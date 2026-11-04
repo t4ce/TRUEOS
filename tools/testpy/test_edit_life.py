@@ -13,6 +13,9 @@ def main() -> None:
         model = work / "model.rs"
         model.write_text(
             "extern crate alloc;\n"
+            "mod r { pub mod services { pub mod shell3_font_service {\n"
+            f'#[path = "{ROOT / "src/r/services/shell3_hex_font.rs"}"] pub mod hex;\n'
+            "}}}\n"
             f'#[path = "{ROOT / "src/ui4/edit_life_model.rs"}"] mod model;\n'
         )
         for name, source in (

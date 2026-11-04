@@ -40,7 +40,7 @@ pub(super) fn present(
             pixel.copy_from_slice(&super::BACKGROUND);
         }
     }
-    if paint_segments(view, &segments, surface.scale).is_err() {
+    if paint_segments(view, &segments, surface).is_err() {
         let _ = cancel_frame_buffer(lease);
         return Err("shell3-show-cpu-glyph-paint");
     }
@@ -64,10 +64,10 @@ pub(super) fn present(
 pub(super) fn paint_segments(
     view: FrameRgbaView,
     segments: &[super::super::SegmentUpdate],
-    scale: u32,
+    surface: &Ui4Surface,
 ) -> Result<(), ()> {
     for segment in segments {
-        paint_segment(view, segment, scale)?;
+        paint_segment(view, segment, surface)?;
     }
     Ok(())
 }
@@ -75,7 +75,7 @@ pub(super) fn paint_segments(
 fn paint_segment(
     view: FrameRgbaView,
     segment: &super::super::SegmentUpdate,
-    scale: u32,
+    surface: &Ui4Surface,
 ) -> Result<(), ()> {
     let row = match segment.row {
         super::super::SpecialRows::TitleRow => 0usize,
@@ -83,7 +83,7 @@ fn paint_segment(
         super::super::SpecialRows::PromtRow => 2,
         super::super::SpecialRows::MatrixRow(index) => index + 3,
     };
-    let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale).ok_or(())?;
+    let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(surface.scale).ok_or(())?;
     let y = u32::try_from(row).ok().and_then(|row| row.checked_mul(cell_height)).ok_or(())?;
     if y >= view.height {
         return Ok(());
@@ -99,9 +99,10 @@ fn paint_segment(
             break;
         }
         let character = characters.next().unwrap_or(' ');
-        copies.push(super::copy::glyph_for_cell(
+        copies.push(super::copy::glyph_for_cell_with_face(
+            surface.font_face((segment.offset + column) as u32, row as u32),
             x, y, cell_width.min(view.width - x), cell_height.min(view.height - y),
-            (character, segment.colors.get(column).copied().flatten()), scale,
+            (character, segment.colors.get(column).copied().flatten()), surface.scale,
         ).map_err(|_| ())?);
     }
     if copies.is_empty() {

@@ -9,6 +9,9 @@ use trueos_time::{Duration, Timer};
 use super::microfont_mask_service::{OwnedAlphaAtlas, build_shell3_alpha_atlas};
 use crate::intel::{GucBcs0RgbaCopy, GucBcs0RgbaSurface, gpgpu::GpgpuOwnedRgba8Surface};
 
+#[path = "shell3_hex_font.rs"]
+pub(crate) mod hex;
+
 const PAGE_COLUMNS: u32 = 8;
 const PAGE_ROWS: u32 = 8;
 pub(crate) const DEFAULT_UI4_FONT_SCALE: u32 = 2;
@@ -46,10 +49,50 @@ type Reply = Signal<crate::wait::EmbassySpinRawMutex, Result<(), &'static str>>;
 
 struct Font {
     alpha: &'static OwnedAlphaAtlas,
+    hex: HexAtlas,
     cache: spin::Mutex<CellCache>,
 }
+/// Only Edit's enabled shader viewport selects Hex; layout remains shared.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) enum FontFace { Raster, Hex }
+
+/// The bitmap side path is expanded at the same physical cell size while the
+/// line/quad font warms. It needs no runtime compiler or native raster pass.
+struct HexAtlas {
+    width: u32,
+    height: u32,
+    coverage: Box<[u8]>,
+}
+impl HexAtlas {
+    fn new(width: u32, height: u32) -> Result<Self, &'static str> {
+        let pixels = (width as usize).checked_mul(height as usize)
+            .and_then(|pixels| pixels.checked_mul(hex::GLYPH_COUNT))
+            .ok_or("shell3-hex-atlas-size")?;
+        let mut coverage = Vec::new();
+        coverage.try_reserve_exact(pixels).map_err(|_| "shell3-hex-atlas-allocation")?;
+        for glyph in 0..hex::GLYPH_COUNT as u32 {
+            for y in 0..height {
+                for x in 0..width {
+                    coverage.push(hex::sample(glyph, x, y, width, height, false));
+                }
+            }
+        }
+        Ok(Self { width, height, coverage: coverage.into_boxed_slice() })
+    }
+
+    fn sample(&self, glyph: u32, x: u32, y: u32, width: u32, height: u32, underline: bool) -> u8 {
+        if underline && y * 11 / height == 10 { return 255; }
+        if width == self.width && height == self.height && (glyph as usize) < hex::GLYPH_COUNT {
+            self.coverage[((glyph * height + y) * width + x) as usize]
+        } else {
+            hex::sample(glyph, x, y, width, height, underline)
+        }
+    }
+}
+
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 struct CellKey {
+    face: FontFace,
     character: char,
     width: u32,
     height: u32,
@@ -105,16 +148,21 @@ pub(crate) async fn prepare() -> Result<(), &'static str> {
 
 fn prepare_once() -> Result<(), &'static str> {
     if FONT.get().is_some() { return Ok(()); }
-    let (_, height) = cell_extent(DEFAULT_UI4_FONT_SCALE)
+    let (width, height) = cell_extent(DEFAULT_UI4_FONT_SCALE)
         .ok_or("shell3-font-physical-size-unavailable")?;
     let alpha = build_shell3_alpha_atlas(height)?;
     alpha.glyph('?').ok_or("shell3-font-missing-question-mark")?;
+    let hex = HexAtlas::new(width, height)?;
     let glyphs = alpha.glyphs().count();
     let line_width_px = alpha.line_width_px;
-    FONT.call_once(|| Font { alpha, cache: spin::Mutex::new(CellCache::default()) });
+    let hex_bytes = hex.coverage.len();
+    FONT.call_once(|| Font { alpha, hex, cache: spin::Mutex::new(CellCache::default()) });
     crate::log_important!(target: "microfont-mask";
         "shell3-font: ready format=r8 em_mm=7.5 em_height_px={} width_px={} glyphs={} successful_productions=1 retained=service-lifetime layout=physical-cells missing_glyph=red-question-mark\n",
         height, line_width_px, glyphs);
+    crate::log_important!(target: "microfont-mask";
+        "shell3-font: hex-ready format=r8 cell={}x{} glyphs={} bytes={} source=canonical-bitmap retained=service-lifetime runtime_hex_feature=off layout=physical-cells\n",
+        width, height, hex::GLYPH_COUNT, hex_bytes);
     Ok(())
 }
 
@@ -128,11 +176,23 @@ pub(crate) fn glyph(
     background: [u8; 4],
     underline: bool,
 ) -> Result<GucBcs0RgbaCopy, &'static str> {
+    glyph_with_face(FontFace::Raster, character, cell_width, cell_height, foreground, background, underline)
+}
+
+pub(crate) fn glyph_with_face(
+    face: FontFace,
+    character: char,
+    cell_width: u32,
+    cell_height: u32,
+    foreground: [u8; 4],
+    background: [u8; 4],
+    underline: bool,
+) -> Result<GucBcs0RgbaCopy, &'static str> {
     let font = FONT.get().ok_or("shell3-font-not-ready")?;
     if cell_width == 0 || cell_height == 0 || cell_width > 256 || cell_height > 256 {
         return Err("shell3-font-cell-size");
     }
-    let key = CellKey { character, width: cell_width, height: cell_height, foreground, background, underline };
+    let key = CellKey { face, character, width: cell_width, height: cell_height, foreground, background, underline };
     let mut cache = font.cache.lock();
     if let Some(copy) = cache.cells.get(&key) { return Ok(*copy); }
     let page_index = if let Some(index) = cache.pages.iter().position(|page| {
@@ -150,12 +210,12 @@ pub(crate) fn glyph(
     let top = (page.used / PAGE_COLUMNS) * cell_height;
     let s = page.backing.surface();
     let destination = crate::phys::phys_to_virt(s.phys as usize) as *mut u8;
-    let (mask, foreground) = resolved_glyph(font, character, foreground)?;
+    let (mask, foreground) = resolved_face(font, face, character, foreground)?;
     let mut first_pixel = None;
     let mut uniform = true;
     for y in 0..cell_height {
         for x in 0..cell_width {
-            let coverage = sample_cell(font.alpha, mask, x, y, cell_width, cell_height, underline);
+            let coverage = sample_face(font, mask, x, y, cell_width, cell_height, underline);
             let pixel = tint(coverage, foreground, background);
             if let Some(first) = first_pixel { uniform &= first == pixel; }
             else { first_pixel = Some(pixel); }
@@ -203,19 +263,54 @@ pub(crate) fn with_cell_coverage(
     cell_height: u32,
     foreground: [u8; 4],
     underline: bool,
+    pixel: impl FnMut(u32, u32, u8, [u8; 4]),
+) -> Result<(), &'static str> {
+    with_cell_coverage_with_face(FontFace::Raster, character, cell_width, cell_height, foreground, underline, pixel)
+}
+
+pub(crate) fn with_cell_coverage_with_face(
+    face: FontFace,
+    character: char,
+    cell_width: u32,
+    cell_height: u32,
+    foreground: [u8; 4],
+    underline: bool,
     mut pixel: impl FnMut(u32, u32, u8, [u8; 4]),
 ) -> Result<(), &'static str> {
     let font = FONT.get().ok_or("shell3-font-not-ready")?;
     if cell_width == 0 || cell_height == 0 || cell_width > 256 || cell_height > 256 {
         return Err("shell3-font-cell-size");
     }
-    let (mask, foreground) = resolved_glyph(font, character, foreground)?;
+    let (mask, foreground) = resolved_face(font, face, character, foreground)?;
     for y in 0..cell_height {
         for x in 0..cell_width {
-            pixel(x, y, sample_cell(font.alpha, mask, x, y, cell_width, cell_height, underline), foreground);
+            pixel(x, y, sample_face(font, mask, x, y, cell_width, cell_height, underline), foreground);
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum CellMask<'a> { Raster(&'a [u8]), Hex(u32) }
+
+fn resolved_face(font: &Font, face: FontFace, character: char, foreground: [u8; 4])
+    -> Result<(CellMask<'_>, [u8; 4]), &'static str> {
+    match face {
+        FontFace::Raster => resolved_glyph(font, character, foreground)
+            .map(|(mask, foreground)| (CellMask::Raster(mask), foreground)),
+        FontFace::Hex => {
+            let (glyph, foreground) = hex::resolve(character, foreground);
+            Ok((CellMask::Hex(glyph), foreground))
+        }
+    }
+}
+
+fn sample_face(font: &Font, mask: CellMask<'_>, x: u32, y: u32,
+    width: u32, height: u32, underline: bool) -> u8 {
+    match mask {
+        CellMask::Raster(mask) => sample_cell(font.alpha, mask, x, y, width, height, underline),
+        CellMask::Hex(glyph) => font.hex.sample(glyph, x, y, width, height, underline),
+    }
 }
 
 fn resolved_glyph(font: &Font, character: char, foreground: [u8; 4])

@@ -24,6 +24,28 @@ const OWNER: WindowOwner = WindowOwner::SHELL3_SERVICE;
 const BACKGROUND: [u8; 4] = super::update::MATRIX_BACKGROUND;
 const FOREGROUND: RgbaColor = RgbaColor::White;
 
+/// The page font follows the Shader preference, including while animation is
+/// paused. Overlay rectangles retain the ordinary terminal face.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HexRegion {
+    viewport: trueos_terminal::edit_life::CellRect,
+    exclusions: alloc::vec::Vec<trueos_terminal::edit_life::CellRect>,
+}
+
+impl HexRegion {
+    fn from_settings(settings: Option<&trueos_terminal::edit_life::EditLife>) -> Option<Self> {
+        let settings = settings.filter(|settings| {
+            settings.enabled && settings.viewport.width != 0 && settings.viewport.height != 0
+        })?;
+        Some(Self { viewport: settings.viewport, exclusions: settings.exclusions.clone() })
+    }
+
+    fn contains(&self, column: u32, row: u32) -> bool {
+        self.viewport.contains(column, row)
+            && !self.exclusions.iter().any(|rect| rect.contains(column, row))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Backend {
     #[default]
@@ -44,8 +66,30 @@ struct Ui4Surface {
     frame_contents: [Option<alloc::vec::Vec<RenderedLine>>; 2],
     scale: u32,
     clear_buffers: [bool; 2],
+    hex_region: Option<HexRegion>,
     edit_life: Option<trueos_terminal::edit_life::EditLife>,
     edit_life_page: Option<alloc::sync::Arc<crate::ui4::edit_life::Page>>,
+}
+
+impl Ui4Surface {
+    fn set_hex_region(&mut self, settings: Option<&trueos_terminal::edit_life::EditLife>) {
+        let next = HexRegion::from_settings(settings);
+        if self.hex_region != next {
+            self.hex_region = next;
+            // A metadata-only toggle or overlay movement still changes font
+            // pixels in both frame buffers, even when every VT cell is equal.
+            self.frame_contents = [None, None];
+            self.clear_buffers = [true; 2];
+        }
+    }
+
+    fn font_face(&self, column: u32, row: u32) -> crate::r::services::shell3_font_service::FontFace {
+        if self.hex_region.as_ref().is_some_and(|region| region.contains(column, row)) {
+            crate::r::services::shell3_font_service::FontFace::Hex
+        } else {
+            crate::r::services::shell3_font_service::FontFace::Raster
+        }
+    }
 }
 
 /// Per-show backend selection and UI4 publication state.
@@ -209,6 +253,7 @@ impl Show {
             frame_contents: [None, None],
             scale: self.font_scale,
             clear_buffers: [false; 2],
+            hex_region: HexRegion::from_settings(edit_life),
             edit_life: None,
             edit_life_page: None,
         };
@@ -340,6 +385,7 @@ impl Show {
                 Some(create_surface(width, height, self.backend, self.initial_geometry)?);
             self.surface.as_mut().unwrap().scale = self.font_scale;
         }
+        self.surface.as_mut().ok_or("shell3-show-surface-missing")?.set_hex_region(edit_life);
         if !recreate_surface
             && batch.segments.is_empty()
             && self
@@ -500,6 +546,7 @@ fn create_surface(
         frame_contents: [None, None],
         scale: 1,
         clear_buffers: [false; 2],
+        hex_region: None,
         edit_life: None,
         edit_life_page: None,
     })

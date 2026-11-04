@@ -5,7 +5,7 @@
 use alloc::vec::Vec;
 
 const MAX_SIDE: u32 = 512;
-pub(crate) const BACKGROUND_ALPHA: u8 = 128;
+pub(crate) const BACKGROUND_ALPHA: u8 = 153; // Static 60% opacity.
 const COVERAGE_THRESHOLD: u32 = 46; // GLSL step(.18, coverage), in R8 bytes.
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
@@ -24,6 +24,8 @@ pub(crate) struct Life {
     cells: Vec<Cell>,
     next: Vec<Cell>,
     previous: Vec<u8>,
+    previous_hex: Vec<[u32; 4]>,
+    previous_hex_layout: Option<[u32; 3]>,
     initialized: bool,
     generation: u64,
 }
@@ -34,18 +36,15 @@ impl Life {
         let grid_width = width.div_ceil(3).min(MAX_SIDE);
         let grid_height = height.div_ceil(3).min(MAX_SIDE);
         let count = (grid_width as usize).checked_mul(grid_height as usize)?;
-        let pixels = (width as usize).checked_mul(height as usize)?;
         let mut cells = Vec::new();
         let mut next = Vec::new();
-        let mut previous = Vec::new();
         cells.try_reserve_exact(count).ok()?;
         next.try_reserve_exact(count).ok()?;
-        previous.try_reserve_exact(pixels).ok()?;
         cells.resize(count, Cell::default());
         next.resize(count, Cell::default());
-        previous.resize(pixels, 0);
         Some(Self { width, height, grid_width, grid_height, cells, next,
-            previous, initialized: false, generation: 0 })
+            previous: Vec::new(), previous_hex: Vec::new(), previous_hex_layout: None,
+            initialized: false, generation: 0 })
     }
 
     pub(crate) fn extent(&self) -> (u32, u32) { (self.width, self.height) }
@@ -68,11 +67,27 @@ impl Life {
         if end > mask.len() || end.checked_mul(4).is_none_or(|end| end > colors.len()) {
             return false;
         }
-        let reseed = reset || !self.initialized;
+        // The bitmap path uses a cell-sized baseline. Allocate the legacy
+        // per-pixel comparison image only when this reference API is used.
+        let Some(pixels) = (width as usize).checked_mul(height as usize) else { return false; };
+        if self.previous.len() != pixels {
+            if self.previous.try_reserve_exact(pixels.saturating_sub(self.previous.len())).is_err() {
+                return false;
+            }
+            self.previous.resize(pixels, 0);
+        }
+        let reseed = reset || !self.initialized || self.previous_hex_layout.is_some();
         if reseed || emit {
             for y in 0..self.grid_height {
                 for x in 0..self.grid_width {
-                    let (coverage, rgb) = self.input_cell(mask, colors, page_width, left, top, x, y, !reseed);
+                    let (coverage, rgb) = self.input_cell(x, y, |sx, sy| {
+                        let at = (top as usize + sy as usize) * page_width as usize + left as usize + sx as usize;
+                        let input = mask[at];
+                        let value = if !reseed {
+                            input.saturating_sub(self.previous[sy as usize * width as usize + sx as usize])
+                        } else { input };
+                        (value, [colors[at * 4], colors[at * 4 + 1], colors[at * 4 + 2]])
+                    });
                     let index = (y * self.grid_width + x) as usize;
                     let old = self.cells[index];
                     if reseed {
@@ -94,12 +109,64 @@ impl Life {
                 .copy_from_slice(&mask[source..source + width as usize]);
         }
         if reseed { self.generation = 0; }
+        self.previous_hex_layout = None;
+        self.previous_hex.clear();
         self.initialized = true;
         true
     }
 
-    fn input_cell(&self, mask: &[u8], colors: &[u8], page_width: u32,
-        left: u32, top: u32, x: u32, y: u32, delta: bool) -> (u32, [u8; 3]) {
+    /// Snapshot viewport-local cells [glyph, foreground, background, flags].
+    /// Both masks are sampled from the same retained bitmap as the text
+    /// painter; the previous input stays one compact record per glyph cell.
+    pub(crate) fn snapshot_hex(&mut self, cells: &[[u32; 4]], columns: u32,
+        cell_width: u32, cell_height: u32, reset: bool, emit: bool) -> bool {
+        if cell_width == 0 || cell_height == 0 || columns != self.width.div_ceil(cell_width) {
+            return false;
+        }
+        let Some(count) = columns.checked_mul(self.height.div_ceil(cell_height))
+            .and_then(|count| usize::try_from(count).ok()) else { return false; };
+        if cells.len() != count { return false; }
+        if self.previous_hex.try_reserve_exact(count.saturating_sub(self.previous_hex.len())).is_err() {
+            return false;
+        }
+        let layout = [columns, cell_width, cell_height];
+        let reseed = reset || !self.initialized || self.previous_hex_layout != Some(layout);
+        if reseed || emit {
+            for y in 0..self.grid_height {
+                for x in 0..self.grid_width {
+                    let (coverage, rgb) = self.input_cell(x, y, |sx, sy| {
+                        let (coverage, rgb) = hex_input(cells, columns, cell_width, cell_height, sx, sy);
+                        let coverage = if !reseed {
+                            coverage.saturating_sub(hex_input(&self.previous_hex, columns,
+                                cell_width, cell_height, sx, sy).0)
+                        } else { coverage };
+                        (coverage, rgb)
+                    });
+                    let index = (y * self.grid_width + x) as usize;
+                    let old = self.cells[index];
+                    if reseed {
+                        let alive = coverage >= COVERAGE_THRESHOLD;
+                        self.cells[index] = Cell { alive, trail: if alive { 255 } else { 0 },
+                            born: alive, rgb: if alive { rgb } else { [0; 3] } };
+                    } else if coverage >= COVERAGE_THRESHOLD {
+                        self.cells[index] = Cell { alive: true, trail: 255,
+                            born: old.born || !old.alive,
+                            rgb: if old.alive { add_rgb(old.rgb, rgb) } else { rgb } };
+                    }
+                }
+            }
+        }
+        self.previous_hex.clear();
+        self.previous_hex.extend_from_slice(cells);
+        self.previous_hex_layout = Some(layout);
+        self.previous = Vec::new();
+        if reseed { self.generation = 0; }
+        self.initialized = true;
+        true
+    }
+
+    fn input_cell(&self, x: u32, y: u32,
+        mut sample: impl FnMut(u32, u32) -> (u8, [u8; 3])) -> (u32, [u8; 3]) {
         // Nine bilinear taps reproduce the demo's .34-cell reach. Fixed-point
         // arithmetic keeps native capture independent of a float math runtime.
         let cx = ((u64::from(x) * 2 + 1) * u64::from(self.width) * 128
@@ -120,20 +187,16 @@ impl Life {
             let fy = qy.rem_euclid(256) as u32;
             let mut alpha = 0;
             for j in 0..2 { for i in 0..2 {
-                let sx = (bx + i).clamp(0, i64::from(self.width) - 1) as usize;
-                let sy = (by + j).clamp(0, i64::from(self.height) - 1) as usize;
-                let at = (top as usize + sy) * page_width as usize + left as usize + sx;
-                let input = mask[at];
-                let value = if delta {
-                    input.saturating_sub(self.previous[sy * self.width as usize + sx])
-                } else { input };
+                let sx = (bx + i).clamp(0, i64::from(self.width) - 1) as u32;
+                let sy = (by + j).clamp(0, i64::from(self.height) - 1) as u32;
+                let (value, rgb) = sample(sx, sy);
                 let weight = (if i == 0 { 256 - fx } else { fx })
                     * (if j == 0 { 256 - fy } else { fy });
                 let score = u32::from(value) * weight;
                 alpha += score;
                 if score > strongest {
                     strongest = score;
-                    chosen.copy_from_slice(&colors[at * 4..at * 4 + 3]);
+                    chosen = rgb;
                 }
             }}
             coverage = coverage.max((alpha + 32768) / 65536);
@@ -182,11 +245,11 @@ impl Life {
         } else { Some(self.cells[(y as u32 * self.grid_width + x as u32) as usize]) }
     }
 
-    /// Premultiplied background RGB at static 50% alpha, relative to the
+    /// Premultiplied background RGB at static 60% alpha, relative to the
     /// viewport. Foreground ink is composited afterward at its original
     /// coverage; shader light never raises the background's alpha.
     pub(crate) fn pixel(&self, x: u32, y: u32) -> [u8; 3] {
-        if x >= self.width || y >= self.height { return [2, 3, 5]; }
+        if x >= self.width || y >= self.height { return [0; 3]; }
         let px = (x as f32 + 0.5) * self.grid_width as f32 / self.width as f32;
         let py = (y as f32 + 0.5) * self.grid_height as f32 / self.height as f32;
         let gx = px as i32;
@@ -206,14 +269,13 @@ impl Life {
                 halo[channel] += f32::from(neighbor.rgb[channel]) * f32::from(neighbor.trail) / 255.0;
             }
         }
-        let base = [4.59, 6.12, 9.945];
         let mut rgb = [0; 3];
         for channel in 0..3 {
             let pigment = f32::from(cell.rgb[channel]);
-            let light = base[channel] * (1.0 - strength) + pigment * strength
+            let light = pigment * strength
                 + halo[channel] * 0.018
                 + if cell.born { pigment * tile * 0.10 } else { 0.0 };
-            rgb[channel] = (light * 0.5 + 0.5).clamp(0.0, f32::from(BACKGROUND_ALPHA)) as u8;
+            rgb[channel] = (light * 0.6 + 0.5).clamp(0.0, f32::from(BACKGROUND_ALPHA)) as u8;
         }
         rgb
     }
@@ -223,9 +285,47 @@ fn add_rgb(a: [u8; 3], b: [u8; 3]) -> [u8; 3] {
     core::array::from_fn(|i| a[i].wrapping_add(b[i]))
 }
 
+fn hex_record(cells: &[[u32; 4]], columns: u32, cell_width: u32, cell_height: u32,
+    x: u32, y: u32) -> Option<([u32; 4], u8)> {
+    if columns == 0 || cell_width == 0 || cell_height == 0 || x / cell_width >= columns {
+        return None;
+    }
+    let index = (y / cell_height).checked_mul(columns)?.checked_add(x / cell_width)?;
+    let cell = *cells.get(index as usize)?;
+    let coverage = crate::r::services::shell3_font_service::hex::sample(
+        cell[0], x % cell_width, y % cell_height, cell_width, cell_height, cell[3] & 2 != 0);
+    Some((cell, coverage))
+}
+
+fn hex_input(cells: &[[u32; 4]], columns: u32, cell_width: u32, cell_height: u32,
+    x: u32, y: u32) -> (u8, [u8; 3]) {
+    let Some((cell, coverage)) = hex_record(cells, columns, cell_width, cell_height, x, y)
+        else { return (0, [0; 3]); };
+    let foreground = cell[1].to_le_bytes();
+    (coverage, [foreground[0], foreground[1], foreground[2]])
+}
+
+/// The exact page ink produced by the shared bitmap face. Unstyled page
+/// backgrounds are transparent; selected/inverted backgrounds stay opaque.
+pub(crate) fn hex_ink(cells: &[[u32; 4]], columns: u32, cell_width: u32, cell_height: u32,
+    x: u32, y: u32) -> [u8; 4] {
+    let Some((cell, coverage)) = hex_record(cells, columns, cell_width, cell_height, x, y)
+        else { return [0; 4]; };
+    let foreground = cell[1].to_le_bytes();
+    let background = if cell[3] & 1 != 0 { cell[2].to_le_bytes() } else { [0; 4] };
+    let alpha = (u32::from(coverage) * u32::from(foreground[3]) + 127) / 255;
+    let mut pixel = [0; 4];
+    for channel in 0..3 {
+        let bg = (u32::from(background[channel]) * u32::from(background[3]) + 127) / 255;
+        pixel[channel] = ((u32::from(foreground[channel]) * alpha + bg * (255 - alpha) + 127) / 255) as u8;
+    }
+    pixel[3] = (alpha + (u32::from(background[3]) * (255 - alpha) + 127) / 255) as u8;
+    pixel
+}
+
 /// The glyph producer has already applied coverage exactly once. Composite
-/// that ink over the premultiplied half-alpha background. Opaque text and
-/// overlay pixels remain opaque; uncovered background stays at alpha 128.
+/// that ink over the premultiplied 60%-opacity background. Opaque text and
+/// overlay pixels remain opaque; uncovered background stays at alpha 153.
 pub(crate) fn composite_background(foreground: [u8; 4], effect: [u8; 3]) -> [u8; 4] {
     let inverse = u32::from(255 - foreground[3]);
     let alpha = u32::from(foreground[3])
@@ -245,37 +345,41 @@ mod tests {
     #[test]
     fn composition_retains_opaque_text_chrome_and_single_pass_antialiasing() {
         let effect = [30, 60, 120];
+        assert_eq!(composite_background([255; 4], effect), [255; 4]);
         assert_eq!(composite_background([210, 100, 33, 255], effect), [210, 100, 33, 255]);
         assert_eq!(composite_background([0, 0, 0, 255], effect), [0, 0, 0, 255]);
-        assert_eq!(composite_background([0; 4], effect), [30, 60, 120, 128]);
+        assert_eq!(composite_background([0; 4], effect), [30, 60, 120, 153]);
         // A half-covered white glyph is already [128,128,128,128]. Applying
         // coverage again would dim it to 64 before adding the background.
-        assert_eq!(composite_background([128; 4], effect), [143, 158, 188, 192]);
+        assert_eq!(composite_background([128; 4], effect), [143, 158, 188, 204]);
     }
 
     #[test]
     fn background_alpha_is_fixed_and_reveals_content_below() {
+        let empty = world(1, 1, &[]);
+        assert_eq!(empty.pixel(1, 1), [0; 3], "unlit field must be pure black");
+        assert_eq!(empty.pixel(3, 3), [0; 3]);
         let black = composite_background([0; 4], [0; 3]);
-        assert_eq!(black, [0, 0, 0, 128]);
+        assert_eq!(black, [0, 0, 0, 153]);
         let over_desktop = |pixel: [u8; 4], desktop: [u8; 3]| -> [u8; 3] {
             core::array::from_fn(|channel| {
                 (u32::from(pixel[channel])
                     + (u32::from(desktop[channel]) * u32::from(255 - pixel[3]) + 127) / 255) as u8
             })
         };
-        assert_eq!(over_desktop(black, [20, 80, 160]), [10, 40, 80]);
+        assert_eq!(over_desktop(black, [20, 80, 160]), [8, 32, 64]);
         let lit = composite_background([0; 4], [30, 60, 120]);
         assert_eq!(lit[3], black[3], "shader color must not add opacity");
-        assert_eq!(over_desktop(lit, [20, 80, 160]), [40, 100, 200]);
+        assert_eq!(over_desktop(lit, [20, 80, 160]), [38, 92, 184]);
         for coverage in 0..=255 {
-            let pixel = composite_background([coverage; 4], [128; 3]);
+            let pixel = composite_background([coverage; 4], [BACKGROUND_ALPHA; 3]);
             assert!(pixel[..3].iter().all(|&channel| channel <= pixel[3]));
             assert!(pixel[3] >= BACKGROUND_ALPHA);
         }
     }
 
     #[test]
-    fn bright_shader_pixels_stay_premultiplied_at_half_alpha() {
+    fn bright_shader_pixels_stay_premultiplied_at_fixed_alpha() {
         let life = world(1, 1, &[(0, 0, [255; 3])]);
         let effect = life.pixel(1, 1);
         assert!(effect.iter().all(|&channel| channel <= BACKGROUND_ALPHA));
@@ -377,5 +481,113 @@ mod tests {
         let previous = life.previous.clone();
         assert!(!life.snapshot(&[0; 8], &colors, 3, [0, 0, 3, 3], true, true));
         assert_eq!(life.previous, previous);
+    }
+
+    fn hex_cell(character: char, foreground: [u8; 4], background: [u8; 4], flags: u32) -> [u32; 4] {
+        let (glyph, foreground) = crate::r::services::shell3_font_service::hex::resolve(character, foreground);
+        [glyph, u32::from_le_bytes(foreground), u32::from_le_bytes(background), flags]
+    }
+
+    fn expanded_hex(cells: &[[u32; 4]], columns: u32, cell_width: u32, cell_height: u32,
+        width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
+        let mut mask = Vec::new();
+        let mut colors = Vec::new();
+        for y in 0..height { for x in 0..width {
+            let (coverage, rgb) = hex_input(cells, columns, cell_width, cell_height, x, y);
+            mask.push(coverage);
+            colors.extend_from_slice(&[rgb[0], rgb[1], rgb[2], coverage]);
+        }}
+        (mask, colors)
+    }
+
+    #[test]
+    fn compact_hex_snapshot_matches_expanded_mask_through_emit_erase_and_scroll() {
+        // The viewport clips the final column and row. Sampling still uses
+        // the full physical glyph cell, exactly as the terminal painter does.
+        let (cell_width, cell_height) = (7, 13);
+        let (width, height, columns) = (12, 23, 2);
+        let mut cells = vec![
+            hex_cell('A', [250, 10, 20, 255], [0, 0, 0, 255], 0),
+            hex_cell('g', [20, 240, 40, 255], [0, 0, 0, 255], 0),
+            hex_cell(' ', [0, 0, 250, 255], [44, 44, 44, 255], 1),
+            hex_cell('\u{10ffff}', [77, 88, 99, 255], [0, 0, 0, 255], 2),
+        ];
+        let mut compact = Life::new(width, height).unwrap();
+        let mut expanded = Life::new(width, height).unwrap();
+        assert!(compact.previous.is_empty(), "no per-pixel allocation before legacy snapshot");
+        for round in 0..6 {
+            if round == 1 {
+                cells[1] = hex_cell('Q', [10, 30, 250, 255], [0, 0, 0, 255], 2);
+            } else if round == 2 {
+                cells[0] = hex_cell(' ', [255; 4], [0, 0, 0, 255], 0);
+            } else if round == 3 {
+                cells[0] = hex_cell('W', [220, 30, 50, 255], [0, 0, 0, 255], 0);
+            }
+            let reset = round == 5;
+            let emit = round != 3;
+            let (mask, colors) = expanded_hex(&cells, columns, cell_width, cell_height, width, height);
+            assert!(compact.snapshot_hex(&cells, columns, cell_width, cell_height, reset, emit));
+            assert!(expanded.snapshot(&mask, &colors, width, [0, 0, width, height], reset, emit));
+            assert_eq!(compact.cells, expanded.cells, "snapshot round={round}");
+            assert_eq!(compact.generation(), expanded.generation());
+            assert!(compact.previous.is_empty());
+            assert_eq!(compact.previous_hex, cells);
+            for _ in 0..2 {
+                compact.step();
+                expanded.step();
+                assert_eq!(compact.cells, expanded.cells, "generation round={round}");
+            }
+        }
+    }
+
+    #[test]
+    fn compact_hex_validates_before_changing_world_or_comparison_baseline() {
+        let mut life = Life::new(12, 22).unwrap();
+        let cells = [hex_cell('A', [255; 4], [0, 0, 0, 255], 0); 4];
+        assert!(life.snapshot_hex(&cells, 2, 6, 11, false, true));
+        life.step();
+        let before = life.cells.clone();
+        let previous = life.previous_hex.clone();
+        for (input, columns, width, height) in [
+            (&cells[..3], 2, 6, 11), (&cells[..], 0, 6, 11),
+            (&cells[..], 2, 0, 11), (&cells[..], 2, 6, 0),
+            (&cells[..], 3, 6, 11),
+        ] {
+            assert!(!life.snapshot_hex(input, columns, width, height, true, true));
+            assert_eq!(life.cells, before);
+            assert_eq!(life.previous_hex, previous);
+            assert_eq!(life.generation(), 1);
+        }
+        let colors = vec![255; 12 * 22 * 4];
+        assert!(life.snapshot(&vec![0; 12 * 22], &colors, 12, [0, 0, 12, 22], false, true));
+        assert_eq!(life.previous.len(), 12 * 22);
+        assert!(life.previous_hex.is_empty());
+        assert!(life.snapshot_hex(&cells, 2, 6, 11, false, true));
+        assert!(life.previous.is_empty(), "return to compact input releases legacy pixel baseline");
+    }
+
+    #[test]
+    fn hex_ink_preserves_exact_mask_alpha_and_opaque_styled_backgrounds() {
+        let background = [40, 90, 150, 255];
+        for alpha in 0..=255u8 {
+            let foreground = [17, 129, 251, alpha];
+            for flags in 0..4 {
+                let cells = [hex_cell('A', foreground, background, flags)];
+                for y in 0..11 { for x in 0..6 {
+                    let coverage = crate::r::services::shell3_font_service::hex::sample(
+                        cells[0][0], x, y, 6, 11, flags & 2 != 0);
+                    let a = (u32::from(coverage) * u32::from(alpha) + 127) / 255;
+                    let bg = if flags & 1 != 0 { background } else { [0; 4] };
+                    let mut expected = [0; 4];
+                    for channel in 0..3 {
+                        expected[channel] = ((u32::from(foreground[channel]) * a
+                            + u32::from(bg[channel]) * (255 - a) + 127) / 255) as u8;
+                    }
+                    expected[3] = (a + (u32::from(bg[3]) * (255 - a) + 127) / 255) as u8;
+                    assert_eq!(hex_ink(&cells, 1, 6, 11, x, y), expected);
+                }}
+            }
+        }
+        assert_eq!(hex_ink(&[], 0, 0, 0, 0, 0), [0; 4]);
     }
 }

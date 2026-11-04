@@ -17,7 +17,10 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def compile_fixture(directory: Path, body: str, name: str, test: bool = False) -> Path:
     source = directory / (name + ".rs")
-    source.write_text("extern crate alloc;\n#[path=" + json.dumps(str(ROOT / "src/ui4/edit_life_model.rs"))
+    source.write_text("extern crate alloc;\n"
+        + "mod r { pub mod services { pub mod shell3_font_service {\n#[path="
+        + json.dumps(str(ROOT / "src/r/services/shell3_hex_font.rs")) + "] pub mod hex;\n}}}\n#[path="
+        + json.dumps(str(ROOT / "src/ui4/edit_life_model.rs"))
         + "] mod model;\n" + body)
     binary = directory / name
     command = ["rustc", "--edition=2024", "--target=x86_64-unknown-linux-gnu", "-O",
@@ -40,19 +43,27 @@ def main() -> None:
             benchmark = compile_fixture(directory, r'''
 fn main() {
     let (width, height) = (1280u32, 720u32);
+    let (cell_width, cell_height) = (12u32, 22u32);
+    let columns = width.div_ceil(cell_width);
     let mut life = model::Life::new(width, height).unwrap();
-    let mask: Vec<u8> = (0..width * height).map(|i| if i % 17 < 3 { 255 } else { 0 }).collect();
-    let colors = vec![200; (width * height * 4) as usize];
+    let cells: Vec<[u32; 4]> = (0..columns * height.div_ceil(cell_height)).map(|i| {
+        let (glyph, fg) = r::services::shell3_font_service::hex::resolve(
+            if i % 17 < 3 { 'A' } else { ' ' }, [200, 220, 240, 255]);
+        [glyph, u32::from_le_bytes(fg), 0xff000000, 0]
+    }).collect();
     let start = std::time::Instant::now();
-    assert!(life.snapshot(&mask, &colors, width, [0, 0, width, height], false, true));
-    println!("host_cpu_snapshot_us={}", start.elapsed().as_micros());
+    assert!(life.snapshot_hex(&cells, columns, cell_width, cell_height, false, true));
+    println!("host_cpu_hex_snapshot_us={} input_bytes={}", start.elapsed().as_micros(), cells.len() * 16);
     let start = std::time::Instant::now();
     for _ in 0..10 { life.step(); }
     println!("host_cpu_step_us={}", start.elapsed().as_micros() / 10);
     let start = std::time::Instant::now();
     let mut checksum = 0u64;
     for y in 0..height {
-        for x in 0..width { checksum += life.pixel(x, y)[0] as u64; }
+        for x in 0..width {
+            let ink = model::hex_ink(&cells, columns, cell_width, cell_height, x, y);
+            checksum += model::composite_background(ink, life.pixel(x, y))[0] as u64;
+        }
     }
     println!("host_cpu_display_us={} checksum={checksum}", start.elapsed().as_micros());
 }

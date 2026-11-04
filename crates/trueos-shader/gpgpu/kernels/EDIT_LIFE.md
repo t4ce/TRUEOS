@@ -10,32 +10,63 @@ the reference and unavailable-backend fallback.
 The source has one SIMD16 entry point and four modes: seed/additive input,
 Conway generation, background composition, and input comparison-baseline copy.
 The comment at the top of the source specifies every buffer and uniform.
-The glyph mask and straight glyph-color page are read-only. A separate
-viewport-sized R8 buffer retains the last input baseline. Cells occupy two
-u32 words, separating binary occupancy from RGB, trail strength and birth.
+Life cells occupy two u32 words, separating binary occupancy from RGB, trail
+strength and birth. Animation stays at ten generations per second, with fixed
+.905 trail decay (the demo's .75 persistence).
 
-For each new immutable page: seed on first input or a changed scroll revision;
-otherwise add positive R8 differences only on a changed emission revision.
-Then copy the input baseline even when there was no emission. Advance ten
-generations per second, with a fixed .905 trail decay (the demo's .75
-persistence). Put a GPU cache/release dependency between every writer and the
-following reader before flipping cell buffers. Never publish the output before
-producer retirement.
+Edit's Shader preference also selects MicroFont's bitmap face inside the page
+viewport. Turning it off restores the line/quad raster face. Menus, status,
+gutters and overlay exclusions keep their existing raster face, including when
+the page animation is paused. Font changes invalidate both terminal buffers,
+even for metadata-only updates; raster-only pan/strip caches cannot overwrite
+bitmap page pixels. Layout, cursor geometry and the physical cell size do not
+change. The font service warms a retained R8 bitmap atlas alongside the existing
+line/quad atlas at that same cell size before publishing font readiness.
+MicroFont's runtime `hex` feature remains disabled.
 
-The editor background, including its shader, has static alpha 128 (50% in
-RGBA8). Shader RGB is premultiplied by that alpha and capped to it, so brighter
-cells never make the background more opaque. Foreground ink is composited over
-this background with its original coverage: output alpha is
-`ink_alpha + round(128 * (255 - ink_alpha) / 255)`. Uncovered background remains
-at 128; opaque text, menus, dialogs, selection and caret remain at 255.
-Antialiased glyph edges retain their original coverage. Outside the editor
-viewport alpha stays 255. Window and hardware-plane opacity remain at 100%;
+`tools/edit_hex_font.py` generates the 724 shared full 66-bit masks from
+`vendor/microfont/data/line-v1`, including ten lowercase compositions assembled
+from validated canonical bitmap fragments. The Rust table and OpenCL sampler
+share glyph IDs and nearest-neighbour mapping of each 6x11 mask to the physical
+cell. Unknown glyphs use the same red question-mark replacement in both paths.
+The complete MIT notice is retained in the generated files. Regenerate with
+`python3 tools/edit_hex_font.py`, or use `--check` to verify freshness.
+
+Capture now publishes only viewport-local records `[glyph, fg_rgba, bg_rgba,
+flags]`: 16 bytes per terminal cell. Flags preserve opaque selection/caret
+backgrounds and underlines. No per-pixel R8 coverage, color image, full RGBA
+snapshot, glyph-atlas traversal or source-frame CPU read is needed. The GPU
+uploads the shared 11,584-byte mask table once per effect and keeps an 8-byte
+comparison record per terminal cell. Both seeding and final text composition
+sample that exact same font data. The CPU reference samples the shared masks
+and retains compact comparison records too.
+
+For each immutable page: seed on first input or a changed scroll revision;
+otherwise add positive coverage differences only on a changed emission
+revision. Advance the compact input baseline even without emission. Put a GPU
+cache/release dependency between every writer and the following reader before
+flipping world buffers. The source terminal frame is borrowed through a read
+lease only during each synchronous render, for unchanged chrome outside the
+viewport. It is not copied or uploaded. On uncertain submission, keep that
+exact source pinned alongside quarantined GPU resources. Never publish effect
+output before producer retirement.
+
+The editor background has a pure-black base and static alpha 153 (60% in
+RGBA8), including its shader. Shader RGB is premultiplied by that alpha and
+capped to it, so brighter cells never make the background more opaque.
+Foreground ink is composited over this background with its original coverage:
+output alpha is
+`ink_alpha + round(153 * (255 - ink_alpha) / 255)`. Uncovered background remains
+at 153; opaque text, menus, dialogs, selection and caret remain at 255.
+Bitmap text keeps its exact coverage without added transparency. Outside the
+editor viewport alpha stays 255. Window and hardware-plane opacity remain at 100%;
 the effect frame is published with per-pixel alpha, without a fully-opaque hint.
 Ordinary edits keep the previous completed effect visible until the next page
 is ready, avoiding a temporary opaque background on each keystroke.
 While Shader is enabled, Edit suppresses its ordinary current-line background
 highlight so typed text does not sit on an opaque row. Selection rendering is
-unchanged.
+unchanged. Unstyled Edit text uses pure-white foreground on TrueOS; explicit
+syntax colors continue to apply.
 
 Animation is allowed only while the main editor textarea owns keyboard focus
 and the UI has no additional floating roots. Menus, dropdowns, modal dialogs,
@@ -49,7 +80,7 @@ Pausing immediately restores the ordinary opaque terminal frame and bypasses
 glyph capture, input upload, Life stepping and effect rendering. The last clean
 page, world and buffers are retained; menu text never becomes shader input.
 When every effect is paused, the service waits for a state change without an
-animation timer. Returning to the page captures its clean current pixels once
+animation timer. Returning to the page captures its clean current glyph cells once
 and resumes the retained world with a fresh generation deadline, without
 replaying the paused time. Real document, viewport and scroll changes still
 follow the existing reset/emission rules. A serial check prevents an older
@@ -61,12 +92,12 @@ needs three submissions (seed, comparison baseline, composite), and a normal
 generation needs two. It does not rebuild the whole page table for every
 128K-pixel chunk. Gutter-origin and viewport-size changes reuse allocations
 when their existing capacities fit. Scroll resets the world in those buffers.
-Capture visits the existing glyph coverage once and skips blank cells; it
-does not allocate a second set of transparent glyph-cache entries. Unchanged
-Edit frames emit no terminal metadata or synchronization fences.
+Unchanged Edit frames emit no terminal metadata or synchronization fences.
+Capture logs expose terminal-cell count, compact input bytes and zero source
+read bytes, alongside existing native submission timings.
 
 Runtime `edit-life: capture`, `edit-life: enabled`, and `edit-life timing` logs
-separate source capture, initial allocation/upload, page-table setup, seeding,
+separate compact text capture, initial allocation/upload, page-table setup, seeding,
 baseline copying, and composition. These timings use the `ui4/edit-life` log
 target so they remain visible with the Blueprint/HV diagnostic profile.
 
@@ -154,9 +185,12 @@ requires separate frontend tools and equivalent generated native code.
 ## Validation
 
 ```sh
-cargo check --locked
+bash tools/build-safe.sh cargo check --release --bin TRUEOS --locked --offline
 python3 tools/testpy/test_edit_life.py
 python3 tools/testpy/test_edit_life_capture.py
+python3 tools/testpy/test_edit_hex_font.py
+python3 tools/testpy/test_edit_hex_paint.py
+python3 tools/testpy/test_edit_hex_shader.py
 python3 tools/edit_life_shader_bake.py --verify
 ```
 
@@ -167,13 +201,14 @@ unchanged/whitespace comparison baselines, deletion, scroll reseeding, and
 premultiplied foreground composition without additional glyph transparency.
 Edit's UI tests cover focused pages, keyboard menus, status/search controls,
 modal and nonfocused overlays, silent paused frames and preserved revisions.
-Capture regressions verify that paused redraws skip glyph/source work, retain
-the page, and recapture only once when the page becomes active again.
+Capture regressions verify compact viewport records, clipped cells, shared
+fallbacks, zero source reads and paused-page retention. Font tests compare
+Rust, canonical source bits and the actual compiled C++ sampler, including
+noninteger physical cell sizes, underlining and all 66 mask bits. Paint tests
+exercise metadata-only font toggles and both-buffer invalidation.
 
 An optional standalone reference timing command is
-`python3 tools/testpy/test_edit_life_model.py --benchmark`. On the current
-host a 1280×720 page (427×240 world) took approximately 6–7 ms per snapshot,
-0.8–1.2 ms per generation and 12–13 ms for a full CPU display pass. These are
-CPU fallback measurements, not measurements of the native GPU implementation.
-The baked shader and producer path have compile/manifest validation; visual
-and performance validation on the physical target remain outstanding.
+`python3 tools/testpy/test_edit_life_model.py --benchmark`. It reports compact
+input bytes and CPU fallback timings; these are not native GPU measurements.
+The baked shader and producer have compile/manifest validation. Visual and
+performance validation on the physical target remain outstanding.

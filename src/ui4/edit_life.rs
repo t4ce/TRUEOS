@@ -29,13 +29,13 @@ impl PixelRect {
 pub(crate) struct Page {
     pub width: u32,
     pub height: u32,
-    /// Premultiplied glyph ink over transparent editor backgrounds. All chrome,
-    /// selection/caret and excluded overlay cells retain opaque backgrounds.
-    pub rgba: Vec<u8>,
-    /// Untinted antialiased glyph coverage; never includes shader output.
-    pub mask: Vec<u8>,
-    /// Straight glyph RGB with alpha byte identical to mask.
-    pub colors: Vec<u8>,
+    /// Viewport-local terminal cells: glyph index, straight foreground RGBA,
+    /// background RGBA, flags (bit0 opaque background, bit1 underline).
+    pub cells: Vec<[u32; 4]>,
+    pub columns: u32,
+    pub rows: u32,
+    pub cell_width: u32,
+    pub cell_height: u32,
     pub viewport: PixelRect,
     pub scroll_revision: u64,
     pub emission_revision: u64,
@@ -44,8 +44,12 @@ impl Page {
     fn valid(&self) -> bool {
         let pixels = self.width as usize * self.height as usize;
         pixels != 0 && pixels <= MAX_PAGE_PIXELS
-            && self.rgba.len() == pixels * 4 && self.colors.len() == pixels * 4
-            && self.mask.len() == pixels && self.viewport.width != 0 && self.viewport.height != 0
+            && self.cell_width != 0 && self.cell_height != 0
+            && self.cell_width <= 256 && self.cell_height <= 256
+            && self.columns == self.viewport.width.div_ceil(self.cell_width)
+            && self.rows == self.viewport.height.div_ceil(self.cell_height)
+            && self.cells.len() == self.columns as usize * self.rows as usize
+            && self.viewport.width != 0 && self.viewport.height != 0
             && self.viewport.x.checked_add(self.viewport.width).is_some_and(|x| x <= self.width)
             && self.viewport.y.checked_add(self.viewport.height).is_some_and(|y| y <= self.height)
     }
@@ -72,8 +76,9 @@ pub(crate) fn publish_page(window: WindowId, source: FrameHandle, page: Arc<Page
     let mut pages = PAGES.lock();
     let serial = NEXT_SERIAL.fetch_add(1, Ordering::Relaxed);
     if let Some(old) = pages.iter_mut().find(|old| old.window == window) {
-        let geometry_changed = (old.page.width, old.page.height, old.page.viewport)
-            != (page.width, page.height, page.viewport);
+        let geometry_changed = (old.page.width, old.page.height, old.page.viewport,
+            old.page.cell_width, old.page.cell_height)
+            != (page.width, page.height, page.viewport, page.cell_width, page.cell_height);
         if geometry_changed && old.displayed.is_some() {
             // Geometry changes replace the effect frame. Detach its predecessor
             // before the worker retires it; ordinary edits keep their alpha.
@@ -168,6 +173,7 @@ impl Effect {
         let backend = if let Some(native) = crate::intel::gpgpu::EditLifeState::new(
             page.width, page.height,
             crate::intel::gpgpu::GpgpuRect::new(rect.x as i32, rect.y as i32, rect.width, rect.height),
+            page.cell_width, page.cell_height,
         ) {
             Backend::Native(native)
         } else {
@@ -189,7 +195,7 @@ impl Effect {
             reset: true, emit: true, steps: 0, quarantined: false, disabled: false };
         effect.capture(true, true);
         crate::log_info!(target: "ui4/edit-life";
-            "edit-life: enabled backend={} speed=1 generations_hz=10 trail_persistence=0.75 background_alpha=128 immutable_glyph_mask=1 backend_ms={} frame_ms={} upload_ms={} total_ms={}\n",
+            "edit-life: enabled backend={} speed=1 generations_hz=10 trail_persistence=0.75 background_alpha=153 font=microfont-hex compact_glyph_cells=1 backend_ms={} frame_ms={} upload_ms={} total_ms={}\n",
             if matches!(effect.backend, Backend::Native(_)) { "native-cpp-adls" } else { "cpu-reference" },
             backend_ready_ms.saturating_sub(started_ms),
             frame_ready_ms.saturating_sub(backend_ready_ms),
@@ -213,14 +219,15 @@ impl Effect {
 
     fn capture(&mut self, reset: bool, emit: bool) {
         let page = &self.input.page;
-        let r = page.viewport;
         match &mut self.backend {
             Backend::Reference(life) => {
-                life.snapshot(&page.mask, &page.colors, page.width,
-                    [r.x, r.y, r.width, r.height], reset, emit);
+                if !life.snapshot_hex(&page.cells, page.columns,
+                    page.cell_width, page.cell_height, reset, emit) {
+                    self.disabled = true;
+                }
             }
             Backend::Native(native) => {
-                if !native.upload(&page.mask, &page.colors, &page.rgba) {
+                if !native.upload(&page.cells) {
                     self.disabled = true;
                 }
                 self.reset |= reset;
@@ -236,23 +243,34 @@ impl Effect {
 
     fn render(&mut self) -> Result<(), ()> {
         if !input_is_active(&self.input) { return Err(()); }
-        let lease = super::acquire_frame_buffer(self.frame).map_err(|_| ())?;
+        // Borrow the source front only for this synchronous render. Retaining
+        // it between frames would consume Shell3's double-buffer capacity.
+        let source_lease = super::acquire_published_frame(self.input.source).map_err(|_| ())?;
+        let lease = match super::acquire_frame_buffer(self.frame) {
+            Ok(lease) => lease,
+            Err(_) => { let _ = super::release_published_frame(source_lease); return Err(()); }
+        };
         let mut may_be_live = false;
         let result = (|| {
             let page = &self.input.page;
+            let source_view = super::published_rgba_view(source_lease).map_err(|_| ())?;
+            if (source_view.width, source_view.height) != (page.width, page.height) { return Err(()); }
             match &mut self.backend {
                 Backend::Reference(life) => {
                     let view = super::writable_rgba_view(lease).map_err(|_| ())?;
                     let out = unsafe { core::slice::from_raw_parts_mut(view.virt, view.byte_len) };
                     for y in 0..page.height {
-                        let source = &page.rgba[y as usize * page.width as usize * 4..][..page.width as usize * 4];
+                        let source = unsafe { core::slice::from_raw_parts(
+                            source_view.virt.add(y as usize * source_view.pitch as usize), page.width as usize * 4) };
                         let row = &mut out[y as usize * view.pitch as usize..][..page.width as usize * 4];
                         row.copy_from_slice(source);
                         for x in 0..page.width {
                             let p = &mut row[x as usize * 4..][..4];
-                            if page.viewport.contains(x, y) && p[3] < 255 {
+                            if page.viewport.contains(x, y) {
                                 let effect = life.pixel(x - page.viewport.x, y - page.viewport.y);
-                                let composed = super::edit_life_model::composite_background([p[0],p[1],p[2],p[3]], effect);
+                                let ink = super::edit_life_model::hex_ink(&page.cells, page.columns,
+                                    page.cell_width, page.cell_height, x - page.viewport.x, y - page.viewport.y);
+                                let composed = super::edit_life_model::composite_background(ink, effect);
                                 p.copy_from_slice(&composed);
                             } else {
                                 p[3] = 255;
@@ -266,7 +284,10 @@ impl Effect {
                 }
                 Backend::Native(native) => {
                     let dst = super::gpgpu_rgba_surface(lease).map_err(|_| ())?;
-                    let result = native.render(dst, self.reset, self.emit, self.steps);
+                    let source = crate::intel::gpgpu::GpgpuRgba8Surface::new(
+                        source_view.phys, source_view.gpu, source_view.byte_len,
+                        source_view.width, source_view.height, source_view.pitch).ok_or(())?;
+                    let result = native.render(dst, source, self.reset, self.emit, self.steps);
                     if !result.ok || result.release.is_none() {
                         may_be_live = result.submitted;
                         self.quarantined = result.submitted;
@@ -294,6 +315,9 @@ impl Effect {
             }
             Ok(())
         })();
+        // An uncertain GPU read must keep this exact source allocation pinned,
+        // just as its destination remains quarantined. Never hand it to a writer.
+        if !may_be_live { let _ = super::release_published_frame(source_lease); }
         if result.is_err() && !may_be_live { let _ = super::cancel_frame_buffer(lease); }
         result
     }
@@ -327,7 +351,8 @@ pub(crate) async fn ui4_edit_life_service_task() {
                 if effect.input.serial != input.serial || effect.input.source != input.source {
                     let old = &effect.input.page;
                     let new = &input.page;
-                    let extent_changed = (old.width, old.height) != (new.width, new.height);
+                    let extent_changed = (old.width, old.height, old.cell_width, old.cell_height)
+                        != (new.width, new.height, new.cell_width, new.cell_height);
                     let viewport_changed = old.viewport != new.viewport;
                     let reset = old.scroll_revision != new.scroll_revision || viewport_changed;
                     let emit = old.emission_revision != new.emission_revision;

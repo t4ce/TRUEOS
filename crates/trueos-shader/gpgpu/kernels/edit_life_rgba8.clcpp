@@ -8,11 +8,17 @@
 //   0 mode (0 seed/emit, 1 step, 2 composite, 3 baseline copy)
 //   1 reset, 2 page width, 3 page height, 4 viewport left, 5 viewport top,
 //   6 viewport width, 7 viewport height, 8 grid width, 9 grid height,
-//  10 glyph R8 pitch, 11 glyph RGBA8 pitch, 12 foreground RGBA8 pitch,
-//  13 output RGBA8 pitch, 14 comparison R8 pitch.
+//  10 terminal columns, 11 terminal rows, 12 source RGBA8 pitch,
+//  13 output RGBA8 pitch, 14 terminal cell width, 15 terminal cell height.
+// Compact glyph input is uint4(index, fg, bg, flags); flags bit0 preserves
+// opaque selection/caret backgrounds and bit1 adds an underline. Shared 6x11
+// hex masks are an immutable uint4 table uploaded once. Previous input stores
+// only compact uint2(index, flags) pairs, not page pixels.
 // For mode 0 set reset on first input/scroll, otherwise submit only on an
 // emission revision. Mode 3 follows EVERY successful input upload, including
 // whitespace-only input. Every mode is a separate, ordered GPU walker.
+
+#include "edit_life_hex_font.generated.h"
 
 static inline uint add_rgb(uint a, uint b) {
     return ((a + b) & 255u)
@@ -35,15 +41,20 @@ static inline uint pack_rgb(float3 rgb) {
     return value.x | (value.y << 8) | (value.z << 16);
 }
 
+static inline uint glyph_coverage(__global const uint4 *font, uint2 glyph, uint native_x, uint native_y) {
+    return trueos_edit_hex_coverage(font, glyph.x, native_x, native_y)
+        | (((glyph.y & 2u) != 0u && native_y == 10u) ? 255u : 0u);
+}
+
 static inline uint2 input_cell(
-    __global const uchar *mask, __global const uchar *previous,
-    __global const uchar *colors, __global const uint *p, uint x, uint y)
+    __global const uint4 *glyphs, __global const uint2 *previous,
+    __global const uint4 *font, __global const uint *p, uint x, uint y)
 {
     int cx = (int)(((ulong)x * 2ul + 1ul) * (ulong)p[6] * 128ul / (ulong)p[8]) - 128;
     int cy = (int)(((ulong)y * 2ul + 1ul) * (ulong)p[7] * 128ul / (ulong)p[9]) - 128;
     int reach_x = (int)((ulong)p[6] * 87ul / (ulong)p[8]);
     int reach_y = (int)((ulong)p[7] * 87ul / (ulong)p[9]);
-    uint coverage = 0u, strongest = 0u, chosen = 0x00e8e2dcu;
+    uint coverage = 0u, strongest = 0u, chosen = 0x00ffffffu;
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
             int qx = cx + dx * reach_x, qy = cy + dy * reach_y;
@@ -54,10 +65,13 @@ static inline uint2 input_cell(
                 for (int i = 0; i < 2; ++i) {
                     uint sx = (uint)clamp(bx + i, 0, (int)p[6] - 1);
                     uint sy = (uint)clamp(by + j, 0, (int)p[7] - 1);
-                    uint at = (p[5] + sy) * p[10] + p[4] + sx;
-                    uint value = (uint)mask[at];
+                    uint column = sx / p[14], row = sy / p[15], at = row * p[10] + column;
+                    uint native_x = (sx - column * p[14]) * 6u / p[14];
+                    uint native_y = (sy - row * p[15]) * 11u / p[15];
+                    uint4 glyph = glyphs[at];
+                    uint value = glyph_coverage(font, (uint2)(glyph.x, glyph.w), native_x, native_y);
                     if (p[1] == 0u) {
-                        uint old = (uint)previous[sy * p[14] + sx];
+                        uint old = glyph_coverage(font, previous[at], native_x, native_y);
                         value = value > old ? value - old : 0u;
                     }
                     uint weight = (i == 0 ? 256u - fx : fx) * (j == 0 ? 256u - fy : fy);
@@ -65,9 +79,7 @@ static inline uint2 input_cell(
                     alpha += score;
                     if (score > strongest) {
                         strongest = score;
-                        uint color_at = (p[5] + sy) * p[11] + (p[4] + sx) * 4u;
-                        chosen = (uint)colors[color_at] | ((uint)colors[color_at + 1u] << 8)
-                            | ((uint)colors[color_at + 2u] << 16);
+                        chosen = glyph.y & 0x00ffffffu;
                     }
                 }
             }
@@ -75,6 +87,25 @@ static inline uint2 input_cell(
         }
     }
     return (uint2)(coverage, chosen);
+}
+
+static inline uint glyph_ink(__global const uint4 *glyphs, __global const uint4 *font,
+    __global const uint *p, uint x, uint y)
+{
+    uint column = x / p[14], row = y / p[15];
+    uint4 cell = glyphs[row * p[10] + column];
+    uint native_x = (x - column * p[14]) * 6u / p[14];
+    uint native_y = (y - row * p[15]) * 11u / p[15];
+    uint coverage = glyph_coverage(font, (uint2)(cell.x, cell.w), native_x, native_y);
+    uint alpha = (coverage * (cell.y >> 24) + 127u) / 255u;
+    uint background = (cell.w & 1u) != 0u ? cell.z : 0u;
+    uint3 foreground_rgb = (uint3)(cell.y & 255u, (cell.y >> 8) & 255u, (cell.y >> 16) & 255u);
+    uint3 background_rgb = (uint3)(background & 255u, (background >> 8) & 255u, (background >> 16) & 255u);
+    // Identical integer tint and rounding to Shell3's bitmap-copy producer.
+    background_rgb = (background_rgb * (background >> 24) + 127u) / 255u;
+    uint3 result = (foreground_rgb * alpha + background_rgb * (255u - alpha) + 127u) / 255u;
+    uint output_alpha = alpha + ((background >> 24) * (255u - alpha) + 127u) / 255u;
+    return result.x | (result.y << 8) | (result.z << 16) | (output_alpha << 24);
 }
 
 static inline float3 halo_at(__global const uint2 *cells, int x, int y, uint w, uint h) {
@@ -86,9 +117,9 @@ __attribute__((intel_reqd_sub_group_size(16)))
 __kernel void edit_life_rgba8(
     __global const uint2 *read_cells,
     __global uint2 *write_cells,
-    __global const uchar *glyphs,
-    __global uchar *previous_glyphs,
-    __global const uchar *glyph_colors,
+    __global const uint4 *glyphs,
+    __global uint2 *previous_glyphs,
+    __global const uint4 *font,
     __global const uint *foreground,
     __global uint *output,
     __global const uint *params)
@@ -101,7 +132,7 @@ __kernel void edit_life_rgba8(
         uint2 old = read_cells[at];
         uint old_alive = old.x & 1u;
         if (mode == 0u) {
-            uint2 input = input_cell(glyphs, previous_glyphs, glyph_colors, params, x, y);
+            uint2 input = input_cell(glyphs, previous_glyphs, font, params, x, y);
             uint emitted = input.x >= 46u;
             if (params[1] != 0u) {
                 write_cells[at] = (uint2)(emitted != 0u ? 0x0001ff01u : 0u,
@@ -135,16 +166,17 @@ __kernel void edit_life_rgba8(
         return;
     }
     if (mode == 3u) {
-        if (x >= params[6] || y >= params[7]) return;
-        previous_glyphs[y * params[14] + x] = glyphs[(params[5] + y) * params[10] + params[4] + x];
+        if (x >= params[10] || y >= params[11]) return;
+        uint4 glyph = glyphs[y * params[10] + x];
+        previous_glyphs[y * params[10] + x] = (uint2)(glyph.x, glyph.w);
         return;
     }
     if (mode != 2u || x >= params[2] || y >= params[3]) return;
-    uint ink = foreground[y * (params[12] >> 2) + x];
     if (x < params[4] || y < params[5] || x - params[4] >= params[6] || y - params[5] >= params[7]) {
-        output[y * (params[13] >> 2) + x] = ink | 0xff000000u;
+        output[y * (params[13] >> 2) + x] = foreground[y * (params[12] >> 2) + x] | 0xff000000u;
         return;
     }
+    uint ink = glyph_ink(glyphs, font, params, x - params[4], y - params[5]);
     float2 pixel = ((float2)((float)(x - params[4]), (float)(y - params[5])) + 0.5f)
         * (float2)((float)gw, (float)gh) / (float2)((float)params[6], (float)params[7]);
     uint2 cell_xy = convert_uint2(pixel);
@@ -160,14 +192,14 @@ __kernel void edit_life_rgba8(
         + halo_at(read_cells, (int)cell_xy.x - 1, (int)cell_xy.y, gw, gh)
         + halo_at(read_cells, (int)cell_xy.x, (int)cell_xy.y + 1, gw, gh)
         + halo_at(read_cells, (int)cell_xy.x, (int)cell_xy.y - 1, gw, gh);
-    float3 effect = (float3)(4.59f, 6.12f, 9.945f) * (1.0f - strength) + pigment * strength
+    float3 effect = pigment * strength
         + halo * 0.018f + (((cell.x >> 16) & 1u) != 0u ? pigment * tile * 0.10f : (float3)(0.0f));
-    // Fixed, premultiplied half-opacity background; shader light cannot raise
+    // Pure-black base at fixed, premultiplied 60% opacity; shader light cannot raise
     // its opacity. Foreground coverage retains its normal source-over alpha.
-    effect = clamp(effect * 0.5f, 0.0f, 128.0f);
+    effect = clamp(effect * 0.6f, 0.0f, 153.0f);
     uint ink_alpha = ink >> 24;
     float alpha = (float)ink_alpha / 255.0f;
     float3 result = rgb_float(ink) + effect * (1.0f - alpha);
-    uint output_alpha = ink_alpha + (128u * (255u - ink_alpha) + 127u) / 255u;
+    uint output_alpha = ink_alpha + (153u * (255u - ink_alpha) + 127u) / 255u;
     output[y * (params[13] >> 2) + x] = pack_rgb(result) | (output_alpha << 24);
 }

@@ -36,8 +36,14 @@ pub(super) async fn present(
             return Err("shell3-show-copy-destination-view");
         }
     };
+    // Matrix and reveal tiles contain the ordinary shell face. Edit's page
+    // selects a face per cell, so paint it directly instead of copying those
+    // raster-only tiles over the page. Retain them for returning to the shell.
+    let use_raster_caches = surface.hex_region.is_none();
     let using_pan =
-        match super::pan::PanBuffer::prepare(pan, budget, area, surface.scale, poisoned).await {
+        match super::pan::PanBuffer::prepare(
+            pan, budget, area.filter(|_| use_raster_caches), surface.scale, poisoned,
+        ).await {
             Ok(using_pan) => using_pan,
             Err(error) => {
                 if !*poisoned {
@@ -47,7 +53,7 @@ pub(super) async fn present(
             }
         };
     let mut cached = [false; 2];
-    for input in reveals {
+    for input in reveals.iter().filter(|_| use_raster_caches) {
         match super::reveal::StripCache::prepare(
             &mut strips[input.row],
             input,
@@ -72,7 +78,7 @@ pub(super) async fn present(
             continue;
         }
         if let Err(error) =
-            glyphs_for_update(view, update, surface.scale, &mut glyphs, reveals, &cached)
+            glyphs_for_update(view, update, surface, &mut glyphs, reveals, &cached)
         {
             let _ = cancel_frame_buffer(lease);
             return Err(error);
@@ -220,12 +226,12 @@ pub(super) async fn present(
 fn glyphs_for_update(
     view: FrameRgbaView,
     update: &super::super::SegmentUpdate,
-    scale: u32,
+    surface: &Ui4Surface,
     output: &mut Vec<crate::intel::GucBcs0RgbaCopy>,
     reveals: &[super::super::update::StripReveal],
     cached: &[bool; 2],
 ) -> Result<(), &'static str> {
-    let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)
+    let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(surface.scale)
         .ok_or("shell3-font-physical-size-unavailable")?;
     let row = match update.row {
         super::super::SpecialRows::TitleRow => 0,
@@ -266,13 +272,14 @@ fn glyphs_for_update(
         }
         let width = (cell_width).min(view.width - x);
         let height = (cell_height).min(view.height - y);
-        output.push(glyph_for_cell(
+        output.push(glyph_for_cell_with_face(
+            surface.font_face(cell_column as u32, row),
             x,
             y,
             width,
             height,
             (character, update.colors.get(column).copied().flatten()),
-            scale,
+            surface.scale,
         )?);
     }
     Ok(())
@@ -286,9 +293,25 @@ pub(super) fn glyph_for_cell(
     cell: (char, Option<super::super::RgbaColor>),
     scale: u32,
 ) -> Result<crate::intel::GucBcs0RgbaCopy, &'static str> {
+    glyph_for_cell_with_face(
+        crate::r::services::shell3_font_service::FontFace::Raster,
+        x, y, width, height, cell, scale,
+    )
+}
+
+pub(super) fn glyph_for_cell_with_face(
+    face: crate::r::services::shell3_font_service::FontFace,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    cell: (char, Option<super::super::RgbaColor>),
+    scale: u32,
+) -> Result<crate::intel::GucBcs0RgbaCopy, &'static str> {
     let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)
         .ok_or("shell3-font-physical-size-unavailable")?;
-    let mut copy = crate::r::services::shell3_font_service::glyph(
+    let mut copy = crate::r::services::shell3_font_service::glyph_with_face(
+        face,
         cell.0,
         cell_width,
         cell_height,

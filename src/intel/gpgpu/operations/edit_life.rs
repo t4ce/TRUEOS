@@ -29,6 +29,7 @@ const _: () = {
     assert!(EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes == 128);
     assert!(EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes == 96);
     assert!(EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT.bindings.len() == 8);
+    assert!(edit_life_abi_matches());
     assert!(EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT.simd_width == 16);
     assert!(EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT.scratch_bytes == 0);
     assert!(EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT.slm_bytes == 0);
@@ -47,20 +48,24 @@ fn upload_edit_life_kernel() -> Option<UploadedKernelArtifact> {
     Some(upload)
 }
 
-/// No buffers here belong to the input or compositor task. Upload copies the
-/// newest immutable page once; generations and presentation read retained GPU
-/// inputs. All submissions retire before this owner can be modified or freed.
+/// Compact glyph and color inputs belong to this effect task. The source frame
+/// is borrowed only during a synchronous render; its caller keeps the exact
+/// published front pinned through retirement (or quarantines that read lease).
+/// Generations reuse the uploaded cells and baked glyph masks.
 pub(crate) struct EditLifeState {
     width: u32,
     height: u32,
     viewport: GpgpuRect,
     grid_width: u32,
     grid_height: u32,
+    cell_width: u32,
+    cell_height: u32,
+    columns: u32,
+    rows: u32,
     cells: [GpgpuOwnedRgba8Surface; 2],
     glyphs: GpgpuOwnedRgba8Surface,
     previous: GpgpuOwnedRgba8Surface,
-    colors: GpgpuOwnedRgba8Surface,
-    page: GpgpuOwnedRgba8Surface,
+    font: GpgpuOwnedRgba8Surface,
     read: usize,
     uploaded: bool,
     pending_snapshot: bool,
@@ -72,8 +77,10 @@ pub(crate) struct EditLifeState {
 }
 
 impl EditLifeState {
-    pub(crate) fn new(width: u32, height: u32, viewport: GpgpuRect) -> Option<Self> {
-        if width == 0 || height == 0 || viewport.x < 0 || viewport.y < 0
+    pub(crate) fn new(width: u32, height: u32, viewport: GpgpuRect,
+        cell_width: u32, cell_height: u32) -> Option<Self>
+    {
+        if width == 0 || height == 0 || cell_width == 0 || cell_height == 0 || viewport.x < 0 || viewport.y < 0
             || viewport.is_empty()
             || (viewport.x as u32).checked_add(viewport.width).is_none_or(|right| right > width)
             || (viewport.y as u32).checked_add(viewport.height).is_none_or(|bottom| bottom > height)
@@ -83,15 +90,23 @@ impl EditLifeState {
         let grid_width = viewport.width.div_ceil(3).min(512);
         let grid_height = viewport.height.div_ceil(3).min(512);
         let cell_words = grid_width.checked_mul(grid_height)?.checked_mul(2)?;
+        let glyph_count = width.div_ceil(cell_width).checked_mul(height.div_ceil(cell_height))?;
+        let font_masks = &crate::r::services::shell3_font_service::hex::MASKS;
+        let font = edit_life_allocation(u32::try_from(font_masks.len()).ok()?.checked_mul(4)?, 1)?;
+        unsafe { core::ptr::copy_nonoverlapping(font_masks.as_ptr().cast::<u8>(), font.virt,
+            core::mem::size_of_val(font_masks)); }
+        super::dma_flush(font.virt, core::mem::size_of_val(font_masks));
         Some(Self {
-            width, height, viewport, grid_width, grid_height,
+            width, height, viewport, grid_width, grid_height, cell_width, cell_height,
+            columns: viewport.width.div_ceil(cell_width), rows: viewport.height.div_ceil(cell_height),
             // A one-row allocation keeps uint2 cells tightly packed without
             // inserting the RGBA helper's 64-byte padding between cell rows.
             cells: [edit_life_allocation(cell_words, 1)?, edit_life_allocation(cell_words, 1)?],
-            glyphs: edit_life_allocation(width.div_ceil(4), height)?,
-            previous: edit_life_allocation(viewport.width.div_ceil(4), viewport.height)?,
-            colors: edit_life_allocation(width, height)?,
-            page: edit_life_allocation(width, height)?,
+            // uint4 terminal cells and uint2 previous glyph/flags pairs. Full
+            // terminal capacity lets gutter shifts reuse the same inputs.
+            glyphs: edit_life_allocation(glyph_count.checked_mul(4)?, 1)?,
+            previous: edit_life_allocation(glyph_count.checked_mul(2)?, 1)?,
+            font,
             read: 0, uploaded: false, pending_snapshot: false,
             initialized: false, quarantined: false,
             timing_kinds: 0, renders: 0, slow_renders: 0,
@@ -115,27 +130,37 @@ impl EditLifeState {
         let grid_height = viewport.height.div_ceil(3).min(512);
         let Some(cell_bytes) = (grid_width as usize).checked_mul(grid_height as usize)
             .and_then(|cells| cells.checked_mul(8)) else { return false; };
-        let previous = self.previous.surface();
+        let columns = viewport.width.div_ceil(self.cell_width);
+        let rows = viewport.height.div_ceil(self.cell_height);
+        let Some(glyph_bytes) = (columns as usize).checked_mul(rows as usize)
+            .and_then(|cells| cells.checked_mul(8)) else { return false; };
         if self.cells.iter().any(|cells| cells.surface().bytes < cell_bytes)
-            || previous.pitch_bytes < viewport.width || previous.height < viewport.height
+            || self.previous.surface().bytes < glyph_bytes
+            || self.glyphs.surface().bytes < glyph_bytes.saturating_mul(2)
         { return false; }
         self.viewport = viewport;
         self.grid_width = grid_width;
         self.grid_height = grid_height;
+        self.columns = columns;
+        self.rows = rows;
         self.initialized = false;
         self.pending_snapshot = true;
         true
     }
 
-    pub(crate) fn upload(&mut self, mask: &[u8], colors: &[u8], page: &[u8]) -> bool {
-        let Some(pixels) = (self.width as usize).checked_mul(self.height as usize) else { return false; };
-        let Some(rgba_bytes) = pixels.checked_mul(4) else { return false; };
-        if self.quarantined || direct_rcs_context_is_quarantined()
-            || mask.len() != pixels || colors.len() != rgba_bytes || page.len() != rgba_bytes
+    /// Transfer one compact terminal cell, not expanded glyph pixels. The shared
+    /// baked 6x11 hex masks are resolved by the kernel for seeding and drawing.
+    pub(crate) fn upload(&mut self, cells: &[[u32; 4]]) -> bool {
+        let Some(count) = (self.columns as usize).checked_mul(self.rows as usize) else { return false; };
+        if self.quarantined || direct_rcs_context_is_quarantined() || cells.len() != count
+            || core::mem::size_of_val(cells) > self.glyphs.surface().bytes
+            || count.saturating_mul(8) > self.previous.surface().bytes
         { return false; }
-        edit_life_upload_rows(&self.glyphs, mask, self.width as usize, self.height as usize);
-        edit_life_upload_rows(&self.colors, colors, self.width as usize * 4, self.height as usize);
-        edit_life_upload_rows(&self.page, page, self.width as usize * 4, self.height as usize);
+        unsafe {
+            core::ptr::copy_nonoverlapping(cells.as_ptr().cast::<u8>(), self.glyphs.virt,
+                core::mem::size_of_val(cells));
+        }
+        super::dma_flush(self.glyphs.virt, core::mem::size_of_val(cells));
         self.uploaded = true;
         self.pending_snapshot = true;
         true
@@ -144,11 +169,16 @@ impl EditLifeState {
     /// `steps` is a bounded clock debt, normally zero or one at speed 1/10 Hz.
     /// A fresh snapshot always advances its comparison baseline; `emit` only
     /// chooses whether positive new glyph ink joins the current world.
-    pub(crate) fn render(&mut self, dst: GpgpuRgba8Surface, reset: bool, emit: bool, steps: u32)
+    pub(crate) fn render(&mut self, dst: GpgpuRgba8Surface, source: GpgpuRgba8Surface,
+        reset: bool, emit: bool, steps: u32)
         -> GpgpuRgba8KernelResult
     {
         if self.quarantined || !self.uploaded || !dst.is_valid()
-            || dst.storage_order != GpgpuRgba8StorageOrder::Rgba
+            || dst.storage_order != GpgpuRgba8StorageOrder::Rgba || !source.is_valid()
+            || source.storage_order != GpgpuRgba8StorageOrder::Rgba
+            || (source.width, source.height) != self.extent()
+            || gpu_ranges_overlap(source.gpu, source.bytes, dst.gpu, dst.bytes)
+            || gpu_ranges_overlap(source.phys, source.bytes, dst.phys, dst.bytes)
             || (dst.width, dst.height) != self.extent() || steps > 5
             || direct_rcs_context_is_quarantined()
         { return GpgpuRgba8KernelResult::default(); }
@@ -168,7 +198,7 @@ impl EditLifeState {
             && direct_rcs_init_ppgtt(state)
             && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
         for resource in [self.cells[0].surface(), self.cells[1].surface(),
-            self.glyphs.surface(), self.previous.surface(), self.colors.surface(), self.page.surface()]
+            self.glyphs.surface(), self.previous.surface(), self.font.surface(), source]
         {
             prepared = prepared && direct_rcs_map_ppgtt_kernel(state, resource.gpu, resource.phys, resource.bytes);
         }
@@ -187,7 +217,7 @@ impl EditLifeState {
         let mut pass_ms = [0u64; 4];
         let mut run = |this: &mut Self, mode: u32, reseed: bool| {
             let pass_started = direct_rcs_now_tick();
-            let outcome = this.dispatch(dev, state, upload, dst, mode, reseed);
+            let outcome = this.dispatch(dev, state, upload, dst, source, mode, reseed);
             passes += 1;
             pass_ms[mode as usize] += direct_rcs_elapsed_ms_since(pass_started);
             submitted |= outcome.submitted;
@@ -235,25 +265,25 @@ impl EditLifeState {
 
     fn quarantine(&mut self) {
         self.quarantined = true;
-        for resource in [&self.cells[0], &self.cells[1], &self.glyphs, &self.previous, &self.colors, &self.page] {
+        for resource in [&self.cells[0], &self.cells[1], &self.glyphs, &self.previous, &self.font] {
             resource.quarantine_backing();
         }
     }
 
     fn dispatch(&self, dev: super::Dev, state: DirectRcsState, upload: UploadedKernelArtifact,
-        dst: GpgpuRgba8Surface, mode: u32, reset: bool) -> DirectRcsDispatchOutcome
+        dst: GpgpuRgba8Surface, source: GpgpuRgba8Surface, mode: u32, reset: bool) -> DirectRcsDispatchOutcome
     {
         let (width, height) = match mode {
             0 | 1 => (self.grid_width, self.grid_height),
             2 => (self.width, self.height),
-            3 => (self.viewport.width, self.viewport.height),
+            3 => (self.columns, self.rows),
             _ => return DirectRcsDispatchOutcome::default(),
         };
         // GPGPU_WALKER carries independent u32 group counts. These domains are
         // bounded by the editor page/grid limits; the previous 128K pixel cap
         // was a local chunking policy, not a command dimension limit. One
         // walker per ordered pass avoids a context submit/save/poll per chunk.
-        let encoded = encode_edit_life_batch(state, upload, self, dst, mode, reset, width, 0, height);
+        let encoded = encode_edit_life_batch(state, upload, self, dst, source, mode, reset, width, 0, height);
         let admission = if encoded { direct_rcs_submit_batch_state(dev, state) }
             else { DirectRcsSubmissionState::Rejected };
         let submitted = admission.may_have_submitted();
@@ -277,34 +307,37 @@ fn edit_life_allocation(width: u32, height: u32) -> Option<GpgpuOwnedRgba8Surfac
     Some(allocation)
 }
 
-fn edit_life_upload_rows(allocation: &GpgpuOwnedRgba8Surface, data: &[u8], row_bytes: usize, rows: usize) {
-    for y in 0..rows {
-        unsafe { core::ptr::copy_nonoverlapping(data.as_ptr().add(y * row_bytes),
-            allocation.virt.add(y * allocation.surface.pitch_bytes as usize), row_bytes); }
-    }
-    super::dma_flush(allocation.virt, allocation.surface.bytes);
-}
-
-fn edit_life_abi_matches() -> bool {
+// Keep the encoder's exact payload layout a compile-time contract. A fresh
+// bake that changes implicit arguments must fail the build, not reject every
+// render silently at runtime.
+const fn edit_life_abi_matches() -> bool {
     let contract = &EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT;
     if contract.payload_args.len() != 8 || contract.bindings.len() != 8 { return false; }
-    for (index, arg) in contract.payload_args.iter().enumerate() {
-        if arg.arg_index as usize != index || arg.kind != GpgpuArtifactArgKind::ByPointer
+    let mut index = 0;
+    while index < 8 {
+        let arg = &contract.payload_args[index];
+        if arg.arg_index as usize != index || !matches!(arg.kind, GpgpuArtifactArgKind::ByPointer)
             || arg.offset_bytes as usize != 48 + index * 8 || arg.size_bytes != 8
             || contract.bindings[index].arg_index as usize != index
             || contract.bindings[index].bti as usize != index { return false; }
+        index += 1;
     }
-    // Four generated stateful buffer-offset arguments remain zero in the
-    // cleared payload. Reject drift to an unrecognized implicit argument.
-    contract.implicit_payload_args.len() == 7
-        && contract.implicit_payload_args[3..].iter().enumerate().all(|(index, arg)|
-            arg.offset_bytes as usize == 112 + index * 4 && arg.size_bytes == 4
-            && matches!(arg.kind, GpgpuArtifactImplicitArgKind::BufferOffset { arg_index }
-                if arg_index == [0, 2, 3, 4][index]))
+    // The sole generated stateful buffer offset stays zero in the cleared
+    // payload. All other implicit fields are written by the encoder below.
+    let implicit = contract.implicit_payload_args;
+    implicit.len() == 4
+        && matches!(implicit[0].kind, GpgpuArtifactImplicitArgKind::GlobalIdOffset)
+        && implicit[0].offset_bytes == 0 && implicit[0].size_bytes == 12
+        && matches!(implicit[1].kind, GpgpuArtifactImplicitArgKind::LocalSize)
+        && implicit[1].offset_bytes == 12 && implicit[1].size_bytes == 12
+        && matches!(implicit[2].kind, GpgpuArtifactImplicitArgKind::EnqueuedLocalSize)
+        && implicit[2].offset_bytes == 32 && implicit[2].size_bytes == 12
+        && matches!(implicit[3].kind, GpgpuArtifactImplicitArgKind::BufferOffset { arg_index: 0 })
+        && implicit[3].offset_bytes == 112 && implicit[3].size_bytes == 4
 }
 
 fn encode_edit_life_batch(state: DirectRcsState, upload: UploadedKernelArtifact,
-    life: &EditLifeState, dst: GpgpuRgba8Surface, mode: u32, reset: bool,
+    life: &EditLifeState, dst: GpgpuRgba8Surface, source: GpgpuRgba8Surface, mode: u32, reset: bool,
     width: u32, first_row: u32, rows: u32) -> bool
 {
     if !edit_life_abi_matches() || upload.bin_sha256 != EDIT_LIFE_RGBA8_ARTIFACT.bin_sha256
@@ -316,7 +349,7 @@ fn encode_edit_life_batch(state: DirectRcsState, upload: UploadedKernelArtifact,
     }
     let uniforms_gpu = DIRECT_RCS_GPU_VA_BATCH_BASE + EDIT_LIFE_UNIFORMS as u64;
     let resources = [life.cells[life.read].surface(), life.cells[1 - life.read].surface(),
-        life.glyphs.surface(), life.previous.surface(), life.colors.surface(), life.page.surface(), dst];
+        life.glyphs.surface(), life.previous.surface(), life.font.surface(), source, dst];
     let mut buffers = [(0u64, 0usize); 8];
     for (index, resource) in resources.into_iter().enumerate() { buffers[index] = (resource.gpu, resource.bytes); }
     buffers[7] = (uniforms_gpu, 64);
@@ -342,8 +375,8 @@ fn encode_edit_life_batch(state: DirectRcsState, upload: UploadedKernelArtifact,
         for lane in 0..16 { core::ptr::write_volatile(local_ids.add(lane), lane as u16); }
         let uniforms = [mode, reset as u32, life.width, life.height,
             life.viewport.x as u32, life.viewport.y as u32, life.viewport.width, life.viewport.height,
-            life.grid_width, life.grid_height, life.glyphs.surface.pitch_bytes, life.colors.surface.pitch_bytes,
-            life.page.surface.pitch_bytes, dst.pitch_bytes, life.previous.surface.pitch_bytes, 0];
+            life.grid_width, life.grid_height, life.columns, life.rows,
+            source.pitch_bytes, dst.pitch_bytes, life.cell_width, life.cell_height];
         core::ptr::copy_nonoverlapping(uniforms.as_ptr(), state.batch_virt.add(EDIT_LIFE_UNIFORMS) as *mut u32, uniforms.len());
     }
     let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, DIRECT_RCS_BATCH_BYTES / 4) };

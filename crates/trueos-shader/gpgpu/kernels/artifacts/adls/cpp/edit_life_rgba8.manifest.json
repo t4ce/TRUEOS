@@ -5,11 +5,11 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "401b64bb03245d72613699d2220c7723070d84b65e6f97a923d7fba9bfc85370",
-      "size_bytes": 101064,
+      "sha256": "88e1d39921b6687241ca5d2fd51f6d40d10aa7dd8e3b18027de623be722fa71e",
+      "size_bytes": 82552,
       "type": "relocatable",
-      "ze_info_section_offset": 94024,
-      "ze_info_section_size": 6228
+      "ze_info_section_offset": 75888,
+      "ze_info_section_size": 5854
     },
     "kernels": [
       {
@@ -76,24 +76,6 @@
             "arg_index": 0,
             "arg_type": "buffer_offset",
             "offset": 112,
-            "size": 4
-          },
-          {
-            "arg_index": 2,
-            "arg_type": "buffer_offset",
-            "offset": 116,
-            "size": 4
-          },
-          {
-            "arg_index": 3,
-            "arg_type": "buffer_offset",
-            "offset": 120,
-            "size": 4
-          },
-          {
-            "arg_index": 4,
-            "arg_type": "buffer_offset",
-            "offset": 124,
             "size": 4
           }
         ],
@@ -284,7 +266,7 @@
             "address_qualifier": "__global",
             "index": 2,
             "name": "glyphs",
-            "type_name": "uchar*;8",
+            "type_name": "uint4*;8",
             "type_qualifiers": "const"
           },
           {
@@ -292,15 +274,15 @@
             "address_qualifier": "__global",
             "index": 3,
             "name": "previous_glyphs",
-            "type_name": "uchar*;8",
+            "type_name": "uint2*;8",
             "type_qualifiers": "NONE"
           },
           {
             "access_qualifier": "NONE",
             "address_qualifier": "__global",
             "index": 4,
-            "name": "glyph_colors",
-            "type_name": "uchar*;8",
+            "name": "font",
+            "type_name": "uint4*;8",
             "type_qualifiers": "const"
           },
           {
@@ -330,13 +312,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 43936,
+          "entry_size": 22872,
           "section_alignment": 0,
           "section_name": ".text.edit_life_rgba8",
           "section_offset": 64,
-          "section_size": 44096,
-          "sha256": "8d39b535e08e5961a590d246161176efba062ef003408bb49750ecf258e86807",
-          "symbol_size": 43936,
+          "section_size": 23040,
+          "sha256": "f3b0f4bfb27076a1f2b038156642965b971cf376cb355cea1e3f803756fe2ff8",
+          "symbol_size": 22872,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -352,10 +334,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 44232,
-      "embedded_section_size": 49720,
-      "sha256": "1fdd8f543e60f0ed13bfef30c00623396f9dcb648808a28ac3079781839fa198",
-      "size_bytes": 49720
+      "embedded_section_offset": 23176,
+      "embedded_section_size": 52640,
+      "sha256": "39b166e1296895adc4171ad3b15c535828ecb3ebf451446115c930639ed1dc04",
+      "size_bytes": 52640
     }
   },
   "provenance": {
@@ -554,9 +536,14 @@
   "source": {
     "inputs": [
       {
+        "path": "TRUEOS/crates/trueos-shader/gpgpu/kernels/edit_life_hex_font.generated.h",
+        "sha256": "51046c30f0e24e7fb91d995fc9deadc80573f1c7af4e90c328af3cff6a162ae3",
+        "size_bytes": 2176
+      },
+      {
         "path": "TRUEOS/crates/trueos-shader/gpgpu/kernels/edit_life_rgba8.clcpp",
-        "sha256": "35730bcb07ee08be6052529dbb13e53a078df85565e70c93c78bb8e6224dde0d",
-        "size_bytes": 8467
+        "sha256": "9aa24ed2f32d678c6385d1d069410259306684bca14c72a6e2902ed4873e14d3",
+        "size_bytes": 10354
       }
     ],
     "language": "C++ for OpenCL",
