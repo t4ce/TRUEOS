@@ -46,7 +46,7 @@ The next generation of algorithms will stand on the same first stone.
 Each bar counts building blocks already in the code, not benchmarks. Keypoints 8–10 come from the platform vision below.
 
 ### § We minimize power consumption
-`███░░░░░░░` **30%** · **Achieved:** idle cores halt by default and wake on work or timers ([power/mod.rs](src/power/mod.rs), [runtime.rs](src/runtime.rs)), and HWP and RAPL code is in tree ([hwp.rs](src/power/hwp.rs), [rapl.rs](src/power/rapl.rs)). **Next:** enable RAPL readings and publish measured watts.
+`███░░░░░░░` **30%** · **Achieved:** idle cores halt by default and wake on work or timers ([power/mod.rs](src/power/mod.rs), [runtime.rs](src/runtime.rs)), and HWP and RAPL code is in tree ([hwp.rs](src/power/hwp.rs), [rapl.rs](src/power/rapl.rs)). **Observed on the i5-14500T rig:** 32–33°C across ten desktop snapshots; energy readings are still pending. An explicit package-only RAPL sampler is now in source ([measurement notes](tools/aiupsell/power/README.md)). **Next:** validate it on the rig and publish watts and joules per completed job.
 
 ### § Instant kernel updates with 0 downtime
 `████░░░░░░` **40%** · **Achieved:** `update live` swaps the kernel in RAM through 20 logged steps, with AP parking, PCI DMA containment, and handoff validation ([os_update.rs](src/shell3/os_update.rs), [live_update.rs](src/live_update.rs)). **Next:** a measured downtime figure for the swap.

@@ -22,7 +22,6 @@ const EDIT_LIFE_CROSS_BYTES: usize = 128;
 const EDIT_LIFE_INDIRECT_BYTES: usize = 256;
 const EDIT_LIFE_POST_SLOT: usize = 50;
 const EDIT_LIFE_POST_MARKER: u32 = 0xC0DE_E102;
-const EDIT_LIFE_MAX_PIXELS_PER_WALKER: u32 = 128 * 1024;
 static EDIT_LIFE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 
 const _: () = {
@@ -67,6 +66,9 @@ pub(crate) struct EditLifeState {
     pending_snapshot: bool,
     initialized: bool,
     quarantined: bool,
+    timing_kinds: u8,
+    renders: u64,
+    slow_renders: u64,
 }
 
 impl EditLifeState {
@@ -92,11 +94,38 @@ impl EditLifeState {
             page: edit_life_allocation(width, height)?,
             read: 0, uploaded: false, pending_snapshot: false,
             initialized: false, quarantined: false,
+            timing_kinds: 0, renders: 0, slow_renders: 0,
         })
     }
 
     pub(crate) fn extent(&self) -> (u32, u32) { (self.width, self.height) }
     pub(crate) fn viewport(&self) -> GpgpuRect { self.viewport }
+
+    /// Gutter changes often move or slightly shrink the editor viewport while
+    /// its page extent stays fixed. Reuse the retained storage when it fits;
+    /// the next seed overwrites both the world and its comparison baseline.
+    pub(crate) fn set_viewport(&mut self, viewport: GpgpuRect) -> bool {
+        if self.quarantined || direct_rcs_context_is_quarantined()
+            || viewport.x < 0 || viewport.y < 0 || viewport.is_empty()
+            || (viewport.x as u32).checked_add(viewport.width).is_none_or(|right| right > self.width)
+            || (viewport.y as u32).checked_add(viewport.height).is_none_or(|bottom| bottom > self.height)
+        { return false; }
+        if viewport == self.viewport { return true; }
+        let grid_width = viewport.width.div_ceil(3).min(512);
+        let grid_height = viewport.height.div_ceil(3).min(512);
+        let Some(cell_bytes) = (grid_width as usize).checked_mul(grid_height as usize)
+            .and_then(|cells| cells.checked_mul(8)) else { return false; };
+        let previous = self.previous.surface();
+        if self.cells.iter().any(|cells| cells.surface().bytes < cell_bytes)
+            || previous.pitch_bytes < viewport.width || previous.height < viewport.height
+        { return false; }
+        self.viewport = viewport;
+        self.grid_width = grid_width;
+        self.grid_height = grid_height;
+        self.initialized = false;
+        self.pending_snapshot = true;
+        true
+    }
 
     pub(crate) fn upload(&mut self, mask: &[u8], colors: &[u8], page: &[u8]) -> bool {
         let Some(pixels) = (self.width as usize).checked_mul(self.height as usize) else { return false; };
@@ -125,13 +154,42 @@ impl EditLifeState {
         { return GpgpuRgba8KernelResult::default(); }
         let started = direct_rcs_now_tick();
         let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+        let lock_ms = direct_rcs_elapsed_ms_since(started);
+        let setup_started = direct_rcs_now_tick();
         let Some(dev) = super::claimed_device() else { return GpgpuRgba8KernelResult::default(); };
         let Some(upload) = upload_edit_life_kernel() else { return GpgpuRgba8KernelResult::default(); };
         let Some(state) = direct_rcs_state_once(dev) else { return GpgpuRgba8KernelResult::default(); };
+        // The system-service lane rebuilds its entire PPGTT on init. Prepare
+        // this retained page once while the submission lock keeps mappings
+        // stable for every pass; rebuilding it for every row chunk made a
+        // reset flush dozens of whole page tables before it became visible.
+        let mut prepared = !direct_rcs_context_is_quarantined()
+            && direct_rcs_forcewake(dev) && direct_rcs_map_state(dev, state)
+            && direct_rcs_init_ppgtt(state)
+            && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+        for resource in [self.cells[0].surface(), self.cells[1].surface(),
+            self.glyphs.surface(), self.previous.surface(), self.colors.surface(), self.page.surface()]
+        {
+            prepared = prepared && direct_rcs_map_ppgtt_kernel(state, resource.gpu, resource.phys, resource.bytes);
+        }
+        prepared = prepared && direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, true);
+        if !prepared { return GpgpuRgba8KernelResult::default(); }
+        let setup_ms = direct_rcs_elapsed_ms_since(setup_started);
+        let (kind, kind_bit) = if !self.initialized && self.renders == 0 { ("startup", 1) }
+            else if !self.initialized { ("viewport-reset", 16) }
+            else if reset { ("scroll-reset", 2) }
+            else if self.pending_snapshot { ("page-update", 4) }
+            else { ("generation", 8) };
+        let dispatch_started = direct_rcs_now_tick();
         let mut submitted = false;
         let mut marker = 0;
+        let mut passes = 0u32;
+        let mut pass_ms = [0u64; 4];
         let mut run = |this: &mut Self, mode: u32, reseed: bool| {
+            let pass_started = direct_rcs_now_tick();
             let outcome = this.dispatch(dev, state, upload, dst, mode, reseed);
+            passes += 1;
+            pass_ms[mode as usize] += direct_rcs_elapsed_ms_since(pass_started);
             submitted |= outcome.submitted;
             marker = outcome.observed;
             outcome.observed == EDIT_LIFE_POST_MARKER
@@ -153,8 +211,25 @@ impl EditLifeState {
         }
         if ok { ok = run(self, 2, false); }
         if !ok && submitted { self.quarantine(); }
+        let submit_ms = direct_rcs_elapsed_ms_since(dispatch_started);
+        let total_ms = direct_rcs_elapsed_ms_since(started);
+        self.renders = self.renders.saturating_add(1);
+        if total_ms >= 100 { self.slow_renders = self.slow_renders.saturating_add(1); }
+        // First timings distinguish startup/reset/input from steady animation.
+        // Power-of-two overrun reporting keeps a slow rig's log bounded.
+        if self.timing_kinds & kind_bit == 0 || !ok
+            || (total_ms >= 100 && self.slow_renders.is_power_of_two())
+            || self.renders % 600 == 0
+        {
+            self.timing_kinds |= kind_bit;
+            crate::log_info!(target: "ui4/edit-life";
+                "intel/gpgpu: edit-life timing kind={} ok={} extent={}x{} grid={}x{} steps={} passes={} ppgtt_prepares=1 lock_ms={} setup_ms={} seed_ms={} baseline_ms={} step_ms={} composite_ms={} submit_ms={} total_ms={} renders={} slow_renders={}\n",
+                kind, ok as u8, self.width, self.height, self.grid_width, self.grid_height,
+                steps, passes, lock_ms, setup_ms, pass_ms[0], pass_ms[3], pass_ms[1], pass_ms[2],
+                submit_ms, total_ms, self.renders, self.slow_renders);
+        }
         GpgpuRgba8KernelResult { ok, submitted, marker,
-            submit_ms: direct_rcs_elapsed_ms_since(started),
+            submit_ms: total_ms,
             release: ok.then(|| gpgpu_rgba8_release(dst)) }
     }
 
@@ -174,39 +249,25 @@ impl EditLifeState {
             3 => (self.viewport.width, self.viewport.height),
             _ => return DirectRcsDispatchOutcome::default(),
         };
-        let rows_per_walker = (EDIT_LIFE_MAX_PIXELS_PER_WALKER / width.div_ceil(16).saturating_mul(16)).max(1);
-        let mut submitted = false;
-        let mut first_row = 0;
-        while first_row < height {
-            let rows = rows_per_walker.min(height - first_row);
-            let forcewake = direct_rcs_forcewake(dev);
-            let mut prepared = forcewake && direct_rcs_map_state(dev, state)
-                && direct_rcs_init_ppgtt(state)
-                && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-            for resource in [self.cells[self.read].surface(), self.cells[1 - self.read].surface(),
-                self.glyphs.surface(), self.previous.surface(), self.colors.surface(), self.page.surface()]
-            {
-                prepared = prepared && direct_rcs_map_ppgtt_kernel(state, resource.gpu, resource.phys, resource.bytes);
-            }
-            prepared = prepared && direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, true)
-                && encode_edit_life_batch(state, upload, self, dst, mode, reset, width, first_row, rows);
-            let admission = if prepared { direct_rcs_submit_batch_state(dev, state) }
-                else { DirectRcsSubmissionState::Rejected };
-            submitted |= admission.may_have_submitted();
-            let observed = if admission.can_poll() {
-                direct_rcs_poll_result_slot_timeout_ms(state, EDIT_LIFE_POST_SLOT, EDIT_LIFE_POST_MARKER,
-                    UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS)
-            } else { 0 };
-            if observed != EDIT_LIFE_POST_MARKER {
-                if admission.may_have_submitted() { quarantine_direct_rcs_context("edit-life-marker-timeout"); }
-                crate::log_error!(target: "gpgpu";
-                    "intel/gpgpu: edit-life failed mode={} prepared={} submitted={} marker=0x{:08X} row={} rows={}\n",
-                    mode, prepared as u8, admission.may_have_submitted() as u8, observed, first_row, rows);
-                return DirectRcsDispatchOutcome { submitted, observed };
-            }
-            first_row += rows;
+        // GPGPU_WALKER carries independent u32 group counts. These domains are
+        // bounded by the editor page/grid limits; the previous 128K pixel cap
+        // was a local chunking policy, not a command dimension limit. One
+        // walker per ordered pass avoids a context submit/save/poll per chunk.
+        let encoded = encode_edit_life_batch(state, upload, self, dst, mode, reset, width, 0, height);
+        let admission = if encoded { direct_rcs_submit_batch_state(dev, state) }
+            else { DirectRcsSubmissionState::Rejected };
+        let submitted = admission.may_have_submitted();
+        let observed = if admission.can_poll() {
+            direct_rcs_poll_result_slot_timeout_ms(state, EDIT_LIFE_POST_SLOT, EDIT_LIFE_POST_MARKER,
+                UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS)
+        } else { 0 };
+        if observed != EDIT_LIFE_POST_MARKER {
+            if submitted { quarantine_direct_rcs_context("edit-life-marker-timeout"); }
+            crate::log_error!(target: "gpgpu";
+                "intel/gpgpu: edit-life failed mode={} encoded={} submitted={} marker=0x{:08X} width={} height={}\n",
+                mode, encoded as u8, submitted as u8, observed, width, height);
         }
-        DirectRcsDispatchOutcome { submitted, observed: EDIT_LIFE_POST_MARKER }
+        DirectRcsDispatchOutcome { submitted, observed }
     }
 }
 

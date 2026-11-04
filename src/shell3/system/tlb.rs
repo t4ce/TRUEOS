@@ -42,6 +42,8 @@ fn selected_command(index: usize) -> Option<String> {
         Some(TLB_MENU_ROWS[index].0.into())
     } else if index == TLB_MENU_ROWS.len() {
         Some("rapl store".into())
+    } else if index == TLB_MENU_ROWS.len() + 1 {
+        Some("rapl sample".into())
     } else {
         None
     }
@@ -74,6 +76,7 @@ async fn menu_task(target: super::MatrixTarget) {
         .map(|(name, description)| alloc::format!("{name} — {description}"))
         .collect();
     labels.push("rapl store — Save RAPL history to TRUEOSFS".into());
+    labels.push("rapl sample — Read package energy now (Intel 06_BF bare metal)".into());
     labels.push("Return".into());
     let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
     while let Some((bytes, _)) = tui::native_read(&target) {

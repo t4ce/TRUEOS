@@ -15,7 +15,7 @@ use crate::shell3::table::TlbTable;
 
 pub(crate) const DUMP_FILE_PATH: &str = "trueos/pci/tlb.txt";
 
-const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|hfi|turbo|ucode|pmu|rapl [store]|thermal|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|smbios|x2apic|usb|dump]`";
+const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|hfi|turbo|ucode|pmu|rapl [sample|store]|thermal|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|smbios|x2apic|usb|dump]`";
 pub(crate) const TLB_ACPI_USAGE: &str = "tlb: usage `tlb acpi [sig [index]]`";
 pub(crate) const TLB_AML_USAGE: &str = "tlb: usage `tlb aml [ec|symbol <path>|prefix <path>]`";
 const ACPI_HEXDUMP_MAX_BYTES: usize = 512;
@@ -31,7 +31,7 @@ pub(crate) const TLB_MENU_ROWS: [(&str, &str); 22] = [
     ("turbo", "List CPU turbo state and all-core verify stats"),
     ("ucode", "Show Intel microcode loader snapshot"),
     ("pmu", "Show architectural PMU/perf snapshot"),
-    ("rapl", "Show Intel RAPL energy or store its history (`tlb rapl store`)"),
+    ("rapl", "Show cached package energy; explicit `tlb rapl sample` / `tlb rapl store`"),
     ("thermal", "Show latest Intel thermal sensor snapshot"),
     ("acpi", "List ACPI tables or dump one (`tlb acpi SSDT 3`)"),
     ("aml", "Inspect parsed AML namespace (`tlb aml ec|symbol|prefix`)"),
@@ -1794,8 +1794,10 @@ fn cmd_tlb_rapl(io: &Output) {
         ],
         |text| line(io, text),
     );
-    field_table
-        .emit_row(&["cpuid-supported", yes_no(snapshot.cpuid_supported)], |text| line(io, text));
+    field_table.emit_row(
+        &["cpuid-supported", yes_no(snapshot.cpuid_supported)],
+        |text| line(io, text),
+    );
     field_table.emit_row(
         &[
             "updates",
@@ -1810,7 +1812,9 @@ fn cmd_tlb_rapl(io: &Output) {
         ],
         |text| line(io, text),
     );
-    field_table.emit_row(&["sample-valid", yes_no(snapshot.sample_valid)], |text| line(io, text));
+    field_table.emit_row(&["sample-valid", yes_no(snapshot.sample_valid)], |text| {
+        line(io, text)
+    });
     field_table.emit_row(
         &[
             "interval-ms",
@@ -1825,11 +1829,20 @@ fn cmd_tlb_rapl(io: &Output) {
     let Some(probe) = snapshot.latest else {
         field_table.emit_footer(|text| line(io, text));
         if snapshot.update_count == 0 {
-            line(io, "tlb rapl: no RAPL service snapshot has been published yet");
+            line(
+                io,
+                "tlb rapl: no RAPL service snapshot has been published yet",
+            );
         } else if snapshot.cpuid_supported {
-            line(io, "tlb rapl: no readable RAPL sample in the latest snapshot");
+            line(
+                io,
+                "tlb rapl: no readable RAPL sample in the latest snapshot",
+            );
         } else {
-            line(io, "tlb rapl: Intel MSR/RAPL path unavailable on this hardware");
+            line(
+                io,
+                "tlb rapl: RAPL profile unavailable (requires bare-metal Intel family 06 model BF)",
+            );
         }
         return;
     };
@@ -1878,8 +1891,8 @@ fn cmd_tlb_rapl(io: &Output) {
         let watts = previous_sample.and_then(|earlier| {
             sample.average_power_watts_since(earlier, probe.units, interval_seconds)
         });
-        let state = if sample.raw == 0 {
-            "zero/absent?"
+        let state = if !sample.available {
+            "not-probed"
         } else if watts.is_some() {
             "active"
         } else {
@@ -1890,8 +1903,18 @@ fn cmd_tlb_rapl(io: &Output) {
                 sample.domain.short_name(),
                 sample.domain.description(),
                 alloc::format!("0x{:03X}", sample.msr).as_str(),
-                alloc::format!("0x{:08X}", sample.raw).as_str(),
-                alloc::format!("{:.6}", sample.joules).as_str(),
+                if sample.available {
+                    alloc::format!("0x{:08X}", sample.raw)
+                } else {
+                    String::from("-")
+                }
+                .as_str(),
+                if sample.available {
+                    alloc::format!("{:.6}", sample.joules)
+                } else {
+                    String::from("-")
+                }
+                .as_str(),
                 delta_joules
                     .map(|delta| alloc::format!("{:.6}", delta))
                     .unwrap_or_else(|| String::from("-"))
@@ -1911,10 +1934,18 @@ fn cmd_tlb_rapl(io: &Output) {
 fn cmd_tlb_rapl_args(spawner: &Spawner, io: &Output, args: &mut SplitWhitespace<'_>) {
     match args.next() {
         None => cmd_tlb_rapl(io),
-        Some("store") if ensure_no_args(io, args, "tlb: usage `tlb rapl [store]`") => {
+        Some("sample") if ensure_no_args(io, args, "tlb: usage `tlb rapl [sample|store]`") => {
+            crate::power::rapl::refresh_snapshot_once();
+            cmd_tlb_rapl(io);
+            line(
+                io,
+                "Package energy only; sample again after 1-10s for interval watts. Optional domains are not probed.",
+            );
+        }
+        Some("store") if ensure_no_args(io, args, "tlb: usage `tlb rapl [sample|store]`") => {
             rapl::store(spawner, io)
         }
-        Some(_) => line(io, "tlb: usage `tlb rapl [store]`"),
+        Some(_) => line(io, "tlb: usage `tlb rapl [sample|store]`"),
     }
 }
 

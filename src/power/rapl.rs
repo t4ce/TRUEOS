@@ -7,6 +7,9 @@ use spin::{Mutex, Once};
 use trueos_time::{Duration as EmbassyDuration, Timer};
 use x86_64::registers::model_specific::Msr;
 
+#[path = "rapl_math.rs"]
+mod math;
+
 const MSR_RAPL_POWER_UNIT: u32 = 0x606;
 const MSR_PKG_ENERGY_STATUS: u32 = 0x611;
 const MSR_DRAM_ENERGY_STATUS: u32 = 0x619;
@@ -14,6 +17,8 @@ const MSR_PP0_ENERGY_STATUS: u32 = 0x639;
 const MSR_PP1_ENERGY_STATUS: u32 = 0x641;
 const MSR_PLATFORM_ENERGY_STATUS: u32 = 0x64D;
 const RAPL_SERVICE_SAMPLE_PERIOD_MS: u64 = 100;
+// Long gaps can hide multiple 32-bit counter wraps. Start a new baseline.
+const RAPL_MAX_INTERVAL_MS: u64 = 60_000;
 pub const RAPL_TRUEOSFS_PATH: &str = "rapl.txt";
 pub const RAPL_HISTORY_MAX_BYTES: usize = 5 * 1024 * 1024;
 const RAPL_HISTORY_TRIM_BYTES: usize = 1024 * 1024;
@@ -24,6 +29,9 @@ const RAPL_WATCH_RECEIVERS: usize = 8;
 pub struct RaplCaps {
     pub vendor_intel: bool,
     pub has_msr: bool,
+    pub hypervisor: bool,
+    pub family: u8,
+    pub model: u8,
 }
 
 static CAPS: Once<Option<RaplCaps>> = Once::new();
@@ -75,15 +83,20 @@ pub struct RaplSample {
     pub msr: u32,
     pub raw: u32,
     pub joules: f64,
+    pub available: bool,
 }
 
 impl RaplSample {
     pub fn delta_joules_since(self, earlier: Self, units: RaplUnits) -> Option<f64> {
-        if self.domain != earlier.domain {
+        if !self.available || !earlier.available || self.domain != earlier.domain {
             return None;
         }
 
-        Some(wraparound_delta_joules(earlier.raw, self.raw, units.energy_joules))
+        Some(wraparound_delta_joules(
+            earlier.raw,
+            self.raw,
+            units.energy_joules,
+        ))
     }
 
     pub fn average_power_watts_since(
@@ -92,11 +105,11 @@ impl RaplSample {
         units: RaplUnits,
         elapsed_seconds: f64,
     ) -> Option<f64> {
-        if self.domain != earlier.domain || elapsed_seconds <= 0.0 {
+        if !self.available || !earlier.available || self.domain != earlier.domain {
             return None;
         }
 
-        Some(self.delta_joules_since(earlier, units)? / elapsed_seconds)
+        math::average_watts(earlier.raw, self.raw, units.energy_joules, elapsed_seconds)
     }
 }
 
@@ -153,6 +166,7 @@ impl RaplSnapshot {
 
 static RAPL_WATCH: Watch<crate::wait::EmbassySpinRawMutex, RaplSnapshot, RAPL_WATCH_RECEIVERS> =
     Watch::new_with(RaplSnapshot::empty());
+static RAPL_SAMPLE_LOCK: Mutex<()> = Mutex::new(());
 static RAPL_HISTORY: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
 pub type RaplReceiver<'a> =
@@ -169,7 +183,15 @@ pub fn caps() -> Option<&'static RaplCaps> {
 pub fn supported_cpuid_only() -> bool {
     init();
     caps()
-        .map(|caps| caps.vendor_intel && caps.has_msr)
+        .map(|caps| {
+            math::package_profile_supported(
+                caps.vendor_intel,
+                caps.has_msr,
+                caps.hypervisor,
+                caps.family,
+                caps.model,
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -210,6 +232,7 @@ pub fn anon_snapshot() -> RaplSnapshot {
 }
 
 pub fn refresh_snapshot_once() -> RaplSnapshot {
+    let _guard = RAPL_SAMPLE_LOCK.lock();
     let sender = RAPL_WATCH.sender();
     let previous_snapshot = latest_snapshot();
     let cpuid_supported = supported_cpuid_only();
@@ -219,11 +242,13 @@ pub fn refresh_snapshot_once() -> RaplSnapshot {
         None
     };
     let now_ms = service_now_ms();
-    let previous = if previous_snapshot.sample_valid {
-        previous_snapshot.latest
-    } else {
-        None
-    };
+    let elapsed_ms = now_ms.saturating_sub(previous_snapshot.last_update_ms);
+    let previous =
+        if previous_snapshot.sample_valid && elapsed_ms > 0 && elapsed_ms <= RAPL_MAX_INTERVAL_MS {
+            previous_snapshot.latest
+        } else {
+            None
+        };
     let interval_ms = if previous.is_some() && latest.is_some() {
         now_ms.saturating_sub(previous_snapshot.last_update_ms)
     } else {
@@ -241,10 +266,11 @@ pub fn refresh_snapshot_once() -> RaplSnapshot {
     };
 
     sender.send(snapshot);
+    append_snapshot_to_history(snapshot);
     snapshot
 }
 
-/// Probes Intel RAPL MSRs on the current CPU.
+/// Probes package RAPL energy on the admitted bare-metal CPU profile.
 ///
 /// This is intentionally opt-in because an RDMSR to an unsupported register
 /// raises #GP. On this codebase's current early-boot paths that can still turn
@@ -265,10 +291,10 @@ pub unsafe fn probe_local() -> Option<RaplProbe> {
     Some(RaplProbe {
         units,
         package: read_sample(RaplDomain::Package, MSR_PKG_ENERGY_STATUS, units),
-        core: read_sample(RaplDomain::Core, MSR_PP0_ENERGY_STATUS, units),
-        graphics: read_sample(RaplDomain::Graphics, MSR_PP1_ENERGY_STATUS, units),
-        dram: read_sample(RaplDomain::Dram, MSR_DRAM_ENERGY_STATUS, units),
-        platform: read_sample(RaplDomain::Platform, MSR_PLATFORM_ENERGY_STATUS, units),
+        core: unavailable_sample(RaplDomain::Core, MSR_PP0_ENERGY_STATUS),
+        graphics: unavailable_sample(RaplDomain::Graphics, MSR_PP1_ENERGY_STATUS),
+        dram: unavailable_sample(RaplDomain::Dram, MSR_DRAM_ENERGY_STATUS),
+        platform: unavailable_sample(RaplDomain::Platform, MSR_PLATFORM_ENERGY_STATUS),
     })
 }
 
@@ -295,6 +321,9 @@ pub unsafe fn log_local_probe() -> bool {
     );
 
     for sample in probe.samples() {
+        if !sample.available {
+            continue;
+        }
         crate::log!(
             "rapl: domain={} desc={} msr=0x{:03X} raw=0x{:08X} joules={:.6}\n",
             sample.domain.short_name(),
@@ -324,15 +353,13 @@ pub async fn raple_service() {
         RAPL_SERVICE_SAMPLE_PERIOD_MS
     );
     loop {
-        let snapshot = refresh_snapshot_once();
-        append_snapshot_to_history(snapshot);
+        refresh_snapshot_once();
         Timer::after(EmbassyDuration::from_millis(RAPL_SERVICE_SAMPLE_PERIOD_MS)).await;
     }
 }
 
 pub fn wraparound_delta_joules(raw_start: u32, raw_end: u32, joules_per_tick: f64) -> f64 {
-    let delta_ticks = raw_end.wrapping_sub(raw_start) as u64;
-    (delta_ticks as f64) * joules_per_tick
+    math::delta_joules(raw_start, raw_end, joules_per_tick)
 }
 
 fn detect_caps_cpuid_only() -> Option<RaplCaps> {
@@ -346,9 +373,16 @@ fn detect_caps_cpuid_only() -> Option<RaplCaps> {
         .map(|features| features.has_msr())
         .unwrap_or(false);
 
+    let features = cpuid.get_feature_info();
     Some(RaplCaps {
         vendor_intel,
         has_msr,
+        hypervisor: features
+            .as_ref()
+            .map(|f| f.has_hypervisor())
+            .unwrap_or(true),
+        family: features.as_ref().map(|f| f.family_id()).unwrap_or(0),
+        model: features.as_ref().map(|f| f.model_id()).unwrap_or(0),
     })
 }
 
@@ -374,6 +408,18 @@ fn read_sample(domain: RaplDomain, msr: u32, units: RaplUnits) -> RaplSample {
         msr,
         raw,
         joules: (raw as f64) * units.energy_joules,
+        available: true,
+    }
+}
+
+// Optional domain registers are not touched until independently admitted.
+fn unavailable_sample(domain: RaplDomain, msr: u32) -> RaplSample {
+    RaplSample {
+        domain,
+        msr,
+        raw: 0,
+        joules: 0.0,
+        available: false,
     }
 }
 
@@ -464,7 +510,11 @@ fn format_history_row(snapshot: RaplSnapshot) -> String {
     };
 
     for sample in probe.samples() {
-        let _ = write!(out, ",{:.6}", sample.joules);
+        if sample.available {
+            let _ = write!(out, ",{:.6}", sample.joules);
+        } else {
+            let _ = write!(out, ",");
+        }
     }
 
     let interval_seconds = snapshot.interval_ms as f64 / 1000.0;
@@ -492,9 +542,30 @@ fn format_snapshot_text(snapshot: RaplSnapshot) -> String {
     let _ = writeln!(out, "update_count={}", snapshot.update_count);
     let _ = writeln!(out, "last_update_ms={}", snapshot.last_update_ms);
     let _ = writeln!(out, "interval_ms={}", snapshot.interval_ms);
-    let _ = writeln!(out, "intel_cpuid={}", caps.map(|caps| caps.vendor_intel).unwrap_or(false));
-    let _ = writeln!(out, "msr_cpuid={}", caps.map(|caps| caps.has_msr).unwrap_or(false));
+    let _ = writeln!(
+        out,
+        "intel_cpuid={}",
+        caps.map(|caps| caps.vendor_intel).unwrap_or(false)
+    );
+    let _ = writeln!(
+        out,
+        "msr_cpuid={}",
+        caps.map(|caps| caps.has_msr).unwrap_or(false)
+    );
     let _ = writeln!(out, "cpuid_supported={}", snapshot.cpuid_supported);
+    if let Some(caps) = caps {
+        let _ = writeln!(
+            out,
+            "cpu_family_model={:02x}-{:02x}",
+            caps.family, caps.model
+        );
+        let _ = writeln!(out, "hypervisor_cpuid={}", caps.hypervisor);
+    }
+    let _ = writeln!(
+        out,
+        "profile=intel-06-bf-package-only (optional domains not probed)"
+    );
+    let _ = writeln!(out, "scope=cpu-package; not wall or motherboard power");
     let _ = writeln!(out, "sample_valid={}", snapshot.sample_valid);
 
     let Some(probe) = snapshot.latest else {
@@ -511,7 +582,10 @@ fn format_snapshot_text(snapshot: RaplSnapshot) -> String {
         probe.units.time_raw_shift,
         probe.units.time_seconds,
     );
-    let _ = writeln!(out, "domain,description,msr,raw,joules,delta_joules,watts,state");
+    let _ = writeln!(
+        out,
+        "domain,description,msr,raw,joules,delta_joules,watts,state"
+    );
     let interval_seconds = snapshot.interval_ms as f64 / 1000.0;
     for sample in probe.samples() {
         let previous_sample = snapshot
@@ -522,8 +596,8 @@ fn format_snapshot_text(snapshot: RaplSnapshot) -> String {
         let watts = previous_sample.and_then(|earlier| {
             sample.average_power_watts_since(earlier, probe.units, interval_seconds)
         });
-        let state = if sample.raw == 0 {
-            "zero/absent?"
+        let state = if !sample.available {
+            "not-probed"
         } else if watts.is_some() {
             "active"
         } else {
@@ -531,12 +605,20 @@ fn format_snapshot_text(snapshot: RaplSnapshot) -> String {
         };
         let _ = writeln!(
             out,
-            "{},{},0x{:03X},0x{:08X},{:.6},{},{},{}",
+            "{},{},0x{:03X},{},{},{},{},{}",
             sample.domain.short_name(),
             sample.domain.description(),
             sample.msr,
-            sample.raw,
-            sample.joules,
+            if sample.available {
+                alloc::format!("0x{:08X}", sample.raw)
+            } else {
+                String::from("-")
+            },
+            if sample.available {
+                alloc::format!("{:.6}", sample.joules)
+            } else {
+                String::from("-")
+            },
             delta_joules
                 .map(|delta| alloc::format!("{:.6}", delta))
                 .unwrap_or_else(|| String::from("-")),

@@ -4,6 +4,7 @@
 //! baseline, and a new keystroke cannot capture an earlier animation frame.
 
 use alloc::{sync::Arc, vec::Vec};
+use core::sync::atomic::{AtomicU64, Ordering};
 use trueos_terminal::edit_life::{CellRect, EditLife};
 
 use crate::ui4::{
@@ -12,6 +13,8 @@ use crate::ui4::{
 };
 
 use super::{RgbaColor, Ui4Surface};
+
+static LAST_CAPTURE_LOG_MS: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn present(
     surface: &mut Ui4Surface,
@@ -53,6 +56,7 @@ fn capture(
     lines: &[&[(char, Option<RgbaColor>)]],
     settings: &EditLife,
 ) -> Result<Page, &'static str> {
+    let started_ms = trueos_time::Instant::now().as_millis();
     let (cell_width, cell_height) =
         crate::r::services::shell3_font_service::cell_extent(surface.scale)
             .ok_or("shell3-life-font-size")?;
@@ -74,7 +78,9 @@ fn capture(
         scroll_revision: settings.scroll_revision,
         emission_revision: settings.emission_revision,
     };
+    let source_started_ms = trueos_time::Instant::now().as_millis();
     copy_source(surface, &mut page.rgba)?;
+    let source_read_ms = trueos_time::Instant::now().as_millis().saturating_sub(source_started_ms);
     let mut exclusions = Vec::new();
     exclusions.try_reserve_exact(settings.exclusions.len()).map_err(|_| "shell3-life-allocation")?;
     exclusions.extend(settings.exclusions.iter().copied()
@@ -96,17 +102,15 @@ fn capture(
             // selection and inverted block-cursor backgrounds as painted by
             // Edit; the shader never changes their foreground or background.
             let clear_background = background == [0, 0, 0, 255];
-            let transparent = if clear_background {
-                Some(crate::r::services::shell3_font_service::glyph(
-                    cell.0, cell_width, cell_height, foreground, [0; 4], underline,
-                )?)
-            } else { None };
-            let transparent_source = transparent.map(|copy| {
-                let start = copy.source_y as usize * copy.source.pitch_bytes as usize
-                    + copy.source_x as usize * 4;
-                let source = crate::phys::phys_to_virt(copy.source.phys as usize) as *const u8;
-                (unsafe { source.add(start) }, copy.source.pitch_bytes as usize)
-            });
+            if cell.0 == ' ' && !underline {
+                // Blank cells have no input ink. Their mask/color allocations
+                // are already zero, so avoid even visiting the retained atlas.
+                if clear_background {
+                    clear_cell(&mut page.rgba, width, viewport, &exclusions,
+                        left, top, cell_width, cell_height);
+                }
+                continue;
+            }
             crate::r::services::shell3_font_service::with_cell_coverage(
                 cell.0, cell_width, cell_height, foreground, underline,
                 |x, y, coverage, resolved_foreground| {
@@ -118,13 +122,16 @@ fn capture(
                     page.colors[index * 4..index * 4 + 4]
                         .copy_from_slice(&[resolved_foreground[0], resolved_foreground[1], resolved_foreground[2], coverage]);
                     if exclusions.iter().any(|&rect| contains(rect, px, py)) { return; }
-                    if let Some((source, source_pitch)) = transparent_source {
-                        // glyph() owns immutable, already tinted source cells.
-                        // Copy their exact premultiplied AA pixels; applying
-                        // the coverage a second time would dim glyph edges.
-                        let offset = y as usize * source_pitch + x as usize * 4;
-                        let pixel = unsafe { core::slice::from_raw_parts(source.add(offset), 4) };
-                        page.rgba[index * 4..index * 4 + 4].copy_from_slice(pixel);
+                    if clear_background {
+                        // Match the font producer's tint over transparent
+                        // black exactly, using its existing coverage once.
+                        // No additional styled glyph/cache allocation is needed.
+                        let alpha = (u32::from(coverage) * u32::from(resolved_foreground[3]) + 127) / 255;
+                        let pixel = &mut page.rgba[index * 4..index * 4 + 4];
+                        for channel in 0..3 {
+                            pixel[channel] = ((u32::from(resolved_foreground[channel]) * alpha + 127) / 255) as u8;
+                        }
+                        pixel[3] = alpha as u8;
                     }
                 },
             )?;
@@ -163,7 +170,46 @@ fn capture(
             }
         }
     }
+    let finished_ms = trueos_time::Instant::now().as_millis();
+    let capture_ms = finished_ms.saturating_sub(started_ms);
+    let first = surface.edit_life_page.is_none();
+    let reset = surface.edit_life_page.as_deref().is_some_and(|previous| {
+        previous.scroll_revision != settings.scroll_revision || previous.viewport != viewport
+    });
+    let last_log_ms = LAST_CAPTURE_LOG_MS.load(Ordering::Relaxed);
+    if first || ((reset || capture_ms >= 25)
+        && finished_ms.saturating_sub(last_log_ms) >= 1000
+        && LAST_CAPTURE_LOG_MS.compare_exchange(last_log_ms, finished_ms,
+            Ordering::Relaxed, Ordering::Relaxed).is_ok())
+    {
+        LAST_CAPTURE_LOG_MS.store(finished_ms, Ordering::Relaxed);
+        crate::log_info!(target: "ui4/edit-life";
+            "edit-life: capture window={} size={}x{} first={} reset={} capture_ms={} source_read_ms={}\n",
+            surface.window.raw(), width, height, first, reset, capture_ms, source_read_ms);
+    }
     Ok(page)
+}
+
+/// Clear blank editor cells in row spans while leaving opaque overlays intact.
+fn clear_cell(rgba: &mut [u8], width: u32, viewport: PixelRect, exclusions: &[PixelRect],
+    left: u32, top: u32, cell_width: u32, cell_height: u32) {
+    let right = left.saturating_add(cell_width).min(viewport.x + viewport.width);
+    let bottom = top.saturating_add(cell_height).min(viewport.y + viewport.height);
+    let left = left.max(viewport.x);
+    for y in top.max(viewport.y)..bottom {
+        let mut start = left;
+        while start < right {
+            if let Some(rect) = exclusions.iter().find(|&&rect| contains(rect, start, y)) {
+                start = rect.x.saturating_add(rect.width).min(right);
+                continue;
+            }
+            let end = exclusions.iter().filter(|rect| y >= rect.y && y - rect.y < rect.height
+                && rect.x > start).map(|rect| rect.x).min().unwrap_or(right).min(right);
+            let row = y as usize * width as usize;
+            rgba[(row + start as usize) * 4..(row + end as usize) * 4].fill(0);
+            start = end;
+        }
+    }
 }
 
 fn zeroed(bytes: usize) -> Result<Vec<u8>, &'static str> {

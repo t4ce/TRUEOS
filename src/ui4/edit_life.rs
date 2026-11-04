@@ -131,6 +131,7 @@ impl Drop for Effect {
 }
 impl Effect {
     fn new(input: Registration) -> Option<Self> {
+        let started_ms = Instant::now().as_millis();
         let page = &input.page;
         let rect = page.viewport;
         let backend = if let Some(native) = crate::intel::gpgpu::EditLifeState::new(
@@ -141,6 +142,7 @@ impl Effect {
         } else {
             Backend::Reference(super::edit_life_model::Life::new(rect.width, rect.height)?)
         };
+        let backend_ready_ms = Instant::now().as_millis();
         let frame = super::create_frame(super::FrameSpec {
             output: super::OutputId::from_slot(0)?,
             content: super::FrameContent::Image,
@@ -150,14 +152,32 @@ impl Effect {
             width: page.width, height: page.height,
             base_color: Some(super::PremultipliedRgba8::TRANSPARENT),
         }).ok()?;
+        let frame_ready_ms = Instant::now().as_millis();
         let mut effect = Self { input, backend, frame,
             next_generation_ms: Instant::now().as_millis() + GENERATION_MS, dirty: true,
             reset: true, emit: true, steps: 0, quarantined: false, disabled: false };
         effect.capture(true, true);
         crate::log_info!(target: "ui4/edit-life";
-            "edit-life: enabled backend={} speed=1 generations_hz=10 trail_persistence=0.75 background_alpha=128 immutable_glyph_mask=1\n",
-            if matches!(effect.backend, Backend::Native(_)) { "native-cpp-adls" } else { "cpu-reference" });
+            "edit-life: enabled backend={} speed=1 generations_hz=10 trail_persistence=0.75 background_alpha=128 immutable_glyph_mask=1 backend_ms={} frame_ms={} upload_ms={} total_ms={}\n",
+            if matches!(effect.backend, Backend::Native(_)) { "native-cpp-adls" } else { "cpu-reference" },
+            backend_ready_ms.saturating_sub(started_ms),
+            frame_ready_ms.saturating_sub(backend_ready_ms),
+            Instant::now().as_millis().saturating_sub(frame_ready_ms),
+            Instant::now().as_millis().saturating_sub(started_ms));
         Some(effect)
+    }
+
+    fn set_viewport(&mut self, viewport: PixelRect) -> bool {
+        match &mut self.backend {
+            Backend::Native(native) => native.set_viewport(crate::intel::gpgpu::GpgpuRect::new(
+                viewport.x as i32, viewport.y as i32, viewport.width, viewport.height)),
+            Backend::Reference(life) => {
+                let Some(next) = super::edit_life_model::Life::new(viewport.width, viewport.height)
+                    else { return false; };
+                *life = next;
+                true
+            }
+        }
     }
 
     fn capture(&mut self, reset: bool, emit: bool) {
@@ -272,13 +292,14 @@ pub(crate) async fn ui4_edit_life_service_task() {
                 if effect.input.serial != input.serial || effect.input.source != input.source {
                     let old = &effect.input.page;
                     let new = &input.page;
-                    if (old.width, old.height, old.viewport)
-                        != (new.width, new.height, new.viewport) {
+                    let extent_changed = (old.width, old.height) != (new.width, new.height);
+                    let viewport_changed = old.viewport != new.viewport;
+                    let reset = old.scroll_revision != new.scroll_revision || viewport_changed;
+                    let emit = old.emission_revision != new.emission_revision;
+                    if extent_changed || (viewport_changed && !effect.set_viewport(new.viewport)) {
                         effects.remove(index);
                         if let Some(effect) = Effect::new(input) { effects.push(effect); }
                     } else {
-                        let reset = old.scroll_revision != new.scroll_revision || old.viewport != new.viewport;
-                        let emit = old.emission_revision != new.emission_revision;
                         effect.input = input;
                         effect.capture(reset, emit);
                     }

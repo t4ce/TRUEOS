@@ -33,6 +33,24 @@ viewport alpha stays 255. Window and hardware-plane opacity remain at 100%;
 the effect frame is published with per-pixel alpha, without a fully-opaque hint.
 Ordinary edits keep the previous completed effect visible until the next page
 is ready, avoiding a temporary opaque background on each keystroke.
+While Shader is enabled, Edit suppresses its ordinary current-line background
+highlight so typed text does not sit on an opaque row. Selection rendering is
+unchanged.
+
+The native producer prepares its PPGTT and retained resource mappings once per
+render. Each ordered pass uses one full-domain walker: initial/scroll seeding
+needs three submissions (seed, comparison baseline, composite), and a normal
+generation needs two. It does not rebuild the whole page table for every
+128K-pixel chunk. Gutter-origin and viewport-size changes reuse allocations
+when their existing capacities fit. Scroll resets the world in those buffers.
+Capture visits the existing glyph coverage once and skips blank cells; it
+does not allocate a second set of transparent glyph-cache entries. Unchanged
+Edit frames emit no terminal metadata or synchronization fences.
+
+Runtime `edit-life: capture`, `edit-life: enabled`, and `edit-life timing` logs
+separate source capture, initial allocation/upload, page-table setup, seeding,
+baseline copying, and composition. These timings use the `ui4/edit-life` log
+target so they remain visible with the Blueprint/HV diagnostic profile.
 
 ## Reproduce the local pinned setup
 
@@ -120,6 +138,7 @@ requires separate frontend tools and equivalent generated native code.
 ```sh
 cargo check --locked
 python3 tools/testpy/test_edit_life.py
+python3 tools/testpy/test_edit_life_capture.py
 python3 tools/edit_life_shader_bake.py --verify
 ```
 
