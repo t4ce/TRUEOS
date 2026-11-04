@@ -16,6 +16,7 @@ thread_local! {
     static PUBLISHES: Cell<usize> = const { Cell::new(0) };
     static PAUSES: Cell<usize> = const { Cell::new(0) };
     static REMOVES: Cell<usize> = const { Cell::new(0) };
+    static FAILED: Cell<bool> = const { Cell::new(false) };
 }
 #[macro_export] macro_rules! log_info { ($($t:tt)*) => {}; }
 #[macro_export] macro_rules! log_warn { ($($t:tt)*) => {}; }
@@ -53,6 +54,7 @@ mod ui4 {
         }
         pub fn pause(_:super::WindowId,_:()) { crate::PAUSES.with(|v| v.set(v.get()+1)); }
         pub fn remove(_:super::WindowId) { crate::REMOVES.with(|v| v.set(v.get()+1)); }
+        pub fn is_failed(_:super::WindowId) -> bool { crate::FAILED.with(core::cell::Cell::get) }
     }
 }
 #[path="@PARSER@"] mod edit_life;
@@ -156,6 +158,27 @@ TESTS = r"""
         settings.exclusions.clear();settings.active=false;
         present(&mut surface,&[],Some(&settings),true);
         assert_eq!(work(),(0,0));
+    }
+    #[test] fn failed_producer_bypasses_capture_on_typing_and_menu_resume() {
+        let mut surface=surface(18,11);
+        let mut settings=settings();
+        let clean=[('A',None)];
+        present(&mut surface,&[&clean],Some(&settings),true);
+        let retained=Arc::clone(surface.edit_life_page.as_ref().unwrap());
+        crate::FAILED.with(|v| v.set(true));
+        let changed=[('B',None)];
+        for active in [true,false,true] {
+            settings.active=active;
+            settings.emission_revision+=1;
+            present(&mut surface,&[&changed],Some(&settings),true);
+        }
+        assert_eq!(work(),(1,1));
+        assert_eq!(PAUSES.with(Cell::get),3);
+        assert!(Arc::ptr_eq(&retained,surface.edit_life_page.as_ref().unwrap()));
+        settings.enabled=false;
+        present(&mut surface,&[&clean],Some(&settings),false);
+        assert_eq!(REMOVES.with(Cell::get),1);
+        assert!(surface.edit_life_page.is_none());
     }
 }
 """

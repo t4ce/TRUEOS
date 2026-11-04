@@ -264,6 +264,7 @@ fn principal_instance_suffix(principal: Principal) -> String {
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuFont
         | Principal::KernelGpgpuExecution
+        | Principal::KernelGpgpuEditLife
         | Principal::KernelGpgpuCodec
         | Principal::KernelLfm25
         | Principal::KernelUi4Compositor

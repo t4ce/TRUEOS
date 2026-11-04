@@ -52,6 +52,15 @@ const EXECUTION_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
     map_general_auxiliary: false,
 };
 
+const EDIT_LIFE_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
+    ring: EDIT_LIFE_RCS_GPU_VA_RING_BASE,
+    context: EDIT_LIFE_RCS_GPU_VA_CONTEXT_BASE,
+    batch: EDIT_LIFE_RCS_GPU_VA_BATCH_BASE,
+    result: EDIT_LIFE_RCS_GPU_VA_RESULT_BASE,
+    job_slots: 1,
+    map_general_auxiliary: false,
+};
+
 
 const UI4_COMPOSITOR_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
     ring: UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE,
@@ -205,6 +214,16 @@ fn execution_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
     }
 
     let state = allocate_direct_rcs_state(EXECUTION_RCS_GPU_VA)?;
+    *state_slot = Some(state);
+    Some(state)
+}
+
+fn edit_life_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
+    if edit_life_rcs_context_is_quarantined() { return None; }
+    let mut state_slot = EDIT_LIFE_RCS_STATE.lock();
+    if edit_life_rcs_context_is_quarantined() { return None; }
+    if let Some(state) = *state_slot { return Some(state); }
+    let state = allocate_direct_rcs_state(EDIT_LIFE_RCS_GPU_VA)?;
     *state_slot = Some(state);
     Some(state)
 }
@@ -364,6 +383,7 @@ fn direct_rcs_ggtt_mapping(gpu_va: DirectRcsGpuVa) -> Option<&'static spin::Once
         DIRECT_RCS_GPU_VA => Some(&DIRECT_RCS_GGTT_MAPPING),
         FONT_RCS_GPU_VA => Some(&FONT_RCS_GGTT_MAPPING),
         EXECUTION_RCS_GPU_VA => Some(&EXECUTION_RCS_GGTT_MAPPING),
+        EDIT_LIFE_RCS_GPU_VA => Some(&EDIT_LIFE_RCS_GGTT_MAPPING),
 
         CODEC_RCS_GPU_VA => Some(&CODEC_RCS_GGTT_MAPPING),
         UI4_COMPOSITOR_RCS_GPU_VA => Some(&UI4_COMPOSITOR_RCS_GGTT_MAPPING),
@@ -376,6 +396,7 @@ fn direct_rcs_mapping_name(gpu_va: DirectRcsGpuVa) -> &'static str {
         DIRECT_RCS_GPU_VA => "system-service",
         FONT_RCS_GPU_VA => "font",
         EXECUTION_RCS_GPU_VA => "execution",
+        EDIT_LIFE_RCS_GPU_VA => "edit-life",
 
         CODEC_RCS_GPU_VA => "codec",
         UI4_COMPOSITOR_RCS_GPU_VA => "ui4-compositor",
@@ -390,6 +411,7 @@ fn direct_rcs_control_ggtt_ready(state: DirectRcsState) -> bool {
         DIRECT_RCS_GPU_VA_RING_BASE => &DIRECT_RCS_GGTT_MAPPING,
         FONT_RCS_GPU_VA_RING_BASE => &FONT_RCS_GGTT_MAPPING,
         EXECUTION_RCS_GPU_VA_RING_BASE => &EXECUTION_RCS_GGTT_MAPPING,
+        EDIT_LIFE_RCS_GPU_VA_RING_BASE => &EDIT_LIFE_RCS_GGTT_MAPPING,
 
         CODEC_RCS_GPU_VA_RING_BASE => &CODEC_RCS_GGTT_MAPPING,
         UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE => &UI4_COMPOSITOR_RCS_GGTT_MAPPING,
@@ -403,6 +425,7 @@ fn quarantine_direct_rcs_mapping_failure(gpu_va: DirectRcsGpuVa, reason: &'stati
         DIRECT_RCS_GPU_VA => quarantine_direct_rcs_context(reason),
         FONT_RCS_GPU_VA => quarantine_font_rcs_context(reason),
         EXECUTION_RCS_GPU_VA => quarantine_execution_rcs_context(reason),
+        EDIT_LIFE_RCS_GPU_VA => quarantine_direct_rcs_lane(DirectRcsLane::EditLife, reason),
 
         CODEC_RCS_GPU_VA => quarantine_direct_rcs_lane(DirectRcsLane::Codec, reason),
         UI4_COMPOSITOR_RCS_GPU_VA => quarantine_ui4_compositor_rcs_context(reason),
@@ -417,12 +440,13 @@ pub(crate) struct DirectRcsControlGgttPrewarmReport {
     pub(crate) execution: bool,
     pub(crate) ui4_compositor: bool,
     pub(crate) codec: bool,
+    pub(crate) edit_life: bool,
 }
 
 impl DirectRcsControlGgttPrewarmReport {
     pub(crate) const fn accepted(self) -> bool {
-        // Codec is optional: its isolated failure selects the CPU service,
-        // without denying the display/execution clients their boot contract.
+        // Codec and Edit animation are optional. Their isolated failure must
+        // not deny the display/execution clients their core boot contract.
         self.system_service
             && self.font
             && self.execution
@@ -484,6 +508,7 @@ pub(crate) fn prewarm_direct_rcs_controls_ggtt(
         ),
         codec: LZ4_BLOCKS_ARTIFACT.target_policy.supports(dev.device_id, dev.revision_id)
             && prewarm_direct_rcs_control_ggtt(dev, CODEC_RCS_GPU_VA, codec_rcs_state_once()),
+        edit_life: prewarm_direct_rcs_control_ggtt(dev, EDIT_LIFE_RCS_GPU_VA, edit_life_rcs_state_once(dev)),
     }
 }
 
@@ -986,6 +1011,22 @@ fn direct_rcs_update_ppgtt_region(
         }
     }
     DirectRcsPpgttMapResult::Updated
+}
+
+/// Edit owns every GPU reference to these retained inputs. Teardown takes
+/// only its own lane lock and refuses to free ambiguous in-flight storage.
+/// There is no global PTE update or mutation of Font/System/Spirit state.
+fn retire_edit_life_scratch_range(surface: GpgpuRgba8Surface) -> bool {
+    let _guard = EDIT_LIFE_RCS_SUBMIT_LOCK.lock();
+    if edit_life_rcs_context_is_quarantined()
+        || EDIT_LIFE_RCS_SUBMIT_RUNTIME.lock().pending.is_some()
+    { return false; }
+    let Some(state) = *EDIT_LIFE_RCS_STATE.lock() else { return true; };
+    if !direct_rcs_unmap_ppgtt_region_exact(state, surface.gpu, surface.phys, surface.bytes)
+        || !direct_rcs_flush_ppgtt_pte_range(state, surface.gpu, surface.bytes)
+    { return false; }
+    core::sync::atomic::fence(Ordering::SeqCst);
+    true
 }
 
 /// Retire an exact persistent Font VM range after all Font work referencing it

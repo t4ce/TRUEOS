@@ -221,7 +221,7 @@ pub(crate) fn allocate_font_instance_rgba8_surface_cleared(
     Some(GpgpuOwnedRgba8Surface {
         surface,
         virt,
-        system_service: false,
+        owner: Rgba8SurfaceOwner::Font,
         quarantined: AtomicBool::new(false),
     })
 }

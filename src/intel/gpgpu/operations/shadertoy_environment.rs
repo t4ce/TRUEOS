@@ -80,7 +80,7 @@ impl ShaderToyEnvironment {
                 return GpgpuRgba8KernelResult::default();
             };
             // Unique persistent VA, mapped/retired only by SystemService RCS.
-            allocation.system_service = true;
+            allocation.owner = Rgba8SurfaceOwner::SystemService;
             self.allocation = Some(allocation);
         }
         let atlas = self.allocation.as_ref().unwrap().surface();

@@ -263,6 +263,7 @@ enum DirectRcsLane {
     SystemService,
     Font,
     Execution,
+    EditLife,
     Codec,
 }
 
@@ -272,6 +273,7 @@ impl DirectRcsLane {
             Self::SystemService => "system-service",
             Self::Font => "font",
             Self::Execution => "execution",
+            Self::EditLife => "edit-life",
 
             Self::Codec => "codec",
         }
@@ -366,6 +368,11 @@ fn direct_rcs_submit_batch_on_lane_state(
             &EXECUTION_RCS_SUBMIT_RUNTIME,
             crate::gpu::vgpu::KernelClient::GpgpuExecution,
         ),
+        DirectRcsLane::EditLife => (
+            &EDIT_LIFE_RCS_CONTEXT_QUARANTINED,
+            &EDIT_LIFE_RCS_SUBMIT_RUNTIME,
+            crate::gpu::vgpu::KernelClient::GpgpuEditLife,
+        ),
         DirectRcsLane::Codec => (
             &CODEC_RCS_CONTEXT_QUARANTINED,
             &CODEC_RCS_SUBMIT_RUNTIME,
@@ -439,6 +446,10 @@ pub(crate) fn font_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&FONT_RCS_CONTEXT_QUARANTINED)
 }
 
+pub(crate) fn edit_life_rcs_context_is_quarantined() -> bool {
+    EDIT_LIFE_RCS_CONTEXT_QUARANTINED.load(Ordering::Acquire)
+}
+
 fn execution_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&EXECUTION_RCS_CONTEXT_QUARANTINED)
 }
@@ -485,6 +496,9 @@ fn quarantine_direct_rcs_lane(lane: DirectRcsLane, reason: &'static str) {
         }
         DirectRcsLane::Execution => {
             (&EXECUTION_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::GpgpuExecution)
+        }
+        DirectRcsLane::EditLife => {
+            (&EDIT_LIFE_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::GpgpuEditLife)
         }
         DirectRcsLane::Codec => {
             (&CODEC_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::GpgpuCodec)
@@ -695,6 +709,7 @@ fn direct_rcs_submit_runtime(lane: DirectRcsLane) -> &'static Mutex<DirectRcsSub
         DirectRcsLane::SystemService => &DIRECT_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Font => &FONT_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Execution => &EXECUTION_RCS_SUBMIT_RUNTIME,
+        DirectRcsLane::EditLife => &EDIT_LIFE_RCS_SUBMIT_RUNTIME,
 
         DirectRcsLane::Codec => &CODEC_RCS_SUBMIT_RUNTIME,
     }
@@ -831,6 +846,7 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
         DirectRcsLane::SystemService => &DIRECT_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Font => &FONT_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Execution => &EXECUTION_RCS_TIMEOUT_POLL_PROBE_LOGGED,
+        DirectRcsLane::EditLife => &EDIT_LIFE_RCS_TIMEOUT_POLL_PROBE_LOGGED,
 
         DirectRcsLane::Codec => &CODEC_RCS_TIMEOUT_POLL_PROBE_LOGGED,
     };

@@ -122,6 +122,14 @@ impl GpgpuRgba8Surface {
     }
 }
 
+/// Exact private address space that must retire before backing can be freed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Rgba8SurfaceOwner {
+    Font,
+    SystemService,
+    EditLife,
+}
+
 /// Persistent linear RGBA8 storage owned by one GPU-side producer.
 ///
 /// Gridpaper uses this for its immutable page base: geometry and static glyph
@@ -131,7 +139,7 @@ impl GpgpuRgba8Surface {
 pub(crate) struct GpgpuOwnedRgba8Surface {
     surface: GpgpuRgba8Surface,
     virt: *mut u8,
-    system_service: bool,
+    owner: Rgba8SurfaceOwner,
     quarantined: AtomicBool,
 }
 
@@ -186,10 +194,11 @@ impl Drop for GpgpuOwnedRgba8Surface {
                 self.surface.gpu, self.surface.bytes);
             return;
         }
-        let retired = if self.system_service {
-            retire_shadertoy_scratch_range(self.surface)
-        } else {
-            retire_font_rcs_ppgtt_range(self.surface.gpu, self.surface.phys, self.surface.bytes)
+        let retired = match self.owner {
+            Rgba8SurfaceOwner::SystemService => retire_shadertoy_scratch_range(self.surface),
+            Rgba8SurfaceOwner::EditLife => retire_edit_life_scratch_range(self.surface),
+            Rgba8SurfaceOwner::Font =>
+                retire_font_rcs_ppgtt_range(self.surface.gpu, self.surface.phys, self.surface.bytes),
         };
         if !retired {
             crate::log_error!(

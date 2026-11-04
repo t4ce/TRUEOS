@@ -103,6 +103,9 @@ pub(crate) enum KernelClient {
     /// Independent compute lane for continuously executing GPU programs. Its
     /// context may remain in flight without blocking system-service compute.
     GpgpuExecution,
+    /// Continuously animated Edit background, isolated from synchronous UI
+    /// services and a normal-priority peer of Spirit and retained Render.
+    GpgpuEditLife,
     /// Bounded reusable block codecs with independent backing and timeline.
     GpgpuCodec,
     /// Fixed-model compute lane with its own persistent PPGTT and GuC context.
@@ -146,6 +149,7 @@ impl KernelClient {
             Self::GpgpuSystem => "kernel-gpgpu-system",
             Self::GpgpuFont => "kernel-gpgpu-font",
             Self::GpgpuExecution => "kernel-gpgpu-execution",
+            Self::GpgpuEditLife => "kernel-gpgpu-edit-life",
             Self::GpgpuCodec => "kernel-gpgpu-codec",
             Self::Lfm25 => "kernel-lfm25",
             Self::Ui4Compositor => "kernel-ui4-compositor",
@@ -161,6 +165,7 @@ impl KernelClient {
             Self::GpgpuSystem => Principal::KernelGpgpuSystem,
             Self::GpgpuFont => Principal::KernelGpgpuFont,
             Self::GpgpuExecution => Principal::KernelGpgpuExecution,
+            Self::GpgpuEditLife => Principal::KernelGpgpuEditLife,
             Self::GpgpuCodec => Principal::KernelGpgpuCodec,
             Self::Lfm25 => Principal::KernelLfm25,
             Self::Ui4Compositor => Principal::KernelUi4Compositor,
@@ -174,6 +179,7 @@ impl KernelClient {
             Self::GpgpuSystem
             | Self::GpgpuFont
             | Self::GpgpuExecution
+            | Self::GpgpuEditLife
             | Self::GpgpuCodec
             | Self::Lfm25 => QueueClass::Compute,
             Self::Ui4Compositor => QueueClass::Compute,
@@ -200,8 +206,8 @@ impl KernelClient {
             Self::GpgpuSystem | Self::GpgpuFont | Self::Ui4Compositor | Self::Lfm25 => {
                 PhysicalContextPriority::KernelHigh
             }
-            // Retained Render carriers and the Spirit/Lab256 execution lane
-            // are independent producers. Both can remain continuously
+            // Retained Render carriers, Spirit/Lab256 and Edit animation
+            // are independent producers. They can remain continuously
             // runnable even though each request is bounded. Keep them as
             // normal-priority peers so neither side consumer can invert the
             // other, while the downstream compositor can drain a completed
@@ -210,6 +216,7 @@ impl KernelClient {
             | Self::Render1
             | Self::Render2
             | Self::GpgpuExecution
+            | Self::GpgpuEditLife
             | Self::GpgpuCodec
             | Self::Vcpy => PhysicalContextPriority::KernelNormal,
         }
@@ -228,6 +235,7 @@ impl KernelClient {
             | Self::GpgpuSystem
             | Self::GpgpuFont
             | Self::GpgpuExecution
+            | Self::GpgpuEditLife
             | Self::GpgpuCodec
             | Self::Lfm25
             | Self::Ui4Compositor => {
@@ -268,6 +276,7 @@ const _: () = {
         PhysicalContextPriority::KernelNormal
     ));
     assert!(matches!(KernelClient::Lfm25.physical_priority(), PhysicalContextPriority::KernelHigh));
+    assert!(matches!(KernelClient::GpgpuEditLife.physical_priority(), PhysicalContextPriority::KernelNormal));
     assert!(matches!(
         KernelClient::Vcpy.physical_priority(),
         PhysicalContextPriority::KernelNormal
@@ -316,6 +325,7 @@ pub(crate) enum Principal {
     KernelGpgpuSystem,
     KernelGpgpuFont,
     KernelGpgpuExecution,
+    KernelGpgpuEditLife,
     KernelGpgpuCodec,
     KernelLfm25,
     KernelUi4Compositor,
@@ -334,6 +344,7 @@ impl Principal {
             Self::KernelGpgpuSystem => "kernel-gpgpu-system",
             Self::KernelGpgpuFont => "kernel-gpgpu-font",
             Self::KernelGpgpuExecution => "kernel-gpgpu-execution",
+            Self::KernelGpgpuEditLife => "kernel-gpgpu-edit-life",
             Self::KernelGpgpuCodec => "kernel-gpgpu-codec",
             Self::KernelLfm25 => "kernel-lfm25",
             Self::KernelUi4Compositor => "kernel-ui4-compositor",
@@ -7147,6 +7158,7 @@ const fn kernel_client_for_principal(principal: Principal) -> Option<KernelClien
         Principal::KernelGpgpuSystem => Some(KernelClient::GpgpuSystem),
         Principal::KernelGpgpuFont => Some(KernelClient::GpgpuFont),
         Principal::KernelGpgpuExecution => Some(KernelClient::GpgpuExecution),
+        Principal::KernelGpgpuEditLife => Some(KernelClient::GpgpuEditLife),
         Principal::KernelGpgpuCodec => Some(KernelClient::GpgpuCodec),
         Principal::KernelLfm25 => Some(KernelClient::Lfm25),
         Principal::KernelUi4Compositor => Some(KernelClient::Ui4Compositor),
@@ -7826,6 +7838,7 @@ fn allowed_capabilities(
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuFont
         | Principal::KernelGpgpuExecution
+        | Principal::KernelGpgpuEditLife
         | Principal::KernelGpgpuCodec
         | Principal::KernelLfm25
         | Principal::KernelUi4Compositor
@@ -7845,6 +7858,7 @@ const fn quota_for(principal: Principal) -> Quota {
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuFont
         | Principal::KernelGpgpuExecution
+        | Principal::KernelGpgpuEditLife
         | Principal::KernelGpgpuCodec
         | Principal::KernelLfm25
         | Principal::KernelUi4Compositor

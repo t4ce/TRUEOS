@@ -63,6 +63,7 @@ struct Registration {
     serial: u64,
     displayed: Option<FrameHandle>,
     paused: bool,
+    failed: bool,
     pause_revision: u64,
 }
 static PAGES: Mutex<Vec<Registration>> = Mutex::new(Vec::new());
@@ -76,14 +77,16 @@ pub(crate) fn publish_page(window: WindowId, source: FrameHandle, page: Arc<Page
     let mut pages = PAGES.lock();
     let serial = NEXT_SERIAL.fetch_add(1, Ordering::Relaxed);
     if let Some(old) = pages.iter_mut().find(|old| old.window == window) {
+        // A newer document frame is not permission to restart a failed GPU
+        // producer. Only disabling/removing the registration clears this latch.
+        if old.failed { return; }
         let geometry_changed = (old.page.width, old.page.height, old.page.viewport,
             old.page.cell_width, old.page.cell_height)
             != (page.width, page.height, page.viewport, page.cell_width, page.cell_height);
         if geometry_changed && old.displayed.is_some() {
             // Geometry changes replace the effect frame. Detach its predecessor
             // before the worker retires it; ordinary edits keep their alpha.
-            let _ = show_source(window, source);
-            old.displayed = None;
+            if show_source(window, source).is_ok() { old.displayed = None; }
         }
         old.source = source;
         old.page = page;
@@ -91,7 +94,7 @@ pub(crate) fn publish_page(window: WindowId, source: FrameHandle, page: Arc<Page
         old.paused = false;
     } else if pages.len() < MAX_PAGES {
         pages.push(Registration { window, source, page, serial, displayed: None,
-            paused: false, pause_revision: 0 });
+            paused: false, failed: false, pause_revision: 0 });
     }
     drop(pages);
     WAKE.signal(());
@@ -102,11 +105,12 @@ pub(crate) fn publish_page(window: WindowId, source: FrameHandle, page: Arc<Page
 pub(crate) fn pause(window: WindowId, source: FrameHandle) {
     let mut pages = PAGES.lock();
     if let Some(old) = pages.iter_mut().find(|old| old.window == window) {
-        let changed = !old.paused || old.source != source;
+        let mut changed = !old.paused || old.source != source;
         // Retain the displayed handle on a transient restore failure so the
         // next ordinary terminal redraw retries detaching the effect frame.
         if old.displayed.is_some() && show_source(window, source).is_ok() {
             old.displayed = None;
+            changed = true;
         }
         old.source = source;
         if !old.paused {
@@ -121,7 +125,33 @@ pub(crate) fn pause(window: WindowId, source: FrameHandle) {
 
 fn input_is_active(input: &Registration) -> bool {
     PAGES.lock().iter().any(|current| current.window == input.window
-        && current.serial == input.serial && current.source == input.source && !current.paused)
+        && current.serial == input.serial && current.source == input.source
+        && !current.paused && !current.failed)
+}
+
+pub(crate) fn is_failed(window: WindowId) -> bool {
+    PAGES.lock().iter().any(|current| current.window == window && current.failed)
+}
+
+/// Fail closed on the opaque source. Never use a new page, a timer tick or a
+/// menu round trip to restart an effect whose native initialization/render failed.
+fn stop(window: WindowId, reason: &'static str) {
+    let mut pages = PAGES.lock();
+    let Some(old) = pages.iter_mut().find(|old| old.window == window) else { return; };
+    // A render may finish after a newer source was registered. Restore that
+    // current source, never the stale frame borrowed by the failed render.
+    if old.displayed.is_some() && show_source(window, old.source).is_ok() { old.displayed = None; }
+    let first = !old.failed;
+    old.failed = true;
+    old.paused = true;
+    if first { old.serial = NEXT_SERIAL.fetch_add(1, Ordering::Relaxed); }
+    drop(pages);
+    if first {
+        crate::log_error!(target: "ui4/edit-life";
+            "edit-life: stopped window={} reason={} action=opaque-source-and-latch no-auto-retry=1 peer-contexts=untouched\n",
+            window.raw(), reason);
+        WAKE.signal(());
+    }
 }
 
 /// Called before source retirement or turning the effect off. Only this frame
@@ -162,7 +192,13 @@ enum Backend {
 }
 impl Drop for Effect {
     fn drop(&mut self) {
-        if !self.quarantined { super::retire_frame_when_released(self.frame); }
+        if self.quarantined { return; }
+        // FramePool reader counts do not represent broker attachment. A failed
+        // source restore must never leave the window holding a retired handle.
+        // Keep the completed frame allocated if detachment cannot be proven.
+        if super::window_broker::window_snapshot(OWNER, self.input.window)
+            .is_some_and(|window| window.frame == self.frame) { return; }
+        super::retire_frame_when_released(self.frame);
     }
 }
 impl Effect {
@@ -170,11 +206,12 @@ impl Effect {
         let started_ms = Instant::now().as_millis();
         let page = &input.page;
         let rect = page.viewport;
-        let backend = if let Some(native) = crate::intel::gpgpu::EditLifeState::new(
+        let backend = if crate::intel::gpgpu::edit_life_native_supported() {
+            let native = crate::intel::gpgpu::EditLifeState::new(
             page.width, page.height,
             crate::intel::gpgpu::GpgpuRect::new(rect.x as i32, rect.y as i32, rect.width, rect.height),
             page.cell_width, page.cell_height,
-        ) {
+            )?;
             Backend::Native(native)
         } else {
             Backend::Reference(super::edit_life_model::Life::new(rect.width, rect.height)?)
@@ -291,19 +328,24 @@ impl Effect {
                     if !result.ok || result.release.is_none() {
                         may_be_live = result.submitted;
                         self.quarantined = result.submitted;
+                        self.disabled = true;
                         return Err(());
                     }
                     self.reset = false;
                     self.emit = false;
                     self.steps = 0;
-                    super::publish_gpgpu_frame_buffer(lease, result.release.ok_or(())?).map_err(|_| ())?;
+                    if super::publish_gpgpu_frame_buffer(lease, result.release.ok_or(())?).is_err() {
+                        self.disabled = true;
+                        return Err(());
+                    }
                 }
             }
             // No suspension between generation validation and window commit.
             // A newer capture can never be overwritten by an old effect frame.
             let mut pages = PAGES.lock();
             let current = pages.iter_mut().find(|r| r.window == self.input.window
-                && r.serial == self.input.serial && r.source == self.input.source && !r.paused).ok_or(())?;
+                && r.serial == self.input.serial && r.source == self.input.source
+                && !r.paused && !r.failed).ok_or(())?;
             if current.displayed == Some(self.frame) {
                 super::publish_window_frame(OWNER, current.window, DamageRect::FULL).map_err(|_| ())?;
             } else {
@@ -339,12 +381,14 @@ pub(crate) async fn ui4_edit_life_service_task() {
     let mut effects: Vec<Effect> = Vec::new();
     loop {
         let inputs = PAGES.lock().clone();
-        effects.retain(|e| inputs.iter().any(|r| r.window == e.input.window));
+        effects.retain(|e| inputs.iter().any(|r| r.window == e.input.window
+            && (!r.failed || r.displayed == Some(e.frame))));
         for input in inputs {
             if super::window_is_closed(OWNER, input.window) { remove(input.window); continue; }
             // A menu can pause even before the first effect allocation. Never
             // initialize, capture or upload a paused registration.
-            if input.paused || !input_is_active(&input) { continue; }
+            if input.paused || input.failed || !input_is_active(&input) { continue; }
+            let window = input.window;
             let index = effects.iter().position(|e| e.input.window == input.window);
             if let Some(index) = index {
                 let effect = &mut effects[index];
@@ -360,6 +404,7 @@ pub(crate) async fn ui4_edit_life_service_task() {
                     if extent_changed || (viewport_changed && !effect.set_viewport(new.viewport)) {
                         effects.remove(index);
                         if let Some(effect) = Effect::new(input) { effects.push(effect); }
+                        else { stop(window, "effect-initialization-failed"); }
                     } else {
                         effect.input = input;
                         effect.capture(reset, emit);
@@ -370,6 +415,7 @@ pub(crate) async fn ui4_edit_life_service_task() {
                     }
                 }
             } else if let Some(effect) = Effect::new(input) { effects.push(effect); }
+            else { stop(window, "effect-initialization-failed"); }
         }
         let now = Instant::now().as_millis();
         let mut runnable = false;
@@ -379,7 +425,7 @@ pub(crate) async fn ui4_edit_life_service_task() {
                 crate::log_warn!(target: "ui4/edit-life";
                     "edit-life: effect stopped window={} uncertain_gpu={} fallback=opaque-editor\n",
                     effect.input.window.raw(), effect.quarantined);
-                remove(effect.input.window);
+                stop(effect.input.window, "effect-input-or-render-failed");
                 continue;
             }
             runnable = true;
@@ -396,7 +442,12 @@ pub(crate) async fn ui4_edit_life_service_task() {
                 if effect.next_generation_ms <= now { effect.next_generation_ms = now + GENERATION_MS; }
                 effect.dirty = true;
             }
-            if effect.dirty && effect.render().is_ok() { effect.dirty = false; }
+            if effect.dirty {
+                if effect.render().is_ok() { effect.dirty = false; }
+                else if effect.disabled || effect.quarantined {
+                    stop(effect.input.window, "native-render-failed");
+                }
+            }
         }
         // With every page paused, there is no animation timer to service.
         wait_for_work(runnable).await;

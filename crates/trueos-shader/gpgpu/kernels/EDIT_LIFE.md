@@ -5,7 +5,9 @@
 Its generated Zebin, SPIR-V, manifest and ABI contract live in
 `artifacts/adls/cpp/edit_life_rgba8.*`. The native producer is
 `src/intel/gpgpu/operations/edit_life.rs`; the bounded CPU implementation is
-the reference and unavailable-backend fallback.
+the reference for outputs without a compatible native backend. A native
+initialization failure on supported hardware stops the effect rather than
+silently selecting the CPU implementation.
 
 The source has one SIMD16 entry point and four modes: seed/additive input,
 Conway generation, background composition, and input comparison-baseline copy.
@@ -86,11 +88,25 @@ replaying the paused time. Real document, viewport and scroll changes still
 follow the existing reset/emission rules. A serial check prevents an older
 in-flight render from replacing an open menu.
 
-The native producer prepares its PPGTT and retained resource mappings once per
-render. Each ordered pass uses one full-domain walker: initial/scroll seeding
-needs three submissions (seed, comparison baseline, composite), and a normal
-generation needs two. It does not rebuild the whole page table for every
-128K-pixel chunk. Gutter-origin and viewport-size changes reuse allocations
+The native producer uses its own normal-priority `GpgpuEditLife` context,
+principal, submission lock, ring, batch, result storage, PPGTT and quarantine.
+Spirit remains a separate normal-priority execution client. Display and font
+service priorities are unchanged. Edit's private GGTT control window is warmed
+once at boot; failure is optional for core display boot and is never repaired
+by rewriting global mappings while peers are running. Retained input teardown
+unmaps only the exact Edit PPGTT range after its pending work has retired.
+
+The producer prepares its PPGTT and retained resource mappings once per render.
+Each ordered pass is split into independently retired row chunks, bounded by
+16K launched lanes for seeding, 64K for generation/comparison and 128K for
+composition. Bounds include padded SIMD16 lanes. The generated descriptor
+disables thread preemption, so a single whole-page walker would bypass this
+scheduling boundary. Every chunk requires both its completion marker and the
+saved context HEAD reaching the published TAIL before batch/payload reuse.
+World buffers flip only after the complete pass succeeds. Chunking does not
+rebuild the whole page table. The encoder uses the shared supported Gen12
+compute prologue, including HDC flush and excluding reserved DW0 bit 11.
+Gutter-origin and viewport-size changes reuse allocations
 when their existing capacities fit. Scroll resets the world in those buffers.
 Unchanged Edit frames emit no terminal metadata or synchronization fences.
 Capture logs expose terminal-cell count, compact input bytes and zero source
@@ -100,6 +116,44 @@ Runtime `edit-life: capture`, `edit-life: enabled`, and `edit-life timing` logs
 separate compact text capture, initial allocation/upload, page-table setup, seeding,
 baseline copying, and composition. These timings use the `ui4/edit-life` log
 target so they remain visible with the Blueprint/HV diagnostic profile.
+
+Native initialization, input, render or frame-publication failure latches the
+window's effect off and attempts to restore its newest ordinary opaque frame.
+Typing, scrolling, menu round trips and timer ticks cannot restart it. Explicit
+removal clears the window registration; GPU context quarantine remains sticky
+until reboot. A failed restore retains the displayed effect until detachment
+is proven; cleanup must not retire a still-attached frame. An uncertain GPU
+submission also retains input allocations and the exact source-read and
+destination-write leases. That source pin can exhaust the terminal's double
+buffer on subsequent edits; this is containment, not a promise of continued
+editor redraw after an ambiguous GPU hang. Clean pre-submit failures release
+their leases normally. Peer contexts are never reset or automatically revived.
+
+## Recorded Spirit freeze and verification boundary
+
+The compact-font run recorded in
+`bld/baremetal-logs/trueos-baremetal.1.log:270279` captures the actual failure:
+compact input capture took 0 ms, initial GPU rendering took 791 ms (223 ms seed,
+556 ms composition), then another generation took 615 ms with five catch-up
+steps. In between, Spirit reported `spirit-vfx-marker-timeout`, marker zero,
+saved HEAD 3516 and published TAIL 3520. Its execution context was quarantined
+and the previous sprite remained displayed. No corresponding physical-context
+fault was logged in that sequence.
+
+The earlier producer used full-page, nonpreemptible walkers on the high-priority
+SystemService context. This is a concrete scheduling defect consistent with
+Spirit's timeout; the log alone does not prove the cause of every stalled
+command. The separate normal-priority context, bounded walkers and corrected
+prologue address those defects without changing Spirit's timeout or weakening
+its retirement proof. Physical-target verification must still show Spirit
+sprite/VFX progress during Edit startup, typing, scroll and menu pause/resume,
+with no execution quarantine. Animation stays at ten generations per second.
+
+The baked shader currently uses ordinary FP32 operations for glow/composition.
+Its recorded Clang/ocloc commands enable neither `-cl-fast-relaxed-math` nor
+FP16 or explicit native math intrinsics. Conway evolution and glyph sampling
+use integer operations. Compiler math settings and baked artifacts are
+unchanged by the scheduling fix.
 
 ## Reproduce the local pinned setup
 
@@ -191,6 +245,9 @@ python3 tools/testpy/test_edit_life_capture.py
 python3 tools/testpy/test_edit_hex_font.py
 python3 tools/testpy/test_edit_hex_paint.py
 python3 tools/testpy/test_edit_hex_shader.py
+python3 tools/testpy/test_edit_life_native.py
+python3 tools/testpy/test_edit_life_lane.py
+python3 tools/testpy/test_edit_life_failure.py
 python3 tools/edit_life_shader_bake.py --verify
 ```
 
@@ -206,6 +263,13 @@ fallbacks, zero source reads and paused-page retention. Font tests compare
 Rust, canonical source bits and the actual compiled C++ sampler, including
 noninteger physical cell sizes, underlining and all 66 mask bits. Paint tests
 exercise metadata-only font toggles and both-buffer invalidation.
+Native dispatch tests compile the production row partitioner and dispatch
+method across 288 padded dimensions/modes, checking coverage, retirement before
+reuse and stopping after a failed chunk. Packet tests compile the actual shared
+prologue. Lane tests exercise priority, identity, nonoverlapping control storage,
+optional boot admission, exact quarantine and private-resource retirement.
+Registration tests exercise failure latching, source freshness, pause/resume,
+frame detachment and cleanup wakeups using the production lifecycle functions.
 
 An optional standalone reference timing command is
 `python3 tools/testpy/test_edit_life_model.py --benchmark`. It reports compact

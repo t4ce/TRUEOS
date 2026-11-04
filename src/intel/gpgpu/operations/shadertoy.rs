@@ -209,7 +209,7 @@ impl ShaderToyFocusScratch {
             let mut allocation = allocate_font_instance_rgba8_surface(width, height)?;
             // Shares the unique resource VA allocator, but this resource is
             // mapped only by SystemService, whose retirement owns its teardown.
-            allocation.system_service = true;
+            allocation.owner = Rgba8SurfaceOwner::SystemService;
             self.allocation = Some(allocation);
         }
         let mut surface = self.allocation.as_ref()?.surface();
