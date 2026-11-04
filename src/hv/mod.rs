@@ -684,6 +684,7 @@ struct BlueprintPendingLaunchState {
     app_args: AllocVec<AllocString>,
     launch_script: Option<AllocString>,
     instance: BlueprintInstanceRequest,
+    access_account: Option<trueos_crypto::AccountId>,
     console_target: Option<MatrixTarget>,
     console_surface: BlueprintConsoleSurface,
     restored_identity: Option<BlueprintInstanceIdentity>,
@@ -702,6 +703,8 @@ pub struct BlueprintLaunchState {
     pub launch_script: Option<AllocString>,
     pub app_fs_root: AllocString,
     pub identity: BlueprintInstanceIdentity,
+    /// Account captured at launch, never inferred from a later Cry login.
+    pub access_account: Option<trueos_crypto::AccountId>,
 }
 
 #[cfg(feature = "legacy_vm_checkpoint")]
@@ -738,6 +741,9 @@ struct BlueprintChildLink {
 pub struct BlueprintInstanceRequest {
     pub name: Option<AllocString>,
     pub peer: Option<AllocString>,
+    /// Host-selected stable workspace suffix. None selects container 0 unless
+    /// an explicit named request asks for a fresh additional container.
+    pub container_id: Option<AllocString>,
 }
 
 impl BlueprintInstanceRequest {
@@ -745,6 +751,7 @@ impl BlueprintInstanceRequest {
         Self {
             name: Some(name.into()),
             peer: None,
+            container_id: None,
         }
     }
 
@@ -752,11 +759,21 @@ impl BlueprintInstanceRequest {
         Self {
             name: Some(name.into()),
             peer: Some(peer.into()),
+            container_id: None,
+        }
+    }
+
+    /// Select an existing workspace identity without copying application code.
+    /// The loader validates the ID before materializing any app files.
+    pub fn container(container_id: impl Into<AllocString>) -> Self {
+        Self {
+            container_id: Some(container_id.into()),
+            ..Self::default()
         }
     }
 
     pub fn is_default(&self) -> bool {
-        self.name.is_none() && self.peer.is_none()
+        self.container_id.is_none() && self.name.is_none() && self.peer.is_none()
     }
 }
 
@@ -1329,6 +1346,7 @@ fn blueprint_child_spawn_archive(
         module_bytes,
         app_args,
         BlueprintInstanceRequest::default(),
+        crate::access_key_db::principal_for_vm(parent_vm_id),
     );
     if result.is_err() {
         let _ = link_slot.lock().take();
@@ -1984,7 +2002,7 @@ pub fn start_blueprint_app_vm(
 ) -> Result<(), StartError> {
     start_prepared_blueprint_app_vm(
         vm_id, spawner, archive, module_bytes, None, app_args, launch_script,
-        instance, console_target, console_surface, None,
+        instance, None, console_target, console_surface, None,
     )
 }
 
@@ -1997,6 +2015,7 @@ fn start_prepared_blueprint_app_vm(
     app_args: AllocVec<AllocString>,
     launch_script: Option<AllocString>,
     instance: BlueprintInstanceRequest,
+    access_account: Option<trueos_crypto::AccountId>,
     console_target: Option<MatrixTarget>,
     console_surface: BlueprintConsoleSurface,
     timing: Option<launch_timing::Trace>,
@@ -2016,6 +2035,7 @@ fn start_prepared_blueprint_app_vm(
             app_args,
             launch_script,
             instance,
+            access_account,
             console_target,
             console_surface,
             restored_identity: None,
@@ -2031,6 +2051,7 @@ fn start_blueprint_child_vm(
     module_bytes: AllocVec<u8>,
     app_args: AllocVec<AllocString>,
     instance: BlueprintInstanceRequest,
+    access_account: Option<trueos_crypto::AccountId>,
 ) -> Result<(), StartError> {
     let timing = launch_timing::Trace::for_archive(&archive);
     timing.measure("vm_admission", || start_with_mode(
@@ -2046,6 +2067,7 @@ fn start_blueprint_child_vm(
             app_args,
             launch_script: None,
             instance,
+            access_account,
             console_target: None,
             console_surface: BlueprintConsoleSurface::Text,
             restored_identity: None,
@@ -3119,6 +3141,8 @@ fn prepare_blueprint_launch_on_lane(
     let instance_guid = format_blueprint_uuid(&identity.instance);
     let app_fs_root = if let Some(root) = pending.restored_app_fs_root.clone() {
         root
+    } else if let Some(container_id) = pending.instance.container_id.as_deref() {
+        crate::hv::blueprint::app_fs_root_for_container_id(pending.archive.as_str(), container_id)?
     } else if pending.instance.is_default() {
         crate::hv::blueprint::app_fs_root_for_archive(
             pending.archive.as_str(),
@@ -3178,6 +3202,7 @@ fn prepare_blueprint_launch_on_lane(
             launch_script: pending.launch_script,
             app_fs_root,
             identity,
+            access_account: pending.access_account,
         },
         pending.console_target,
         console_surface,
@@ -3351,6 +3376,11 @@ pub fn stage_blueprint_launch(
         clear_blueprint_child_template(vm_id);
         return Err(StartError::GuestMemoryUnavailable);
     }
+    // Bind only after fallible staging has succeeded, before any guest CABI
+    // can observe its process context. This also covers direct restore paths.
+    crate::access_key_db::bind_launch(
+        vm_id, &state.archive, &state.app_fs_root, state.access_account,
+    );
     *launch_script_slot.lock() = launch_script;
     *slot.lock() = Some(guest_state);
     let _ = exit_reason_mailbox.lock().take();
@@ -4149,6 +4179,7 @@ pub(crate) fn blueprint_process_context(vm_id: u8) -> Option<BlueprintProcessCon
 }
 
 fn clear_blueprint_process_context(vm_id: u8) -> BlueprintTerminalCleanup {
+    crate::access_key_db::clear_vm(vm_id);
     if let Some(target) = blueprint_console_target(vm_id) {
         let _ = crate::shell3::tui::release(&target, vm_id);
     }

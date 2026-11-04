@@ -946,6 +946,16 @@ pub(crate) fn authenticated_history_identity(scope_id: u8) -> Option<(u64, u64)>
     Some((session.account.raw(), session.challenge_sequence))
 }
 
+/// Capture the account authenticated in the caller's transport scope.
+/// A later login must not change the principal of an already queued app.
+pub(crate) fn authenticated_access_account(scope_id: u8) -> Option<AccountId> {
+    let state = CRY_STATE.lock();
+    if !state.totp.as_ref().is_some_and(|factor| factor.active) {
+        return None;
+    }
+    state.session.filter(|session| session.scope_id == scope_id).map(|session| session.account)
+}
+
 pub(crate) fn authenticated_user_input_record_key(scope_id: u8) -> Option<CryUserInputRecordKey> {
     const DOMAIN: &[u8] = b"TRUEOS/user-input-record/chacha20-poly1305/v1";
 

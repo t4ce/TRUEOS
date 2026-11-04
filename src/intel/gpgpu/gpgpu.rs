@@ -52,6 +52,7 @@ include!("operations/effects.rs");
 include!("operations/cpp_demo.rs");
 include!("operations/shadertoy_focus.rs");
 include!("operations/shadertoy.rs");
+include!("operations/edit_life.rs");
 include!("operations/cloud_brush.rs");
 include!("operations/shadertoy_catalog.rs");
 include!("operations/shadertoy_environment.rs");

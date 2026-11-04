@@ -154,12 +154,25 @@ pub(crate) fn launch_bytes_with_script(
     frontend: super::tui::Frontend,
     script: Option<alloc::string::String>,
 ) -> Result<QueuedBlueprint, alloc::string::String> {
+    let account = super::tui::frontend_access_account(frontend);
+    launch_bytes_with_script_for_account(archive, bytes, frontend, script, account)
+}
+
+/// Guest-originated requests carry their bound principal, including `None`.
+/// Never replace it with the currently signed-in frontend account.
+pub(crate) fn launch_bytes_with_script_for_account(
+    archive: alloc::string::String,
+    bytes: Vec<u8>,
+    frontend: super::tui::Frontend,
+    script: Option<alloc::string::String>,
+    access_account: Option<trueos_crypto::AccountId>,
+) -> Result<QueuedBlueprint, alloc::string::String> {
     let args = if archive == "os.bp" {
         super::os::arguments()
     } else {
         Vec::new()
     };
-    launch_bytes_with_args(archive, bytes, frontend, script, args)
+    launch_bytes_with_args(archive, bytes, frontend, script, args, access_account)
 }
 fn launch_bytes_with_args(
     archive: alloc::string::String,
@@ -167,6 +180,7 @@ fn launch_bytes_with_args(
     frontend: super::tui::Frontend,
     script: Option<alloc::string::String>,
     args: Vec<alloc::string::String>,
+    access_account: Option<trueos_crypto::AccountId>,
 ) -> Result<QueuedBlueprint, alloc::string::String> {
     let observer = (archive == "os.bp").then(|| {
         alloc::boxed::Box::new(ShellLaunch)
@@ -175,6 +189,7 @@ fn launch_bytes_with_args(
     let mut request = crate::hv::launcher::LaunchRequest::new(archive, bytes);
     request.script = script;
     request.args = args;
+    request.access_account = access_account;
     request.frontend = Some(frontend);
     request.console_surface = crate::hv::BlueprintConsoleSurface::Terminal;
     crate::hv::launcher::enqueue(request, observer)
@@ -965,11 +980,11 @@ pub(crate) fn report_launch_error(error: alloc::string::String) {
 }
 
 #[trueos_executor::task(pool_size = 4)]
-async fn edit_aka_task(frontend: super::tui::Frontend) {
+async fn edit_aka_task(frontend: super::tui::Frontend, access_account: Option<trueos_crypto::AccountId>) {
     let result = async {
         let path = crate::r::startup_config::edit_path().await?;
         let bytes = crate::app_db::get("edit.bp")?.ok_or("Aka: edit builtin unavailable")?;
-        launch_bytes_with_args("edit.bp".into(), bytes, frontend, None, alloc::vec![path])
+        launch_bytes_with_args("edit.bp".into(), bytes, frontend, None, alloc::vec![path], access_account)
     }
     .await;
     match result {
@@ -979,7 +994,8 @@ async fn edit_aka_task(frontend: super::tui::Frontend) {
 }
 pub(super) fn edit_aka(frontend: super::tui::Frontend) -> Result<(), alloc::string::String> {
     let worker = crate::workers::pick_background_spawner().ok_or("Aka: no background worker")?;
-    let task = edit_aka_task(frontend)
+    let access_account = super::tui::frontend_access_account(frontend);
+    let task = edit_aka_task(frontend, access_account)
         .map_err(|_| alloc::string::String::from("Aka: editor request busy"))?;
     worker.spawn(task);
     Ok(())

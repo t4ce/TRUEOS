@@ -3,6 +3,7 @@
 
 extern crate alloc;
 
+pub mod access;
 pub mod selection;
 
 #[cfg(test)]
@@ -227,8 +228,8 @@ const FILE_ID_END: usize = FILE_ID_OFF + 12;
 
 const ZERO_INTEGRITY_TAG: [u8; 32] = [0u8; 32];
 
-// Record-key extension in the otherwise reserved portion of every log header.
-// Legacy records have zeroes in this region and therefore decode as FFA.
+// Mandatory V3 record-key extension in the otherwise reserved header region.
+// A missing/zero extension is invalid; Ffa is encoded explicitly as kind zero.
 const RECORD_KEY_MAGIC: [u8; 4] = *b"TOSK";
 const RECORD_KEY_VERSION: u8 = 1;
 const RECORD_KEY_EXT_OFF: usize = 52;
@@ -241,11 +242,13 @@ pub const CONTENT_TYPE_ID_OFF: usize = RECORD_KEY_HEADER_MIN_BYTES;
 /// Minimum V3 record header. All TRUEOSFS block devices must accommodate this.
 pub const RECORD_HEADER_MIN_BYTES: usize = CONTENT_TYPE_ID_OFF + 4;
 
-/// Native access identity stored in each TRUEOSFS record header.
+/// Exactly one native access identity stored in each TRUEOSFS file header.
 ///
-/// This is metadata only for now: the filesystem persists and reports it, but
-/// key-provider authorization and stream encryption are intentionally later
-/// layers. `KeyRef` never contains private key material.
+/// Many files may share this identity. `Ffa` is the legacy standard/default
+/// identity, not an implicit grant. [`access::AccessKeyDb`] separately evaluates
+/// account-qualified app/workspace grants; the kernel currently reports denied
+/// decisions without blocking its development workflow. Provider authorization
+/// and stream encryption remain later layers. `KeyRef` has no private material.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RecordKey {
     #[default]

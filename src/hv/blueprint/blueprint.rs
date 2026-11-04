@@ -1729,7 +1729,25 @@ pub(crate) fn uses_volatile_codex_files(archive: &str) -> bool {
 }
 
 pub(crate) fn app_fs_root_for_archive(archive: &str, _module_bytes: &[u8]) -> String {
+    // The historical bare app root is container 0, including across reboots.
     alloc::format!("apps/{}", safe_archive_stem(archive))
+}
+
+/// Resolve a stable host-selected ID without sanitizing distinct IDs together.
+/// Container 0 keeps its existing bare path; every other ID is one suffix.
+pub(crate) fn app_fs_root_for_container_id(archive: &str, container_id: &str) -> Result<String, &'static str> {
+    if container_id.is_empty() || container_id.len() > 192
+        || !(container_id.as_bytes()[0].is_ascii_alphanumeric() || matches!(container_id.as_bytes()[0], b'-' | b'_'))
+        || !container_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err("invalid app container ID");
+    }
+    let app_root = app_fs_root_for_archive(archive, &[]);
+    if container_id == "0" {
+        Ok(app_root)
+    } else {
+        Ok(alloc::format!("{app_root}_{container_id}"))
+    }
 }
 
 fn safe_instance_component(value: &str, fallback: &str) -> String {
@@ -1764,9 +1782,6 @@ pub(crate) fn app_fs_root_for_named_instance(
     peer: Option<&str>,
     instance_guid: &str,
 ) -> String {
-    if uses_volatile_codex_files(archive) {
-        return app_fs_root_for_archive(archive, &[]);
-    }
     let name = safe_instance_component(name, "unnamed");
     let instance = match peer {
         Some(peer) => alloc::format!(
@@ -1777,7 +1792,7 @@ pub(crate) fn app_fs_root_for_named_instance(
         ),
         None => alloc::format!("{}--{}", name, instance_guid.trim_matches('/')),
     };
-    alloc::format!("apps/{}/{}", safe_archive_stem(archive), instance)
+    alloc::format!("apps/{}_{}", safe_archive_stem(archive), instance)
 }
 
 pub(crate) fn app_fs_common_root() -> String {

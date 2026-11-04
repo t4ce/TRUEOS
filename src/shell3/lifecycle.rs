@@ -14,7 +14,7 @@ pub(super) fn recognizes(name: &str) -> bool {
 
 /// The hypervisor rechecks this lease under lifecycle admission, so a stale
 /// selection cannot control a later guest that happens to reuse its VM id.
-pub(super) fn control(action: &str, lease: &MatrixSlotLease) -> String {
+pub(super) fn control(action: &str, lease: &MatrixSlotLease, actor: Option<trueos_crypto::AccountId>) -> String {
     let Some(vm) = crate::hv::matrix::vm_for_lease(lease) else {
         return format!("{action}: selected VM slot is no longer active");
     };
@@ -24,6 +24,7 @@ pub(super) fn control(action: &str, lease: &MatrixSlotLease) -> String {
             crate::hv::pause_for_matrix_slot(vm, lease).map_err(|error| format!("{error:?}"))
         }
         "resume" => {
+            crate::access_key_db::audit_resume(vm, actor);
             crate::hv::resume_for_matrix_slot(vm, lease).map_err(|error| format!("{error:?}"))
         }
         "kill" => crate::hv::kill_for_matrix_slot(vm, lease).map_err(|error| format!("{error:?}")),
@@ -116,7 +117,10 @@ async fn lifecycle_task(action: String, target: MatrixTarget) {
             Some(Event::Choose(index)) => {
                 if let Some((_, choice)) = entries.get(index) {
                     match choice {
-                        Choice::Vm(lease) => result = control(&action, lease),
+                        Choice::Vm(lease) => {
+                            let actor = tui::native_frontend(&target).and_then(tui::frontend_access_account);
+                            result = control(&action, lease, actor);
+                        }
                         Choice::App(name) => {
                             if let Some(frontend) = tui::native_frontend(&target) {
                                 match service::launch_appdb(name, frontend) {

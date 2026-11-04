@@ -40,6 +40,10 @@ mod r {
             }
             fn trueosfs_scope_granted() -> bool { CONTEXT.with(|context| context.borrow().0) }
             fn current_app_fs_root() -> Option<String> { CONTEXT.with(|context| context.borrow().1.clone()) }
+            fn var(key: &str) -> Option<String> {
+                assert_eq!(key, "TRUEOS_APP_ARCHIVE");
+                Some("edit.bp".into())
+            }
             @RESOLVERS@
         }
         pub mod fs_cabi {
@@ -50,13 +54,16 @@ mod r {
                 pub archive: String,
                 pub path: Option<String>,
                 pub new_shell: bool,
+                pub access_account: Option<u64>,
             }
             fn launch_archive_task(
                 _: Option<u32>, archive: String, path: Option<String>,
                 _: Option<String>, destination: launch_request::Destination,
+                access_account: Option<u64>,
             ) -> Result<Admission, ()> {
                 Ok(Admission { archive, path,
-                    new_shell: destination == launch_request::Destination::NewShell3 })
+                    new_shell: destination == launch_request::Destination::NewShell3,
+                    access_account })
             }
             @LAUNCH_REQUEST@
             pub fn submit(path: &str) -> i32 {
@@ -70,7 +77,28 @@ mod r {
         }
     }
 }
-mod hv { pub fn blueprint_console_target(_: u8) -> Option<u32> { Some(1) } }
+mod hv {
+    pub fn blueprint_console_target(_: u8) -> Option<u32> { Some(1) }
+    pub mod blueprint {
+        use alloc::string::String;
+        @APP_FUNCTIONS@
+    }
+}
+mod app_db {
+    use std::cell::RefCell;
+    #[derive(Clone)] pub struct AppEntry { pub archive: String }
+    thread_local! {
+        static APPS: RefCell<Result<Vec<AppEntry>, ()>> = RefCell::new(Ok(vec![AppEntry { archive: "demo.bp".into() }]));
+    }
+    pub fn list() -> Result<Vec<AppEntry>, ()> { APPS.with(|apps| apps.borrow().clone()) }
+    pub fn fail() { APPS.with(|apps| *apps.borrow_mut() = Err(())); }
+}
+mod access_key_db {
+    use std::cell::Cell;
+    thread_local! { static ACCOUNT: Cell<Option<u64>> = const { Cell::new(Some(17)) }; }
+    pub fn principal_for_vm(_: u8) -> Option<u64> { ACCOUNT.with(Cell::get) }
+    pub fn set(account: Option<u64>) { ACCOUNT.with(|current| current.set(account)); }
+}
 mod shell3 { pub mod tui {
     pub fn frontend_for_target(target: &u32) -> Option<u32> { Some(*target) }
 } }
@@ -89,7 +117,7 @@ mod workers {
 #[test]
 fn confined_edit_can_install_and_launch_shared_builds() {
     use r::io::{async_fs_cabi, env, fs_cabi};
-    env::set(false, Some("apps/edit/instances/editor"));
+    env::set(false, Some("apps/edit_editor"));
     let expected = "apps/common/ide/builds/42-7/1/demo.bp";
     for path in [
         "/apps/common/ide/builds/42-7/1/demo.bp",
@@ -113,6 +141,7 @@ fn confined_archive_requests_cannot_leave_shared_common() {
     env::set(false, Some("apps/edit"));
     for path in [
         "/apps/other/private.bp", "private/out.bp", "./private.bp",
+        "/apps/edit/userdata/private.bp", "/apps/edit_editor/userdata/private.bp",
         "/apps/common-other/out.bp", "common/../other/out.bp",
         "trueosfs:disc7/apps/other/out.bp", "trueosfs:disc7/apps/common/out.bp",
     ] {
@@ -156,6 +185,31 @@ fn appdb_names_still_launch_without_filesystem_scope() {
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].archive, "demo.bp");
     assert!(queued[0].path.is_none());
+    assert_eq!(queued[0].access_account, Some(17));
+}
+
+#[test]
+fn missing_appdb_names_and_database_errors_are_not_admitted() {
+    r::io::env::set(false, Some("apps/edit_editor"));
+    assert_eq!(r::io::fs_cabi::submit("missing.bp"), -2);
+    assert!(workers::take().is_empty());
+    app_db::fail();
+    assert_eq!(r::io::fs_cabi::submit("demo.bp"), -5);
+    assert!(workers::take().is_empty());
+}
+
+#[test]
+fn queued_launch_retains_the_callers_account_including_absence() {
+    use r::io::{env, fs_cabi};
+    env::set(false, Some("apps/edit_editor"));
+    access_key_db::set(Some(71));
+    assert_eq!(fs_cabi::submit("demo.bp"), 0);
+    access_key_db::set(Some(83));
+    assert_eq!(workers::take()[0].access_account, Some(71));
+    access_key_db::set(None);
+    assert_eq!(fs_cabi::submit("demo.bp"), 0);
+    access_key_db::set(Some(83));
+    assert_eq!(workers::take()[0].access_account, None);
 }
 '''
 
@@ -167,12 +221,16 @@ def main() -> None:
         "pub(crate) fn resolve_blueprint_archive_path(",
     ])
     fs = (ROOT / "src/r/io/fs_cabi.rs").read_text()
+    blueprint = (ROOT / "src/hv/blueprint/blueprint.rs").read_text()
     asynchronous = (ROOT / "src/r/io/async_fs_cabi.rs").read_text()
     install = asynchronous[asynchronous.index('if path == "vFile:appdb-install" {'):]
     closure = function(install, "|| {")[4:-1]
     source = HARNESS.replace("@PATH_SOURCE@", json.dumps(str(ROOT / "src/r/path.rs")))
     source = source.replace("@LAUNCH_SOURCE@", json.dumps(str(ROOT / "src/r/io/launch_request.rs")))
     source = source.replace("@RESOLVERS@", resolvers)
+    source = source.replace("@APP_FUNCTIONS@", "\n".join(function(blueprint, signature) for signature in [
+        "fn safe_archive_stem(", "pub(crate) fn app_fs_root_for_archive(",
+    ]))
     source = source.replace("@LAUNCH_REQUEST@", function(fs, "fn launch_script_request("))
     source = source.replace("@INSTALL_PATH@", closure)
     channel = re.search(r'^channel\s*=\s*"([^"]+)"',

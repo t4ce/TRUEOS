@@ -9,6 +9,8 @@ pub(crate) struct LaunchRequest {
     pub args: Vec<String>,
     pub script: Option<String>,
     pub instance: super::BlueprintInstanceRequest,
+    /// Frozen authenticated origin; presentation attachment cannot change it.
+    pub access_account: Option<trueos_crypto::AccountId>,
     pub frontend: Option<crate::shell3::tui::Frontend>,
     pub console_surface: super::BlueprintConsoleSurface,
 }
@@ -20,6 +22,7 @@ impl LaunchRequest {
             args: Vec::new(),
             script: None,
             instance: super::BlueprintInstanceRequest::default(),
+            access_account: None,
             frontend: None,
             console_surface: super::BlueprintConsoleSurface::Text,
         }
@@ -171,6 +174,7 @@ async fn launch_task(
                     request.args,
                     request.script,
                     request.instance,
+                    request.access_account,
                     Some(target.clone()),
                     request.console_surface,
                     Some(timing),

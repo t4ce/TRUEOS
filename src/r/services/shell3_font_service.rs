@@ -150,23 +150,12 @@ pub(crate) fn glyph(
     let top = (page.used / PAGE_COLUMNS) * cell_height;
     let s = page.backing.surface();
     let destination = crate::phys::phys_to_virt(s.phys as usize) as *mut u8;
-    let (mask, foreground) = match font.alpha.glyph(character) {
-        Some(mask) => (mask, foreground),
-        None => (
-            font.alpha.glyph('?').ok_or("shell3-font-missing-question-mark")?,
-            [255, 0, 0, foreground[3]],
-        ),
-    };
+    let (mask, foreground) = resolved_glyph(font, character, foreground)?;
     let mut first_pixel = None;
     let mut uniform = true;
     for y in 0..cell_height {
         for x in 0..cell_width {
-            let mut coverage = sample_native(
-                font.alpha, mask, x, y, cell_width, cell_height,
-            );
-            if underline && y * microfont::FHEIGHT as u32 / cell_height == microfont::FHEIGHT as u32 - 1 {
-                coverage = 255;
-            }
+            let coverage = sample_cell(font.alpha, mask, x, y, cell_width, cell_height, underline);
             let pixel = tint(coverage, foreground, background);
             if let Some(first) = first_pixel { uniform &= first == pixel; }
             else { first_pixel = Some(pixel); }
@@ -203,6 +192,48 @@ pub(crate) fn glyph(
 pub(crate) fn solid_color(copy: &GucBcs0RgbaCopy) -> Option<u32> {
     FONT.get()?.cache.lock().solids.get(&(copy.source.gpu, copy.source_x, copy.source_y))
         .copied().flatten()
+}
+
+/// Visit the exact retained coverage used by `glyph`, including underlines and
+/// the missing-character fallback. This only samples the existing atlas; it
+/// never rasterizes text or changes the shared font tiles.
+pub(crate) fn with_cell_coverage(
+    character: char,
+    cell_width: u32,
+    cell_height: u32,
+    foreground: [u8; 4],
+    underline: bool,
+    mut pixel: impl FnMut(u32, u32, u8, [u8; 4]),
+) -> Result<(), &'static str> {
+    let font = FONT.get().ok_or("shell3-font-not-ready")?;
+    if cell_width == 0 || cell_height == 0 || cell_width > 256 || cell_height > 256 {
+        return Err("shell3-font-cell-size");
+    }
+    let (mask, foreground) = resolved_glyph(font, character, foreground)?;
+    for y in 0..cell_height {
+        for x in 0..cell_width {
+            pixel(x, y, sample_cell(font.alpha, mask, x, y, cell_width, cell_height, underline), foreground);
+        }
+    }
+    Ok(())
+}
+
+fn resolved_glyph(font: &Font, character: char, foreground: [u8; 4])
+    -> Result<(&[u8], [u8; 4]), &'static str> {
+    match font.alpha.glyph(character) {
+        Some(mask) => Ok((mask, foreground)),
+        None => Ok((font.alpha.glyph('?').ok_or("shell3-font-missing-question-mark")?,
+            [255, 0, 0, foreground[3]])),
+    }
+}
+
+fn sample_cell(atlas: &OwnedAlphaAtlas, mask: &[u8], x: u32, y: u32,
+    width: u32, height: u32, underline: bool) -> u8 {
+    if underline && y * microfont::FHEIGHT as u32 / height == microfont::FHEIGHT as u32 - 1 {
+        255
+    } else {
+        sample_native(atlas, mask, x, y, width, height)
+    }
 }
 
 fn sample_native(atlas: &OwnedAlphaAtlas, mask: &[u8],

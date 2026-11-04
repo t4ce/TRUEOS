@@ -8,6 +8,7 @@ pub(crate) enum Startup {
         archive: String,
         bytes: Vec<u8>,
         script: Option<String>,
+        access_account: Option<trueos_crypto::AccountId>,
     },
 }
 
@@ -19,12 +20,14 @@ impl Startup {
                 archive,
                 bytes,
                 script,
+                access_account,
             } => {
-                match super::service::launch_bytes_with_script(
+                match super::service::launch_bytes_with_script_for_account(
                     archive,
                     bytes,
                     shell.tui_frontend(),
                     script,
+                    access_account,
                 ) {
                     Ok(app) => {
                         // This selects the admitted foreground route as well

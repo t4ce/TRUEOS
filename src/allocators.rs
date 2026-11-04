@@ -360,7 +360,7 @@ impl Drop for HvGuestDmaPinReservation {
 // node and allocation tag layouts, and therefore saved heap images, do not
 // change.
 const FREE_ADDRESS_FENCES: usize = 256;
-// Cache a bounded number of proven-too-small prefixes. Unlike a next-fit
+// Cache a bounded number of proven-nonfitting prefixes. Unlike a next-fit
 // cursor, these hints never bypass a block that could satisfy the request.
 // Exact minimum sizes also help when fragmentation is concentrated within a
 // single address band, before a large surviving tail.
@@ -369,11 +369,12 @@ const ALLOC_SEARCH_HINTS: usize = 32;
 #[derive(Clone, Copy)]
 struct AllocSearchHint {
     minimum: usize,
+    alignment: usize,
     before: Option<NonNull<FreeBlock>>,
 }
 
 impl AllocSearchHint {
-    const EMPTY: Self = Self { minimum: 0, before: None };
+    const EMPTY: Self = Self { minimum: 0, alignment: 0, before: None };
 }
 
 struct FreeList {
@@ -472,9 +473,17 @@ impl FreeList {
         else {
             return null_mut();
         };
+        // Payload starts are FreeBlock-aligned. Rounded size plus effective
+        // alignment therefore fixes each block's required span, including
+        // padding. A different alignment must not reuse those rejections.
+        // Splitting a rejected range cannot improve its fit: the end stays
+        // fixed while the earliest aligned payload can only move forward.
+        let alignment = layout.align().max(align_of::<AllocTag>());
         let hint_index = Self::alloc_search_index(minimum);
-        if self.alloc_search[hint_index].minimum != minimum {
-            self.alloc_search[hint_index] = AllocSearchHint { minimum, before: None };
+        if self.alloc_search[hint_index].minimum != minimum
+            || self.alloc_search[hint_index].alignment != alignment
+        {
+            self.alloc_search[hint_index] = AllocSearchHint { minimum, alignment, before: None };
         }
         let mut prev = self.alloc_search[hint_index].before;
         let mut current = match prev {
@@ -487,7 +496,6 @@ impl FreeList {
             }
             None => self.head,
         };
-        let mut small_prefix = true;
         let mut last_rejected = None;
 
         while let Some(mut block_ptr) = current {
@@ -501,20 +509,12 @@ impl FreeList {
             }
             let block = block_ptr.as_mut();
 
-            // Only a contiguous prefix of blocks smaller than this lower
-            // bound is reusable across requests. Alignment can reject a larger
-            // block, but another alignment at the same minimum may fit there.
-            if small_prefix && block.size < minimum {
-                self.alloc_search[hint_index].before = Some(block_ptr);
-            } else {
-                small_prefix = false;
-            }
-
             let block_start = block as *mut FreeBlock as usize;
 
             let payload_start = match aligned_payload(block_start, layout) {
                 Some(v) => v,
                 None => {
+                    self.alloc_search[hint_index].before = Some(block_ptr);
                     prev = Some(block_ptr);
                     current = block.next;
                     continue;
@@ -527,6 +527,7 @@ impl FreeList {
             {
                 Some(v) => v,
                 None => {
+                    self.alloc_search[hint_index].before = Some(block_ptr);
                     prev = Some(block_ptr);
                     current = block.next;
                     continue;
@@ -538,6 +539,7 @@ impl FreeList {
             let aligned_used = align_up(total_used, align_of::<FreeBlock>());
 
             if aligned_used > block.size {
+                self.alloc_search[hint_index].before = Some(block_ptr);
                 last_rejected = Some((block_ptr, payload_start, aligned_used));
                 prev = Some(block_ptr);
                 current = block.next;
@@ -948,7 +950,7 @@ impl FreeList {
     }
 
     /// A removed prefix anchor must never remain a pointer into allocated
-    /// storage. Its predecessor was part of the same too-small prefix.
+    /// storage. Its predecessor was part of the same rejected prefix.
     fn remove_alloc_search_node(
         &mut self,
         node: NonNull<FreeBlock>,
@@ -963,7 +965,8 @@ impl FreeList {
 
     /// Insertion or coalescing can create a first fit inside an old rejected
     /// prefix. Back up before that block; every earlier node is still proven
-    /// too small. The caller may conservatively supply an earlier predecessor.
+    /// nonfitting for that key. The caller may conservatively supply an
+    /// earlier predecessor.
     fn rewind_alloc_search(
         &mut self,
         node: NonNull<FreeBlock>,

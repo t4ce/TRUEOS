@@ -26,6 +26,7 @@ struct Entry {
     id: u64,
     vm: u8,
     run: u64,
+    access_account: Option<trueos_crypto::AccountId>,
     owner: MatrixSlotLease,
     slot: u32,
     claimed: bool,
@@ -91,6 +92,7 @@ fn open_inner(vm: u8, script: &[u8], cols: usize, rows: usize, stdin_open: bool)
         id,
         vm,
         run,
+        access_account: crate::access_key_db::principal_for_vm(vm),
         owner,
         slot,
         claimed: false,
@@ -240,13 +242,14 @@ impl Worker {
                         entry.id,
                         entry.vm,
                         entry.run,
+                        entry.access_account,
                         entry.owner.clone(),
                         Arc::clone(&entry.state),
                     )
                 })
                 .collect()
         };
-        for (id, vm, run, owner, shared) in pending {
+        for (id, vm, run, access_account, owner, shared) in pending {
             let (size, captured) = {
                 let state = shared.lock();
                 (state.size, state.captured)
@@ -263,6 +266,7 @@ impl Worker {
                 (None, Frontend::Captured(Captured::new(vm)))
             } else {
                 let shell = Shell3::new_terminal_sized_reserved(self.slot, None, size.0, size.1);
+                super::tui::bind_guest_frontend_account(shell.tui_frontend(), access_account);
                 let own_slot = shell
                     .active_matrix_lease()
                     .expect("fresh terminal owns a Matrix slot");

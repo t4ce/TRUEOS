@@ -65,6 +65,7 @@ struct Registry {
     revisions: Vec<(u64, u64)>,
     next_revision: u64,
     remote_frontends: Vec<(u64, remote::Output)>,
+    guest_frontend_accounts: Vec<(u64, Option<trueos_crypto::AccountId>)>,
     pending_launches: Vec<(u64, QueuedBlueprint)>,
     navigation_holds: Vec<u64>,
 }
@@ -76,6 +77,7 @@ impl Registry {
             revisions: Vec::new(),
             next_revision: 0,
             remote_frontends: Vec::new(),
+            guest_frontend_accounts: Vec::new(),
             pending_launches: Vec::new(),
             navigation_holds: Vec::new(),
         }
@@ -689,6 +691,28 @@ pub(super) fn native_transport_scope(target: &MatrixTarget) -> Option<u8> {
         },
     )
 }
+
+/// Resolve the transport of this exact frontend before queuing a launch.
+pub(super) fn frontend_access_account(frontend: Frontend) -> Option<trueos_crypto::AccountId> {
+    let scope = {
+        let routes = ROUTES.lock();
+        if let Some((_, account)) = routes.guest_frontend_accounts.iter().find(|entry| entry.0 == frontend.id) {
+            return *account;
+        }
+        if routes.remote_frontends.iter().any(|entry| entry.0 == frontend.id) {
+            TRANSPORT_NET_TCP_SCOPE
+        } else {
+            TRANSPORT_LOCAL_SCOPE
+        }
+    };
+    crate::crypt::authenticated_access_account(scope)
+}
+
+/// A guest-owned terminal keeps the originating VM's principal even when a
+/// different account later signs in through a human terminal.
+pub(super) fn bind_guest_frontend_account(frontend: Frontend, account: Option<trueos_crypto::AccountId>) {
+    ROUTES.lock().guest_frontend_accounts.push((frontend.id, account));
+}
 pub(super) fn native_read(target: &MatrixTarget) -> Option<(Vec<u8>, Vec<String>)> {
     let lease = crate::shell3::matrix_target_slot_lease(target);
     let mut routes = ROUTES.lock();
@@ -1029,6 +1053,7 @@ pub(super) fn request(frontend: Frontend, name: &str) -> Result<(), &'static str
     crate::hv::blueprint_terminal_request_reentry(vm)
 }
 pub(super) fn detach(frontend: u64) {
+    ROUTES.lock().guest_frontend_accounts.retain(|entry| entry.0 != frontend);
     hold_navigation(frontend, false);
     ROUTES
         .lock()
@@ -1091,6 +1116,12 @@ pub(super) fn mouse_options(frontend: u64, name: Option<&str>) -> trueos_termina
 }
 
 pub(super) fn snapshot(frontend: u64, name: Option<&str>) -> Option<Vec<RenderedLine>> {
+    snapshot_with_effect(frontend, name).map(|(lines, _)| lines)
+}
+
+/// Capture terminal cells and their effect metadata under the same route lock.
+pub(super) fn snapshot_with_effect(frontend: u64, name: Option<&str>)
+    -> Option<(Vec<RenderedLine>, Option<trueos_terminal::edit_life::EditLife>)> {
     let routes = ROUTES.lock();
     let route = routes.routes.iter().find(|route| {
         route.frontend == Some(frontend)
@@ -1112,7 +1143,7 @@ pub(super) fn snapshot(frontend: u64, name: Option<&str>) -> Option<Vec<Rendered
     }
     let (cols, _) = route.screen.dimensions();
     let cursor = route.screen.cursor();
-    Some(
+    Some((
         route
             .screen
             .cells()
@@ -1147,7 +1178,8 @@ pub(super) fn snapshot(frontend: u64, name: Option<&str>) -> Option<Vec<Rendered
                     .collect()
             })
             .collect(),
-    )
+        route.screen.edit_life().cloned(),
+    ))
 }
 
 fn rendered_cell(

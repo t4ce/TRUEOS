@@ -116,6 +116,7 @@ pub(super) struct Snapshot {
     matrix_generation: u64,
     tui_revision: u64,
     terminal_active: bool,
+    edit_life: Option<trueos_terminal::edit_life::EditLife>,
     blink_phase: Option<bool>,
     matrix_area: Option<MatrixAreaSnapshot>,
     reveals: Vec<StripReveal>,
@@ -134,6 +135,7 @@ impl Snapshot {
             matrix_generation: 0,
             tui_revision: 0,
             terminal_active: false,
+            edit_life: None,
             blink_phase: None,
             matrix_area: None,
             reveals: Vec::new(),
@@ -306,6 +308,7 @@ impl Snapshot {
         layout_generation: usize,
         lines: Vec<RenderedLine>,
         revision: u64,
+        edit_life: Option<trueos_terminal::edit_life::EditLife>,
     ) -> Self {
         Self {
             size,
@@ -317,6 +320,7 @@ impl Snapshot {
             matrix_generation: 0,
             tui_revision: revision,
             terminal_active: true,
+            edit_life,
             blink_phase: None,
             matrix_area: None,
             reveals: Vec::new(),
@@ -331,6 +335,10 @@ impl Snapshot {
     }
     pub(super) fn terminal_active(&self) -> bool {
         self.terminal_active
+    }
+
+    pub(super) fn edit_life(&self) -> Option<&trueos_terminal::edit_life::EditLife> {
+        self.edit_life.as_ref()
     }
 
     pub(super) fn blink_phase(&self) -> Option<bool> {

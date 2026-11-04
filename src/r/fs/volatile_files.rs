@@ -34,13 +34,24 @@ fn contains(root: &str, path: &str) -> bool {
             .is_some_and(|tail| tail.starts_with('/'))
 }
 
-/// Codex home is the durable user-state boundary for both supported app families.
-/// Match only the subtree root or slash-delimited children, never similarly
-/// prefixed names such as `.codex-backup`.
+/// A flat Codex container home, including the bare container-0 directory.
+/// Prefixes end at the underscore, so unrelated apps such as codex-tools do
+/// not inherit Codex's supporting-file storage policy.
+fn codex_root(path: &str) -> Option<&str> {
+    let component = path.strip_prefix("apps/")?.split('/').next()?;
+    let supported = matches!(component, "codex" | "codex-check")
+        || ["codex_", "codex-check_"].into_iter().any(|prefix| {
+            component.strip_prefix(prefix).is_some_and(|id| !id.is_empty())
+        });
+    supported.then(|| &path[.."apps/".len() + component.len()])
+}
+
+/// Each container's Codex home is durable. Match slash-delimited children,
+/// never similarly prefixed names such as `.codex-backup`.
 fn persistent_path(path: &str) -> bool {
-    ["apps/codex/.codex", "apps/codex-check/.codex"]
-        .into_iter()
-        .any(|root| contains(root, path))
+    let Some(root) = codex_root(path) else { return false; };
+    path.strip_prefix(root).and_then(|tail| tail.strip_prefix('/'))
+        .is_some_and(|relative| contains(".codex", relative))
 }
 
 /// `path` must already be normalized and scoped by the app filesystem boundary.
@@ -103,11 +114,10 @@ pub(crate) async fn prepare(root: &str) -> Result<SeedStats> {
     let home = crate::r::path::FsPath::parse(root, false)
         .map_err(|_| FsError::BadPath)?
         .to_relative_string();
-    // Seed the whole app family once, regardless of which named instance starts
-    // first. A later default launch must never overwrite a live instance's RAM.
-    let root = ["apps/codex", "apps/codex-check"]
-        .into_iter()
-        .find(|root| contains(root, &home))
+    // Seed this exact container once. A later container-0 launch must never
+    // overwrite a live additional container's supporting files in RAM.
+    let root = codex_root(&home)
+        .filter(|root| *root == home.as_str())
         .ok_or(FsError::BadPath)?;
     let _prepare = PREPARE.lock().await;
     let source = fs::primary_root_handle().ok_or(FsError::NoRoot)?;

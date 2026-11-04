@@ -24,19 +24,21 @@ pub(crate) fn enqueue(vm: u8, payload: &[u8]) -> i32 {
     };
     let Some(worker) = crate::workers::pick_background_spawner() else { return -3; };
     let target = crate::hv::blueprint_console_target(vm);
-    match launch_task(paths, target) {
+    let access_account = crate::access_key_db::principal_for_vm(vm);
+    match launch_task(paths, target, access_account) {
         Ok(task) => { worker.spawn(task); 0 }
         Err(_) => -16,
     }
 }
 
 #[trueos_executor::task(pool_size = 4)]
-async fn launch_task(paths: Vec<String>, target: Option<crate::shell3::MatrixTarget>) {
+async fn launch_task(paths: Vec<String>, target: Option<crate::shell3::MatrixTarget>, access_account: Option<trueos_crypto::AccountId>) {
     let result = (|| {
         let bytes = crate::app_db::get("img.bp")?
             .ok_or_else(|| String::from("img.bp is missing from AppDB"))?;
         let mut request = crate::hv::launcher::LaunchRequest::new("img.bp".into(), bytes);
         request.args = paths;
+        request.access_account = access_account;
         request.script = Some("fs-scope trueosfs\n".into());
         crate::hv::launcher::enqueue(request, None).map(|_| ())
     })();

@@ -794,6 +794,8 @@ pub(crate) fn start_blueprint_replica_vm(
     let instance = BlueprintInstanceRequest {
         name: state.identity.name.clone(),
         peer: state.identity.peer.clone(),
+        // The restored workspace root already carries its container identity.
+        container_id: None,
     };
     let result = start_with_mode(
         vm_id,
@@ -808,6 +810,8 @@ pub(crate) fn start_blueprint_replica_vm(
             app_args: state.app_args,
             launch_script: state.launch_script,
             instance,
+            // Portable legacy checkpoints have no authenticated launch origin.
+            access_account: None,
             console_target: None,
             console_surface: state.console_surface,
             restored_identity: Some(state.identity),
@@ -931,6 +935,7 @@ pub fn restore_blueprint_portable_state(
         launch_script: None,
         app_fs_root,
         identity: identity.clone(),
+        access_account: None,
     };
     if stage_blueprint_launch(vm_id, state, console_target, surface).is_err() {
         memory::release_guest_rel_exec_for_vm(vm_id);

@@ -3,12 +3,13 @@
 extern crate alloc;
 
 pub mod program_status;
+pub mod edit_life;
 
 use alloc::{string::String, vec, vec::Vec};
 
 const TAB_WIDTH: usize = 8;
 const MAX_CSI_BYTES: usize = 128;
-const MAX_OSC_BYTES: usize = 64;
+const MAX_OSC_BYTES: usize = 768;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Cursor {
@@ -111,6 +112,12 @@ impl Cell {
     }
 }
 
+struct SynchronizedScreen {
+    cells: Vec<Cell>,
+    cursor: Cursor,
+    edit_life: Option<edit_life::EditLife>,
+}
+
 /// A compact, fixed-cell terminal screen for the UI4 shell frontend.
 ///
 /// Every Unicode scalar occupies exactly one cell. Foreground, background,
@@ -134,6 +141,8 @@ pub struct Terminal {
     csi_overflow: bool,
     osc_buf: Vec<u8>,
     osc_overflow: bool,
+    edit_life: Option<edit_life::EditLife>,
+    synchronized: Option<SynchronizedScreen>,
     utf8_buf: [u8; 4],
     utf8_len: usize,
     utf8_expected: usize,
@@ -168,6 +177,8 @@ impl Terminal {
             csi_overflow: false,
             osc_buf: Vec::new(),
             osc_overflow: false,
+            edit_life: None,
+            synchronized: None,
             utf8_buf: [0; 4],
             utf8_len: 0,
             utf8_expected: 0,
@@ -187,10 +198,18 @@ impl Terminal {
 
     /// Return the row-major screen cells. Use `dimensions` to split rows.
     pub fn cells(&self) -> &[Cell] {
-        &self.cells
+        self.synchronized.as_ref().map_or(&self.cells, |screen| &screen.cells)
+    }
+
+    pub fn edit_life(&self) -> Option<&edit_life::EditLife> {
+        match self.synchronized.as_ref() {
+            Some(screen) => screen.edit_life.as_ref(),
+            None => self.edit_life.as_ref(),
+        }
     }
 
     pub fn cursor(&self) -> Cursor {
+        if let Some(screen) = self.synchronized.as_ref() { return screen.cursor; }
         Cursor {
             col: self.cursor_col,
             row: self.cursor_row,
@@ -199,10 +218,11 @@ impl Terminal {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.synchronized.is_none() && self.dirty
     }
 
     pub fn take_dirty(&mut self) -> bool {
+        if self.synchronized.is_some() { return false; }
         core::mem::replace(&mut self.dirty, false)
     }
 
@@ -253,7 +273,7 @@ impl Terminal {
             let start = row * self.cols;
             let end = start + self.cols;
             rendered.push(
-                self.cells[start..end]
+                self.cells()[start..end]
                     .iter()
                     .map(|cell| cell.glyph)
                     .collect(),
@@ -294,11 +314,15 @@ impl Terminal {
         self.scroll_top = 0;
         self.scroll_bottom = rows - 1;
         self.reset_parser();
+        self.edit_life = None;
+        self.synchronized = None;
         self.dirty = true;
     }
 
     /// Clear the screen and all parser/cursor state without changing its size.
     pub fn reset(&mut self) {
+        self.edit_life = None;
+        self.synchronized = None;
         self.cells.fill(Cell::blank());
         self.current_style = CellStyle::default();
         self.cursor_col = 0;
@@ -468,6 +492,13 @@ impl Terminal {
     }
 
     fn finish_osc(&mut self) {
+        if !self.osc_overflow
+            && let Some(report) = edit_life::parse(&self.osc_buf)
+            && self.edit_life.as_ref() != Some(&report)
+        {
+            self.edit_life = Some(report);
+            self.dirty = true;
+        }
         self.osc_buf.clear();
         self.osc_overflow = false;
     }
@@ -643,6 +674,21 @@ impl Terminal {
                 1003 => self.mouse_any_tracking = enabled,
                 1006 => self.mouse_sgr_encoding = enabled,
                 1015 => self.mouse_urxvt_encoding = enabled,
+                47 | 1047 | 1049 if !enabled => {
+                    if self.edit_life.take().is_some() { self.dirty = true; }
+                    self.synchronized = None;
+                }
+                2026 => {
+                    if enabled && self.synchronized.is_none() {
+                        self.synchronized = Some(SynchronizedScreen {
+                            cells: self.cells.clone(),
+                            cursor: self.cursor(),
+                            edit_life: self.edit_life.clone(),
+                        });
+                    } else if !enabled {
+                        self.synchronized = None;
+                    }
+                }
                 _ => {}
             }
         }
@@ -1320,6 +1366,72 @@ mod tests {
         terminal.feed(b"\\C");
 
         assert_eq!(rows(&terminal), ["ABC     "]);
+    }
+
+    #[test]
+    fn edit_life_commits_only_complete_reports_and_clears_on_exit() {
+        let mut terminal = Terminal::new(8, 3);
+        terminal.take_dirty();
+        terminal.feed(b"\x1b]777;edit-life;1;1;0;1;8;1;7;9;0\x1b");
+        assert!(terminal.edit_life().is_none());
+        terminal.feed(b"\\");
+        assert_eq!(terminal.edit_life().unwrap().scroll_revision, 7);
+        assert!(terminal.take_dirty());
+        terminal.feed(b"\x1b]777;edit-life;1;1;0;1;8;1;7;9;0\x07");
+        assert!(!terminal.take_dirty(), "unchanged reports do not repaint");
+        terminal.feed(b"\x1b]777;edit-life;1;1;0;1;8;1;8;10;0;garbage\x07");
+        assert_eq!(terminal.edit_life().unwrap().scroll_revision, 7);
+        assert!(!terminal.take_dirty());
+        terminal.feed(b"\x1b[?1049l");
+        assert!(terminal.edit_life().is_none());
+        assert!(terminal.take_dirty());
+        terminal.feed(b"\x1b]777;edit-life;1;1;0;1;8;1;8;10;0\x07");
+        terminal.reset();
+        assert!(terminal.edit_life().is_none());
+    }
+
+    #[test]
+    fn edit_life_handles_byte_fragmentation_and_oversized_payloads() {
+        let mut terminal = Terminal::new(8, 3);
+        for byte in b"A\x1b]777;edit-life;1;1;0;1;8;1;0;1;1;2;1;3;1\x07B" {
+            terminal.feed(core::slice::from_ref(byte));
+        }
+        assert_eq!(terminal.edit_life().unwrap().exclusions.len(), 1);
+        assert_eq!(terminal.cells()[0].glyph, 'A');
+        assert_eq!(terminal.cells()[1].glyph, 'B');
+        terminal.feed(b"\x1b]777;edit-life;1;1;0;1;8;1;2;2;0");
+        terminal.feed(&vec![b'0'; MAX_OSC_BYTES]);
+        terminal.feed(b"\x07C");
+        assert_eq!(terminal.edit_life().unwrap().emission_revision, 1);
+        assert_eq!(terminal.cells()[2].glyph, 'C');
+    }
+
+    #[test]
+    fn synchronized_frame_keeps_cells_cursor_and_mask_metadata_together() {
+        let mut terminal = Terminal::new(8, 3);
+        terminal.feed(b"A\x1b]777;edit-life;1;1;0;1;8;1;0;1;0\x07");
+        terminal.take_dirty();
+        let cursor = terminal.cursor();
+        terminal.feed(b"\x1b[?2026h\x1b[1GB\x1b[2;3H");
+        assert!(!terminal.is_dirty());
+        assert!(!terminal.take_dirty());
+        assert_eq!(terminal.cells()[0].glyph, 'A');
+        assert_eq!(terminal.cursor(), cursor);
+        assert_eq!(terminal.render_rows()[0], "A       ");
+        terminal.feed(b"\x1b]777;edit-life;1;1;0;1;8;1;0;2;1;2;1;3;1\x07");
+        assert_eq!(terminal.edit_life().unwrap().emission_revision, 1);
+        // Even a close sequence split across separate guest vmcalls commits once.
+        terminal.feed(b"\x1b[?2026");
+        assert!(!terminal.is_dirty());
+        terminal.feed(b"l");
+        assert!(terminal.take_dirty());
+        assert_eq!(terminal.cells()[0].glyph, 'B');
+        assert_eq!(terminal.edit_life().unwrap().emission_revision, 2);
+        assert_eq!(terminal.edit_life().unwrap().exclusions.len(), 1);
+        assert_eq!(terminal.cursor().col, 2);
+        terminal.feed(b"\x1b[?2026hC\x1b[?1049l");
+        assert!(terminal.edit_life().is_none());
+        assert!(terminal.take_dirty());
     }
 
     #[test]

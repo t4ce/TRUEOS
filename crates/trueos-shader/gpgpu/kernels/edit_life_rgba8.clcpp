@@ -1,0 +1,169 @@
+// Edit's fixed Conway B3/S23 background, for the maintained offline bakery.
+// Its pinned executable and generated ABI contract are published together in
+// artifacts/adls/cpp. See EDIT_LIFE.md for dispatch and publication gates.
+//
+// Cells are uint2: x = alive(bit0), trail(bits8..15), born(bit16);
+// y = straight RGB bytes. Black remains alive independently of its color.
+// Params, all uints:
+//   0 mode (0 seed/emit, 1 step, 2 composite, 3 baseline copy)
+//   1 reset, 2 page width, 3 page height, 4 viewport left, 5 viewport top,
+//   6 viewport width, 7 viewport height, 8 grid width, 9 grid height,
+//  10 glyph R8 pitch, 11 glyph RGBA8 pitch, 12 foreground RGBA8 pitch,
+//  13 output RGBA8 pitch, 14 comparison R8 pitch.
+// For mode 0 set reset on first input/scroll, otherwise submit only on an
+// emission revision. Mode 3 follows EVERY successful input upload, including
+// whitespace-only input. Every mode is a separate, ordered GPU walker.
+
+static inline uint add_rgb(uint a, uint b) {
+    return ((a + b) & 255u)
+        | ((((a >> 8) + (b >> 8)) & 255u) << 8)
+        | ((((a >> 16) + (b >> 16)) & 255u) << 16);
+}
+
+static inline uint2 cell_at(__global const uint2 *cells, int x, int y, uint w, uint h) {
+    if (x < 0 || y < 0 || (uint)x >= w || (uint)y >= h) return (uint2)(0u);
+    return cells[(uint)y * w + (uint)x];
+}
+
+static inline float3 rgb_float(uint packed) {
+    return (float3)((float)(packed & 255u), (float)((packed >> 8) & 255u),
+        (float)((packed >> 16) & 255u));
+}
+
+static inline uint pack_rgb(float3 rgb) {
+    uint3 value = convert_uint3(clamp(rgb + 0.5f, 0.0f, 255.0f));
+    return value.x | (value.y << 8) | (value.z << 16);
+}
+
+static inline uint2 input_cell(
+    __global const uchar *mask, __global const uchar *previous,
+    __global const uchar *colors, __global const uint *p, uint x, uint y)
+{
+    int cx = (int)(((ulong)x * 2ul + 1ul) * (ulong)p[6] * 128ul / (ulong)p[8]) - 128;
+    int cy = (int)(((ulong)y * 2ul + 1ul) * (ulong)p[7] * 128ul / (ulong)p[9]) - 128;
+    int reach_x = (int)((ulong)p[6] * 87ul / (ulong)p[8]);
+    int reach_y = (int)((ulong)p[7] * 87ul / (ulong)p[9]);
+    uint coverage = 0u, strongest = 0u, chosen = 0x00e8e2dcu;
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            int qx = cx + dx * reach_x, qy = cy + dy * reach_y;
+            // Arithmetic right shift is floor division, including negative taps.
+            int bx = qx >> 8, by = qy >> 8;
+            uint fx = (uint)qx & 255u, fy = (uint)qy & 255u, alpha = 0u;
+            for (int j = 0; j < 2; ++j) {
+                for (int i = 0; i < 2; ++i) {
+                    uint sx = (uint)clamp(bx + i, 0, (int)p[6] - 1);
+                    uint sy = (uint)clamp(by + j, 0, (int)p[7] - 1);
+                    uint at = (p[5] + sy) * p[10] + p[4] + sx;
+                    uint value = (uint)mask[at];
+                    if (p[1] == 0u) {
+                        uint old = (uint)previous[sy * p[14] + sx];
+                        value = value > old ? value - old : 0u;
+                    }
+                    uint weight = (i == 0 ? 256u - fx : fx) * (j == 0 ? 256u - fy : fy);
+                    uint score = value * weight;
+                    alpha += score;
+                    if (score > strongest) {
+                        strongest = score;
+                        uint color_at = (p[5] + sy) * p[11] + (p[4] + sx) * 4u;
+                        chosen = (uint)colors[color_at] | ((uint)colors[color_at + 1u] << 8)
+                            | ((uint)colors[color_at + 2u] << 16);
+                    }
+                }
+            }
+            coverage = max(coverage, (alpha + 32768u) / 65536u);
+        }
+    }
+    return (uint2)(coverage, chosen);
+}
+
+static inline float3 halo_at(__global const uint2 *cells, int x, int y, uint w, uint h) {
+    uint2 cell = cells[(uint)clamp(y, 0, (int)h - 1) * w + (uint)clamp(x, 0, (int)w - 1)];
+    return rgb_float(cell.y) * (float)((cell.x >> 8) & 255u) / 255.0f;
+}
+
+__attribute__((intel_reqd_sub_group_size(16)))
+__kernel void edit_life_rgba8(
+    __global const uint2 *read_cells,
+    __global uint2 *write_cells,
+    __global const uchar *glyphs,
+    __global uchar *previous_glyphs,
+    __global const uchar *glyph_colors,
+    __global const uint *foreground,
+    __global uint *output,
+    __global const uint *params)
+{
+    uint x = get_global_id(0), y = get_global_id(1);
+    uint mode = params[0], gw = params[8], gh = params[9];
+    if (mode == 0u || mode == 1u) {
+        if (x >= gw || y >= gh) return;
+        uint at = y * gw + x;
+        uint2 old = read_cells[at];
+        uint old_alive = old.x & 1u;
+        if (mode == 0u) {
+            uint2 input = input_cell(glyphs, previous_glyphs, glyph_colors, params, x, y);
+            uint emitted = input.x >= 46u;
+            if (params[1] != 0u) {
+                write_cells[at] = (uint2)(emitted != 0u ? 0x0001ff01u : 0u,
+                    emitted != 0u ? input.y : 0u);
+            } else if (emitted != 0u) {
+                write_cells[at] = (uint2)(1u | (255u << 8)
+                    | ((old.x & (1u << 16)) | ((1u - old_alive) << 16)),
+                    old_alive != 0u ? add_rgb(old.y, input.y) : input.y);
+            } else { write_cells[at] = old; }
+            return;
+        }
+        uint count = 0u, first = 0u, sum = 0u, same = 1u;
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0) continue;
+                uint2 neighbor = cell_at(read_cells, (int)x + dx, (int)y + dy, gw, gh);
+                if ((neighbor.x & 1u) != 0u) {
+                    if (count == 0u) first = neighbor.y;
+                    else if (first != neighbor.y) same = 0u;
+                    sum = add_rgb(sum, neighbor.y);
+                    ++count;
+                }
+            }
+        }
+        uint alive = count == 3u || (old_alive != 0u && count == 2u);
+        uint born = alive != 0u && old_alive == 0u;
+        uint decayed = ((((old.x >> 8) & 255u) * 905u) + 500u) / 1000u;
+        uint trail = alive != 0u ? 255u : (decayed > 0u ? decayed - 1u : 0u);
+        write_cells[at] = (uint2)(alive | (trail << 8) | (born << 16),
+            born != 0u ? (same != 0u ? first : sum) : old.y);
+        return;
+    }
+    if (mode == 3u) {
+        if (x >= params[6] || y >= params[7]) return;
+        previous_glyphs[y * params[14] + x] = glyphs[(params[5] + y) * params[10] + params[4] + x];
+        return;
+    }
+    if (mode != 2u || x >= params[2] || y >= params[3]) return;
+    uint ink = foreground[y * (params[12] >> 2) + x];
+    if (x < params[4] || y < params[5] || x - params[4] >= params[6] || y - params[5] >= params[7]) {
+        output[y * (params[13] >> 2) + x] = ink | 0xff000000u;
+        return;
+    }
+    float2 pixel = ((float2)((float)(x - params[4]), (float)(y - params[5])) + 0.5f)
+        * (float2)((float)gw, (float)gh) / (float2)((float)params[6], (float)params[7]);
+    uint2 cell_xy = convert_uint2(pixel);
+    uint2 cell = read_cells[cell_xy.y * gw + cell_xy.x];
+    float2 tile_offset = fabs(pixel - convert_float2(cell_xy) - 0.5f);
+    float t = clamp((max(tile_offset.x, tile_offset.y) - 0.32f) / 0.17f, 0.0f, 1.0f);
+    float tile = 1.0f - t * t * (3.0f - 2.0f * t);
+    float strength = ((cell.x & 1u) != 0u ? 0.85f : 0.0f)
+        + (float)((cell.x >> 8) & 255u) / 255.0f * 0.15f;
+    strength *= tile;
+    float3 pigment = rgb_float(cell.y);
+    float3 halo = halo_at(read_cells, (int)cell_xy.x + 1, (int)cell_xy.y, gw, gh)
+        + halo_at(read_cells, (int)cell_xy.x - 1, (int)cell_xy.y, gw, gh)
+        + halo_at(read_cells, (int)cell_xy.x, (int)cell_xy.y + 1, gw, gh)
+        + halo_at(read_cells, (int)cell_xy.x, (int)cell_xy.y - 1, gw, gh);
+    float3 effect = (float3)(4.59f, 6.12f, 9.945f) * (1.0f - strength) + pigment * strength
+        + halo * 0.018f + (((cell.x >> 16) & 1u) != 0u ? pigment * tile * 0.10f : (float3)(0.0f));
+    effect *= 0.5f; // Fixed effect-only scrim. Foreground ink is untouched.
+    float alpha = (float)(ink >> 24) / 255.0f;
+    float3 result = rgb_float(ink) + effect * (1.0f - alpha);
+    output[y * (params[13] >> 2) + x] = pack_rgb(result) | 0xff000000u;
+}

@@ -35,7 +35,8 @@ use trueos_ide::protocol;
 struct World {
     installed: bool, catalog_failed: bool, helper_done: bool,
     helper_starts: usize, helper_drops: usize,
-    launches: Vec<(String, Option<String>, String)>,
+    bound_account: Option<u64>, account_at_spawn: Option<Option<u64>>,
+    launches: Vec<(String, Option<String>, String, Option<u64>)>,
 }
 thread_local! { static WORLD: RefCell<World> = RefCell::new(World::default()); }
 mod app_db {
@@ -50,6 +51,11 @@ mod app_db {
     }
 }
 mod hv { pub fn blueprint_console_target(_: u8) -> Option<()> { Some(()) } }
+mod access_key_db {
+    pub fn principal_for_vm(_: u8) -> Option<u64> {
+        crate::WORLD.with(|w| w.borrow().bound_account)
+    }
+}
 mod shell3 { pub mod tui {
     pub type Frontend = ();
     pub fn frontend_for_target(_: &()) -> Option<Frontend> { Some(()) }
@@ -57,8 +63,17 @@ mod shell3 { pub mod tui {
 mod workers {
     pub struct Worker;
     pub fn pick_background_spawner() -> Option<Worker> { Some(Worker) }
-    impl Worker { pub fn spawn(&self, _: ()) {} }
+    impl Worker {
+        pub fn spawn(&self, task: crate::LaunchTask) {
+            crate::WORLD.with(|w| {
+                let mut w = w.borrow_mut();
+                if let Some(account) = w.account_at_spawn.take() { w.bound_account = account; }
+                w.launches.push((task.archive, task.script, task.destination, task.account));
+            });
+        }
+    }
 }
+struct LaunchTask { archive: String, script: Option<String>, destination: String, account: Option<u64> }
 mod adapter {
     use alloc::string::String;
     #[path = @PARSER@] mod launch_request;
@@ -66,9 +81,8 @@ mod adapter {
     mod request {
         use super::*;
         @KERNEL@
-        fn launch_archive_task(_: Option<()>, archive: String, _: Option<String>, script: Option<String>, destination: launch_request::Destination) -> Result<(), ()> {
-            crate::WORLD.with(|w| w.borrow_mut().launches.push((archive, script, format!("{destination:?}"))));
-            Ok(())
+        fn launch_archive_task(_: Option<()>, archive: String, _: Option<String>, script: Option<String>, destination: launch_request::Destination, account: Option<u64>) -> Result<crate::LaunchTask, ()> {
+            Ok(crate::LaunchTask { archive, script, destination: format!("{destination:?}"), account })
         }
     }
     pub fn launch(payload: &[u8]) -> i32 { request::launch_script_request(0, payload) }
@@ -119,7 +133,7 @@ fn installed_codex_launches_with_exact_endpoint_in_its_own_shell() {
     WORLD.with(|w| {
         let w=w.borrow();
         assert_eq!(w.helper_starts, 0);
-        assert_eq!(w.launches, [("codex.bp".into(), Some("ide-endpoint 42\n".into()), "NewShell3".into())]);
+        assert_eq!(w.launches, [("codex.bp".into(), Some("ide-endpoint 42\n".into()), "NewShell3".into(), None)]);
     });
 }
 #[test]
@@ -160,6 +174,41 @@ fn explicit_archive_paths_keep_the_existing_launch_path() {
     let _s=session();
     assert_eq!(adapter::launch(b"/apps/common/dl/apps/codex.bp\0ide-endpoint 42\n\0sh3"),0);
     WORLD.with(|w| assert_eq!(w.borrow().launches.len(),1));
+}
+#[test]
+fn launch_destinations_keep_the_guest_account_captured_before_scheduling() {
+    for destination in [None, Some("sh3"), Some("headless")] {
+        let _s = session();
+        WORLD.with(|w| {
+            let mut w = w.borrow_mut();
+            w.installed = true;
+            w.bound_account = Some(7);
+            w.account_at_spawn = Some(Some(99));
+        });
+        let mut payload = String::from("codex.bp\0ide-endpoint 42\n");
+        if let Some(destination) = destination { payload.push('\0'); payload.push_str(destination); }
+        assert_eq!(adapter::launch(payload.as_bytes()), 0);
+        WORLD.with(|w| {
+            let w = w.borrow();
+            assert_eq!(w.bound_account, Some(99));
+            assert_eq!(w.launches[0].3, Some(7));
+        });
+    }
+}
+#[test]
+fn missing_guest_account_stays_missing_when_another_account_appears() {
+    let _s = session();
+    WORLD.with(|w| {
+        let mut w = w.borrow_mut();
+        w.installed = true;
+        w.account_at_spawn = Some(Some(99));
+    });
+    assert_eq!(adapter::launch(b"codex.bp\0ide-endpoint 42\n\0sh3"), 0);
+    WORLD.with(|w| {
+        let w = w.borrow();
+        assert_eq!(w.bound_account, Some(99));
+        assert_eq!(w.launches[0].3, None);
+    });
 }
 mod startup {
     use std::sync::{Mutex, OnceLock};

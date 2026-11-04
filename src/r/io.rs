@@ -448,9 +448,12 @@ pub mod env {
         // relative paths instance-local and restrict this rooted export to the
         // owning app's userdata subtree, rather than granting global FS scope.
         if path.starts_with('/') {
-            if let Some(app_path) = root_rel.strip_prefix("apps/") {
-                let app = app_path.split('/').next()?;
-                let shared = alloc::format!("apps/{app}/userdata");
+            // Flat container roots include an opaque ID suffix. The immutable
+            // launch archive identifies the owning app without guessing where
+            // its name ends and a container ID begins.
+            if let Some(archive) = var("TRUEOS_APP_ARCHIVE") {
+                let app_root = crate::hv::blueprint::app_fs_root_for_archive(&archive, &[]);
+                let shared = alloc::format!("{app_root}/userdata");
                 if rel == shared
                     || rel.strip_prefix(shared.as_str()).is_some_and(|tail| tail.starts_with('/'))
                 {

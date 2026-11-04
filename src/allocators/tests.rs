@@ -71,11 +71,21 @@ impl Heap {
                     .iter()
                     .position(|node| *node == before)
                     .expect("search hint points outside the free list");
+                let layout = Layout::from_size_align(
+                    hint.minimum - minimum_block_size(),
+                    hint.alignment,
+                )
+                .unwrap();
                 for node in &nodes[..=index] {
-                    assert!(
-                        unsafe { node.as_ref().size } < hint.minimum,
-                        "search hint skips a possible first fit"
-                    );
+                    let start = node.as_ptr() as usize;
+                    let fits = aligned_payload(start, layout)
+                        .and_then(|payload| payload.checked_add(layout.size()))
+                        .and_then(|end| end.checked_sub(start))
+                        .is_some_and(|used| {
+                            align_up(used, align_of::<FreeBlock>())
+                                <= unsafe { node.as_ref().size }
+                        });
+                    assert!(!fits, "search hint skips a possible first fit");
                 }
             }
         }
@@ -132,6 +142,39 @@ fn fragmented_prefix_is_not_rescanned_for_each_allocation() {
 }
 
 #[test]
+fn cabi_alignment_rejected_prefix_is_reused_across_rounded_sizes() {
+    const HOLES: usize = 2048;
+    const CALLS: usize = 128;
+    let mut heap = Heap::new(8 * 1024 * 1024);
+    // C malloc aligns payloads to 16 bytes. This first allocation leaves the
+    // following block starts at 8 mod 16; each retained pair preserves that.
+    assert!(!heap.alloc(8, 16).is_null());
+    let mut holes = Vec::new();
+    for _ in 0..HOLES {
+        holes.push(heap.alloc(8, 16));
+        assert!(!heap.alloc(8, 16).is_null());
+    }
+    for ptr in holes {
+        heap.free(ptr);
+    }
+    heap.list.reset_work_counts();
+    for i in 0..CALLS {
+        // Every request has minimum size 64, but alignment padding means
+        // these 64-byte holes cannot fit it. Heap::alloc checks first fit.
+        let ptr = heap.alloc(9 + i % 8, 16);
+        assert!(!ptr.is_null());
+        heap.free(ptr);
+    }
+    heap.validate();
+    assert_eq!(heap.list.alloc_calls, CALLS as u64);
+    assert_eq!(heap.list.alloc_nodes, (HOLES + CALLS) as u64);
+    std::println!(
+        "cabi-aligned-prefix allocations={} reference_nodes={} actual_nodes={}",
+        CALLS, (HOLES + 1) * CALLS, heap.list.alloc_nodes
+    );
+}
+
+#[test]
 fn freeing_an_earlier_fit_rewinds_the_prefix() {
     let mut heap = Heap::new(1024 * 1024);
     let small = heap.alloc(32, 8);
@@ -180,7 +223,7 @@ fn allocating_a_prefix_anchor_cannot_leave_a_stale_hint() {
 }
 
 #[test]
-fn alignment_rejection_is_not_cached_as_a_size_rejection() {
+fn changing_alignment_invalidates_a_rejected_prefix() {
     let mut heap = Heap::new(1024 * 1024);
     let first = heap.alloc(16, 8);
     let _guard = heap.alloc(32, 8);
@@ -188,7 +231,11 @@ fn alignment_rejection_is_not_cached_as_a_size_rejection() {
     let aligned = heap.alloc(1, 4096);
     assert!(!aligned.is_null());
     assert_ne!(aligned, first);
+    let slot = FreeList::alloc_search_index(56);
+    assert_eq!(heap.list.alloc_search[slot].alignment, 4096);
+    assert!(heap.list.alloc_search[slot].before.is_some());
     assert_eq!(heap.alloc(1, 8), first);
+    assert_eq!(heap.list.alloc_search[slot].alignment, 8);
     heap.validate();
 }
 

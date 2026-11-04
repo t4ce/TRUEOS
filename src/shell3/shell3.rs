@@ -910,6 +910,7 @@ impl Shell3 {
                     &batch,
                     snapshot.reveals(),
                     snapshot.matrix_area(),
+                    snapshot.edit_life(),
                 )
                 .await?;
             if let Some(window) = self.show.window() {
@@ -958,7 +959,7 @@ impl Shell3 {
         let lines = snapshot.rendered_lines();
         let line_refs: Vec<_> = lines.iter().map(|line| line.as_slice()).collect();
         self.show
-            .resize_to_current(&line_refs, snapshot.matrix_area())
+            .resize_to_current(&line_refs, snapshot.matrix_area(), snapshot.edit_life())
             .await
     }
 
@@ -1658,7 +1659,8 @@ impl Shell3 {
         } else if lifecycle::recognizes(&text) && self.active_vmx_app().is_some() {
             if let Some(app) = self.active_vmx_app() {
                 let lease = MatrixSlotLease::from_identity(app.slot.clone(), app.lifetime);
-                let message = lifecycle::control(&text, &lease);
+                let actor = tui::frontend_access_account(self.tui_frontend());
+                let message = lifecycle::control(&text, &lease, actor);
                 MatrixSlots::echo(Some(&app.slot), Some(app.lifetime), message);
             }
         } else if text == "tui"
@@ -2013,14 +2015,15 @@ impl Shell3 {
         {
             return self.update_baseline.clone().with_tui_revision(revision);
         }
-        if let Some(lines) =
-            tui::snapshot(self.tui_frontend, self.active_matrix_slot_name().as_deref())
+        if let Some((lines, edit_life)) =
+            tui::snapshot_with_effect(self.tui_frontend, self.active_matrix_slot_name().as_deref())
         {
             return update::Snapshot::terminal(
                 (self.columns, self.rows_count),
                 self.layout_generation,
                 lines,
                 revision,
+                edit_life,
             );
         }
         self.capture_matrix_snapshot()
@@ -2125,7 +2128,7 @@ impl Shell3 {
             return false;
         };
         let lease = MatrixSlotLease::from_identity(app.slot.clone(), app.lifetime);
-        MatrixSlots::echo(Some(&app.slot), Some(app.lifetime), lifecycle::control("stop", &lease));
+        MatrixSlots::echo(Some(&app.slot), Some(app.lifetime), lifecycle::control("stop", &lease, None));
         true
     }
 

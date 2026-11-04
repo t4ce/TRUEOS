@@ -50,6 +50,7 @@ def run_harness() -> None:
         item(name)
         for name in (
             "contains",
+            "codex_root",
             "persistent_path",
             "disk_for_path",
             "selected_disk",
@@ -108,9 +109,9 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
 
 #[test]
 fn exact_persistent_subtrees_fall_through_to_primary() {
-    *ROOTS.lock() = vec!["apps/codex".into(), "apps/codex-check".into()];
+    *ROOTS.lock() = vec!["apps/codex".into(), "apps/codex-check".into(), "apps/codex_1".into(), "apps/codex-check_worker--guid".into()];
     *STORAGE.lock() = Some(Storage { disk: DeviceHandle(2), initialized: true });
-    for path in ["apps/codex/.codex", "apps/codex/.codex/auth.json", "apps/codex-check/.codex/sessions/x"] {
+    for path in ["apps/codex/.codex", "apps/codex/.codex/auth.json", "apps/codex-check/.codex/sessions/x", "apps/codex_1/.codex/auth.json", "apps/codex-check_worker--guid/.codex/sessions/x"] {
         assert_eq!(disk_for_path(path), None, "{path}");
         assert_eq!(selected_disk(path), Some(DeviceHandle(1)), "{path}");
     }
@@ -118,20 +119,31 @@ fn exact_persistent_subtrees_fall_through_to_primary() {
 
 #[test]
 fn supporting_paths_remain_ram_and_namespace_prefixes_do_not_match() {
-    *ROOTS.lock() = vec!["apps/codex".into(), "apps/codex-check".into()];
+    *ROOTS.lock() = vec!["apps/codex".into(), "apps/codex-check".into(), "apps/codex_1".into(), "apps/codex-check_worker--guid".into()];
     *STORAGE.lock() = Some(Storage { disk: DeviceHandle(2), initialized: true });
-    for path in ["apps/codex/tmp/file", "apps/codex/config", "apps/codex-check/tmp/x", "apps/codex/.codex-backup/x"] {
+    for path in ["apps/codex/tmp/file", "apps/codex/config", "apps/codex-check/tmp/x", "apps/codex/.codex-backup/x", "apps/codex_1/tmp/file", "apps/codex-check_worker--guid/config", "apps/codex_1/.codex-backup/x"] {
         assert_eq!(disk_for_path(path), Some(DeviceHandle(2)), "{path}");
     }
-    for path in ["apps/codex-other/.codex/auth.json", "apps/codex-checkpoint/.codex/x"] {
+    for path in ["apps/codex-other/.codex/auth.json", "apps/codex-checkpoint/.codex/x", "apps/codex_/.codex/x", "apps/codex-check_/.codex/x"] {
         assert!(!persistent_path(path), "{path}");
         assert_eq!(disk_for_path(path), None, "{path}");
     }
-    for path in ["apps/codex/.codex", "apps/codex/.codex/a/b", "apps/codex-check/.codex", "apps/codex-check/.codex/a"] {
+    for path in ["apps/codex/.codex", "apps/codex/.codex/a/b", "apps/codex-check/.codex", "apps/codex-check/.codex/a", "apps/codex_1/.codex", "apps/codex-check_worker--guid/.codex/a"] {
         assert!(persistent_path(path), "{path}");
     }
-    for path in ["apps/codex/.codex-other", "apps/codex-check/.codexx", "apps/codex/.codex2"] {
+    for path in ["apps/codex/.codex-other", "apps/codex-check/.codexx", "apps/codex/.codex2", "apps/codex_1/.codex2", "apps/codex-check_worker--guid/.codex-backup/x"] {
         assert!(!persistent_path(path), "{path}");
+    }
+}
+
+#[test]
+fn flat_container_roots_are_exact_and_independent_of_runtime_subdirectories() {
+    for root in ["apps/codex", "apps/codex_1", "apps/codex-check", "apps/codex-check_worker--guid"] {
+        assert_eq!(codex_root(root), Some(root));
+        assert_eq!(codex_root(&format!("{root}/tmp/file")), Some(root));
+    }
+    for root in ["apps/other", "apps/codex-tools", "apps/codex_", "apps/codex-check_"] {
+        assert_eq!(codex_root(root), None);
     }
 }
 
@@ -141,6 +153,9 @@ fn durable_home_creation_uses_requested_primary_path_and_propagates_errors() {
     *CREATED_PATH.lock() = None;
     assert_eq!(block_on(ensure_durable_codex_home(DeviceHandle(1), "apps/codex")), Ok(()));
     assert_eq!(CREATED_PATH.lock().as_deref(), Some("apps/codex/.codex"));
+
+    assert_eq!(block_on(ensure_durable_codex_home(DeviceHandle(1), "apps/codex_1")), Ok(()));
+    assert_eq!(CREATED_PATH.lock().as_deref(), Some("apps/codex_1/.codex"));
 
     *CREATE_RESULT.lock() = Ok(false);
     assert_eq!(block_on(ensure_durable_codex_home(DeviceHandle(1), "apps/codex-check")), Err(FsError::NoSpace));

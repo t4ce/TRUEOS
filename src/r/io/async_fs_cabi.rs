@@ -135,6 +135,23 @@ enum RequestKind {
 }
 
 impl RequestKind {
+    fn access_operation(&self) -> (&'static str, bool) {
+        match self {
+            Self::Read { .. } => ("read", false),
+            Self::Write { .. } => ("write", true),
+            Self::CreateDirAll { .. } => ("create-dir-all", true),
+            Self::Stat { .. } => ("stat", false),
+            Self::TypedStat { .. } => ("typed-stat", false),
+            Self::Metadata { .. } | Self::MetadataV2 { .. } => ("metadata", false),
+            Self::RecordKey { .. } => ("record-key", false),
+            Self::ListDir { .. } | Self::TypedListDir { .. } => ("list-dir", false),
+            Self::SelectFiles { .. } => ("select-files", false),
+            Self::Remove { .. } => ("remove", false),
+            Self::Rename { .. } => ("rename", false),
+            Self::ListMounts => ("list-mounts", false),
+        }
+    }
+
     // Stable numeric classes; never export paths or request payloads.
     fn progress_class(&self) -> u32 {
         match self {
@@ -425,6 +442,11 @@ pub(crate) fn encode_typed_dir_listing(
 #[inline]
 pub(crate) const fn owner_for_vm(vm_id: u8) -> u32 {
     0x8000_0000 | vm_id as u32
+}
+
+fn vm_for_owner(owner: u32) -> Option<u8> {
+    let vm = owner & !0x8000_0000;
+    (owner & 0x8000_0000 != 0 && vm <= u8::MAX as u32).then_some(vm as u8)
 }
 
 #[inline]
@@ -1108,6 +1130,7 @@ async fn process(request: &Request) -> OperationState {
             let archive = path.rsplit('/').next().unwrap_or("");
             if !archive.ends_with(".bp") { return OperationState::Failed(FS_ERR_BAD_PATH); }
             let (disk, file) = match selected_disk(&path) { Ok(selected) => selected, Err(code) => return OperationState::Failed(code) };
+            crate::access_key_db::audit_path(vm as u8, disk, file, "appdb-install-read", false).await;
             let len = match crate::r::fs::trueosfs::file_info_async(disk, file).await {
                 Ok(Some(info)) => info.data_len,
                 Ok(None) => return OperationState::Failed(FS_ERR_NOT_FOUND),
@@ -1148,6 +1171,15 @@ async fn process(request: &Request) -> OperationState {
         }
         if source_path.is_empty() || destination_path.is_empty() {
             return OperationState::Failed(FS_ERR_BAD_PATH);
+        }
+        if let Some(vm) = vm_for_owner(request.owner) {
+            // A rename preserves the source key. Only an existing destination
+            // has a second access identity; a missing destination is not a new
+            // FFA file. Directory descendants still need a future tree audit.
+            crate::access_key_db::audit_path(vm, source_disk, source_path, "rename-source", false).await;
+            if source_path != destination_path {
+                crate::access_key_db::audit_path(vm, destination_disk, destination_path, "rename-destination", false).await;
+            }
         }
         if source_path == destination_path {
             return match path_kind_async(source_disk, source_path).await {
@@ -1214,6 +1246,14 @@ async fn process(request: &Request) -> OperationState {
         Ok(selected) => selected,
         Err(code) => return OperationState::Failed(code),
     };
+    if let Some(vm) = vm_for_owner(request.owner) {
+        let (operation, create) = request.kind.access_operation();
+        // Observe the actual selected disk and scoped pathname. The adapter
+        // only warns, including on metadata lookup failure, and cannot replace
+        // the operation's existing result. Recursive operations currently
+        // observe their target, rather than each descendant's record key.
+        crate::access_key_db::audit_path(vm, disk, selected_path, operation, create).await;
+    }
     match &request.kind {
         RequestKind::Read { path: _ } => {
             let path = selected_path;

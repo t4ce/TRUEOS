@@ -2613,13 +2613,14 @@ fn launch_script_request(vm_id: u8, payload: &[u8]) -> i32 {
     }
     let script = (!script.is_empty()).then(|| String::from(script));
     let Some(worker) = crate::workers::pick_background_spawner() else { return -3; };
-    match launch_archive_task(frontend, archive, path, script, destination) {
+    let access_account = crate::access_key_db::principal_for_vm(vm_id);
+    match launch_archive_task(frontend, archive, path, script, destination, access_account) {
         Ok(task) => { worker.spawn(task); 0 }
         Err(_) => -16,
     }
 }
 #[trueos_executor::task(pool_size = 4)]
-async fn launch_archive_task(frontend: Option<crate::shell3::tui::Frontend>, archive: String, path: Option<String>, script: Option<String>, destination: launch_request::Destination) {
+async fn launch_archive_task(frontend: Option<crate::shell3::tui::Frontend>, archive: String, path: Option<String>, script: Option<String>, destination: launch_request::Destination, access_account: Option<trueos_crypto::AccountId>) {
     let result = (|| {
         let bytes = match path {
             Some(path) => {
@@ -2633,17 +2634,18 @@ async fn launch_archive_task(frontend: Option<crate::shell3::tui::Frontend>, arc
         match destination {
             launch_request::Destination::CurrentShell => {
                 let frontend = frontend.ok_or("apps: missing launch frontend")?;
-                let app = crate::shell3::service::launch_bytes_with_script(archive, bytes, frontend, script)?;
+                let app = crate::shell3::service::launch_bytes_with_script_for_account(archive, bytes, frontend, script, access_account)?;
                 crate::shell3::tui::queue_launch(frontend.id, app);
                 Ok(())
             }
             launch_request::Destination::NewShell3 => {
-                crate::shell3::service::request_shell3_with_startup(Some(crate::shell3::startup::Startup::Blueprint { archive, bytes, script }))
+                crate::shell3::service::request_shell3_with_startup(Some(crate::shell3::startup::Startup::Blueprint { archive, bytes, script, access_account }))
                     .map(|_| ()).map_err(|error| alloc::format!("apps: Shell3 launch failed: {error:?}"))
             }
             launch_request::Destination::Headless => {
                 let mut request = crate::hv::launcher::LaunchRequest::new(archive, bytes);
                 request.script = script;
+                request.access_account = access_account;
                 crate::hv::launcher::enqueue(request, None).map(|_| ())
             }
         }

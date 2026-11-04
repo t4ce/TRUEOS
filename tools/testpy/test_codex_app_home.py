@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the production app-root functions for stable Codex home paths."""
+"""Exercise production container-0 and explicit flat app-root selection."""
 
 from pathlib import Path
 import re
@@ -37,6 +37,7 @@ def harness_source() -> str:
             "safe_archive_stem",
             "uses_volatile_codex_files",
             "app_fs_root_for_archive",
+            "app_fs_root_for_container_id",
             "safe_instance_component",
             "app_fs_root_for_named_instance",
         )
@@ -52,19 +53,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_and_named_codex_launches_share_the_app_home() {
+    fn default_codex_stays_container_zero_and_named_launches_are_additional() {
         assert_eq!(app_fs_root_for_archive("codex.bp", &[]), "apps/codex");
         assert_eq!(
             app_fs_root_for_named_instance("codex.bp", "first", None, "guid-one"),
-            "apps/codex",
+            "apps/codex_first--guid-one",
         );
         assert_eq!(
             app_fs_root_for_named_instance("codex.bp", "second", None, "guid-two"),
-            "apps/codex",
+            "apps/codex_second--guid-two",
         );
         assert_eq!(
             app_fs_root_for_named_instance("codex.bp", "peer-name", Some("peer-a"), "guid"),
-            "apps/codex",
+            "apps/codex_peer-peer-a--peer-name--guid",
         );
     }
 
@@ -74,7 +75,7 @@ mod tests {
         assert!(uses_volatile_codex_files("CODEX.bp"));
         assert_eq!(
             app_fs_root_for_named_instance("CODEX.bp", "named", None, "guid"),
-            "apps/codex",
+            "apps/codex_named--guid",
         );
 
         assert_eq!(safe_archive_stem("Codex-7A8f.bp"), "codex-7a8f");
@@ -82,7 +83,7 @@ mod tests {
 
         assert_eq!(
             app_fs_root_for_named_instance("CODEX-CHECK.bp", "named", None, "guid"),
-            "apps/codex-check",
+            "apps/codex-check_named--guid",
         );
         assert_ne!(
             app_fs_root_for_archive("codex.bp", &[]),
@@ -95,11 +96,48 @@ mod tests {
         let first = app_fs_root_for_named_instance("other.bp", "worker", None, "guid-one");
         let second = app_fs_root_for_named_instance("other.bp", "worker", None, "guid-two");
         let peer = app_fs_root_for_named_instance("other.bp", "worker", Some("peer-a"), "guid-one");
-        assert_eq!(first, "apps/other/worker--guid-one");
-        assert_eq!(second, "apps/other/worker--guid-two");
-        assert_eq!(peer, "apps/other/peer-peer-a--worker--guid-one");
+        assert_eq!(first, "apps/other_worker--guid-one");
+        assert_eq!(second, "apps/other_worker--guid-two");
+        assert_eq!(peer, "apps/other_peer-peer-a--worker--guid-one");
         assert_ne!(first, second);
         assert_ne!(first, peer);
+    }
+
+    #[test]
+    fn explicit_container_selection_is_stable_and_zero_keeps_existing_paths() {
+        for app in ["codex", "codex-check", "other"] {
+            let archive = format!("{app}.bp");
+            let default = app_fs_root_for_archive(&archive, &[]);
+            assert_eq!(default, format!("apps/{app}"));
+            assert_eq!(app_fs_root_for_container_id(&archive, "0").unwrap(), default);
+            let first = app_fs_root_for_container_id(&archive, "1").unwrap();
+            let reopened = app_fs_root_for_container_id(&archive, "1").unwrap();
+            assert_eq!(first, format!("apps/{app}_1"));
+            assert_eq!(first, reopened);
+            assert_ne!(first, default);
+            assert_ne!(first, app_fs_root_for_container_id(&archive, "2").unwrap());
+        }
+    }
+
+    #[test]
+    fn explicit_ids_cannot_escape_the_flat_container_component() {
+        for id in ["", ".", "..", "a/b", "/1", "../1", "1/../2", "a b", "a\\b", "ß"] {
+            assert!(app_fs_root_for_container_id("codex.bp", id).is_err(), "{id}");
+        }
+        assert!(app_fs_root_for_container_id("codex.bp", &"a".repeat(193)).is_err());
+    }
+
+    #[test]
+    fn generated_named_and_peer_container_ids_can_be_selected_again() {
+        let guid = "11111111-2222-4333-8444-555555555555";
+        for (name, peer) in [
+            ("-worker".to_owned(), None),
+            ("n".repeat(48), Some("p".repeat(48))),
+        ] {
+            let root = app_fs_root_for_named_instance("codex.bp", &name, peer.as_deref(), guid);
+            let id = root.strip_prefix("apps/codex_").unwrap();
+            assert_eq!(app_fs_root_for_container_id("codex.bp", id).unwrap(), root);
+        }
     }
 }
 '''

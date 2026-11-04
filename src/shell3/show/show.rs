@@ -6,6 +6,7 @@ mod copy;
 mod cpu;
 mod pan;
 mod reveal;
+mod edit_life;
 
 use super::RgbaColor;
 use super::update::RenderedLine;
@@ -43,6 +44,8 @@ struct Ui4Surface {
     frame_contents: [Option<alloc::vec::Vec<RenderedLine>>; 2],
     scale: u32,
     clear_buffers: [bool; 2],
+    edit_life: Option<trueos_terminal::edit_life::EditLife>,
+    edit_life_page: Option<alloc::sync::Arc<crate::ui4::edit_life::Page>>,
 }
 
 /// Per-show backend selection and UI4 publication state.
@@ -181,6 +184,7 @@ impl Show {
         &mut self,
         lines: &[&[(char, Option<RgbaColor>)]],
         area: Option<&super::update::MatrixAreaSnapshot>,
+        edit_life: Option<&trueos_terminal::edit_life::EditLife>,
     ) -> Result<(), &'static str> {
         if self.poisoned {
             return Err("shell3-show-bcs0-allocation-pinned");
@@ -205,6 +209,8 @@ impl Show {
             frame_contents: [None, None],
             scale: self.font_scale,
             clear_buffers: [false; 2],
+            edit_life: None,
+            edit_life_page: None,
         };
         let render_result = match self.backend {
             Backend::Cpu => cpu::present(&mut staged, lines, &[]),
@@ -234,6 +240,7 @@ impl Show {
             }
             return Err(error);
         }
+        crate::ui4::edit_life::remove(staged.window);
         let commit = commit_window_frame_replacement(
             OWNER,
             staged.window,
@@ -251,6 +258,12 @@ impl Show {
             .replace(staged)
             .ok_or("shell3-show-surface-missing")?;
         retire_frame_when_released(old.frame);
+        edit_life::present(
+            self.surface.as_mut().ok_or("shell3-show-surface-missing")?,
+            lines,
+            edit_life,
+            true,
+        );
         Ok(())
     }
 
@@ -296,6 +309,7 @@ impl Show {
         batch: &super::UpdateBatch,
         reveals: &[super::update::StripReveal],
         area: Option<&super::update::MatrixAreaSnapshot>,
+        edit_life: Option<&trueos_terminal::edit_life::EditLife>,
     ) -> Result<(), &'static str> {
         if !matches!(self.backend, Backend::Copy | Backend::Cpu) {
             return Err("shell3-show-backend-not-implemented");
@@ -333,6 +347,8 @@ impl Show {
                 .as_ref()
                 .is_some_and(|surface| !surface.clear_buffers.iter().any(|clear| *clear))
         {
+            let surface = self.surface.as_mut().ok_or("shell3-show-surface-missing")?;
+            edit_life::present(surface, lines, edit_life, false);
             return Ok(());
         }
         let surface = self.surface.as_mut().ok_or("shell3-show-surface-missing")?;
@@ -367,6 +383,7 @@ impl Show {
             publish_window_frame(OWNER, surface.window, damage)
                 .map_err(|_| "shell3-show-window-publish")?;
         }
+        edit_life::present(surface, lines, edit_life, damage.is_some());
         Ok(())
     }
 
@@ -377,6 +394,7 @@ impl Show {
         let Some(surface) = self.surface.take() else {
             return;
         };
+        crate::ui4::edit_life::remove(surface.window);
         retire_frame_when_released(surface.frame);
         if !surface.closing {
             let _ = finish_window_session_with_request(
@@ -482,6 +500,8 @@ fn create_surface(
         frame_contents: [None, None],
         scale: 1,
         clear_buffers: [false; 2],
+        edit_life: None,
+        edit_life_page: None,
     })
 }
 

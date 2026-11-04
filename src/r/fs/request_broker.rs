@@ -325,6 +325,32 @@ enum Request {
 }
 
 impl Request {
+    fn access_path(&self) -> Option<(block::DeviceHandle, &str, bool)> {
+        match self {
+            Self::ReadFile { disk, path, .. }
+            | Self::ReadFileLen { disk, path, .. }
+            | Self::ReadFileRange { disk, path, .. }
+            | Self::Stat { disk, path, .. }
+            | Self::TypedStat { disk, path, .. }
+            | Self::ListDir { disk, path, .. }
+            | Self::TypedListDir { disk, path, .. }
+            | Self::Remove { disk, path, .. }
+            | Self::Exists { disk, path, .. } => Some((*disk, path, false)),
+            Self::WriteFileBegin { disk, path, .. }
+            | Self::WriteFileBeginTyped { disk, path, .. }
+            | Self::CreateDirAll { disk, path, .. } => Some((*disk, path, true)),
+            // Streams retain their existing owner checks and are observed at
+            // begin, before they own a root write lease. Whole-tree diagnostic
+            // exports and volatile seeding need separate per-record coverage.
+            Self::WriteFileChunk { .. }
+            | Self::WriteFileFinish { .. }
+            | Self::WriteFileAbort { .. }
+            | Self::PrepareVolatileFiles { .. }
+            | Self::HtmlTree { .. }
+            | Self::JsonAll { .. } => None,
+        }
+    }
+
     fn stream_handle(&self) -> Option<u32> {
         match self {
             Self::WriteFileChunk { handle, .. }
@@ -680,6 +706,14 @@ async fn process_request(owned: OwnedRequest) {
         }
     }
     progress.advance(progress::FILESYSTEM, 0, crate::r::input_timing::now_ms);
+    if let Some(vm) = owner
+        && let Some((disk, path, create)) = request.access_path()
+    {
+        // Native std service lanes use this broker instead of async_fs_cabi.
+        // Missing nodes and audit metadata errors must leave normal I/O errors
+        // untouched. Recursive removals currently observe only the target.
+        crate::access_key_db::audit_path(vm, disk, path, operation, create).await;
+    }
     match request {
         Request::PrepareVolatileFiles { id, root, completion } => {
             let result = super::volatile_files::prepare(&root).await;

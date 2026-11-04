@@ -17,6 +17,8 @@ mod display_metrics;
 pub(crate) use display_metrics::{physical_extent_pixels, physical_extent_pixels_fraction};
 pub(crate) mod drag_drop;
 pub(crate) mod emulator_paint;
+pub(crate) mod edit_life;
+mod edit_life_model;
 mod frame_pool;
 mod gpgpu_preview_consumer;
 mod gpgpu_svg_probe_consumer;
@@ -82,6 +84,7 @@ impl InteractionCadence {
 }
 
 pub(crate) use color_picker::ui4_color_picker_service_task;
+pub(crate) use edit_life::ui4_edit_life_service_task;
 pub(crate) use codex_prompt::{request_open as request_codex_prompt_open, ui4_codex_prompt_service_task};
 pub(crate) use compositor_service::ui4_compositor_service_task;
 pub(crate) use context_menu::{
