@@ -532,11 +532,51 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
         push_requested_context_menu(&mut rects, &menu, screen_w, screen_h);
     }
 
+    if let Some(handle) = super::input_broker::quad_resize_visual() {
+        push_quad_resize_handle(&mut rects, handle, screen_w, screen_h);
+    }
+
     for visual in &visuals {
         push_software_cursor_visual(&mut rects, visual, screen_w, screen_h);
     }
 
     rects
+}
+
+/// The large (3x) UI4 crosshair's silhouette, hollow with a two-pixel
+/// border. Row spans avoid double blending the translucent arm junctions.
+fn push_quad_resize_handle(
+    rects: &mut Slot4Rects,
+    handle: super::input_broker::QuadResizeVisual,
+    screen_w: u32,
+    screen_h: u32,
+) {
+    if handle.selected {
+        push_overlay_rect(rects, 0, handle.y, screen_w, 1, handle.color);
+        push_overlay_rect(rects, handle.x, 0, 1, handle.y, handle.color);
+        push_overlay_rect(rects, handle.x, handle.y + 1, 1,
+            screen_h.saturating_sub(handle.y + 1), handle.color);
+    }
+    let long = SOFTWARE_CURSOR_LONG_PX * 3;
+    let stroke = SOFTWARE_CURSOR_STROKE_PX * 3;
+    let radius = (long / 2) as i32;
+    let half_stroke = (stroke / 2) as i32;
+    for row in -radius..=radius {
+        let y = i64::from(handle.y) + i64::from(row);
+        if y < 0 || y >= i64::from(screen_h) { continue; }
+        let outer = if row.abs() <= half_stroke { radius } else { half_stroke };
+        let inner = if row.abs() <= half_stroke - 2 { radius - 2 }
+            else if row.abs() <= radius - 2 { half_stroke - 2 } else { -1 };
+        let spans = if inner < 0 { [(-outer, outer), (1, 0)] }
+            else { [(-outer, -inner - 1), (inner + 1, outer)] };
+        for (left, right) in spans {
+            let x0 = (i64::from(handle.x) + i64::from(left)).max(0);
+            let x1 = (i64::from(handle.x) + i64::from(right) + 1).min(i64::from(screen_w));
+            if x1 > x0 {
+                push_overlay_rect(rects, x0 as u32, y as u32, (x1 - x0) as u32, 1, handle.color);
+            }
+        }
+    }
 }
 
 fn push_software_cursor_visual(

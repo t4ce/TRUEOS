@@ -141,24 +141,6 @@ pub(crate) fn blueprint_image_source_info(name: &str) -> Result<BlueprintImageSo
                 byte_len: byte_len as u32,
             })
         }
-        "kernel:live-update-nway-left"
-        | "kernel:live-update-nway-center"
-        | "kernel:live-update-nway-right" => {
-            let panel = match name {
-                "kernel:live-update-nway-left" => 0,
-                "kernel:live-update-nway-center" => 1,
-                _ => 2,
-            };
-            let (width, height, byte_len) =
-                crate::virtio_gpu_logo::live_update_triptych_panel_info(panel)
-                    .ok_or(ERROR_NOT_FOUND)?;
-            Ok(BlueprintImageSourceInfo {
-                format: IMAGE_SOURCE_FORMAT_RGBA8,
-                width,
-                height,
-                byte_len: byte_len as u32,
-            })
-        }
         _ => Err(ERROR_NOT_FOUND),
     }
 }
@@ -197,17 +179,6 @@ pub(crate) fn copy_blueprint_image_source(
                 };
             }
             Ok(copied)
-        }
-        "kernel:live-update-nway-left"
-        | "kernel:live-update-nway-center"
-        | "kernel:live-update-nway-right" => {
-            let panel = match name {
-                "kernel:live-update-nway-left" => 0,
-                "kernel:live-update-nway-center" => 1,
-                _ => 2,
-            };
-            crate::virtio_gpu_logo::copy_live_update_triptych_panel(panel, offset, out)
-                .ok_or(ERROR_INVALID)
         }
         _ => Err(ERROR_NOT_FOUND),
     }

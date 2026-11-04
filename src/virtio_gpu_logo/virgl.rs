@@ -793,13 +793,6 @@ impl Compositor {
         Some(this)
     }
 
-    pub(super) fn update_background(&mut self, gpu: &mut VirtioGpuLogo, backing: &DmaRegion) {
-        let pixels = unsafe { core::slice::from_raw_parts(backing.virt(), backing.len()) };
-        if self.upload(gpu, BACKGROUND, self.width, self.height, self.width * 4, pixels) {
-            self.revision = None;
-        }
-    }
-
     fn submit(&mut self, gpu: &mut VirtioGpuLogo, commands: &VirglCmdBuf) -> bool {
         self.fence += 1;
         gpu.submit_3d(commands, self.fence)

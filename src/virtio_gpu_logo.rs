@@ -53,115 +53,7 @@ pub(crate) fn output_dimensions() -> Option<(u32, u32)> {
     (packed != 0).then_some(((packed >> 32) as u32, packed as u32))
 }
 
-use crate::os_assets::{
-    LIVE_UPDATE_0WAY_PNG, LIVE_UPDATE_NOWAY_PNG, LIVE_UPDATE_NWAY_PNG, LOGO_JPEG,
-};
-const LIVE_UPDATE_NOTICE_VISIBLE_MS: u64 = 3_000;
-pub(crate) const LIVE_UPDATE_NOTICE_VARIANT_COUNT: usize = 5;
-
-const LIVE_UPDATE_NOTICE_SOURCES: [&str; LIVE_UPDATE_NOTICE_VARIANT_COUNT] = [
-    "kernel:live-update-0way",
-    "kernel:live-update-noway",
-    "kernel:live-update-nway-left",
-    "kernel:live-update-nway-center",
-    "kernel:live-update-nway-right",
-];
-
-static LIVE_UPDATE_NWAY_PANEL: spin::Mutex<
-    Option<(usize, crate::graphics::png_codec::DecodedPng)>,
-> = spin::Mutex::new(None);
-
-pub(crate) const fn live_update_notice_source(variant: usize) -> &'static str {
-    LIVE_UPDATE_NOTICE_SOURCES[variant % LIVE_UPDATE_NOTICE_VARIANT_COUNT]
-}
-
-fn decode_live_update_triptych_panel(
-    panel: usize,
-) -> Result<crate::graphics::png_codec::DecodedPng, crate::graphics::png_codec::PngDecodeError> {
-    let mut decoded = crate::graphics::png_codec::decode_png_rgba(LIVE_UPDATE_NWAY_PNG)?;
-    if panel >= 3 || decoded.width != 1_536 || decoded.height != 1_024 {
-        return Err(crate::graphics::png_codec::PngDecodeError::Invalid);
-    }
-
-    let panel_width = decoded.width / 3;
-    let source_row_bytes = decoded.width as usize * 4;
-    let panel_row_bytes = panel_width as usize * 4;
-    let panel_x_bytes = panel * panel_row_bytes;
-    for row in 0..decoded.height as usize {
-        let source = row * source_row_bytes + panel_x_bytes;
-        let destination = row * panel_row_bytes;
-        decoded
-            .rgba
-            .copy_within(source..source + panel_row_bytes, destination);
-    }
-    decoded
-        .rgba
-        .truncate(panel_row_bytes * decoded.height as usize);
-    decoded.rgba.shrink_to_fit();
-    decoded.width = panel_width;
-    Ok(decoded)
-}
-
-fn ensure_live_update_triptych_panel(
-    panel: usize,
-) -> spin::MutexGuard<'static, Option<(usize, crate::graphics::png_codec::DecodedPng)>> {
-    let mut cached = LIVE_UPDATE_NWAY_PANEL.lock();
-    if cached
-        .as_ref()
-        .map(|(cached_panel, _)| *cached_panel != panel)
-        .unwrap_or(true)
-    {
-        *cached = decode_live_update_triptych_panel(panel)
-            .ok()
-            .map(|decoded| (panel, decoded));
-    }
-    cached
-}
-
-pub(crate) fn live_update_triptych_panel_info(panel: usize) -> Option<(u32, u32, usize)> {
-    if panel >= 3 {
-        return None;
-    }
-    let cached = ensure_live_update_triptych_panel(panel);
-    let (_, decoded) = cached.as_ref()?;
-    let byte_len = (decoded.width as usize)
-        .checked_mul(decoded.height as usize)?
-        .checked_mul(4)?;
-    Some((decoded.width, decoded.height, byte_len))
-}
-
-pub(crate) fn copy_live_update_triptych_panel(
-    panel: usize,
-    offset: usize,
-    out: &mut [u8],
-) -> Option<usize> {
-    if panel >= 3 {
-        return None;
-    }
-    let cached = ensure_live_update_triptych_panel(panel);
-    let (_, decoded) = cached.as_ref()?;
-    let total = decoded.rgba.len();
-    if offset > total {
-        return None;
-    }
-    let wanted = out.len().min(total - offset);
-    out[..wanted].copy_from_slice(&decoded.rgba[offset..offset + wanted]);
-    Some(wanted)
-}
-
-fn decode_live_update_notice_variant(
-    variant: usize,
-) -> Result<crate::graphics::png_codec::DecodedPng, crate::graphics::png_codec::PngDecodeError> {
-    let png = match variant {
-        0 => Some(LIVE_UPDATE_0WAY_PNG),
-        1 => Some(LIVE_UPDATE_NOWAY_PNG),
-        _ => None,
-    };
-    if let Some(png) = png {
-        return crate::graphics::png_codec::decode_png_rgba(png);
-    }
-    decode_live_update_triptych_panel(variant.saturating_sub(2))
-}
+use crate::os_assets::LOGO_JPEG;
 
 const VIRTIO_PCI_VENDOR: u16 = 0x1AF4;
 const VIRTIO_GPU_DEVICE_MODERN: u16 = 0x1050;
@@ -210,16 +102,6 @@ const SCANOUT_RESOURCE_ID: u32 = 1;
 const COMPOSITOR_POLL_MS: u64 = 16;
 
 static VIRTIO_GPU_PRESENT_CACHE: AtomicU8 = AtomicU8::new(0);
-static LIVE_UPDATE_STAMP_REQUEST: AtomicU64 = AtomicU64::new(0);
-
-pub(crate) fn request_live_update_stamp(generation: u64) {
-    LIVE_UPDATE_STAMP_REQUEST.store(generation, Ordering::Release);
-    crate::log_info!(target: "global";
-        "live-update: emulator stamp requested generation={} backend=virtio-logo-plane\n",
-        generation,
-    );
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct VirtioPciCap {
@@ -892,11 +774,8 @@ impl VirtioGpuLogo {
 
 struct EmulatorUi {
     gpu: VirtioGpuLogo,
-    width: u32,
-    height: u32,
-    scanout_backing: DmaRegion,
-    stamped_generation: u64,
-    stamp_deadline_ms: Option<u64>,
+    // Keep the scanout DMA allocation alive while the GPU owns its backing.
+    _scanout_backing: DmaRegion,
     compositor: Option<virgl::Compositor>,
 }
 
@@ -969,92 +848,8 @@ impl EmulatorUi {
         Some(Self {
             gpu,
             compositor,
-            width,
-            height,
-            scanout_backing,
-            stamped_generation: 0,
-            stamp_deadline_ms: None,
+            _scanout_backing: scanout_backing,
         })
-    }
-
-    fn present_scanout(&mut self) -> bool {
-        self.scanout_backing.flush();
-        self.gpu
-            .transfer_to_host_2d(SCANOUT_RESOURCE_ID, self.width, self.height)
-            && self
-                .gpu
-                .resource_flush(SCANOUT_RESOURCE_ID, self.width, self.height)
-    }
-
-    fn service_live_update_stamp(&mut self) {
-        let now_ms = trueos_time::Instant::now().as_millis();
-        // The replacement kernel may publish the request before this service
-        // is reconstructed. The validated warm handoff is the durable source
-        // of truth across that ordering boundary; cold boot yields zero.
-        let requested = LIVE_UPDATE_STAMP_REQUEST
-            .load(Ordering::Acquire)
-            .max(crate::live_update::warm_generation().unwrap_or(0));
-        if requested != 0 && requested != self.stamped_generation {
-            let mut rng = crate::tyche::soft_rng();
-            let variant = rng.usize_below(LIVE_UPDATE_NOTICE_VARIANT_COUNT);
-            let notice = match decode_live_update_notice_variant(variant) {
-                Ok(notice) => notice,
-                Err(error) => {
-                    crate::log_warn!(target: "gfx";
-                        "live-update: emulator stamp decode failed generation={} code={}\n",
-                        requested,
-                        error.code(),
-                    );
-                    self.stamped_generation = requested;
-                    return;
-                }
-            };
-            let copy = blend_centered_rgba(
-                self.scanout_backing.virt(),
-                self.width,
-                self.height,
-                notice.width,
-                notice.height,
-                notice.rgba.as_slice(),
-            );
-            if self.present_scanout() {
-                self.stamp_deadline_ms = Some(now_ms.saturating_add(LIVE_UPDATE_NOTICE_VISIBLE_MS));
-                crate::log_info!(target: "global";
-                    "live-update: emulator stamp visible generation={} variant={} source={} duration_ms={} image={}x{} copy={}x{} src={},{} dst={},{} scale=none layer=above-logo\n",
-                    requested,
-                    variant,
-                    live_update_notice_source(variant),
-                    LIVE_UPDATE_NOTICE_VISIBLE_MS,
-                    notice.width,
-                    notice.height,
-                    copy.copy_w,
-                    copy.copy_h,
-                    copy.src_x,
-                    copy.src_y,
-                    copy.dst_x,
-                    copy.dst_y,
-                );
-            }
-            self.stamped_generation = requested;
-        }
-
-        if self
-            .stamp_deadline_ms
-            .is_some_and(|deadline| now_ms >= deadline)
-        {
-            let restored = crate::graphics::jpeg_codec::decode_jpeg_rgba(LOGO_JPEG)
-                .map(|logo| {
-                    draw_centered_logo(self.scanout_backing.virt(), self.width, self.height, &logo);
-                    self.present_scanout()
-                })
-                .unwrap_or(false);
-            crate::log_info!(target: "global";
-                "live-update: emulator stamp closed generation={} logo_restored={}\n",
-                self.stamped_generation,
-                restored as u8,
-            );
-            self.stamp_deadline_ms = None;
-        }
     }
 }
 
@@ -1281,13 +1076,6 @@ async fn fallback_logo_service_task() {
                     queue_start_glyph_warmup();
                     next_font_warm_ms = now_ms.saturating_add(1_000);
                 }
-                let old_stamp = (ui.stamped_generation, ui.stamp_deadline_ms);
-                ui.service_live_update_stamp();
-                if old_stamp != (ui.stamped_generation, ui.stamp_deadline_ms) {
-                    if let Some(compositor) = ui.compositor.as_mut() {
-                        compositor.update_background(&mut ui.gpu, &ui.scanout_backing);
-                    }
-                }
                 if let Some(compositor) = ui.compositor.as_mut() {
                     requests::service(compositor, &mut ui.gpu);
                     compositor.tick(&mut ui.gpu);
@@ -1390,38 +1178,6 @@ fn draw_centered_logo(
         }
     }
 
-    copy
-}
-
-fn blend_centered_rgba(
-    dst: *mut u8,
-    dst_w: u32,
-    dst_h: u32,
-    src_w: u32,
-    src_h: u32,
-    rgba: &[u8],
-) -> LogoCopy {
-    let copy = centered_logo_copy(dst_w, dst_h, src_w, src_h);
-    for y in 0..copy.copy_h {
-        let src_row = ((copy.src_y + y) as usize * src_w as usize + copy.src_x as usize) * 4;
-        let dst_row = ((copy.dst_y + y) as usize * dst_w as usize + copy.dst_x as usize) * 4;
-        for x in 0..copy.copy_w as usize {
-            let si = src_row + x * 4;
-            let di = dst_row + x * 4;
-            let alpha = u16::from(rgba[si + 3]);
-            let inverse = 255 - alpha;
-            unsafe {
-                let dst_b = u16::from(*dst.add(di));
-                let dst_g = u16::from(*dst.add(di + 1));
-                let dst_r = u16::from(*dst.add(di + 2));
-                *dst.add(di) = ((u16::from(rgba[si + 2]) * alpha + dst_b * inverse) / 255) as u8;
-                *dst.add(di + 1) =
-                    ((u16::from(rgba[si + 1]) * alpha + dst_g * inverse) / 255) as u8;
-                *dst.add(di + 2) = ((u16::from(rgba[si]) * alpha + dst_r * inverse) / 255) as u8;
-                *dst.add(di + 3) = 0xFF;
-            }
-        }
-    }
     copy
 }
 

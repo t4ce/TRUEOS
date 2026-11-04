@@ -772,19 +772,6 @@ pub fn spawn_post_boot(_spawner: Spawner) {
         return;
     };
 
-    let virtio_logo = crate::virtio_gpu_logo::present();
-    let intel_display = crate::intel::has_claimed_device();
-    crate::log_important!(target: "global";
-        "live-update: visual proof route generation={} virtio_logo={} intel_display={} route={}\n",
-        handoff.generation,
-        virtio_logo as u8,
-        intel_display as u8,
-        if virtio_logo && !intel_display { "emulator-stamp" } else { "hardware-img" },
-    );
-    if virtio_logo && !intel_display {
-        crate::virtio_gpu_logo::request_live_update_stamp(handoff.generation);
-    }
-
     crate::log_important!(
         target: "global";
         "live-update: step=20/20 bp-autostart-uplift-delegated generation={}\n",

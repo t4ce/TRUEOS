@@ -39,7 +39,7 @@ def harness_source():
         "next_serial", "pack_handle", "unpack_handle", "collapse_state", "toggle_collapse",
         "collapse_at_cursor", "change_collapse", "collapsed_cursor_placement",
         "follow_collapsed_cursor", "center_restored_window_on_cursor",
-        "docked_window_placement", "producer_resize_required", "change_window_dock_record",
+        "docked_window_placement", "producer_resize_required", "change_window_dock_record", "change_window_dock_record_at",
     ]
     geometry_functions = [
         "DockZoneMetrics", "dock_zone_metrics", "scale_reference", "clamp_zone_metric",
