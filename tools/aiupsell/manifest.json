@@ -93,6 +93,20 @@
       "height": 1440
     },
     {
+      "path": "screenshots/cubes-four-acts.gif",
+      "bytes": 5491645,
+      "sha256": "be52e8bc306952e580a3c92dac74282a8aa2235f9ed53c8812555ee156604636",
+      "width": 512,
+      "height": 288
+    },
+    {
+      "path": "screenshots/cubes-four-sections.gif",
+      "bytes": 5436721,
+      "sha256": "764da870897ebc575abe7da02654040c4c9fbd03127cf11fc8bdef1bbf053006",
+      "width": 512,
+      "height": 288
+    },
+    {
       "path": "screenshots/hull-live-page.png",
       "bytes": 609500,
       "sha256": "d3e3a1596dfdea9a81164af9ef06ebcc90c270a1dad9aa65556c4f35010351bb",

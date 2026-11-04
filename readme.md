@@ -126,7 +126,14 @@ Idle cores halt, and work wakes them. Token maxing is the mood. Useful work per 
 ## THE DESKTOP, NOT THE SLIDE DECK.
 
 <p align="center"><img src="tools/aiupsell/screenshots/cubes-rubik-cube.png" width="100%" alt="Cubes running fullscreen on the real TRUEOS desktop with a 3x3 cube and Lilly"></p>
-<p align="center"><sub>Cubes on native TRUEOS. Fullscreen scene capture; no video.</sub></p>
+<p align="center"><sub>Cubes on native TRUEOS. Fullscreen still; the animations below are cut from the node's own recordings.</sub></p>
+
+<table>
+  <tr>
+    <td width="50%" align="center"><img src="tools/aiupsell/screenshots/cubes-four-acts.gif" width="100%" alt="Four acts from two TRUEOS recordings: pointer control, cubes, tree placement, and tree assets"></td>
+    <td width="50%" align="center"><img src="tools/aiupsell/screenshots/cubes-four-sections.gif" width="100%" alt="Four sections from one TRUEOS recording: removing big cubes, subdividing, extracting cubes, and zooming out"></td>
+  </tr>
+</table>
 
 <p align="center"><img src="tools/aiupsell/screenshots/codex-edit-lilly.png" width="100%" alt="A signed-in Codex session alongside Microsoft Edit on TRUEOS, with Lilly visible"></p>
 <p align="center"><sub>Codex, Edit, and Lilly on the desktop: a running session, not a mockup.</sub></p>

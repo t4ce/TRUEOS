@@ -31,6 +31,13 @@ Prepared on 2026-11-03. The root README uses this folder's checked-in assets;
   2560x1440 RGBA). Shows the Cubes scene with a 3x3 cube on the neon grid and
   Lilly beside it. It replaces `cubes-fullscreen.png` on the root README; the
   earlier capture stays because this folder's `readme.md` still uses it.
+- `screenshots/cubes-four-acts.gif` and `screenshots/cubes-four-sections.gif`:
+  512x288 animated GIFs at 12.5 fps, about 12 s each, cut from the node's own
+  `screenfilms` recordings in 3-second sections with black fades. The first
+  uses acts 1-2 from `vid-1793790451-599541000000.h264` and acts 3-4 from
+  `vid-1793790552-700550000000.h264`, with labels. The second uses
+  `vid-1793790642-790891000000.h264` without labels: removing big cubes,
+  subdividing into smaller cubes, extracting cubes, and zooming out.
 
 The first shell `pic` capture succeeded. Subsequent requests remained pending
 and another request reported `WD screenshot slot is busy`; the RDP still-frame
