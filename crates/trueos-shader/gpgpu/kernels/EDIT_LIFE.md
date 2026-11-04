@@ -96,7 +96,10 @@ once at boot; failure is optional for core display boot and is never repaired
 by rewriting global mappings while peers are running. Retained input teardown
 unmaps only the exact Edit PPGTT range after its pending work has retired.
 
-The producer prepares its PPGTT and retained resource mappings once per render.
+The producer initializes its private PPGTT once for the lane's lifetime, then
+prepares changed resource mappings once per render. It refuses initialization
+retry or replacement of that physical root. Identical mappings incur no PTE
+writes; changed mappings are preflighted, published and invalidated before use.
 Each ordered pass is split into independently retired row chunks, bounded by
 16K launched lanes for seeding, 64K for generation/comparison and 128K for
 composition. Bounds include padded SIMD16 lanes. The generated descriptor
@@ -214,9 +217,85 @@ ASan and UBSan pass. This uses host strict/fast math, rather than native IGC
 execution. Static instruction counts describe emitted code, not GPU time; the next
 target boot must establish the runtime gain against the strict baseline.
 The one-time `edit-life: artifact` log exposes the admitted binary hash even
-with the diagnostic log filter. The current relaxed binary is
+with the diagnostic log filter. The relaxed-math-only binary was
 `e3cd3873360211b80c8173c86c2ecfc7fc0241203506fccbe94a13b180d65809`.
 Animation interval, lane priority, chunk bounds and pause policy are unchanged.
+These code counts describe the math-only revision, before the next section's
+source optimization; the reproduction commands compare whichever source is
+currently checked out.
+
+## Removing repeated division and submission work
+
+The deployed relaxed-math boot starts at log line 278730 and confirms that
+compiler relaxation alone did not fix runtime performance. Comparable turbo
+1700x800 generation samples have median 266.0 ms total / 245.0 ms composition,
+versus strict math's 266.5 / 243.5 ms. At 2560x1440 composition rises to
+695.5 ms, approximately following output pixel count. There are no Spirit or
+Edit timeout/quarantine records in that boot. Exact samples and instance/power
+classification are in `/tmp/trueos-edit-perf-latest.json`.
+
+The source had four variable integer divisions per output pixel to rediscover
+the terminal cell and the glyph pixel. Seed sampling repeated the same work
+at every bilinear tap, plus 64-bit geometry divisions for every Life cell.
+Physical font dimensions and page geometry are invariant between resizes.
+The producer now caches a 4,176-byte uniform table with width/height reciprocal
+constants and the exact fixed-point seed centers/reach. The shader replaces
+division with `mul_hi(n, ceil(2^32/d))`, exact for the enforced page bound
+`n <= 4096*2160` and physical font sizes `1 <= d <= 256`; size one is explicit.
+Plain spaces bypass glyph sampling, and opaque text/selection/caret pixels
+return their ink before evaluating background lighting. Font size, glyph masks,
+page layout, Conway sampling and visual composition remain the same.
+
+Each chunk previously cleared/flushed the entire 262,144-byte batch and
+4,096-byte result allocation, although almost all of it was unused. The encoder
+now touches 7,296 batch bytes and 256 result bytes, covering commands, surfaces,
+the exact payload, geometry table, markers and timestamps. Retaining the PPGTT
+also removes its repeated 2 MiB initialization/flush. All reuse still requires
+the exact lane's marker and saved HEAD retirement proof.
+
+Actual IGA disassembly, deployed `e3cd...` versus candidate `9ec0...`:
+
+| Native code metric | Deployed | Candidate |
+| --- | ---: | ---: |
+| Integer quotient instructions | 22 | 0 |
+| Reciprocal instructions | 6 | 2 |
+| Static instructions through EOT | 1632 | 1196 |
+| Native entry bytes | 21,800 | 15,904 |
+| Memory sends | 47 | 50 |
+
+Composition's static count grows from 503 to 558 while removing all eight of
+its integer-quotient instructions and adding early returns. Instruction counts
+do not predict the removed operations' latency or GPU scheduling cost. SIMD16,
+128 GRFs, zero scratch, zero SLM and the eight-buffer ABI remain unchanged.
+The current binary hash is
+`9ec0aa04ff39d6e0cd22b4eeb9e7779f212e7c19400138abdd2040ccbf47b9a3`.
+
+Sampled `edit-life: GPU probe` records split each pass into chunk count,
+CPU encoding/admission, submit-to-batch queue delay, prologue, actual walker,
+release drain, marker observation and saved-context retirement, in microseconds.
+Four ordered GPU timestamps use the existing Gen12 helpers and 36-bit clock
+handling. Samples cover first startup/input/reset kinds and every 120 renders;
+ordinary renders retain their release packets. `samples` must match `chunks`
+before treating the aggregated GPU phases as a complete measurement. These
+markers distinguish shader execution from submission overhead on the next boot.
+They do not weaken timeout, quarantine or resource ownership rules.
+
+The production reciprocal helper passes 1,164,664 divisor/boundary/random cases.
+The native geometry builder is tested against the original wide arithmetic,
+and all 134 full-shader strict snapshots match deployed revision
+`17270fef458e72deaf06bf23cb1b0cf28de3dea8` byte for byte, including complete
+4096x2160 composition, input/reset/generation state, text and alpha. The optional
+reference snapshot is `/tmp/trueos-edit-fast/deployed.clcpp`:
+
+```sh
+python3 tools/testpy/test_edit_life_division.py
+python3 tools/testpy/test_edit_life_math.py --reference-source /tmp/trueos-edit-fast/deployed.clcpp
+```
+
+Target runtime speedup remains unmeasured for this candidate. The inherited VFE
+configuration is unchanged: Intel's own Gen12LP preamble also uses one large
+URB entry, so its size alone does not prove restricted EU occupancy. See the
+[official Intel preamble](https://raw.githubusercontent.com/intel/compute-runtime/master/shared/source/gen12lp/preamble_gen12lp.cpp).
 
 ## Reproduce the local pinned setup
 
@@ -316,6 +395,7 @@ python3 tools/testpy/test_edit_life_native.py
 python3 tools/testpy/test_edit_life_lane.py
 python3 tools/testpy/test_edit_life_failure.py
 python3 tools/testpy/test_edit_life_math.py
+python3 tools/testpy/test_edit_life_division.py
 python3 tools/edit_life_shader_bake.py --verify
 ```
 

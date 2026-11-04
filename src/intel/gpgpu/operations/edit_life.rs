@@ -18,11 +18,22 @@ const EDIT_LIFE_BINDING: usize = 0x840;
 const EDIT_LIFE_SURFACES: usize = 0x880;
 const EDIT_LIFE_PAYLOAD: usize = 0xB00;
 const EDIT_LIFE_UNIFORMS: usize = 0xC00;
+const EDIT_LIFE_UNIFORM_WORDS: usize = 1044;
+const EDIT_LIFE_UNIFORM_BYTES: usize = EDIT_LIFE_UNIFORM_WORDS * 4;
+const EDIT_LIFE_BATCH_USED_BYTES: usize = (EDIT_LIFE_UNIFORMS + EDIT_LIFE_UNIFORM_BYTES + 63) & !63;
+const EDIT_LIFE_RESULT_USED_BYTES: usize = 256;
+const EDIT_LIFE_MAX_PAGE_PIXELS: u64 = 4096 * 2160;
+const EDIT_LIFE_BATCH_ENTER_SLOT: usize = 40;
+const EDIT_LIFE_PRE_WALKER_SLOT: usize = 42;
+const EDIT_LIFE_POST_WALKER_SLOT: usize = 44;
+const EDIT_LIFE_POST_RELEASE_SLOT: usize = 46;
 const EDIT_LIFE_CROSS_BYTES: usize = 128;
 const EDIT_LIFE_INDIRECT_BYTES: usize = 256;
 const EDIT_LIFE_POST_SLOT: usize = 50;
 const EDIT_LIFE_POST_MARKER: u32 = 0xC0DE_E102;
 static EDIT_LIFE_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static EDIT_LIFE_PPGTT_ROOT: AtomicU64 = AtomicU64::new(0);
+static EDIT_LIFE_PPGTT_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 // IDD thread preemption is disabled by the proven compute descriptor. Bound
 // each independently retired walker so an editor page cannot monopolize RCS.
 const EDIT_LIFE_SEED_MAX_LANES: u64 = 16 * 1024;
@@ -43,6 +54,90 @@ fn edit_life_dispatch_rows(mode: u32, width: u32, height: u32, first_row: u32) -
     Some((height - first_row).min(rows as u32))
 }
 
+/// For n <= MAX_PAGE_PIXELS and d <= 256, n*(d-1) < 2^32.
+/// Therefore mul_hi(n, ceil(2^32/d)) is exactly floor(n/d). A zero
+/// reciprocal denotes d=1, which the shader handles without a multiply.
+fn edit_life_reciprocal(divisor: u32) -> Option<u32> {
+    if divisor == 0 || divisor > 256 { return None; }
+    Some(if divisor == 1 { 0 } else { (1u64 << 32).div_ceil(u64::from(divisor)) as u32 })
+}
+
+fn edit_life_geometry_uniforms(viewport: GpgpuRect, grid_width: u32, grid_height: u32,
+    cell_width: u32, cell_height: u32) -> Option<Vec<u32>>
+{
+    if grid_width == 0 || grid_height == 0 || grid_width > 512 || grid_height > 512 { return None; }
+    let mut uniforms = Vec::new();
+    uniforms.try_reserve_exact(EDIT_LIFE_UNIFORM_WORDS).ok()?;
+    uniforms.resize(EDIT_LIFE_UNIFORM_WORDS, 0);
+    uniforms[16] = edit_life_reciprocal(cell_width)?;
+    uniforms[17] = edit_life_reciprocal(cell_height)?;
+    uniforms[18] = (u64::from(viewport.width) * 87 / u64::from(grid_width)) as u32;
+    uniforms[19] = (u64::from(viewport.height) * 87 / u64::from(grid_height)) as u32;
+    for (origin, count, extent) in [(20, grid_width, viewport.width), (532, grid_height, viewport.height)] {
+        for index in 0..count {
+            let center = ((u64::from(index) * 2 + 1) * u64::from(extent) * 128 / u64::from(count)) as i64 - 128;
+            uniforms[origin + index as usize] = i32::try_from(center).ok()? as u32;
+        }
+    }
+    Some(uniforms)
+}
+
+/// Called only while EDIT_LIFE_RCS_SUBMIT_LOCK is held. The lane has one
+/// immutable physical root for its lifetime; never rebuild it between frames.
+fn edit_life_prepare_ppgtt(state: DirectRcsState) -> bool {
+    let root = EDIT_LIFE_PPGTT_ROOT.load(Ordering::Acquire);
+    if root != 0 {
+        if root == state.ppgtt_phys { return true; }
+        quarantine_direct_rcs_lane(DirectRcsLane::EditLife, "edit-life-ppgtt-root-changed");
+        return false;
+    }
+    if EDIT_LIFE_PPGTT_ATTEMPTED.swap(true, Ordering::AcqRel) { return false; }
+    if !direct_rcs_init_ppgtt(state) {
+        quarantine_direct_rcs_lane(DirectRcsLane::EditLife, "edit-life-ppgtt-initialization-failed");
+        return false;
+    }
+    EDIT_LIFE_PPGTT_ROOT.store(state.ppgtt_phys, Ordering::Release);
+    true
+}
+
+/// Borrowed UI4 addresses may be recycled between source/PAT0 and destination/
+/// PAT3 roles. Retire those exact leaves after the final context-save proof;
+/// persistent kernel/world/font leaves remain in this lane's private PPGTT.
+/// The caller holds EDIT_LIFE_RCS_SUBMIT_LOCK and retains both frame leases.
+fn edit_life_retire_imports(state: DirectRcsState, imports: &[GpgpuRgba8Surface]) -> bool {
+    if edit_life_rcs_context_is_quarantined() || EDIT_LIFE_RCS_SUBMIT_RUNTIME.lock().pending.is_some() {
+        return false;
+    }
+    for surface in imports {
+        let Some(bytes) = surface.bytes.checked_add(4095).map(|bytes| bytes & !4095)
+            .filter(|bytes| *bytes != 0) else { return false; };
+        if !direct_rcs_unmap_ppgtt_region_exact(state, surface.gpu, surface.phys, bytes)
+            || !direct_rcs_flush_ppgtt_pte_range(state, surface.gpu, bytes)
+        { return false; }
+    }
+    true
+}
+
+#[derive(Clone, Copy, Default)]
+struct EditLifePassTiming {
+    chunks: u32,
+    samples: u32,
+    encode_us: u64,
+    admit_cpu_us: u64,
+    queue_us: u64,
+    prologue_us: u64,
+    walker_us: u64,
+    release_us: u64,
+    marker_us: u64,
+    save_us: u64,
+}
+
+fn edit_life_phase_us(start: u64, end: u64, frequency_hz: u64) -> Option<u64> {
+    if start == 0 || end == 0 || frequency_hz == 0 { return None; }
+    if start == end { return Some(0); }
+    direct_rcs_timestamp_interval_us(start, end, frequency_hz).map(|(_, us)| us)
+}
+
 const _: () = {
     assert!(matches!(EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
     assert!(EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes == 128);
@@ -56,6 +151,10 @@ const _: () = {
     assert!(EDIT_LIFE_RGBA8_GPU + EDIT_LIFE_RGBA8_ADLS_BIN.len() as u64 <= HELIO_RETAINED_TRANSFORM_ADLS_GPU);
     assert!(EDIT_LIFE_SURFACES + 8 * 64 <= EDIT_LIFE_PAYLOAD);
     assert!(EDIT_LIFE_PAYLOAD + EDIT_LIFE_INDIRECT_BYTES <= EDIT_LIFE_UNIFORMS);
+    assert!(EDIT_LIFE_BATCH_USED_BYTES == 0x1C80);
+    assert!(EDIT_LIFE_BATCH_USED_BYTES <= DIRECT_RCS_BATCH_BYTES);
+    assert!((EDIT_LIFE_POST_SLOT + 2) * 4 <= EDIT_LIFE_RESULT_USED_BYTES);
+    assert!(EDIT_LIFE_MAX_PAGE_PIXELS * 255 < (1u64 << 32));
 };
 
 /// Hardware compatibility only: no upload, allocation, submission or retry.
@@ -100,6 +199,7 @@ pub(crate) struct EditLifeState {
     glyphs: GpgpuOwnedRgba8Surface,
     previous: GpgpuOwnedRgba8Surface,
     font: GpgpuOwnedRgba8Surface,
+    geometry_uniforms: Vec<u32>,
     read: usize,
     uploaded: bool,
     pending_snapshot: bool,
@@ -114,7 +214,10 @@ impl EditLifeState {
     pub(crate) fn new(width: u32, height: u32, viewport: GpgpuRect,
         cell_width: u32, cell_height: u32) -> Option<Self>
     {
-        if width == 0 || height == 0 || cell_width == 0 || cell_height == 0 || viewport.x < 0 || viewport.y < 0
+        if width == 0 || height == 0 || cell_width == 0 || cell_height == 0
+            || cell_width > 256 || cell_height > 256
+            || u64::from(width) * u64::from(height) > EDIT_LIFE_MAX_PAGE_PIXELS
+            || viewport.x < 0 || viewport.y < 0
             || viewport.is_empty()
             || (viewport.x as u32).checked_add(viewport.width).is_none_or(|right| right > width)
             || (viewport.y as u32).checked_add(viewport.height).is_none_or(|bottom| bottom > height)
@@ -124,6 +227,7 @@ impl EditLifeState {
         let grid_width = viewport.width.div_ceil(3).min(512);
         let grid_height = viewport.height.div_ceil(3).min(512);
         let cell_words = grid_width.checked_mul(grid_height)?.checked_mul(2)?;
+        let geometry_uniforms = edit_life_geometry_uniforms(viewport, grid_width, grid_height, cell_width, cell_height)?;
         let glyph_count = width.div_ceil(cell_width).checked_mul(height.div_ceil(cell_height))?;
         let font_masks = &crate::r::services::shell3_font_service::hex::MASKS;
         let font = edit_life_allocation(u32::try_from(font_masks.len()).ok()?.checked_mul(4)?, 1)?;
@@ -140,7 +244,7 @@ impl EditLifeState {
             // terminal capacity lets gutter shifts reuse the same inputs.
             glyphs: edit_life_allocation(glyph_count.checked_mul(4)?, 1)?,
             previous: edit_life_allocation(glyph_count.checked_mul(2)?, 1)?,
-            font,
+            font, geometry_uniforms,
             read: 0, uploaded: false, pending_snapshot: false,
             initialized: false, quarantined: false,
             timing_kinds: 0, renders: 0, slow_renders: 0,
@@ -172,6 +276,9 @@ impl EditLifeState {
             || self.previous.surface().bytes < glyph_bytes
             || self.glyphs.surface().bytes < glyph_bytes.saturating_mul(2)
         { return false; }
+        let Some(geometry_uniforms) = edit_life_geometry_uniforms(viewport, grid_width, grid_height,
+            self.cell_width, self.cell_height) else { return false; };
+        self.geometry_uniforms = geometry_uniforms;
         self.viewport = viewport;
         self.grid_width = grid_width;
         self.grid_height = grid_height;
@@ -228,15 +335,25 @@ impl EditLifeState {
         // before the shared batch/payload is rewritten for the next one.
         let mut prepared = !edit_life_rcs_context_is_quarantined()
             && direct_rcs_forcewake(dev) && direct_rcs_map_state(dev, state)
-            && direct_rcs_init_ppgtt(state)
+            && edit_life_prepare_ppgtt(state)
             && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
         for resource in [self.cells[0].surface(), self.cells[1].surface(),
-            self.glyphs.surface(), self.previous.surface(), self.font.surface(), source]
+            self.glyphs.surface(), self.previous.surface(), self.font.surface()]
         {
             prepared = prepared && direct_rcs_map_ppgtt_kernel(state, resource.gpu, resource.phys, resource.bytes);
         }
-        prepared = prepared && direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, true);
-        if !prepared { return GpgpuRgba8KernelResult::default(); }
+        let source_mapped = prepared
+            && direct_rcs_map_ppgtt_kernel(state, source.gpu, source.phys, source.bytes);
+        prepared = source_mapped
+            && direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, true);
+        if !prepared {
+            // Mapping policy preflights the whole destination range before any
+            // PTE write. Only the successfully imported source needs cleanup.
+            if source_mapped && !edit_life_retire_imports(state, &[source]) {
+                quarantine_direct_rcs_lane(DirectRcsLane::EditLife, "edit-life-source-import-retirement-failed");
+            }
+            return GpgpuRgba8KernelResult::default();
+        }
         let setup_ms = direct_rcs_elapsed_ms_since(setup_started);
         let (kind, kind_bit) = if !self.initialized && self.renders == 0 { ("startup", 1) }
             else if !self.initialized { ("viewport-reset", 16) }
@@ -248,9 +365,14 @@ impl EditLifeState {
         let mut marker = 0;
         let mut passes = 0u32;
         let mut pass_ms = [0u64; 4];
+        // Sample startup/input/reset and occasional steady frames. Production
+        // frames otherwise keep the ordinary release packets unchanged.
+        let probe = self.timing_kinds & kind_bit == 0 || self.renders < 2 || self.renders % 120 == 0;
+        let mut pass_timing = [EditLifePassTiming::default(); 4];
         let mut run = |this: &mut Self, mode: u32, reseed: bool| {
             let pass_started = direct_rcs_now_tick();
-            let outcome = this.dispatch(dev, state, upload, dst, source, mode, reseed);
+            let outcome = this.dispatch(dev, state, upload, dst, source, mode, reseed,
+                if probe { Some(&mut pass_timing[mode as usize]) } else { None });
             passes += 1;
             pass_ms[mode as usize] += direct_rcs_elapsed_ms_since(pass_started);
             submitted |= outcome.submitted;
@@ -273,7 +395,19 @@ impl EditLifeState {
             if ok { self.read = 1 - self.read; }
         }
         if ok { ok = run(self, 2, false); }
-        if !ok && submitted { self.quarantine(); }
+        if ok || !submitted {
+            if !edit_life_retire_imports(state, &[source, dst]) {
+                quarantine_direct_rcs_lane(DirectRcsLane::EditLife, "edit-life-import-retirement-failed");
+                ok = false;
+            }
+        }
+        if !ok && submitted {
+            // A later chunk can reject after earlier chunks were admitted.
+            // Keep all imported/owned backing fenced until reboot rather than
+            // leaving a still-admissible lane with retained borrowed aliases.
+            quarantine_direct_rcs_lane(DirectRcsLane::EditLife, "edit-life-render-incomplete");
+            self.quarantine();
+        }
         let submit_ms = direct_rcs_elapsed_ms_since(dispatch_started);
         let total_ms = direct_rcs_elapsed_ms_since(started);
         self.renders = self.renders.saturating_add(1);
@@ -291,6 +425,16 @@ impl EditLifeState {
                 steps, passes, lock_ms, setup_ms, pass_ms[0], pass_ms[3], pass_ms[1], pass_ms[2],
                 submit_ms, total_ms, self.renders, self.slow_renders);
         }
+        if probe {
+            for (mode, timing) in pass_timing.iter().enumerate().filter(|(_, timing)| timing.chunks != 0) {
+                crate::log_info!(target: "ui4/edit-life";
+                    "edit-life: GPU probe kind={} mode={} chunks={} samples={} encode_cpu_us={} admit_cpu_us={} submit_to_batch_us={} prologue_us={} walker_us={} release_us={} release_to_marker_us={} marker_to_saved_us={} timestamp_hz={} batch_bytes={} result_bytes={} ppgtt=retained\n",
+                    kind, mode, timing.chunks, timing.samples, timing.encode_us, timing.admit_cpu_us,
+                    timing.queue_us, timing.prologue_us, timing.walker_us, timing.release_us,
+                    timing.marker_us, timing.save_us, direct_rcs_timestamp_frequency_hz(dev),
+                    EDIT_LIFE_BATCH_USED_BYTES, EDIT_LIFE_RESULT_USED_BYTES);
+            }
+        }
         GpgpuRgba8KernelResult { ok, submitted, marker,
             submit_ms: total_ms,
             release: ok.then(|| gpgpu_rgba8_release(dst)) }
@@ -304,7 +448,8 @@ impl EditLifeState {
     }
 
     fn dispatch(&self, dev: super::Dev, state: DirectRcsState, upload: UploadedKernelArtifact,
-        dst: GpgpuRgba8Surface, source: GpgpuRgba8Surface, mode: u32, reset: bool) -> DirectRcsDispatchOutcome
+        dst: GpgpuRgba8Surface, source: GpgpuRgba8Surface, mode: u32, reset: bool,
+        mut timing: Option<&mut EditLifePassTiming>) -> DirectRcsDispatchOutcome
     {
         let (width, height) = match mode {
             0 | 1 => (self.grid_width, self.grid_height),
@@ -317,16 +462,31 @@ impl EditLifeState {
         while first_row < height {
             let Some(rows) = edit_life_dispatch_rows(mode, width, height, first_row)
                 else { return DirectRcsDispatchOutcome { submitted, observed: 0 }; };
+            let probe = timing.is_some();
+            let encode_started = if probe { direct_rcs_now_tick() } else { 0 };
             let encoded = encode_edit_life_batch(state, upload, self, dst, source,
-                mode, reset, width, first_row, rows);
+                mode, reset, width, first_row, rows, probe);
+            if let Some(timing) = timing.as_deref_mut() {
+                timing.chunks += 1;
+                timing.encode_us += direct_rcs_elapsed_us_since(encode_started);
+            }
+            let host_submit_gpu = if probe { direct_rcs_read_render_timestamp(dev) } else { 0 };
+            let admit_started = if probe { direct_rcs_now_tick() } else { 0 };
             let admission = if encoded {
                 direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::EditLife)
             } else { DirectRcsSubmissionState::Rejected };
+            if let Some(timing) = timing.as_deref_mut() {
+                timing.admit_cpu_us += direct_rcs_elapsed_us_since(admit_started);
+            }
             submitted |= admission.may_have_submitted();
-            let observed = if admission.can_poll() {
-                direct_rcs_poll_result_slot_timeout_ms_on_lane(state, EDIT_LIFE_POST_SLOT,
-                    EDIT_LIFE_POST_MARKER, UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS, DirectRcsLane::EditLife)
-            } else { 0 };
+            let (observed, marker_observed_gpu) = if admission.can_poll() && probe {
+                direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(state, EDIT_LIFE_POST_SLOT,
+                    EDIT_LIFE_POST_MARKER, UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
+                    DirectRcsLane::EditLife, Some(dev))
+            } else if admission.can_poll() {
+                (direct_rcs_poll_result_slot_timeout_ms_on_lane(state, EDIT_LIFE_POST_SLOT,
+                    EDIT_LIFE_POST_MARKER, UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS, DirectRcsLane::EditLife), 0)
+            } else { (0, 0) };
             if observed != EDIT_LIFE_POST_MARKER {
                 if admission.may_have_submitted() {
                     quarantine_direct_rcs_lane(DirectRcsLane::EditLife, "edit-life-marker-timeout");
@@ -335,6 +495,28 @@ impl EditLifeState {
                     "intel/gpgpu: edit-life failed lane=edit-life mode={} encoded={} submitted={} marker=0x{:08X} width={} first_row={} rows={} height={} action=stop-effect-no-retry\n",
                     mode, encoded as u8, submitted as u8, observed, width, first_row, rows, height);
                 return DirectRcsDispatchOutcome { submitted, observed };
+            }
+            if let Some(timing) = timing.as_deref_mut() {
+                let saved_gpu = direct_rcs_read_render_timestamp(dev);
+                let enter = direct_rcs_read_result_qword(state, EDIT_LIFE_BATCH_ENTER_SLOT);
+                let pre = direct_rcs_read_result_qword(state, EDIT_LIFE_PRE_WALKER_SLOT);
+                let post = direct_rcs_read_result_qword(state, EDIT_LIFE_POST_WALKER_SLOT);
+                let release = direct_rcs_read_result_qword(state, EDIT_LIFE_POST_RELEASE_SLOT);
+                let hz = u64::from(direct_rcs_timestamp_frequency_hz(dev));
+                if let (Some(queue), Some(prologue), Some(walker), Some(drain), Some(marker), Some(save)) = (
+                    edit_life_phase_us(host_submit_gpu, enter, hz), edit_life_phase_us(enter, pre, hz),
+                    edit_life_phase_us(pre, post, hz), edit_life_phase_us(post, release, hz),
+                    edit_life_phase_us(release, marker_observed_gpu, hz),
+                    edit_life_phase_us(marker_observed_gpu, saved_gpu, hz))
+                {
+                    timing.samples += 1;
+                    timing.queue_us += queue;
+                    timing.prologue_us += prologue;
+                    timing.walker_us += walker;
+                    timing.release_us += drain;
+                    timing.marker_us += marker;
+                    timing.save_us += save;
+                }
             }
             // The poll requires marker + saved HEAD at the published TAIL.
             // It is now safe to rewrite this lane's batch and payload. The
@@ -382,21 +564,21 @@ const fn edit_life_abi_matches() -> bool {
 
 fn encode_edit_life_batch(state: DirectRcsState, upload: UploadedKernelArtifact,
     life: &EditLifeState, dst: GpgpuRgba8Surface, source: GpgpuRgba8Surface, mode: u32, reset: bool,
-    width: u32, first_row: u32, rows: u32) -> bool
+    width: u32, first_row: u32, rows: u32, probe: bool) -> bool
 {
     if !edit_life_abi_matches() || upload.bin_sha256 != EDIT_LIFE_RGBA8_ARTIFACT.bin_sha256
         || upload.gpu != EDIT_LIFE_RGBA8_GPU || upload.bytes != EDIT_LIFE_RGBA8_ADLS_BIN.len()
     { return false; }
     unsafe {
-        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
-        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+        core::ptr::write_bytes(state.batch_virt, 0, EDIT_LIFE_BATCH_USED_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, EDIT_LIFE_RESULT_USED_BYTES);
     }
     let uniforms_gpu = state.gpu_va.batch + EDIT_LIFE_UNIFORMS as u64;
     let resources = [life.cells[life.read].surface(), life.cells[1 - life.read].surface(),
         life.glyphs.surface(), life.previous.surface(), life.font.surface(), source, dst];
     let mut buffers = [(0u64, 0usize); 8];
     for (index, resource) in resources.into_iter().enumerate() { buffers[index] = (resource.gpu, resource.bytes); }
-    buffers[7] = (uniforms_gpu, 64);
+    buffers[7] = (uniforms_gpu, EDIT_LIFE_UNIFORM_BYTES);
     if !direct_rcs_write_interface_descriptor_at(state, EDIT_LIFE_IDD, EDIT_LIFE_BINDING,
         EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset, 8, (EDIT_LIFE_CROSS_BYTES / 32) as u32)
     { return false; }
@@ -417,27 +599,41 @@ fn encode_edit_life_batch(state: DirectRcsState, upload: UploadedKernelArtifact,
         }
         let local_ids = state.batch_virt.add(EDIT_LIFE_PAYLOAD + EDIT_LIFE_CROSS_BYTES) as *mut u16;
         for lane in 0..16 { core::ptr::write_volatile(local_ids.add(lane), lane as u16); }
+        core::ptr::copy_nonoverlapping(life.geometry_uniforms.as_ptr(),
+            state.batch_virt.add(EDIT_LIFE_UNIFORMS).cast::<u32>(), EDIT_LIFE_UNIFORM_WORDS);
         let uniforms = [mode, reset as u32, life.width, life.height,
             life.viewport.x as u32, life.viewport.y as u32, life.viewport.width, life.viewport.height,
             life.grid_width, life.grid_height, life.columns, life.rows,
             source.pitch_bytes, dst.pitch_bytes, life.cell_width, life.cell_height];
         core::ptr::copy_nonoverlapping(uniforms.as_ptr(), state.batch_virt.add(EDIT_LIFE_UNIFORMS) as *mut u32, uniforms.len());
     }
-    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, DIRECT_RCS_BATCH_BYTES / 4) };
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, EDIT_LIFE_BATCH_USED_BYTES / 4) };
     let mut cursor = 0;
-    let mut ok = direct_rcs_push_gpgpu_prologue_with_instruction_base(batch, &mut cursor,
+    let mut ok = !probe || direct_rcs_push_pipe_control_timestamp_at(batch, &mut cursor,
+        state.gpu_va.result, EDIT_LIFE_BATCH_ENTER_SLOT);
+    ok &= direct_rcs_push_gpgpu_prologue_with_instruction_base(batch, &mut cursor,
         state.gpu_va.batch, upload.gpu, GPGPU_VFE_DW5_UOS);
     for value in [MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD, 0, 32, EDIT_LIFE_IDD as u32]
     { ok &= direct_rcs_push(batch, &mut cursor, value); }
+    if probe { ok &= direct_rcs_push_pipe_control_timestamp_at(batch, &mut cursor,
+        state.gpu_va.result, EDIT_LIFE_PRE_WALKER_SLOT); }
     ok &= direct_rcs_push_gpgpu_walker_2d(batch, &mut cursor, EDIT_LIFE_PAYLOAD,
         EDIT_LIFE_INDIRECT_BYTES, width.div_ceil(16), rows, GPGPU_WALKER_SIMD16_MASK);
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push_gpgpu_dispatch_epilogue(batch, &mut cursor, state.gpu_va.result,
-        EDIT_LIFE_POST_SLOT, EDIT_LIFE_POST_MARKER);
+    if probe {
+        ok &= direct_rcs_push_pipe_control_timestamp_at(batch, &mut cursor,
+            state.gpu_va.result, EDIT_LIFE_POST_WALKER_SLOT);
+        ok &= direct_rcs_push_gpgpu_dispatch_timestamped_epilogue(batch, &mut cursor,
+            state.gpu_va.result, EDIT_LIFE_POST_RELEASE_SLOT, EDIT_LIFE_POST_SLOT, EDIT_LIFE_POST_MARKER);
+    } else {
+        ok &= direct_rcs_push_gpgpu_dispatch_epilogue(batch, &mut cursor, state.gpu_va.result,
+            EDIT_LIFE_POST_SLOT, EDIT_LIFE_POST_MARKER);
+    }
     if ok {
-        super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
-        super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+        if cursor * 4 > EDIT_LIFE_IDD { return false; }
+        super::dma_flush(state.batch_virt, EDIT_LIFE_BATCH_USED_BYTES);
+        super::dma_flush(state.result_virt, EDIT_LIFE_RESULT_USED_BYTES);
     }
     ok
 }

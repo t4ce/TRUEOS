@@ -16,6 +16,22 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 KERNEL = ROOT / "crates/trueos-shader/gpgpu/kernels/edit_life_rgba8.clcpp"
+PARAM_WORDS = 1044
+
+
+def cell_reciprocal(divisor: int) -> int:
+    assert 1 <= divisor <= 256
+    return (((1 << 32) + divisor - 1) // divisor) & 0xffffffff
+
+
+def c_function(source: str, name: str) -> str:
+    start = source.index("static inline uint " + name + "(")
+    position = source.index("{", start) + 1
+    depth = 1
+    while depth:
+        depth += (source[position] == "{") - (source[position] == "}")
+        position += 1
+    return source[start:position] + "\n"
 
 
 def host_vectors(source: str) -> str:
@@ -42,7 +58,8 @@ def main() -> None:
     masks, _, _ = generator.source_masks()
     ids = {codepoint: index for index, (codepoint, _) in enumerate(masks)}
     shader = KERNEL.read_text()
-    coverage = shader[shader.index("static inline uint glyph_coverage("):shader.index("static inline uint2 input_cell(")]
+    coverage = c_function(shader, "glyph_coverage")
+    division = c_function(shader, "fast_cell_div")
     ink = shader[shader.index("static inline uint glyph_ink("):shader.index("static inline float3 halo_at(")]
     with tempfile.TemporaryDirectory(prefix="trueos-edit-hex-shader-") as temporary:
         directory = Path(temporary)
@@ -50,12 +67,13 @@ def main() -> None:
         wrapper.write_text("""#include <cstdint>
 #define __global
 using uint = std::uint32_t;
+static inline uint mul_hi(uint a, uint b) { return static_cast<uint>((std::uint64_t(a) * b) >> 32); }
 typedef uint uint2 __attribute__((vector_size(8), aligned(4)));
 // GCC requires a power-of-two vector size; the unused fourth uint3 lane does
 // not participate in either the OpenCL helper's result or its arithmetic.
 typedef uint uint3 __attribute__((vector_size(16), aligned(4)));
 typedef uint uint4 __attribute__((vector_size(16), aligned(4)));
-""" + "#include " + json.dumps(str(generator.OPENCL)) + "\n" + host_vectors(coverage + ink) + """
+""" + "#include " + json.dumps(str(generator.OPENCL)) + "\n" + host_vectors(division + coverage + ink) + """
 extern "C" uint sample_coverage(const uint4 *font, uint index, uint flags, uint x, uint y) {
     return glyph_coverage(font, uint2{index, flags}, x, y);
 }
@@ -106,8 +124,9 @@ extern "C" void sample_ink(const uint4 *cells, const uint4 *font, const uint *pa
             # The last column and row are clipped by the viewport. Their glyph
             # mapping must retain the full original cell dimensions.
             width, height = cell_width * 2 - 3, cell_height * 2 - 5
-            params = (uint * 16)()
+            params = (uint * PARAM_WORDS)()
             params[10], params[11], params[14], params[15] = 2, 2, cell_width, cell_height
+            params[16], params[17] = cell_reciprocal(cell_width), cell_reciprocal(cell_height)
             result = (uint * (width * height))()
             for start in range(0, len(glyphs), 4):
                 for foreground, background in styles:

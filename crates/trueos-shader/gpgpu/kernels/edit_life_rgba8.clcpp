@@ -10,6 +10,9 @@
 //   6 viewport width, 7 viewport height, 8 grid width, 9 grid height,
 //  10 terminal columns, 11 terminal rows, 12 source RGBA8 pitch,
 //  13 output RGBA8 pitch, 14 terminal cell width, 15 terminal cell height.
+//  16,17 exact bounded-division reciprocals for physical cell width/height;
+//  18,19 seed reach X/Y; 20..531 fixed-point seed centers X,
+//  532..1043 seed centers Y. Geometry is calculated once by the producer.
 // Compact glyph input is uint4(index, fg, bg, flags); flags bit0 preserves
 // opaque selection/caret backgrounds and bit1 adds an underline. Shared 6x11
 // hex masks are an immutable uint4 table uploaded once. Previous input stores
@@ -46,14 +49,20 @@ static inline uint glyph_coverage(__global const uint4 *font, uint2 glyph, uint 
         | (((glyph.y & 2u) != 0u && native_y == 10u) ? 255u : 0u);
 }
 
+// n <= 4096*2160 and d <= 256 imply n*(d-1) < 2^32. In this
+// domain mul_hi(n, ceil(2^32/d)) is exact, including division boundaries.
+// Physical cell size is constant for the page; never run integer division
+// again for each glyph tap and each output pixel.
+static inline uint fast_cell_div(uint n, uint d, uint reciprocal) {
+    return d == 1u ? n : mul_hi(n, reciprocal);
+}
+
 static inline uint2 input_cell(
     __global const uint4 *glyphs, __global const uint2 *previous,
     __global const uint4 *font, __global const uint *p, uint x, uint y)
 {
-    int cx = (int)(((ulong)x * 2ul + 1ul) * (ulong)p[6] * 128ul / (ulong)p[8]) - 128;
-    int cy = (int)(((ulong)y * 2ul + 1ul) * (ulong)p[7] * 128ul / (ulong)p[9]) - 128;
-    int reach_x = (int)((ulong)p[6] * 87ul / (ulong)p[8]);
-    int reach_y = (int)((ulong)p[7] * 87ul / (ulong)p[9]);
+    int cx = (int)p[20u + x], cy = (int)p[532u + y];
+    int reach_x = (int)p[18], reach_y = (int)p[19];
     uint coverage = 0u, strongest = 0u, chosen = 0x00ffffffu;
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
@@ -65,9 +74,10 @@ static inline uint2 input_cell(
                 for (int i = 0; i < 2; ++i) {
                     uint sx = (uint)clamp(bx + i, 0, (int)p[6] - 1);
                     uint sy = (uint)clamp(by + j, 0, (int)p[7] - 1);
-                    uint column = sx / p[14], row = sy / p[15], at = row * p[10] + column;
-                    uint native_x = (sx - column * p[14]) * 6u / p[14];
-                    uint native_y = (sy - row * p[15]) * 11u / p[15];
+                    uint column = fast_cell_div(sx, p[14], p[16]);
+                    uint row = fast_cell_div(sy, p[15], p[17]), at = row * p[10] + column;
+                    uint native_x = fast_cell_div((sx - column * p[14]) * 6u, p[14], p[16]);
+                    uint native_y = fast_cell_div((sy - row * p[15]) * 11u, p[15], p[17]);
                     uint4 glyph = glyphs[at];
                     uint value = glyph_coverage(font, (uint2)(glyph.x, glyph.w), native_x, native_y);
                     if (p[1] == 0u) {
@@ -92,10 +102,11 @@ static inline uint2 input_cell(
 static inline uint glyph_ink(__global const uint4 *glyphs, __global const uint4 *font,
     __global const uint *p, uint x, uint y)
 {
-    uint column = x / p[14], row = y / p[15];
+    uint column = fast_cell_div(x, p[14], p[16]), row = fast_cell_div(y, p[15], p[17]);
     uint4 cell = glyphs[row * p[10] + column];
-    uint native_x = (x - column * p[14]) * 6u / p[14];
-    uint native_y = (y - row * p[15]) * 11u / p[15];
+    if (cell.x == EDIT_HEX_SPACE_GLYPH && (cell.w & 3u) == 0u) return 0u;
+    uint native_x = fast_cell_div((x - column * p[14]) * 6u, p[14], p[16]);
+    uint native_y = fast_cell_div((y - row * p[15]) * 11u, p[15], p[17]);
     uint coverage = glyph_coverage(font, (uint2)(cell.x, cell.w), native_x, native_y);
     uint alpha = (coverage * (cell.y >> 24) + 127u) / 255u;
     uint background = (cell.w & 1u) != 0u ? cell.z : 0u;
@@ -177,6 +188,10 @@ __kernel void edit_life_rgba8(
         return;
     }
     uint ink = glyph_ink(glyphs, font, params, x - params[4], y - params[5]);
+    if ((ink >> 24) == 255u) {
+        output[y * (params[13] >> 2) + x] = ink;
+        return;
+    }
     float2 pixel = ((float2)((float)(x - params[4]), (float)(y - params[5])) + 0.5f)
         * (float2)((float)gw, (float)gh) / (float2)((float)params[6], (float)params[7]);
     // Relaxed reciprocal/rounding must not turn the last pixel into an

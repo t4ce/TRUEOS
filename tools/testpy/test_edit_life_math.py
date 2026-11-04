@@ -2,8 +2,10 @@
 """Compare the complete production Conway shader under strict and fast host math.
 
 OpenCL address spaces, vector constructors and builtins are adapted to host
-C++; shader arithmetic and all four kernel branches remain unchanged. Both
+C++; shader arithmetic and all four kernel branches remain unchanged. The
 executables run with address/undefined-behavior sanitizers and padded launches.
+An optional --reference-source snapshot must match the new strict result
+byte-for-byte. The maintained test never depends on mutable Git history.
 This checks host floating-point sensitivity, not native Intel GPU performance
 or exact equivalence to IGC's -cl-fast-relaxed-math implementation.
 """
@@ -37,6 +39,7 @@ ADAPTER = r'''
 #define __kernel
 using uint = std::uint32_t;
 using ulong = std::uint64_t;
+[[maybe_unused]] static inline uint mul_hi(uint a, uint b) { return static_cast<uint>((std::uint64_t(a) * b) >> 32); }
 typedef uint uint2 __attribute__((vector_size(8), aligned(4)));
 typedef uint uint3 __attribute__((vector_size(16), aligned(4)));
 typedef uint uint4 __attribute__((vector_size(16), aligned(4)));
@@ -45,7 +48,7 @@ typedef float float3 __attribute__((vector_size(16), aligned(4)));
 static uint global_x, global_y;
 static inline uint get_global_id(uint axis) { return axis == 0 ? global_x : global_y; }
 static inline uint max(uint a, uint b) { return std::max(a, b); }
-static inline uint2 min(uint2 a, uint2 b) { return uint2{std::min(a[0], b[0]), std::min(a[1], b[1])}; }
+[[maybe_unused]] static inline uint2 min(uint2 a, uint2 b) { return uint2{std::min(a[0], b[0]), std::min(a[1], b[1])}; }
 static inline float max(float a, float b) { return std::max(a, b); }
 static inline int clamp(int v, int low, int high) { return std::clamp(v, low, high); }
 static inline float clamp(float v, float low, float high) { return std::clamp(v, low, high); }
@@ -78,9 +81,17 @@ static void scenario(uint width, uint height, uint left, uint top, uint vp_width
     const uint columns = (vp_width + cell_width - 1) / cell_width;
     const uint rows = (vp_height + cell_height - 1) / cell_height;
     const uint source_pitch = width + 7, output_pitch = width + 11;
-    uint p[16] = {0, 1, width, height, left, top, vp_width, vp_height,
+    uint p[1044] = {0, 1, width, height, left, top, vp_width, vp_height,
         grid_width, grid_height, columns, rows, source_pitch * 4, output_pitch * 4,
         cell_width, cell_height};
+    p[16] = static_cast<uint>(((std::uint64_t(1) << 32) + cell_width - 1) / cell_width);
+    p[17] = static_cast<uint>(((std::uint64_t(1) << 32) + cell_height - 1) / cell_height);
+    p[18] = static_cast<uint>(std::uint64_t(vp_width) * 87 / grid_width);
+    p[19] = static_cast<uint>(std::uint64_t(vp_height) * 87 / grid_height);
+    for (uint x = 0; x < grid_width; ++x)
+        p[20 + x] = static_cast<uint>(((std::uint64_t(x) * 2 + 1) * vp_width * 128 / grid_width) - 128);
+    for (uint y = 0; y < grid_height; ++y)
+        p[532 + y] = static_cast<uint>(((std::uint64_t(y) * 2 + 1) * vp_height * 128 / grid_height) - 128);
     std::vector<uint> read(grid_width * grid_height * 2);
     std::vector<uint> write(read.size(), 0xd15ea5edu);
     std::vector<uint> glyphs(columns * rows * 4);
@@ -117,7 +128,7 @@ static void scenario(uint width, uint height, uint left, uint top, uint vp_width
         p[0] = mode; p[1] = reset;
         const auto before_read = read, before_write = write, before_previous = previous;
         const auto before_output = output, before_glyphs = glyphs;
-        const std::vector<uint> before_params(p, p + 16);
+        const std::vector<uint> before_params(p, p + 1044);
         const uint domain_width = mode < 2 ? grid_width : mode == 3 ? columns : width;
         const uint domain_height = mode < 2 ? grid_height : mode == 3 ? rows : height;
         // Launch the same SIMD16-rounded X domain as hardware, plus edge Y
@@ -131,7 +142,7 @@ static void scenario(uint width, uint height, uint left, uint top, uint vp_width
             }
         }
         assert(read == before_read && glyphs == before_glyphs && source == immutable_source && font == immutable_font);
-        assert(std::equal(p, p + 16, before_params.begin()));
+        assert(std::equal(p, p + 1044, before_params.begin()));
         if (mode != 0 && mode != 1) assert(write == before_write);
         if (mode != 3) assert(previous == before_previous);
         if (mode != 2) assert(output == before_output);
@@ -201,13 +212,13 @@ def compiler_path(requested: str | None) -> str:
     raise RuntimeError("No host C++ compiler found; pass --compiler /path/to/clang++")
 
 
-def fixture_source() -> str:
+def fixture_source(shader_source: str | None = None) -> str:
     spec = importlib.util.spec_from_file_location("edit_hex_font", ROOT / "tools/edit_hex_font.py")
     generator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(generator)
     masks, _, _ = generator.source_masks()
     ids = {codepoint: index for index, (codepoint, _) in enumerate(masks)}
-    source = KERNEL.read_text()
+    source = shader_source if shader_source is not None else KERNEL.read_text()
     # Reuse the existing integer literal/swizzle adapter. Float constructors
     # receive the same syntax-only conversion, without changing vector types.
     integer = host_vectors(source)
@@ -246,15 +257,21 @@ def records(path: Path):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--compiler")
+    parser.add_argument("--reference-source", type=Path)
     args = parser.parse_args()
     compiler = compiler_path(args.compiler)
     version = subprocess.check_output([compiler, "--version"], text=True).splitlines()[0]
     with tempfile.TemporaryDirectory(prefix="trueos-edit-life-math-") as temporary:
         directory = Path(temporary)
-        source = directory / "shader.cpp"
-        source.write_text(fixture_source())
-        outputs = []
-        for name, flags in [("strict", ["-fno-fast-math", "-ffp-contract=off"]), ("fast", ["-ffast-math"])]:
+        outputs = {}
+        strict_flags = ["-fno-fast-math", "-ffp-contract=off"]
+        current_source = KERNEL.read_text()
+        profiles = [("strict", strict_flags, current_source), ("fast", ["-ffast-math"], current_source)]
+        if args.reference_source:
+            profiles.insert(0, ("deployed", strict_flags, args.reference_source.read_text()))
+        for name, flags, shader in profiles:
+            source = directory / (name + ".cpp")
+            source.write_text(fixture_source(shader))
             binary = directory / name
             command = [compiler, "-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror",
                 "-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-I", str(KERNEL.parent),
@@ -263,9 +280,11 @@ def main() -> None:
             output = directory / (name + ".bin")
             with output.open("wb") as stream:
                 subprocess.run([str(binary)], stdout=stream, env={**os.environ, "ASAN_OPTIONS": "detect_leaks=1"}, check=True)
-            outputs.append(output)
+            outputs[name] = output
+        if args.reference_source:
+            assert outputs["deployed"].read_bytes() == outputs["strict"].read_bytes(), "new integer addressing/seed tables changed reference strict output"
         compared, changed, largest, above_one = 0, 0, 0, 0
-        strict, fast = list(records(outputs[0])), list(records(outputs[1]))
+        strict, fast = list(records(outputs["strict"])), list(records(outputs["fast"]))
         assert len(strict) == len(fast)
         for (header, a), (other_header, b) in zip(strict, fast):
             assert header == other_header
@@ -284,7 +303,8 @@ def main() -> None:
                     changed += delta != 0
                     above_one += delta > 1
                     assert delta <= VISUAL_RGB_TOLERANCE, (header, index // 4, index % 4, left, right)
-        print(f"{version}: strict vs -ffast-math; {len(strict)} four-mode snapshots, "
+        reference_result = "reference snapshot vs new strict exact; " if args.reference_source else ""
+        print(f"{version}: {reference_result}new strict vs -ffast-math; {len(strict)} four-mode snapshots, "
               f"{compared} output bytes, changed_rgb_bytes={changed}, max_rgb_delta={largest}, "
               f"rgb_deltas_above_one={above_one}; "
               "integer state/glyphs/alpha exact; ASan/UBSan and padded edge launches passed")
