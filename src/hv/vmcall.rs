@@ -319,7 +319,7 @@ pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
 pub const OP_BP_NET_SUBMIT: u32 = 0x21; // request payload is wire Command
 pub const OP_BP_NET_POLL: u32 = 0x22; // response payload is optional wire Event
-pub const OP_BP_FETCH_BYTES_START: u32 = 0x23; // request payload is URL, response is op id
+pub const OP_BP_FETCH_BYTES_START: u32 = 0x23; // flags: bit0 Happy Eyeballs, bit1 URL\0Referer; response is op id
 pub const OP_BP_FETCH_BYTES_RESULT_LEN: u32 = 0x24; // arg0 is op id, response is signed len/rc
 pub const OP_BP_FETCH_BYTES_READ: u32 = 0x25; // arg0 op id,arg1 offset:cap,response payload bytes
 pub const OP_BP_FETCH_BYTES_DISCARD: u32 = 0x26; // arg0 is op id
@@ -4128,14 +4128,17 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let bytes = unsafe { &(&(*p).payload)[..n] };
-            let Ok(url) = core::str::from_utf8(bytes) else {
+            let Some((url, referrer, happy_eyeballs)) =
+                crate::r::net::https::fetch_bytes_request_context(bytes, arg0)
+            else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
             const TIMEOUT_MS: u32 = 45_000;
             const MAX_BYTES: usize = 8 * 1024 * 1024;
-            let op_id =
-                crate::r::net::https::cabi_net_fetch_bytes_start_with_policy_host(url, TIMEOUT_MS, MAX_BYTES, arg0 == 1);
+            let op_id = crate::r::net::https::cabi_net_fetch_bytes_start_with_context_host(
+                url, TIMEOUT_MS, MAX_BYTES, happy_eyeballs, referrer,
+            );
             if op_id == 0 {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
             } else {

@@ -40,4 +40,5 @@
 # Additive UI4 physical millimetre extent query v1; all existing signatures unchanged.
 # Additive owner-bound Spirit agent snapshot v1; every existing declaration unchanged.
 # Additive launch-scoped placement and continuation-scoped role/activity v1; all prior signatures verified unchanged.
-a9dd33dd77dddbf53028bcfafc92466f36efe93570c8ac5cf4c43cc3b0209d66
+# Additive bounded subdocument fetch with host-applied Referer context; all previous signatures verified unchanged.
+c5ef36dd797248ccaeac397ab357ff8f5f40835c37eeaece978922437738f955

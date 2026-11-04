@@ -1250,6 +1250,12 @@ unsafe extern "C" {
     ) -> u32;
     pub fn trueos_cabi_net_prewarm_url_start(url_ptr: *const u8, url_len: usize) -> i32;
     pub fn trueos_cabi_net_fetch_bytes_start(url_ptr: *const u8, url_len: usize) -> u32;
+    pub fn trueos_cabi_net_fetch_bytes_start_with_referrer(
+        url_ptr: *const u8,
+        url_len: usize,
+        referrer_ptr: *const u8,
+        referrer_len: usize,
+    ) -> u32;
     pub fn trueos_cabi_net_fetch_bytes_start_happy_eyeballs(
         url_ptr: *const u8,
         url_len: usize,

@@ -30,6 +30,17 @@ pub fn fetch_bytes(url: &[u8]) -> Result<u32, i32> {
     Ok(op_id)
 }
 
+/// Fetch a browser subdocument with explicit, bounded Referer context.
+#[inline]
+pub fn fetch_bytes_with_referrer(url: &[u8], referrer: &[u8]) -> Result<u32, i32> {
+    let id = unsafe {
+        vcabi::trueos_cabi_net_fetch_bytes_start_with_referrer(
+            url.as_ptr(), url.len(), referrer.as_ptr(), referrer.len(),
+        )
+    };
+    if id == 0 { Err(-1) } else { Ok(id) }
+}
+
 /// Race IPv6 and IPv4 only for the initial HTTPS connection of this fetch.
 #[inline]
 pub fn fetch_bytes_happy_eyeballs(url: &[u8]) -> Result<u32, i32> {

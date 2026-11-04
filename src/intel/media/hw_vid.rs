@@ -560,9 +560,33 @@ async fn run_media_url_playback(
     if url.split('?').next().unwrap_or(url).ends_with(".m3u8") {
         return run_hls_url_playback(session, url, options, playback_path, user_agent, referrer).await;
     }
-    let mp4_bytes = h264_fetch_media_url_bytes(session, url, log_scope, user_agent, referrer).await?;
+    run_mp4_url_playback(session, url, None, options, log_scope, playback_path, user_agent, referrer).await
+}
+
+async fn run_mp4_url_playback(
+    session: crate::ui4::VideoPlaybackSession,
+    url: &str,
+    indexed_length: Option<usize>,
+    options: H264PlaybackOptions,
+    log_scope: &'static str,
+    playback_path: &'static str,
+    user_agent: Option<&str>,
+    referrer: Option<&str>,
+) -> Result<H264PlaybackReport, &'static str> {
+    if indexed_length.is_some_and(|length| length > H264_ONLINE_MEDIA_FETCH_MAX_BYTES) {
+        return Err("HLS MP4 resource exceeds playback byte limit");
+    }
+    let mut mp4_bytes = h264_fetch_media_url_bytes(session, url, log_scope, user_agent, referrer).await?;
     if session.is_cancelled() {
         return Err("playback cancelled");
+    }
+    if let Some(length) = indexed_length {
+        if mp4_bytes.len() < length {
+            return Err("HLS MP4 resource shorter than indexed byte ranges");
+        }
+        // The finite playlist defines the admitted prefix, even if its backing
+        // object also contains an index trailer or later, unlisted fragments.
+        mp4_bytes.truncate(length);
     }
     let demuxed = mp4_avc1_to_annexb(mp4_bytes.as_slice())?;
     crate::log!(
@@ -672,6 +696,17 @@ async fn run_hls_url_playback(
                     .collect();
                 segments = Some(urls?);
                 break;
+            }
+            super::hls::Playlist::SingleFileMp4 { reference, length } => {
+                let media = crate::r::net::https::resolve_http_location(&current, &reference)
+                    .map_err(|_| "HLS invalid MP4 resource URL")?;
+                if !media.starts_with("https://") {
+                    return Err("HLS requires HTTPS segments");
+                }
+                crate::log_info!(target: "intel-media";
+                    "video/hls: prepared container=fragmented-mp4 single_resource=1 indexed_bytes={} existing_mp4_demux=1\n", length);
+                return run_mp4_url_playback(session, &media, Some(length), options,
+                    "website-hls-single-file-mp4", path, user_agent, referrer).await;
             }
         }
     }

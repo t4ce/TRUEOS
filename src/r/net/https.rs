@@ -1125,7 +1125,17 @@ async fn fetch_https_bytes_with_policy(
     max_bytes: usize,
     happy_eyeballs: bool,
 ) -> Result<Vec<u8>, String> {
-    let request = HttpsRequest {
+    fetch_https_bytes_with_context(target, timeout_ms, max_bytes, happy_eyeballs, None).await
+}
+
+async fn fetch_https_bytes_with_context(
+    target: &FetchTarget,
+    timeout_ms: u32,
+    max_bytes: usize,
+    happy_eyeballs: bool,
+    referrer: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    let mut request = HttpsRequest {
         method: "GET",
         headers_only: false,
         content_type: None,
@@ -1139,7 +1149,11 @@ async fn fetch_https_bytes_with_policy(
         if !seen.insert(current.clone()) {
             return Err(String::from("redirect loop"));
         }
-        let target = parse_fetch_url(&current).map_err(String::from)?;
+        let target = if referrer.is_some() {
+            checked_media_target(&current)?
+        } else {
+            parse_fetch_url(&current).map_err(String::from)?
+        };
         let remaining = deadline
             .saturating_duration_since(Instant::now())
             .as_millis();
@@ -1148,6 +1162,12 @@ async fn fetch_https_bytes_with_policy(
         }
         if target.scheme != "https" {
             return Err(String::from("https redirect to insecure scheme"));
+        }
+        request
+            .headers
+            .retain(|(name, _)| !name.eq_ignore_ascii_case("Referer"));
+        if let Some(value) = media_referrer_for_target(referrer, &target)? {
+            request.headers.push((String::from("Referer"), value));
         }
         let first = async {
             if happy_eyeballs && hop == 0 {
@@ -2076,6 +2096,7 @@ fn spawn_fetch_bytes(
     timeout_ms: u32,
     max_bytes: usize,
     happy_eyeballs: bool,
+    referrer: Option<String>,
 ) {
     crate::wait::spawn_local_detached(async move {
         let started = Instant::now();
@@ -2085,7 +2106,20 @@ fn spawn_fetch_bytes(
                 .unwrap_or_default();
             crate::log_info!(target: "net"; "asset-fetch: begin id={} host={} timeout_ms={} max_bytes={}\n", op_id, host, timeout_ms, max_bytes);
         }
-        let fetched = if happy_eyeballs {
+        let fetched = if let Some(referrer) = referrer.as_deref() {
+            match checked_media_target(&url) {
+                Ok(target) => fetch_https_bytes_with_context(
+                    &target,
+                    timeout_ms,
+                    max_bytes,
+                    happy_eyeballs,
+                    Some(referrer),
+                )
+                .await
+                .map_err(|err| fetch_error_to_code(&err)),
+                Err(err) => Err(fetch_error_to_code(&err)),
+            }
+        } else if happy_eyeballs {
             match parse_fetch_url(&url) {
                 Ok(target) if target.scheme == "https" => {
                     fetch_https_bytes_with_policy(&target, timeout_ms, max_bytes, true)
@@ -2233,6 +2267,21 @@ pub(crate) fn cabi_net_fetch_bytes_start_with_policy_host(
     max_bytes: usize,
     happy_eyeballs: bool,
 ) -> u32 {
+    cabi_net_fetch_bytes_start_with_context_host(url_s, timeout_ms, max_bytes, happy_eyeballs, None)
+}
+
+pub(crate) fn cabi_net_fetch_bytes_start_with_context_host(
+    url_s: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+    happy_eyeballs: bool,
+    referrer: Option<&str>,
+) -> u32 {
+    if referrer
+        .is_some_and(|r| checked_media_target(r).is_err() || checked_media_target(url_s).is_err())
+    {
+        return 0;
+    }
     if url_s.trim().is_empty() {
         return 0;
     }
@@ -2246,6 +2295,7 @@ pub(crate) fn cabi_net_fetch_bytes_start_with_policy_host(
         timeout_ms.max(1),
         max_bytes,
         happy_eyeballs,
+        referrer.map(String::from),
     );
     op_id
 }
@@ -2347,11 +2397,26 @@ fn cabi_net_fetch_bytes_start_guest(url: &str, happy_eyeballs: bool) -> u32 {
     if url.len() > trueos_vm::vmcall::PAYLOAD_CAP {
         return 0;
     }
+    cabi_net_fetch_bytes_start_with_context_guest(url, happy_eyeballs, None)
+}
+fn cabi_net_fetch_bytes_start_with_context_guest(
+    url: &str,
+    happy_eyeballs: bool,
+    referrer: Option<&str>,
+) -> u32 {
+    let mut payload = url.as_bytes().to_vec();
+    if let Some(referrer) = referrer {
+        payload.push(0);
+        payload.extend_from_slice(referrer.as_bytes());
+    }
+    if payload.len() > trueos_vm::vmcall::PAYLOAD_CAP {
+        return 0;
+    }
     let (status, value) = trueos_vm::vmcall::call_with_payload(
         trueos_vm::vmcall::OP_BP_FETCH_BYTES_START,
-        u64::from(happy_eyeballs),
+        u64::from(happy_eyeballs) | if referrer.is_some() { 2 } else { 0 },
         0,
-        url.as_bytes(),
+        &payload,
         &mut [],
     );
     guest_vmcall_op_id(status, value)
@@ -3283,4 +3348,57 @@ async fn request_https_happy_eyeballs(
         let _ = fence_https_owner(cmds).await;
     }
     result
+}
+
+/// Host-owned request context for read-only browser subdocument fetches.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_net_fetch_bytes_start_with_referrer(
+    url_ptr: *const u8,
+    url_len: usize,
+    referrer_ptr: *const u8,
+    referrer_len: usize,
+) -> u32 {
+    let Some(url) = (unsafe { abi_str(url_ptr, url_len) }) else {
+        return 0;
+    };
+    let Some(referrer) = (unsafe { abi_str(referrer_ptr, referrer_len) }) else {
+        return 0;
+    };
+    if checked_media_target(url).is_err() || checked_media_target(referrer).is_err() {
+        return 0;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        cabi_net_fetch_bytes_start_with_context_guest(url, true, Some(referrer))
+    } else {
+        cabi_net_fetch_bytes_start_with_context_host(
+            url,
+            45_000,
+            8 * 1024 * 1024,
+            true,
+            Some(referrer),
+        )
+    }
+}
+
+pub(crate) fn fetch_bytes_request_context(
+    payload: &[u8],
+    flags: u64,
+) -> Option<(&str, Option<&str>, bool)> {
+    if flags & !3 != 0 {
+        return None;
+    }
+    let text = core::str::from_utf8(payload).ok()?;
+    let (url, referrer) = if flags & 2 != 0 {
+        let (u, r) = text.split_once('\0')?;
+        if checked_media_target(u).is_err() || checked_media_target(r).is_err() {
+            return None;
+        }
+        (u, Some(r))
+    } else {
+        if text.contains('\0') || text.trim().is_empty() {
+            return None;
+        }
+        (text, None)
+    };
+    Some((url, referrer, flags & 1 != 0))
 }

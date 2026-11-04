@@ -1,4 +1,4 @@
-//! Bounded, unencrypted AVC-in-MPEG-TS HLS VOD demux. No transcoding.
+//! Bounded, unencrypted AVC HLS VOD admission and MPEG-TS demux. No transcoding.
 use alloc::{
     string::{String, ToString},
     vec::Vec,
@@ -12,6 +12,95 @@ const SAMPLE_CAP: usize = 4096;
 pub(super) enum Playlist {
     Variant(String),
     Vod(Vec<String>),
+    /// A finite playlist indexes a contiguous prefix of one fMP4 resource.
+    /// The existing complete-file AVC demux can consume that resource directly.
+    SingleFileMp4 {
+        reference: String,
+        length: usize,
+    },
+}
+
+fn reference(value: &str) -> Result<(), &'static str> {
+    if value.is_empty()
+        || value.len() > 3072
+        || value.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        return Err("HLS invalid reference");
+    }
+    Ok(())
+}
+
+fn byte_range(value: &str) -> Result<(usize, Option<usize>), &'static str> {
+    let (length, offset) = value
+        .split_once('@')
+        .map_or((value, None), |(n, o)| (n, Some(o)));
+    let number = |text: &str| {
+        if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+            return Err("HLS invalid byte range");
+        }
+        text.parse::<usize>().map_err(|_| "HLS byte range overflow")
+    };
+    let length = number(length)?;
+    if length == 0 || length > SEGMENT_CAP {
+        return Err("HLS byte range length outside limit");
+    }
+    Ok((length, offset.map(number).transpose()?))
+}
+
+fn initialization_map(mut attributes: &str) -> Result<(String, usize), &'static str> {
+    let mut uri = None;
+    let mut range = None;
+    let mut names = Vec::new();
+    while !attributes.is_empty() {
+        let (name, tail) = attributes
+            .split_once('=')
+            .ok_or("HLS invalid map attributes")?;
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'-')
+            || names.contains(&name)
+        {
+            return Err("HLS invalid map attribute name");
+        }
+        names.push(name);
+        let (value, rest) = if let Some(tail) = tail.strip_prefix('"') {
+            let (value, rest) = tail
+                .split_once('"')
+                .ok_or("HLS unterminated map attribute")?;
+            (value, rest)
+        } else {
+            let (value, rest) = tail.split_once(',').map_or((tail, ""), |(v, r)| (v, r));
+            if matches!(name, "URI" | "BYTERANGE") {
+                return Err("HLS map URI and range must be quoted");
+            }
+            attributes = rest;
+            if value.is_empty() {
+                return Err("HLS empty map attribute");
+            }
+            continue;
+        };
+        match name {
+            "URI" => {
+                reference(value)?;
+                uri = Some(value.to_string());
+            }
+            "BYTERANGE" => {
+                range = Some(byte_range(value)?);
+            }
+            _ => {}
+        }
+        attributes = if rest.is_empty() {
+            ""
+        } else {
+            rest.strip_prefix(',').ok_or("HLS invalid map delimiter")?
+        };
+    }
+    let (length, offset) = range.ok_or("HLS single-file map requires a byte range")?;
+    if offset != Some(0) {
+        return Err("HLS single-file initialization must begin at zero");
+    }
+    Ok((uri.ok_or("HLS map missing URI")?, length))
 }
 
 /// Return references, resolving them with the shared HTTP URL parser at fetch time.
@@ -22,37 +111,68 @@ pub(super) fn playlist(text: &str) -> Result<Playlist, &'static str> {
     let mut variant = false;
     let mut segment = false;
     let mut urls = Vec::new();
+    let mut ranges = Vec::new();
+    let mut pending_range = None;
+    let mut initialization = None;
     let mut ended = false;
     for line in text.lines().map(str::trim).filter(|s| !s.is_empty()) {
         if line.starts_with("#EXT-X-KEY:") && line != "#EXT-X-KEY:METHOD=NONE"
-            || line.starts_with("#EXT-X-MAP:")
-            || line.starts_with("#EXT-X-BYTERANGE:")
             || line == "#EXT-X-DISCONTINUITY"
         {
-            return Err("HLS encrypted, fragmented or discontinuous stream unsupported");
+            return Err("HLS encrypted or discontinuous stream unsupported");
         }
-        if line.starts_with("#EXT-X-STREAM-INF:") {
+        if let Some(attributes) = line.strip_prefix("#EXT-X-MAP:") {
+            if initialization.is_some() || !urls.is_empty() {
+                return Err("HLS changing initialization map unsupported");
+            }
+            initialization = Some(initialization_map(attributes)?);
+        } else if let Some(value) = line.strip_prefix("#EXT-X-BYTERANGE:") {
+            if pending_range.replace(byte_range(value)?).is_some() {
+                return Err("HLS repeated byte range");
+            }
+        } else if line.starts_with("#EXT-X-STREAM-INF:") {
             variant = true;
         } else if line.starts_with("#EXTINF:") {
+            if segment || ended {
+                return Err("HLS invalid segment list");
+            }
             segment = true;
         } else if line == "#EXT-X-ENDLIST" {
             ended = true;
         } else if !line.starts_with('#') {
-            if line.len() > 3072 || line.chars().any(|c| c.is_control() || c.is_whitespace()) {
-                return Err("HLS invalid reference");
-            }
+            reference(line)?;
             if variant {
+                if initialization.is_some() || pending_range.is_some() {
+                    return Err("HLS invalid variant list");
+                }
                 return Ok(Playlist::Variant(line.to_string()));
             }
             if !segment || urls.len() >= 4096 {
                 return Err("HLS invalid segment list");
             }
             urls.push(line.to_string());
+            ranges.push(pending_range.take());
             segment = false;
         }
     }
-    if !ended || urls.is_empty() || segment {
+    if !ended || urls.is_empty() || segment || pending_range.is_some() {
         return Err("HLS requires finite VOD playlist");
+    }
+    if let Some((reference, mut length)) = initialization {
+        for (index, (url, range)) in urls.iter().zip(ranges).enumerate() {
+            let (count, offset) = range.ok_or("HLS single-file segment missing byte range")?;
+            if url != &reference || index == 0 && offset.is_none() {
+                return Err("HLS requires one byte-ranged MP4 resource");
+            }
+            if offset.unwrap_or(length) != length {
+                return Err("HLS noncontiguous MP4 byte ranges unsupported");
+            }
+            length = length.checked_add(count).ok_or("HLS byte range overflow")?;
+        }
+        return Ok(Playlist::SingleFileMp4 { reference, length });
+    }
+    if ranges.iter().any(Option::is_some) {
+        return Err("HLS byte-ranged MPEG-TS unsupported");
     }
     Ok(Playlist::Vod(urls))
 }
@@ -415,12 +535,45 @@ mod tests {
             "#EXT-X-DISCONTINUITY",
         ] {
             assert!(
-                playlist(&alloc::format!("#EXTM3U\n{tag}\n#EXTINF:1,\nclip.ts\n#EXT-X-ENDLIST"))
-                    .is_err()
+                playlist(&alloc::format!(
+                    "#EXTM3U\n{tag}\n#EXTINF:1,\nclip.ts\n#EXT-X-ENDLIST"
+                ))
+                .is_err()
             );
         }
         assert!(playlist("#EXTM3U\n#EXTINF:1,\nclip.ts").is_err());
         assert!(playlist("#EXTM3U\nstray.ts\n#EXT-X-ENDLIST").is_err());
+    }
+    #[test]
+    fn single_mp4_ranges_cover_initialization_and_finite_media() {
+        let text = "#EXTM3U\n#EXT-X-MAP:URI=\"clip.mp4?token=a,b\",BYTERANGE=\"100@0\"\n#EXTINF:1,\n#EXT-X-BYTERANGE:50@100\nclip.mp4?token=a,b\n#EXTINF:1,\n#EXT-X-BYTERANGE:75\nclip.mp4?token=a,b\n#EXT-X-ENDLIST";
+        match playlist(text).unwrap() {
+            Playlist::SingleFileMp4 { reference, length } => {
+                assert_eq!(reference, "clip.mp4?token=a,b");
+                assert_eq!(length, 225);
+            }
+            _ => panic!("expected one MP4 resource"),
+        }
+    }
+    #[test]
+    fn ambiguous_or_noncontiguous_mp4_ranges_are_rejected() {
+        let valid = "#EXTM3U\n#EXT-X-MAP:URI=\"clip.mp4\",BYTERANGE=\"100@0\"\n#EXTINF:1,\n#EXT-X-BYTERANGE:50@100\nclip.mp4\n#EXT-X-ENDLIST";
+        for invalid in [
+            valid.replace("100@0", "100@1"),
+            valid.replace("50@100", "50@99"),
+            valid.replace("50@100", "50@101"),
+            valid.replace("50@100", "50"),
+            valid.replace("50@100", "0@100"),
+            valid.replace("50@100", "50@18446744073709551616"),
+            valid.replace("\nclip.mp4\n", "\nother.mp4\n"),
+            valid.replace(",BYTERANGE=\"100@0\"", ""),
+            valid.replace("URI=\"clip.mp4\"", "URI=\"clip.mp4\",URI=\"other.mp4\""),
+            valid.replace("URI=\"clip.mp4\"", "URI=clip.mp4"),
+            valid.replace("BYTERANGE=\"100@0\"", "BYTERANGE=\"100@0"),
+            valid.replace("#EXT-X-ENDLIST", ""),
+        ] {
+            assert!(playlist(&invalid).is_err(), "accepted {invalid}");
+        }
     }
     #[test]
     fn pes_tail_survives_segment_boundary_and_gop_closes_at_next_idr() {
