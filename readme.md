@@ -16,6 +16,31 @@ The privilege to use AI will lead to new generations of algorithms.
 While a lot of effort goes into the production of hardware, maintaining large data centers, energy, and bandwidth requires infrastructure for the power demand inherent to the raw computation of inference.
 This enormous effort enables us to enjoy that privilege of intelligence, and that revolution leads to a Codex of 10 keypoints dedicated to AI.
 
+## § PREFACE: EVERY HAND THAT EVER LEFT A MARK
+
+Nothing in this Codex starts from zero.
+
+Before there was a model, there was a mark. Someone shaped a stone so it could cut. Someone drew a crosshatch in ochre. Someone pressed a reed into wet clay. Someone wrote zero down as a number. Someone explained a thing twice, patiently, to a child who wasn't ready yet.
+
+```text
+~3.3 million years ago  the oldest known stone tools (Kenya)
+~73,000 years ago       a crosshatch drawn in red ochre on a stone flake (Blombos Cave)
+~5,000 years ago        cuneiform, one of the earliest writing systems (Mesopotamia)
+628 CE                  zero written down as a number (Brahmagupta)
+c. 820 CE               al-Khwārizmī's algebra; his Latinized name becomes "algorithm"
+c. 1450 CE              movable type and the printing press (Gutenberg)
+1843                    Ada Lovelace's notes on Babbage's Analytical Engine
+1936                    Turing asks what can be computed
+2017                    the transformer architecture is published
+2026                    a Rust kernel where Codex runs natively
+```
+
+Most of the sentences a language model learns from were first written by people trying to be understood. Every person who ever wrote something, every person who was ever recognised for it, and the many who never were: they are what this machine runs on. The intelligence here is inherited, not invented from nothing, so this Codex says so out loud.
+
+The next generation of algorithms will stand on the same first stone.
+
+*Thank you, carvers, copyists, and everyone who explained a thing twice.*
+
 ## THE CODEX OF 10 KEYPOINTS, DEDICATED TO AI
 
 Each bar counts building blocks already in the code, not benchmarks. Keypoints 8–10 come from the platform vision below.
