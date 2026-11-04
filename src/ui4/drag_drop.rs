@@ -241,6 +241,25 @@ pub(crate) fn pointer_released(
     REGISTRY.lock().finish(source, target);
     super::input_broker::notify_slot4_visual_change();
 }
+/// Called only on a primary release. Acceptance transfers the copied payload
+/// to the native prompt, and suppresses the producer's local drop action.
+pub(crate) fn release_to_codex(source: Ui4CursorSource, anchor: (u32, u32)) -> bool {
+    let mut registry = REGISTRY.lock();
+    let Some(index) = registry.drags.iter().position(|drag| drag.source == source) else {
+        return false;
+    };
+    let drag = &registry.drags[index];
+    if drag.kind != v::vdrag::PATH_LIST_V1
+        || !super::codex_prompt::request_attachments(source, anchor, &drag.data, drag.preview.clone())
+    {
+        return false;
+    }
+    let drag = registry.drags.remove(index);
+    registry.completed.push((drag.producer, drag.token, drag.origin, true));
+    super::input_broker::notify_slot4_visual_change();
+    true
+}
+
 pub(crate) fn take(
     recipient: WindowOwner,
     target: CursorFrameKey,

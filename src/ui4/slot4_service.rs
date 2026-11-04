@@ -455,6 +455,10 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
         }
     }
 
+    for (preview, x, y) in super::codex_prompt::attachment_visuals() {
+        push_drag_preview(&mut rects, x, y, &preview, screen_w, screen_h);
+    }
+
     for visual in &visuals {
         if let Some(preview) = visual.drag_preview.as_deref() {
             push_drag_preview(&mut rects, visual.x, visual.y, preview, screen_w, screen_h);

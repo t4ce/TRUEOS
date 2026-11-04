@@ -37,7 +37,7 @@ pub(crate) use lilly_protocol::{LillyEmotion, enqueue_emotion_words, enqueue_emo
 
 pub(crate) use window_selection::spirit_window_selection_task;
 
-pub(super) fn marker_anchor() -> Option<(u32, u32, i32, i32, u32, u32)> {
+pub(crate) fn marker_anchor() -> Option<(u32, u32, i32, i32, u32, u32)> {
     intel_cursor::spirit_cursor_geometry(active_spirit_fence()?.0)
 }
 

@@ -765,7 +765,18 @@ impl InputBroker {
                     signed_local(y, window.presentation_placement.y),
                 )
             });
-            super::drag_drop::pointer_released(source, destination);
+            let on_lilly = crate::spirit::marker_anchor().is_some_and(
+                |(_, _, left, top, width, height)| {
+                    i64::from(x) >= i64::from(left) && i64::from(y) >= i64::from(top)
+                        && i64::from(x) < i64::from(left) + i64::from(width)
+                        && i64::from(y) < i64::from(top) + i64::from(height)
+                });
+            let on_prompt = hit.is_some_and(|window| window.owner == WindowOwner::CODEX_PROMPT_SERVICE);
+            if !(on_lilly || on_prompt)
+                || !super::drag_drop::release_to_codex(source, (x, y))
+            {
+                super::drag_drop::pointer_released(source, destination);
+            }
         }
 
         if self.cursors[index].screenshot_latch {
