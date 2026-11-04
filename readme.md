@@ -183,8 +183,8 @@ Apps are userspace Blueprints. Builtins ship inside the kernel bundle; the rest 
 | 5 | [Maxpix](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/maxpix) | Catalog | 230,400 particles: tornadoes, knots, and quantum-weighted scenes. |
 | 6 | [Shadertoy](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/shadertoy) | Catalog | Native shader visuals on the Intel GPU. |
 | 7 | [Player](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/Player) | Catalog | Media and audio playback. |
-| 8 | [OSM](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/osm) | Catalog | OpenStreetMap on a desktop you can extend. |
-| 9 | [GBOI](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/gboi) | Catalog | A Game Boy emulator for the detours between agent runs. |
+| 8 | [OSM](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/osm) + [Frog](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/Frog) | Catalog | OpenStreetMap on a desktop you can extend. Right-click a point on the map and Frog shows its live weather. |
+| 9 | [Termdir](https://github.com/t4ce/TRUEOS-Buildins/tree/main/termdir) | Builtin | Browse TRUEOSFS as a graph, with a minimap, SHA-256, and archive actions. |
 | 10 | [PrismQ](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/prismq) | Catalog | Quantum circuits. Maxpix's quantum scenes build on them. |
 
 ## BOOT IT. TRY IT.
