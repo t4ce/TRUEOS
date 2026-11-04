@@ -433,7 +433,11 @@ pub(super) struct QuadResizeVisual {
 
 fn current_quad_layout(width: u32, height: u32) -> Option<[WindowSnapshot; 4]> {
     let output = OutputId::from_slot(0)?;
-    super::window_broker::quad_dock_layout(&super::visible_windows_for_output(output), width, height)
+    super::window_broker::quad_dock_layout(
+        &super::visible_windows_for_output(output),
+        width,
+        height,
+    )
 }
 
 fn quad_handle_contains(center: (u32, u32), x: u32, y: u32) -> bool {
@@ -442,12 +446,16 @@ fn quad_handle_contains(center: (u32, u32), x: u32, y: u32) -> bool {
 }
 
 fn quad_gesture_valid(gesture: QuadResizeGesture, windows: [WindowSnapshot; 4]) -> bool {
-    gesture.windows.iter().zip(windows).all(|(a, b)|
-        a.id == b.id && a.owner == b.owner && a.placement == b.placement)
+    gesture
+        .windows
+        .iter()
+        .zip(windows)
+        .all(|(a, b)| a.id == b.id && a.owner == b.owner && a.placement == b.placement)
 }
 
 struct InputBroker {
     quad_resize: Option<QuadResizeGesture>,
+    quad_cancel_key: Option<KeyboardSource>,
     cursor_read_seq: u64,
     keyboard_read_seq: u64,
     physical_read_seq: u64,
@@ -461,6 +469,7 @@ impl InputBroker {
     const fn new() -> Self {
         Self {
             quad_resize: None,
+            quad_cancel_key: None,
             cursor_read_seq: 0,
             keyboard_read_seq: 0,
             physical_read_seq: 0,
@@ -663,7 +672,10 @@ impl InputBroker {
         let quad = current_quad_layout(width, height);
         if self.quad_resize.is_some_and(|gesture| {
             !quad.is_some_and(|windows| quad_gesture_valid(gesture, windows))
-                || !self.cursors.iter().any(|route| route.source == gesture.source)
+                || !self
+                    .cursors
+                    .iter()
+                    .any(|route| route.source == gesture.source)
         }) {
             self.quad_resize = None;
         }
@@ -682,7 +694,11 @@ impl InputBroker {
                 } else if pressed & PRIMARY_BUTTON_MASK != 0 {
                     self.quad_resize = None;
                     if let Err(error) = super::window_broker::resize_quad_dock(
-                        gesture.windows, width, height, gesture.x, gesture.y,
+                        gesture.windows,
+                        width,
+                        height,
+                        gesture.x,
+                        gesture.y,
                     ) {
                         crate::log_warn!(target: "ui4"; "ui4/input: quad resize rejected error={:?}\n", error);
                     }
@@ -701,9 +717,7 @@ impl InputBroker {
             }
         } else if let Some(windows) = quad {
             let center = (windows[0].placement.width, windows[0].placement.height);
-            if pressed & PRIMARY_BUTTON_MASK != 0
-                && quad_handle_contains(center, raw_x, raw_y)
-            {
+            if pressed & PRIMARY_BUTTON_MASK != 0 && quad_handle_contains(center, raw_x, raw_y) {
                 super::context_menu::dismiss_for_source(source);
                 let route = &mut self.cursors[index];
                 route.clear_window_interaction();
@@ -713,7 +727,10 @@ impl InputBroker {
                 route.visible_after_motion = true;
                 route.absorb_select = true;
                 self.quad_resize = Some(QuadResizeGesture {
-                    source, windows, x: center.0, y: center.1,
+                    source,
+                    windows,
+                    x: center.0,
+                    y: center.1,
                 });
                 return;
             }
@@ -1399,6 +1416,9 @@ impl InputBroker {
         slot_id: u32,
         ep_target: u32,
     ) -> usize {
+        if self.quad_cancel_key == Some(KeyboardSource { controller_id, slot_id, ep_target }) {
+            self.quad_cancel_key = None;
+        }
         let mut retired = 0usize;
         for route in &mut self.cursors {
             if route.keyboard_source.is_some_and(|source| {
@@ -1426,12 +1446,20 @@ impl InputBroker {
             );
             return;
         }
-        if self.quad_resize.is_some()
+        // Own Escape through release: the normal selected-frame path also
+        // closes frames on that edge, after the preview has already vanished.
+        if (self.quad_resize.is_some()
+            || self.quad_cancel_key == Some(KeyboardSource::from(event)))
             && event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
             && event.key_code == crate::r::keyboard::KEYBOARD_KEY_ESCAPE
         {
             if event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_PRESS != 0 {
-                self.quad_resize = None;
+                self.quad_cancel_key = Some(KeyboardSource::from(event));
+                if self.quad_resize.take().is_some() {
+                    notify_slot4_visual_change();
+                }
+            } else {
+                self.quad_cancel_key = None;
             }
             let _ = self.consumed_keys.push(event);
             return;
@@ -2353,15 +2381,35 @@ pub(super) fn quad_resize_visual() -> Option<QuadResizeVisual> {
     };
     if let Some(gesture) = broker.quad_resize {
         if quad_gesture_valid(gesture, windows) {
-            if let Some(route) = broker.cursors.iter().find(|route| route.source == gesture.source) {
-                return Some(QuadResizeVisual { x: gesture.x, y: gesture.y,
-                    color: route.color, selected: true });
+            if let Some(route) = broker
+                .cursors
+                .iter()
+                .find(|route| route.source == gesture.source)
+            {
+                return Some(QuadResizeVisual {
+                    x: gesture.x,
+                    y: gesture.y,
+                    color: (route.source.hid_kind == crate::r::cursor::HID_KIND_VIRTUAL_CURSOR)
+                        .then(|| {
+                            crate::r::services::mouse_motion_service::cursor_visual_metadata(
+                                route.source.slot_id,
+                            )
+                        })
+                        .flatten()
+                        .and_then(|visual| visual.color)
+                        .unwrap_or(route.color),
+                    selected: true,
+                });
             }
         }
         broker.quad_resize = None;
     }
-    Some(QuadResizeVisual { x: windows[0].placement.width, y: windows[0].placement.height,
-        color: crate::graphics::primitives::Rgba8::new(255, 55, 255, 128), selected: false })
+    Some(QuadResizeVisual {
+        x: windows[0].placement.width,
+        y: windows[0].placement.height,
+        color: crate::graphics::primitives::Rgba8::new(255, 55, 255, 128),
+        selected: false,
+    })
 }
 
 pub(super) fn software_cursor_scale() -> u32 {

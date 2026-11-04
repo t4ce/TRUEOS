@@ -102,7 +102,7 @@ def harness_source():
     start = input_source.index('        // The shared handle takes precedence')
     end = input_source.index('        let hit = snapped_window.or_else', start)
     routing = input_source[start:end]
-    escape = block(input_source, 'if self.quad_resize.is_some()\n            && event.kind')
+    escape = block(input_source, 'if (self.quad_resize.is_some()\n            || self.quad_cancel_key')
     code = r'''
 mod graphics { pub mod primitives {
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -124,6 +124,8 @@ mod r { pub mod keyboard {
         type Ui4CursorSource = u32;
         const PRIMARY_BUTTON_MASK: u32 = 1;
         const SECONDARY_BUTTON_MASK: u32 = 2;
+        static VISUAL_WAKES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        fn notify_slot4_visual_change() { VISUAL_WAKES.fetch_add(1, std::sync::atomic::Ordering::SeqCst); }
         @TYPES@
         fn current_quad_layout(_: u32, _: u32) -> Option<[WindowSnapshot; 4]> {
             super::window_broker::quad_layout()
@@ -133,12 +135,16 @@ mod r { pub mod keyboard {
             absorb_select: bool, color: crate::graphics::primitives::Rgba8,
         }
         impl Route { fn clear_window_interaction(&mut self) {} }
+        #[derive(Copy, Clone)]
         struct Key { kind: u8, key_code: u8, flags: u8 }
-        struct Input { quad_resize: Option<QuadResizeGesture>, cursors: Vec<Route>,
+        #[derive(Copy, Clone, Eq, PartialEq)]
+        struct KeyboardSource;
+        impl From<Key> for KeyboardSource { fn from(_: Key) -> Self { Self } }
+        struct Input { quad_resize: Option<QuadResizeGesture>, quad_cancel_key: Option<KeyboardSource>, cursors: Vec<Route>,
             forwarded: usize, consumed_keys: Vec<Key> }
         impl Input {
             fn new() -> Self {
-                Self { quad_resize: None, cursors: (0..2).map(|source| Route {
+                Self { quad_resize: None, quad_cancel_key: None, cursors: (0..2).map(|source| Route {
                     source, x: 0, y: 0, buttons_down: 0, visible_after_motion: false,
                     absorb_select: false, color: crate::graphics::primitives::Rgba8::new(source as u8, 2, 3, 255),
                 }).collect(), forwarded: 0, consumed_keys: Vec::new() }
@@ -151,8 +157,8 @@ mod r { pub mod keyboard {
                 self.cursors[index].buttons_down = buttons_down;
                 self.forwarded += 1;
             }
-            fn escape(&mut self) {
-                let event = Key { kind: 1, key_code: 27, flags: 1 };
+            fn escape(&mut self, press: bool) {
+                let event = Key { kind: 1, key_code: 27, flags: u8::from(press) };
                 @ESCAPE@
                 self.forwarded += 1;
             }
@@ -184,9 +190,14 @@ mod r { pub mod keyboard {
             assert_eq!(super::input_broker::RESIZES.lock().len(), 4);
             input.pointer(0, 700, 400, 0);
             input.pointer(0, 700, 400, 1);
-            input.escape();
+            let wakes = VISUAL_WAKES.load(std::sync::atomic::Ordering::SeqCst);
+            let forwarded = input.forwarded;
+            input.escape(true);
+            input.escape(false);
+            assert_eq!(input.forwarded, forwarded, "Escape release must not reach frame-close routing");
+            assert_eq!(VISUAL_WAKES.load(std::sync::atomic::Ordering::SeqCst), wakes + 1);
             assert!(input.quad_resize.is_none());
-            assert_eq!(input.consumed_keys.len(), 1);
+            assert_eq!(input.consumed_keys.len(), 2);
             assert_eq!(super::input_broker::RESIZES.lock().len(), 4);
         }
         #[test]

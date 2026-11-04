@@ -2665,8 +2665,15 @@ fn change_window_dock_record(
     restore_placement: Option<WindowPlacement>,
     restore_center: Option<(u32, u32)>,
 ) -> Result<WindowDockChange, WindowBrokerError> {
-    change_window_dock_record_at(window, target, output_width, output_height,
-        restore_placement, restore_center, None)
+    change_window_dock_record_at(
+        window,
+        target,
+        output_width,
+        output_height,
+        restore_placement,
+        restore_center,
+        None,
+    )
 }
 
 /// Shared dock transaction, including a custom quadrant split.
@@ -2830,49 +2837,80 @@ pub(crate) fn dock_window(
 /// form a complete partition. Individual movement clears docking and removes
 /// the shared handle; producer publication/replacement does not.
 pub(super) fn quad_dock_layout(
-    windows: &[WindowSnapshot], width: u32, height: u32,
+    windows: &[WindowSnapshot],
+    width: u32,
+    height: u32,
 ) -> Option<[WindowSnapshot; 4]> {
-    use WindowDockTarget::{TopLeft, TopRight, BottomLeft, BottomRight};
-    if width < 64 || height < 64 { return None; }
+    use WindowDockTarget::{BottomLeft, BottomRight, TopLeft, TopRight};
+    if width < 64 || height < 64 {
+        return None;
+    }
     let mut quadrants = [None; 4];
     for window in windows {
         let index = match window.dock_target {
-            Some(TopLeft) => 0, Some(TopRight) => 1,
-            Some(BottomLeft) => 2, Some(BottomRight) => 3,
+            Some(TopLeft) => 0,
+            Some(TopRight) => 1,
+            Some(BottomLeft) => 2,
+            Some(BottomRight) => 3,
             _ => continue,
         };
-        if !window.plane.is_application() { continue; }
-        if quadrants[index].is_some() || window.state != WindowState::Ready
-            || !window.interaction.resize_on_maximize || !window.interaction.maximizable
-        { return None; }
+        if !window.plane.is_application() {
+            continue;
+        }
+        if quadrants[index].is_some()
+            || window.state != WindowState::Ready
+            || !window.interaction.resize_on_maximize
+            || !window.interaction.maximizable
+        {
+            return None;
+        }
         quadrants[index] = Some(*window);
     }
     let windows = [quadrants[0]?, quadrants[1]?, quadrants[2]?, quadrants[3]?];
     let split = (windows[0].placement.width, windows[0].placement.height);
-    if split.0 < 32 || split.1 < 32
-        || width.saturating_sub(split.0) < 32 || height.saturating_sub(split.1) < 32
-    { return None; }
+    if split.0 < 32
+        || split.1 < 32
+        || width.saturating_sub(split.0) < 32
+        || height.saturating_sub(split.1) < 32
+    {
+        return None;
+    }
     let rects = quad_dock_rects(width, height, split.0, split.1);
     for (window, rect) in windows.iter().zip(rects) {
         let p = window.placement;
-        if (p.x, p.y, p.width, p.height) != rect { return None; }
+        if (p.x, p.y, p.width, p.height) != rect {
+            return None;
+        }
     }
     Some(windows)
 }
 
 pub(super) fn quad_dock_rects(
-    width: u32, height: u32, x: u32, y: u32,
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
 ) -> [(i32, i32, u32, u32); 4] {
-    [(0, 0, x, y), (x as i32, 0, width - x, y),
-     (0, y as i32, x, height - y), (x as i32, y as i32, width - x, height - y)]
+    [
+        (0, 0, x, y),
+        (x as i32, 0, width - x, y),
+        (0, y as i32, x, height - y),
+        (x as i32, y as i32, width - x, height - y),
+    ]
 }
 
 /// Validate and commit all four logical targets under one broker lock, then
 /// deliver normal dock resize epochs to their producers after unlocking.
 pub(super) fn resize_quad_dock(
-    expected: [WindowSnapshot; 4], width: u32, height: u32, x: u32, y: u32,
+    expected: [WindowSnapshot; 4],
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
 ) -> Result<(), WindowBrokerError> {
-    if width < 64 || height < 64 { return Err(WindowBrokerError::EmptyExtent); }
+    if width < 64 || height < 64 {
+        return Err(WindowBrokerError::EmptyExtent);
+    }
     let output = expected[0].output;
     let mut broker = WINDOW_BROKER.lock();
     let current = quad_dock_layout(&broker.snapshots(output), width, height)
@@ -2882,23 +2920,50 @@ pub(super) fn resize_quad_dock(
             return Err(WindowBrokerError::StaleResize);
         }
     }
-    let rects = quad_dock_rects(width, height, x.clamp(32, width - 32), y.clamp(32, height - 32));
+    let rects = quad_dock_rects(
+        width,
+        height,
+        x.clamp(32, width - 32),
+        y.clamp(32, height - 32),
+    );
     let mut changes = Vec::with_capacity(4);
     for (snapshot, (rect_x, rect_y, rect_width, rect_height)) in current.iter().zip(rects) {
         let window = broker.checked_window_mut(snapshot.owner, snapshot.id)?;
-        let destination = WindowPlacement { x: rect_x, y: rect_y, width: rect_width, height: rect_height, ..window.placement };
-        let change = change_window_dock_record_at(window, snapshot.dock_target,
-            width, height, None, None, Some(destination))?;
+        let destination = WindowPlacement {
+            x: rect_x,
+            y: rect_y,
+            width: rect_width,
+            height: rect_height,
+            ..window.placement
+        };
+        let change = change_window_dock_record_at(
+            window,
+            snapshot.dock_target,
+            width,
+            height,
+            None,
+            None,
+            Some(destination),
+        )?;
         changes.push(change);
     }
-    if changes.iter().any(|change| change.changed) { broker.mark_composition_changed(); }
+    if changes.iter().any(|change| change.changed) {
+        broker.mark_composition_changed();
+    }
     drop(broker);
     for (snapshot, change) in current.iter().zip(changes) {
         if change.notify_resize {
             let previous = change.transition.previous;
             let placement = change.transition.placement;
-            super::input_broker::enqueue_window_resize(snapshot.owner, snapshot.id,
-                change.resize_epoch, previous.width, previous.height, placement.width, placement.height);
+            super::input_broker::enqueue_window_resize(
+                snapshot.owner,
+                snapshot.id,
+                change.resize_epoch,
+                previous.width,
+                previous.height,
+                placement.width,
+                placement.height,
+            );
         }
     }
     super::cursor_frame_inout::selection_strip_stack_changed();
