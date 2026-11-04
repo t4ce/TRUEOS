@@ -952,8 +952,13 @@ fn push_software_crosshair(
     color: crate::graphics::primitives::Rgba8,
     scale: u32,
 ) {
+    // Scale 0 is the fine cursor: single-pixel lines at default length.
+    let stroke = if scale == 0 {
+        1
+    } else {
+        SOFTWARE_CURSOR_STROKE_PX.saturating_mul(scale)
+    };
     let scale = scale.max(1);
-    let stroke = SOFTWARE_CURSOR_STROKE_PX.saturating_mul(scale);
     let long = SOFTWARE_CURSOR_LONG_PX.saturating_mul(scale);
     let long_before = long / 2;
 

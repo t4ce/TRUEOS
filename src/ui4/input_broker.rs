@@ -8,7 +8,7 @@
 //! global HID queue.
 
 use alloc::sync::Arc;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 use embassy_sync::signal::Signal;
 use heapless::Vec;
@@ -50,7 +50,8 @@ pub(super) const DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX: u32 = 12;
 
 static OWNER_QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
 static KEYBOARD_TEXT_FORWARDS: AtomicU32 = AtomicU32::new(0);
-static FAT_SOFTWARE_CURSORS: AtomicBool = AtomicBool::new(false);
+// 0 = fine (1px lines), 1 = default, 2 = big.
+static SOFTWARE_CURSOR_MODE: AtomicU8 = AtomicU8::new(1);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct DesktopShellLaunchRequest {
@@ -1930,12 +1931,20 @@ fn capture_software_cursor_size_hotkey(
     }
 
     if event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_PRESS != 0 {
-        let fat = !FAT_SOFTWARE_CURSORS.fetch_xor(true, Ordering::AcqRel);
+        let mode = match SOFTWARE_CURSOR_MODE.load(Ordering::Acquire) {
+            0 => 1,
+            1 => 2,
+            _ => 0,
+        };
+        SOFTWARE_CURSOR_MODE.store(mode, Ordering::Release);
         SLOT4_VISUAL_CHANGE.signal(());
         crate::log_info!(target: "ui4";
-            "ui4/input: F11 global software cursor size toggled mode={} scale={}x key_delivery=consumed\n",
-            if fat { "fat" } else { "small" },
-            if fat { 3 } else { 1 },
+            "ui4/input: F11 global software cursor size cycled mode={} key_delivery=consumed\n",
+            match mode {
+                0 => "fine",
+                1 => "default",
+                _ => "big",
+            },
         );
     }
     // Consume both edges so applications never observe half of the global
@@ -1965,7 +1974,7 @@ pub(crate) async fn ui4_input_service_task(ap1_spawner: crate::workers::WorkerSp
         super::register_global_keyboard_hook(u8::MAX, capture_software_cursor_size_hotkey);
     match cursor_size_hook {
         Ok(_) => crate::log_info!(target: "ui4";
-            "ui4/input: global hotkey online key=F11 action=toggle-software-cursor-size small=1x fat=3x key_delivery=consumed\n"
+            "ui4/input: global hotkey online key=F11 action=toggle-software-cursor-size cycle=fine,default,big key_delivery=consumed\n"
         ),
         Err(error) => crate::log_warn!(target: "ui4";
             "ui4/input: global hotkey unavailable key=F11 error={:?}\n",
@@ -2225,10 +2234,10 @@ pub(crate) fn software_cursor_visuals() -> Vec<Ui4SoftwareCursorVisual, MAX_CURS
 }
 
 pub(super) fn software_cursor_scale() -> u32 {
-    if FAT_SOFTWARE_CURSORS.load(Ordering::Acquire) {
-        3
-    } else {
-        1
+    match SOFTWARE_CURSOR_MODE.load(Ordering::Acquire) {
+        0 => 0,
+        1 => 1,
+        _ => 3,
     }
 }
 

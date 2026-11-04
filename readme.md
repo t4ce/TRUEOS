@@ -106,7 +106,7 @@ The GPU driver is the largest directory under `src/`: about 100,000 lines of Rus
 
 TRUEOS aims to be the platform to deploy a large number of nodes across the world. Modern CPUs offer integrated graphics and rich computation, and that is what we support.
 
-The operating system should be program code that is for everybody. Parts like the USB stack are batteries included. A specific missing driver will be reasoned out of thin air. The AI does the final last-mile wiring, by nature. A vendor can't support arbitrary platforms. Supporting a platform is the platform's job, and it has always been the largest effort for OS developers, who tend to do everything at once. That work is enormous, so we offload some of it here.
+The operating system should be program code that is for everybody. Parts like the USB stack are batteries included. A specific missing driver will be reasoned out of thin air. The AI does the final last-mile wiring, by nature. A vendor can't support arbitrary platforms. Supporting a platform is the platform's job, and for systems engineers it has always been the largest share of the work: firmware, power, interrupts, drivers, and devices have to work in harmony as one large, coherent system. That work is enormous, so we offload some of it here.
 
 Our goal is a versatile bundle of what an operating system is expected to ship to a node, not a generic cross-platform build. 25 MB is expected to fulfill every demand.
 
@@ -122,6 +122,12 @@ Local models run as userspace Blueprints. [apps/lumen](https://github.com/t4ce/T
 Idle cores halt, and work wakes them. Token maxing is the mood. Useful work per watt is the goal.
 
 *Please remain calm. Ideally, the processors already are.*
+
+## WORK IN HARMONY: ASYNC PARTS, ONE SMOOTH MACHINE
+
+The cores, the GPU and its encoder, and the network card each run on their own timing. The craft is in making them work in harmony, so throughput stays balanced and the parts keep each other fed. That takes *hard effort and a lot of craftsmanship*. We start with a concept that runs slowly, work out the nuts and bolts, and only then scale it up. A careful eye stays on the watts: the RAPL readout is already in tree, and measured numbers come next. Every result is held to a direct side-by-side comparison, like the ones below.
+
+All of that effort aims at one thing: a machine that almost looks like one big, synchronously running, never-stuttering electric field of glory.
 
 ## THE DESKTOP, NOT THE SLIDE DECK.
 
