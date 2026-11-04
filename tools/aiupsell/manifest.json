@@ -86,6 +86,13 @@
       "height": 1440
     },
     {
+      "path": "screenshots/cubes-rubik-cube.png",
+      "bytes": 2655116,
+      "sha256": "412b11342c22919ded998619f2e9e9193e3f6ba9c2affe11d9d1a17405d95f7d",
+      "width": 2560,
+      "height": 1440
+    },
+    {
       "path": "screenshots/hull-live-page.png",
       "bytes": 609500,
       "sha256": "d3e3a1596dfdea9a81164af9ef06ebcc90c270a1dad9aa65556c4f35010351bb",

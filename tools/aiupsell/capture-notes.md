@@ -26,6 +26,11 @@ Prepared on 2026-11-03. The root README uses this folder's checked-in assets;
   scene selected. A temporary solid-color image was used while staging the
   scene. No video file was created. Display content has not been reconstructed
   or replaced in post-production.
+- `screenshots/cubes-rubik-cube.png`: unchanged copy of a local capture (original
+  filename `wd-postblend-xyuv709-1793789466-256473-wd000001-capture000003.png`,
+  2560x1440 RGBA). Shows the Cubes scene with a 3x3 cube on the neon grid and
+  Lilly beside it. It replaces `cubes-fullscreen.png` on the root README; the
+  earlier capture stays because this folder's `readme.md` still uses it.
 
 The first shell `pic` capture succeeded. Subsequent requests remained pending
 and another request reported `WD screenshot slot is busy`; the RDP still-frame

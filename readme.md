@@ -125,16 +125,26 @@ Idle cores halt, and work wakes them. Token maxing is the mood. Useful work per 
 
 ## THE DESKTOP, NOT THE SLIDE DECK.
 
-<p align="center"><img src="tools/aiupsell/screenshots/cubes-fullscreen.png" width="100%" alt="Cubes running fullscreen on the real TRUEOS desktop with Lilly"></p>
+<p align="center"><img src="tools/aiupsell/screenshots/cubes-rubik-cube.png" width="100%" alt="Cubes running fullscreen on the real TRUEOS desktop with a 3x3 cube and Lilly"></p>
 <p align="center"><sub>Cubes on native TRUEOS. Fullscreen scene capture; no video.</sub></p>
 
 <p align="center"><img src="tools/aiupsell/screenshots/codex-edit-lilly.png" width="100%" alt="A signed-in Codex session alongside Microsoft Edit on TRUEOS, with Lilly visible"></p>
 <p align="center"><sub>Codex, Edit, and Lilly on the desktop: a running session, not a mockup.</sub></p>
 
-## HULL: A NATIVE BROWSER, IN USERSPACE.
+## HULL: CONCEPT VS. REAL
 
-<p align="center"><img src="tools/aiupsell/screenshots/hull-live-page.png" width="100%" alt="An HTML and CSS page rendered fullscreen in native Hull on TRUEOS"></p>
-<p align="center"><sub>HTML and CSS rendered in Hull on TRUEOS. <a href="tools/aiupsell/page/index.html">Page source</a> · <a href="tools/aiupsell/page/README.md">Open it yourself</a>.</sub></p>
+<table>
+  <tr>
+    <td width="46%" valign="top"><img src="tools/aiupsell/assets/hull-wikipedia-concept.png" width="100%" alt="Concept illustration of Hull researching artificial intelligence and Sam Altman alongside Edit, Codex, and Lilly"></td>
+    <td width="8%" align="center" valign="middle"><h3 align="center">VS</h3></td>
+    <td width="46%" valign="top"><img src="tools/aiupsell/screenshots/hull-live-page.png" width="100%" alt="The concept rebuilt as real HTML and CSS, rendered fullscreen in native Hull on TRUEOS"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><strong>CONCEPT</strong> · AI-generated illustration, made with Codex on Ubuntu Linux</sub></td>
+    <td></td>
+    <td align="center"><sub><strong>REAL</strong> · the concept rebuilt as HTML/CSS, rendered natively in Hull on TRUEOS · <a href="tools/aiupsell/page/index.html">Page source</a> · <a href="tools/aiupsell/page/README.md">Open it yourself</a></sub></td>
+  </tr>
+</table>
 
 Hull is a builtin Blueprint: HTML/CSS rendering, JavaScript through QuickJS, downloads, and local project previews.
 Codex's sign-in and browser actions open here. Web compatibility keeps growing.

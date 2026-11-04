@@ -1194,6 +1194,14 @@ const fn resident_release_direct_contract(
                 super::FrameCadence::Immutable,
                 super::FrameBuffering::Single,
             )
+            // Layered Blueprint backgrounds are Dirty/Double. A resident
+            // indexed batch (point-list background) publishes the same exact
+            // released allocation a compute producer does.
+            | (
+                FrameContent::BlueprintScene,
+                super::FrameCadence::Dirty,
+                super::FrameBuffering::Double,
+            )
     )
 }
 
@@ -1242,7 +1250,7 @@ const _: () = {
         super::FrameCadence::Streaming,
         super::FrameBuffering::Triple,
     ));
-    assert!(!resident_release_direct_contract(
+    assert!(resident_release_direct_contract(
         FrameContent::BlueprintScene,
         super::FrameCadence::Dirty,
         super::FrameBuffering::Double,
