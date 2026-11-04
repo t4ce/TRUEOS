@@ -15,6 +15,7 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
+use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::signal::Signal;
 use spin::Mutex;
 use trueos_time::{Duration, Instant, Timer};
@@ -44,6 +45,7 @@ struct OpenRequest {
 }
 
 static OPEN_REQUEST: Mutex<Option<OpenRequest>> = Mutex::new(None);
+static SUBMITTING: AtomicBool = AtomicBool::new(false);
 static ACTIVE_TARGET: Mutex<Option<codex::Target>> = Mutex::new(None);
 // Reserved paths include pending drops, so admission is atomic across polls.
 static RESERVED_PATHS: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -119,6 +121,9 @@ pub(super) fn request_attachments(
         return false;
     }
     let mut pending = OPEN_REQUEST.lock();
+    if SUBMITTING.load(Ordering::Acquire) {
+        return false;
+    }
     let mut reserved = RESERVED_PATHS.lock();
     let mut combined = reserved.clone();
     if !attachments::accumulate(&mut combined, &paths) {
@@ -172,7 +177,7 @@ pub(crate) async fn ui4_codex_prompt_service_task() {
                 }
             } else if let Some(prompt) = active.as_mut() {
                 if prompt.target == request.target && !prompt.submitted {
-                    append_attachments(prompt, request.paths, request.previews);
+                    append_attachments(prompt, request.paths, request.previews).await;
                 }
             }
         }
@@ -190,13 +195,18 @@ pub(crate) async fn ui4_codex_prompt_service_task() {
                     }
                     prompt.seed_tick = Instant::now();
                 }
+                crate::spirit::poll_attachment_intro(prompt.window);
                 close = process_input(prompt).await;
                 update_attachment_visuals(prompt);
             }
             if close {
                 if close_prompt(prompt) {
+                    // Serialize reset with drop admission.
+                    let mut pending = OPEN_REQUEST.lock();
+                    *pending = None;
                     *ACTIVE_TARGET.lock() = None;
                     RESERVED_PATHS.lock().clear();
+                    SUBMITTING.store(false, Ordering::Release);
                     ATTACHMENT_VISUALS.lock().clear();
                     super::input_broker::notify_slot4_visual_change();
                     active = None;
@@ -299,7 +309,7 @@ async fn open_prompt(request: OpenRequest) -> Result<ActivePrompt, &'static str>
         seed: None,
         seed_tick: Instant::now(),
     };
-    append_attachments(&mut prompt, request.paths, request.previews);
+    append_attachments(&mut prompt, request.paths, request.previews).await;
     if render_prompt(&mut prompt).await.is_err() {
         let _ = close_prompt(&prompt);
         return Err("initial-render");
@@ -323,7 +333,7 @@ async fn open_prompt(request: OpenRequest) -> Result<ActivePrompt, &'static str>
     Ok(prompt)
 }
 
-fn append_attachments(
+async fn append_attachments(
     prompt: &mut ActivePrompt,
     paths: Vec<String>,
     previews: Vec<(Arc<super::drag_drop::DragPreview>, (u32, u32))>,
@@ -338,7 +348,26 @@ fn append_attachments(
         return;
     }
     if first && !prompt.paths.is_empty() && prompt.editor.text().is_empty() {
-        prompt.seed = Some(attachments::question(&prompt.paths));
+        let (mut files, mut folders, mut unknown) = (0, 0, 0);
+        for path in &prompt.paths {
+            let kind = async {
+                let name = crate::r::path::FsPath::parse(path, false)
+                    .ok()?
+                    .to_relative_string();
+                let disk = crate::r::fs::volatile_files::selected_disk(&name)?;
+                crate::r::fs::trueosfs::node_info_async(disk, &name)
+                    .await
+                    .ok()?
+            }
+            .await
+            .map(|info| info.kind);
+            match kind {
+                Some(crate::r::fs::trueosfs::NodeKind::File) => files += 1,
+                Some(crate::r::fs::trueosfs::NodeKind::Directory) => folders += 1,
+                None => unknown += 1,
+            }
+        }
+        prompt.seed = Some(attachments::question(files, folders, unknown));
     }
     for (preview, from) in previews {
         if prompt.previews.len() < attachments::LIMIT {
@@ -365,6 +394,7 @@ fn update_attachment_visuals(prompt: &ActivePrompt) {
         return;
     }
     let mut visuals = ATTACHMENT_VISUALS.lock();
+    let previous = visuals.clone();
     visuals.clear();
     for (index, item) in prompt.previews.iter().enumerate() {
         let t = item.since.elapsed().as_millis().min(350) as i64;
@@ -377,8 +407,9 @@ fn update_attachment_visuals(prompt: &ActivePrompt) {
         let y = (i64::from(item.from.1) * (350 - t) + ty * t) / 350;
         visuals.push((item.preview.clone(), x.max(0) as u32, y.max(0) as u32));
     }
+    let changed = *visuals != previous;
     drop(visuals);
-    if !prompt.previews.is_empty() {
+    if changed {
         super::input_broker::notify_slot4_visual_change();
     }
 }
@@ -400,8 +431,8 @@ async fn message(prompt: &ActivePrompt) -> Option<String> {
         let Some(disk) = crate::r::fs::volatile_files::selected_disk(&name) else {
             continue;
         };
-        // A bounded probe includes one overflow byte. Large files and folders
-        // stay path-only; file growth cannot turn this into an unbounded read.
+        // Pin the file revision and check its size before allocating. Large
+        // files and folders stay path-only; growth cannot expand this read.
         let Ok(Some(handle)) = crate::r::fs::trueosfs::file_read_open_async(disk, &name).await
         else {
             continue;
@@ -410,7 +441,7 @@ async fn message(prompt: &ActivePrompt) -> Option<String> {
             continue;
         }
         let mut bytes = alloc::vec![0; handle.data_len() as usize];
-        if let Ok(len) =
+        if let Ok(Some(len)) =
             crate::r::fs::trueosfs::file_read_handle_range_async(handle, 0, &mut bytes).await
         {
             if len == bytes.len()
@@ -434,6 +465,9 @@ async fn process_input(prompt: &mut ActivePrompt) -> bool {
         match event {
             Ui4InputEvent::Keyboard(keyboard) if keyboard.window == prompt.window => {
                 let event = keyboard.event;
+                if !crate::spirit::attachment_intro_input(prompt.window, &event) {
+                    continue;
+                }
                 prompt.seed = None;
                 if event.kind == KEYBOARD_OUTPUT_KIND_TEXT {
                     if let Some(character) = char::from_u32(event.codepoint) {
@@ -450,12 +484,23 @@ async fn process_input(prompt: &mut ActivePrompt) -> bool {
                             } else if !prompt.editor.text().trim().is_empty() {
                                 // Mark accepted before teardown. A temporarily
                                 // busy close must never submit the same text twice.
+                                // Freeze admission before awaiting disk I/O, then include
+                                // any drop accepted since this poll began.
+                                SUBMITTING.store(true, Ordering::Release);
+                                let pending = OPEN_REQUEST.lock().take();
+                                if let Some(request) = pending {
+                                    if request.target == prompt.target {
+                                        append_attachments(prompt, request.paths, request.previews)
+                                            .await;
+                                    }
+                                }
                                 if let Some(text) = message(prompt).await
                                     && codex::submit(&prompt.target, &text).is_ok()
                                 {
                                     prompt.submitted = true;
                                     return true;
                                 } else {
+                                    SUBMITTING.store(false, Ordering::Release);
                                     let _ = super::set_window_title(
                                         OWNER,
                                         prompt.window,
@@ -505,6 +550,7 @@ async fn process_input(prompt: &mut ActivePrompt) -> bool {
 }
 
 fn close_prompt(prompt: &ActivePrompt) -> bool {
+    crate::spirit::cancel_attachment_intro(prompt.window);
     // UI4 owns scanout-safe frame retirement, including the default Escape
     // close which may already have hidden this window before this poll.
     if super::finish_window_session_with_request(

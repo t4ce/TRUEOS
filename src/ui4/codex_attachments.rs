@@ -36,11 +36,14 @@ pub(super) fn accumulate(paths: &mut Vec<String>, incoming: &[String]) -> bool {
     true
 }
 
-pub(super) fn question(paths: &[String]) -> &'static str {
-    if paths.len() == 1 {
-        "What to do with this file/folder? "
-    } else {
-        "What to do with these attachments? "
+pub(super) fn question(files: usize, folders: usize, unknown: usize) -> &'static str {
+    match (files, folders, unknown) {
+        (1, 0, 0) => "What to do with this file? ",
+        (0, 1, 0) => "What to do with this folder? ",
+        (_, 0, 0) => "What to do with these files? ",
+        (0, _, 0) => "What to do with these folders? ",
+        (0, 0, 1) => "What to do with this attachment? ",
+        _ => "What to do with these attachments? ",
     }
 }
 
@@ -81,6 +84,14 @@ mod tests {
         assert_eq!(paths.len(), LIMIT);
         assert!(!accumulate(&mut paths, &["x".repeat(PATH_BYTES + 1)]));
         assert_eq!(paths.len(), LIMIT);
+    }
+    #[test]
+    fn introduction_names_files_folders_and_groups() {
+        assert_eq!(question(1, 0, 0), "What to do with this file? ");
+        assert_eq!(question(0, 1, 0), "What to do with this folder? ");
+        assert_eq!(question(2, 0, 0), "What to do with these files? ");
+        assert_eq!(question(0, 2, 0), "What to do with these folders? ");
+        assert_eq!(question(1, 1, 0), "What to do with these attachments? ");
     }
     #[test]
     fn inline_is_whole_utf8_text_with_one_shared_budget() {
