@@ -2883,7 +2883,7 @@ pub(super) fn resize_quad_dock(
         }
     }
     let rects = quad_dock_rects(width, height, x.clamp(32, width - 32), y.clamp(32, height - 32));
-    let mut changes = alloc::vec::Vec::with_capacity(4);
+    let mut changes = Vec::with_capacity(4);
     for (snapshot, (rect_x, rect_y, rect_width, rect_height)) in current.iter().zip(rects) {
         let window = broker.checked_window_mut(snapshot.owner, snapshot.id)?;
         let destination = WindowPlacement { x: rect_x, y: rect_y, width: rect_width, height: rect_height, ..window.placement };
