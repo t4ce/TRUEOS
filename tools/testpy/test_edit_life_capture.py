@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check production Edit capture against the real font tint and opaque exclusions."""
+"""Check production Edit capture, font tint, and its menu pause handoff."""
 
 import json
 from pathlib import Path
@@ -13,7 +13,7 @@ CAPTURE_TESTS = r'''
 #[cfg(test)]
 mod capture_tests {
     use super::*;
-    use crate::{SOURCE, VISITS};
+    use crate::{CAPTURES, PAUSES, PUBLISHES, REMOVES, SOURCE, SOURCE_READS, VISITS};
     fn surface(width: u32) -> Ui4Surface {
         Ui4Surface {
             width,
@@ -28,6 +28,7 @@ mod capture_tests {
     fn settings(width: u32) -> EditLife {
         EditLife {
             enabled: true,
+            active: true,
             viewport: CellRect {
                 x: 0,
                 y: 0,
@@ -41,6 +42,107 @@ mod capture_tests {
     }
     fn source(width: usize) {
         SOURCE.with(|s| *s.borrow_mut() = [17u8, 19, 23, 255].repeat(width));
+    }
+    fn work() -> (usize, usize, usize, usize) {
+        (
+            CAPTURES.with(|v| v.get()),
+            SOURCE_READS.with(|v| v.get()),
+            VISITS.with(|v| v.get()),
+            PUBLISHES.with(|v| v.get()),
+        )
+    }
+    fn ink() -> [(char, Option<crate::RgbaColor>); 1] {
+        [('A', Some(crate::FOREGROUND))]
+    }
+    #[test]
+    fn present_pauses_before_capture_and_resumes_clean_page_without_discarding_retained_input() {
+        let mut surface = surface(256);
+        let mut settings = settings(1);
+        source(256);
+        present(&mut surface, &[&ink()], Some(&settings), true);
+        assert_eq!(work(), (1, 1, 1, 1));
+        let retained = Arc::clone(surface.edit_life_page.as_ref().unwrap());
+
+        // A menu redraw must still use the terminal source; none of its pixels
+        // or glyphs may become a new immutable editor page.
+        settings.active = false;
+        SOURCE.with(|s| s.borrow_mut().fill(93));
+        let menu = [('M', Some(crate::FOREGROUND))];
+        present(&mut surface, &[&menu], Some(&settings), true);
+        assert_eq!(work(), (1, 1, 1, 1));
+        assert_eq!(PAUSES.with(|v| v.get()), 1);
+        assert_eq!(REMOVES.with(|v| v.get()), 0);
+        assert!(Arc::ptr_eq(&retained, surface.edit_life_page.as_ref().unwrap()));
+        assert_eq!(surface.edit_life.as_ref(), Some(&settings));
+
+        // Repaints within the menu also bypass source reads and the atlas.
+        present(&mut surface, &[&menu], Some(&settings), true);
+        assert_eq!(work(), (1, 1, 1, 1));
+        assert!(Arc::ptr_eq(&retained, surface.edit_life_page.as_ref().unwrap()));
+
+        // Closing a menu restores the document cells before publishing its
+        // clean page. Even a metadata-only resume must capture once.
+        settings.active = true;
+        source(256);
+        present(&mut surface, &[&ink()], Some(&settings), false);
+        assert_eq!(work(), (2, 2, 2, 2));
+        let resumed = surface.edit_life_page.as_ref().unwrap();
+        assert!(!Arc::ptr_eq(&retained, resumed));
+        assert_eq!(resumed.rgba, retained.rgba);
+        assert_eq!(resumed.mask, retained.mask);
+        assert_eq!(resumed.colors, retained.colors);
+        assert_eq!(resumed.scroll_revision, retained.scroll_revision);
+        assert_eq!(resumed.emission_revision, retained.emission_revision);
+        present(&mut surface, &[&ink()], Some(&settings), false);
+        assert_eq!(work(), (2, 2, 2, 2), "unchanged resumed page is not recaptured");
+
+        settings.enabled = false;
+        present(&mut surface, &[&ink()], Some(&settings), true);
+        assert_eq!(work(), (2, 2, 2, 2));
+        assert_eq!(REMOVES.with(|v| v.get()), 1);
+        assert!(surface.edit_life_page.is_none());
+        assert!(surface.edit_life.is_none());
+    }
+    #[test]
+    fn present_with_any_popup_exclusion_pauses_without_initial_capture() {
+        let mut surface = surface(256);
+        let mut settings = settings(1);
+        settings.exclusions.push(settings.viewport);
+        source(256);
+        present(&mut surface, &[&ink()], Some(&settings), true);
+        assert_eq!(work(), (0, 0, 0, 0));
+        assert_eq!(PAUSES.with(|v| v.get()), 1);
+        assert!(surface.edit_life_page.is_none());
+        assert_eq!(surface.edit_life.as_ref(), Some(&settings));
+
+        settings.exclusions.clear();
+        settings.active = false;
+        present(&mut surface, &[&ink()], Some(&settings), true);
+        assert_eq!(work(), (0, 0, 0, 0));
+        assert_eq!(PAUSES.with(|v| v.get()), 2);
+
+        settings.enabled = false;
+        present(&mut surface, &[&ink()], Some(&settings), false);
+        assert_eq!(work(), (0, 0, 0, 0));
+        assert_eq!(REMOVES.with(|v| v.get()), 1);
+        assert!(surface.edit_life.is_none());
+        assert!(surface.edit_life_page.is_none());
+    }
+    #[test]
+    fn paused_toggle_off_releases_the_retained_page() {
+        let mut surface = surface(256);
+        let mut settings = settings(1);
+        source(256);
+        present(&mut surface, &[&ink()], Some(&settings), true);
+        let retained = Arc::downgrade(surface.edit_life_page.as_ref().unwrap());
+        settings.active = false;
+        present(&mut surface, &[&ink()], Some(&settings), true);
+        assert!(retained.upgrade().is_some());
+        settings.enabled = false;
+        present(&mut surface, &[&ink()], Some(&settings), false);
+        assert!(retained.upgrade().is_none());
+        assert_eq!(work(), (1, 1, 1, 1));
+        assert_eq!(REMOVES.with(|v| v.get()), 1);
     }
     #[test]
     fn captured_transparent_ink_matches_production_font_tint_for_every_alpha_and_coverage() {
@@ -171,7 +273,15 @@ extern crate alloc;
 extern crate self as trueos_terminal;
 extern crate self as trueos_time;
 use std::cell::{Cell, RefCell};
-thread_local! {static SOURCE:RefCell<Vec<u8>>=const{RefCell::new(Vec::new())}; static VISITS:Cell<usize>=const{Cell::new(0)};}
+thread_local! {
+    static SOURCE: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static VISITS: Cell<usize> = const { Cell::new(0) };
+    static CAPTURES: Cell<usize> = const { Cell::new(0) };
+    static SOURCE_READS: Cell<usize> = const { Cell::new(0) };
+    static PAUSES: Cell<usize> = const { Cell::new(0) };
+    static PUBLISHES: Cell<usize> = const { Cell::new(0) };
+    static REMOVES: Cell<usize> = const { Cell::new(0) };
+}
 pub struct Instant;
 impl Instant {
     pub fn now() -> Self {
@@ -242,6 +352,7 @@ mod ui4 {
         Ok(())
     }
     pub fn published_rgba_view(_: ()) -> Result<View, ()> {
+        crate::SOURCE_READS.with(|v| v.set(v.get() + 1));
         crate::SOURCE.with(|s| {
             let s = s.borrow();
             Ok(View {
@@ -269,14 +380,22 @@ mod ui4 {
             pub scroll_revision: u64,
             pub emission_revision: u64,
         }
-        pub fn remove(_: super::WindowId) {}
-        pub fn publish_page(_: super::WindowId, _: (), _: alloc::sync::Arc<Page>) {}
+        pub fn remove(_: super::WindowId) {
+            crate::REMOVES.with(|v| v.set(v.get() + 1));
+        }
+        pub fn pause(_: super::WindowId, _: ()) {
+            crate::PAUSES.with(|v| v.set(v.get() + 1));
+        }
+        pub fn publish_page(_: super::WindowId, _: (), _: alloc::sync::Arc<Page>) {
+            crate::PUBLISHES.with(|v| v.set(v.get() + 1));
+        }
     }
 }
 mod r {
     pub mod services {
         pub mod shell3_font_service {
             pub fn cell_extent(_: u32) -> Option<(u32, u32)> {
+                crate::CAPTURES.with(|v| v.set(v.get() + 1));
                 Some((256, 1))
             }
             pub fn with_cell_coverage(

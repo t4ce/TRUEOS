@@ -58,6 +58,8 @@ struct Registration {
     page: Arc<Page>,
     serial: u64,
     displayed: Option<FrameHandle>,
+    paused: bool,
+    pause_revision: u64,
 }
 static PAGES: Mutex<Vec<Registration>> = Mutex::new(Vec::new());
 static WAKE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
@@ -81,11 +83,40 @@ pub(crate) fn publish_page(window: WindowId, source: FrameHandle, page: Arc<Page
         old.source = source;
         old.page = page;
         old.serial = serial;
+        old.paused = false;
     } else if pages.len() < MAX_PAGES {
-        pages.push(Registration { window, source, page, serial, displayed: None });
+        pages.push(Registration { window, source, page, serial, displayed: None,
+            paused: false, pause_revision: 0 });
     }
     drop(pages);
     WAKE.signal(());
+}
+
+/// Pause before any capture or upload. Ordinary terminal pixels, including
+/// menus and pickers, are displayed while the retained world stays untouched.
+pub(crate) fn pause(window: WindowId, source: FrameHandle) {
+    let mut pages = PAGES.lock();
+    if let Some(old) = pages.iter_mut().find(|old| old.window == window) {
+        let changed = !old.paused || old.source != source;
+        // Retain the displayed handle on a transient restore failure so the
+        // next ordinary terminal redraw retries detaching the effect frame.
+        if old.displayed.is_some() && show_source(window, source).is_ok() {
+            old.displayed = None;
+        }
+        old.source = source;
+        if !old.paused {
+            old.pause_revision = old.pause_revision.wrapping_add(1);
+        }
+        old.paused = true;
+        if changed { old.serial = NEXT_SERIAL.fetch_add(1, Ordering::Relaxed); }
+        drop(pages);
+        if changed { WAKE.signal(()); }
+    }
+}
+
+fn input_is_active(input: &Registration) -> bool {
+    PAGES.lock().iter().any(|current| current.window == input.window
+        && current.serial == input.serial && current.source == input.source && !current.paused)
 }
 
 /// Called before source retirement or turning the effect off. Only this frame
@@ -204,6 +235,7 @@ impl Effect {
     }
 
     fn render(&mut self) -> Result<(), ()> {
+        if !input_is_active(&self.input) { return Err(()); }
         let lease = super::acquire_frame_buffer(self.frame).map_err(|_| ())?;
         let mut may_be_live = false;
         let result = (|| {
@@ -250,7 +282,7 @@ impl Effect {
             // A newer capture can never be overwritten by an old effect frame.
             let mut pages = PAGES.lock();
             let current = pages.iter_mut().find(|r| r.window == self.input.window
-                && r.serial == self.input.serial && r.source == self.input.source).ok_or(())?;
+                && r.serial == self.input.serial && r.source == self.input.source && !r.paused).ok_or(())?;
             if current.displayed == Some(self.frame) {
                 super::publish_window_frame(OWNER, current.window, DamageRect::FULL).map_err(|_| ())?;
             } else {
@@ -286,6 +318,9 @@ pub(crate) async fn ui4_edit_life_service_task() {
         effects.retain(|e| inputs.iter().any(|r| r.window == e.input.window));
         for input in inputs {
             if super::window_is_closed(OWNER, input.window) { remove(input.window); continue; }
+            // A menu can pause even before the first effect allocation. Never
+            // initialize, capture or upload a paused registration.
+            if input.paused || !input_is_active(&input) { continue; }
             let index = effects.iter().position(|e| e.input.window == input.window);
             if let Some(index) = index {
                 let effect = &mut effects[index];
@@ -296,18 +331,25 @@ pub(crate) async fn ui4_edit_life_service_task() {
                     let viewport_changed = old.viewport != new.viewport;
                     let reset = old.scroll_revision != new.scroll_revision || viewport_changed;
                     let emit = old.emission_revision != new.emission_revision;
+                    let resumed = effect.input.pause_revision != input.pause_revision;
                     if extent_changed || (viewport_changed && !effect.set_viewport(new.viewport)) {
                         effects.remove(index);
                         if let Some(effect) = Effect::new(input) { effects.push(effect); }
                     } else {
                         effect.input = input;
                         effect.capture(reset, emit);
+                        if resumed {
+                            effect.next_generation_ms = Instant::now().as_millis() + GENERATION_MS;
+                            effect.steps = 0;
+                        }
                     }
                 }
             } else if let Some(effect) = Effect::new(input) { effects.push(effect); }
         }
         let now = Instant::now().as_millis();
+        let mut runnable = false;
         for effect in &mut effects {
+            if !input_is_active(&effect.input) { continue; }
             if effect.quarantined || effect.disabled {
                 crate::log_warn!(target: "ui4/edit-life";
                     "edit-life: effect stopped window={} uncertain_gpu={} fallback=opaque-editor\n",
@@ -315,6 +357,7 @@ pub(crate) async fn ui4_edit_life_service_task() {
                 remove(effect.input.window);
                 continue;
             }
+            runnable = true;
             let visible = super::window_placement(OWNER, effect.input.window)
                 .is_ok_and(|p| p.visible && p.opacity != 0);
             if !visible { effect.next_generation_ms = now + GENERATION_MS; continue; }
@@ -330,6 +373,7 @@ pub(crate) async fn ui4_edit_life_service_task() {
             }
             if effect.dirty && effect.render().is_ok() { effect.dirty = false; }
         }
-        wait_for_work(!effects.is_empty()).await;
+        // With every page paused, there is no animation timer to service.
+        wait_for_work(runnable).await;
     }
 }

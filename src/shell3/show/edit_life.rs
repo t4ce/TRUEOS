@@ -31,6 +31,13 @@ pub(super) fn present(
         }
         return;
     };
+    if !settings.active || !settings.exclusions.is_empty() {
+        // Menus and non-page focus use the ordinary terminal painter. Keep the
+        // last clean document input and world without capturing overlay text.
+        crate::ui4::edit_life::pause(surface.window, surface.frame);
+        surface.edit_life = Some(settings.clone());
+        return;
+    }
     if !source_changed && surface.edit_life.as_ref() == Some(settings) {
         return;
     }

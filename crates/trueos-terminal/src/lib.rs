@@ -1435,6 +1435,45 @@ mod tests {
     }
 
     #[test]
+    fn edit_life_v2_pause_and_resume_commit_with_their_terminal_frame() {
+        let mut terminal = Terminal::new(8, 3);
+        terminal.feed(b"\x1b[2;1Hpage\x1b]777;edit-life;2;1;1;0;1;8;1;7;9;0\x07");
+        let active = terminal.edit_life().unwrap().clone();
+        let page_cells = terminal.cells().to_vec();
+        assert!(active.enabled && active.active);
+        terminal.take_dirty();
+
+        terminal.feed(b"\x1b[?2026h\x1b[1;1HFile\x1b]777;edit-life;2;1;0;0;1;8;1;7;9;0\x07");
+        assert_eq!(terminal.cells(), page_cells);
+        assert_eq!(terminal.edit_life(), Some(&active));
+        assert!(!terminal.take_dirty(), "menu cells and pause stay hidden until the fence closes");
+        terminal.feed(b"\x1b[?2026");
+        assert_eq!(terminal.edit_life(), Some(&active));
+        terminal.feed(b"l");
+        assert!(terminal.take_dirty());
+        assert_eq!(rows(&terminal), ["File    ", "page    ", "        "]);
+        let mut paused = active.clone();
+        paused.active = false;
+        assert_eq!(terminal.edit_life(), Some(&paused), "pausing changes neither the toggle nor page revisions");
+
+        // Ordinary terminal drawing removes the menu while the effect remains
+        // paused. Page focus can then resume through metadata alone.
+        terminal.feed(b"\x1b[?2026h\x1b[1;1H\x1b[2K\x1b[?2026l");
+        assert!(terminal.take_dirty());
+        assert_eq!(terminal.cells(), page_cells);
+        assert_eq!(terminal.edit_life(), Some(&paused));
+        terminal.feed(b"\x1b[?2026h\x1b]777;edit-life;2;1;1;0;1;8;1;7;9;0\x07");
+        assert_eq!(terminal.edit_life(), Some(&paused));
+        assert_eq!(terminal.cells(), page_cells);
+        assert!(!terminal.take_dirty());
+        terminal.feed(b"\x1b[?2026l");
+        assert!(terminal.take_dirty(), "a metadata-only resume still publishes once");
+        assert_eq!(terminal.edit_life(), Some(&active));
+        assert_eq!(terminal.cells(), page_cells);
+        assert!(!terminal.take_dirty());
+    }
+
+    #[test]
     fn tracks_cursor_visibility_save_and_restore() {
         let mut terminal = Terminal::new(5, 2);
         terminal.feed(b"ab\x1b[s\x1b[2;5H\x1b[?25lX\x1b[u");

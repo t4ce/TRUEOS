@@ -37,6 +37,24 @@ While Shader is enabled, Edit suppresses its ordinary current-line background
 highlight so typed text does not sit on an opaque row. Selection rendering is
 unchanged.
 
+Animation is allowed only while the main editor textarea owns keyboard focus
+and the UI has no additional floating roots. Menus, dropdowns, modal dialogs,
+file/project pickers and status/search/line inputs therefore pause the effect,
+including overlays outside the page or overlays that leave its focus intact.
+The terminal's version-2 `edit-life` report separates the Shader `enabled`
+preference from this `active` state. Version-1 reports remain accepted, with
+any popup exclusion conservatively treated as inactive.
+
+Pausing immediately restores the ordinary opaque terminal frame and bypasses
+glyph capture, input upload, Life stepping and effect rendering. The last clean
+page, world and buffers are retained; menu text never becomes shader input.
+When every effect is paused, the service waits for a state change without an
+animation timer. Returning to the page captures its clean current pixels once
+and resumes the retained world with a fresh generation deadline, without
+replaying the paused time. Real document, viewport and scroll changes still
+follow the existing reset/emission rules. A serial check prevents an older
+in-flight render from replacing an open menu.
+
 The native producer prepares its PPGTT and retained resource mappings once per
 render. Each ordered pass uses one full-domain walker: initial/scroll seeding
 needs three submissions (seed, comparison baseline, composite), and a normal
@@ -147,6 +165,10 @@ finite Conway boundaries, still lifes, an oscillator and a moving glider,
 independent RGB wraparound including black live cells, positive input deltas,
 unchanged/whitespace comparison baselines, deletion, scroll reseeding, and
 premultiplied foreground composition without additional glyph transparency.
+Edit's UI tests cover focused pages, keyboard menus, status/search controls,
+modal and nonfocused overlays, silent paused frames and preserved revisions.
+Capture regressions verify that paused redraws skip glyph/source work, retain
+the page, and recapture only once when the page becomes active again.
 
 An optional standalone reference timing command is
 `python3 tools/testpy/test_edit_life_model.py --benchmark`. On the current

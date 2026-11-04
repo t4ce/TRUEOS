@@ -23,6 +23,9 @@ impl CellRect {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EditLife {
     pub enabled: bool,
+    /// Only the unobstructed, focused editor page may animate. Disabled is a
+    /// separate user preference: inactivity preserves the retained Life world.
+    pub active: bool,
     pub viewport: CellRect,
     pub scroll_revision: u64,
     pub emission_revision: u64,
@@ -30,9 +33,13 @@ pub struct EditLife {
 }
 
 pub(crate) fn parse(payload: &[u8]) -> Option<EditLife> {
-    let text = core::str::from_utf8(payload).ok()?.strip_prefix("777;edit-life;1;")?;
+    let text = core::str::from_utf8(payload).ok()?.strip_prefix("777;edit-life;")?;
     let mut fields = text.split(';');
+    let version = match fields.next()? { "1" => 1, "2" => 2, _ => return None };
     let enabled = match fields.next()? { "0" => false, "1" => true, _ => return None };
+    let requested_active = if version == 2 {
+        match fields.next()? { "0" => false, "1" => true, _ => return None }
+    } else { true };
     fn number<T: core::str::FromStr>(fields: &mut core::str::Split<'_, char>) -> Option<T> {
         let text = fields.next()?;
         if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) { return None; }
@@ -56,7 +63,8 @@ pub(crate) fn parse(payload: &[u8]) -> Option<EditLife> {
     let mut exclusions = Vec::with_capacity(count);
     for _ in 0..count { exclusions.push(rect(&mut fields)?); }
     if fields.next().is_some() { return None; }
-    Some(EditLife { enabled, viewport, scroll_revision, emission_revision, exclusions })
+    let active = enabled && requested_active && exclusions.is_empty();
+    Some(EditLife { enabled, active, viewport, scroll_revision, emission_revision, exclusions })
 }
 
 #[cfg(test)]
@@ -82,5 +90,20 @@ mod tests {
             "777;edit-life;1;1;+0;0;1;1;0;0;0",
         ] { assert!(parse(invalid.as_bytes()).is_none(), "{invalid}"); }
         assert!(!parse(b"777;edit-life;1;0;0;0;0;0;0;0;0").unwrap().enabled);
+    }
+
+    #[test]
+    fn activity_is_independent_of_enabled_and_legacy_popups_pause() {
+        let active = parse(b"777;edit-life;2;1;1;4;2;70;20;42;99;0").unwrap();
+        let paused = parse(b"777;edit-life;2;1;0;4;2;70;20;42;99;0").unwrap();
+        assert!(active.enabled && active.active);
+        assert!(paused.enabled && !paused.active);
+        assert_eq!(active.scroll_revision, paused.scroll_revision);
+        assert_eq!(active.emission_revision, paused.emission_revision);
+        assert!(!parse(b"777;edit-life;2;0;1;0;0;0;0;42;99;0").unwrap().active);
+        assert!(parse(b"777;edit-life;1;1;4;2;70;20;42;99;0").unwrap().active);
+        assert!(!parse(b"777;edit-life;1;1;4;2;70;20;42;99;1;5;3;10;4").unwrap().active);
+        assert!(!parse(b"777;edit-life;2;1;1;4;2;70;20;42;99;1;5;3;10;4").unwrap().active);
+        assert!(parse(b"777;edit-life;2;1;2;4;2;70;20;42;99;0").is_none());
     }
 }
