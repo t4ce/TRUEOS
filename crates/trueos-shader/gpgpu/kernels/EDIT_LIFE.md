@@ -98,8 +98,9 @@ unmaps only the exact Edit PPGTT range after its pending work has retired.
 
 The producer initializes its private PPGTT once for the lane's lifetime, then
 prepares changed resource mappings once per render. It refuses initialization
-retry or replacement of that physical root. Identical mappings incur no PTE
-writes; changed mappings are preflighted, published and invalidated before use.
+retry or replacement of that physical root. Identical retained mappings incur
+no PTE writes; changed mappings are preflighted, published and invalidated
+before use. Borrowed source/destination imports are removed after retirement.
 Each ordered pass is split into independently retired row chunks, bounded by
 16K launched lanes for seeding, 64K for generation/comparison and 128K for
 composition. Bounds include padded SIMD16 lanes. The generated descriptor
@@ -252,6 +253,13 @@ now touches 7,296 batch bytes and 256 result bytes, covering commands, surfaces,
 the exact payload, geometry table, markers and timestamps. Retaining the PPGTT
 also removes its repeated 2 MiB initialization/flush. All reuse still requires
 the exact lane's marker and saved HEAD retirement proof.
+The owned world/font/kernel mappings persist. Borrowed source and destination
+leaves are exact-unmapped and flushed after successful retirement, while both
+frame leases are held. This lets the shared UI allocator recycle a GPU address
+between source and destination cache-policy roles without stale PTE rejection.
+Clean pre-submit failures remove partial imports; uncertain submitted failures
+retain imports/backing and quarantine only Edit. The cache-policy guard remains
+strict and no peer mapping is changed.
 
 Actual IGA disassembly, deployed `e3cd...` versus candidate `9ec0...`:
 
@@ -392,6 +400,7 @@ python3 tools/testpy/test_edit_hex_font.py
 python3 tools/testpy/test_edit_hex_paint.py
 python3 tools/testpy/test_edit_hex_shader.py
 python3 tools/testpy/test_edit_life_native.py
+python3 tools/testpy/test_edit_life_imports.py
 python3 tools/testpy/test_edit_life_lane.py
 python3 tools/testpy/test_edit_life_failure.py
 python3 tools/testpy/test_edit_life_math.py
@@ -414,7 +423,9 @@ exercise metadata-only font toggles and both-buffer invalidation.
 Native dispatch tests compile the production row partitioner and dispatch
 method across 288 padded dimensions/modes, checking coverage, retirement before
 reuse and stopping after a failed chunk. Packet tests compile the actual shared
-prologue. Lane tests exercise priority, identity, nonoverlapping control storage,
+prologue. Import-retirement tests check exact physical ownership, missing and
+partial imports, cache-policy role reuse, pending work and failure retention.
+Lane tests exercise priority, identity, nonoverlapping control storage,
 optional boot admission, exact quarantine and private-resource retirement.
 Registration tests exercise failure latching, source freshness, pause/resume,
 frame detachment and cleanup wakeups using the production lifecycle functions.

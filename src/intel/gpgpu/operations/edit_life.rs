@@ -347,9 +347,10 @@ impl EditLifeState {
         prepared = source_mapped
             && direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, true);
         if !prepared {
-            // Mapping policy preflights the whole destination range before any
-            // PTE write. Only the successfully imported source needs cleanup.
-            if source_mapped && !edit_life_retire_imports(state, &[source]) {
+            // A destination publication failure can follow its PTE writes.
+            // Exact retirement also accepts absent leaves, so clean both
+            // imports while their leases are still held and no job was sent.
+            if source_mapped && !edit_life_retire_imports(state, &[source, dst]) {
                 quarantine_direct_rcs_lane(DirectRcsLane::EditLife, "edit-life-source-import-retirement-failed");
             }
             return GpgpuRgba8KernelResult::default();
