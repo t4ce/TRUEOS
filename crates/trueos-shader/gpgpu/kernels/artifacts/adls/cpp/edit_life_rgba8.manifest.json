@@ -5,10 +5,10 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "88e1d39921b6687241ca5d2fd51f6d40d10aa7dd8e3b18027de623be722fa71e",
-      "size_bytes": 82552,
+      "sha256": "e3cd3873360211b80c8173c86c2ecfc7fc0241203506fccbe94a13b180d65809",
+      "size_bytes": 82120,
       "type": "relocatable",
-      "ze_info_section_offset": 75888,
+      "ze_info_section_offset": 75368,
       "ze_info_section_size": 5854
     },
     "kernels": [
@@ -312,13 +312,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 22872,
+          "entry_size": 21800,
           "section_alignment": 0,
           "section_name": ".text.edit_life_rgba8",
           "section_offset": 64,
-          "section_size": 23040,
-          "sha256": "f3b0f4bfb27076a1f2b038156642965b971cf376cb355cea1e3f803756fe2ff8",
-          "symbol_size": 22872,
+          "section_size": 21952,
+          "sha256": "fbde0838bde3d67ac3531fbd6b2774ebc9dac5ca80dd42806b44b850ad90e629",
+          "symbol_size": 21800,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -334,10 +334,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 23176,
-      "embedded_section_size": 52640,
-      "sha256": "39b166e1296895adc4171ad3b15c535828ecb3ebf451446115c930639ed1dc04",
-      "size_bytes": 52640
+      "embedded_section_offset": 22088,
+      "embedded_section_size": 53184,
+      "sha256": "f3fd7ee978e42d39192c8613325bdb9f34f6403a523e7c8935522d891985f103",
+      "size_bytes": 53184
     }
   },
   "provenance": {
@@ -391,7 +391,9 @@
         "-out_dir",
         "$OUT_DIR",
         "-output_no_suffix",
-        "-gen_file"
+        "-gen_file",
+        "-options",
+        "-cl-fast-relaxed-math"
       ],
       [
         "$OCLOC",
@@ -404,8 +406,8 @@
       "description": "Clang C++ for OpenCL -> LLVM bitcode -> llvm-spirv"
     },
     "profile": {
-      "path": "tools/intel-gpu-bakery/profiles/adls-4680-r0c-cpp.json",
-      "sha256": "66835e5d4fd37f63d767e7e11314ae0cd728eeb7a18abac6fbc90851346816b6"
+      "path": "tools/intel-gpu-bakery/profiles/adls-4680-r0c-shadertoy.json",
+      "sha256": "548db118bee677b46a45d43fe57bb574bfc724f789b2fb58b79c5ba94fe37b57"
     },
     "publication_policy": {
       "expected_kernels": [
@@ -466,7 +468,7 @@
         }
       ],
       "frontend": "clang-clcpp",
-      "profile_sha256": "66835e5d4fd37f63d767e7e11314ae0cd728eeb7a18abac6fbc90851346816b6",
+      "profile_sha256": "548db118bee677b46a45d43fe57bb574bfc724f789b2fb58b79c5ba94fe37b57",
       "schema_version": 1,
       "tools": {
         "clang": {
@@ -525,8 +527,8 @@
       }
     },
     "toolchain_lock": {
-      "path": "tools/intel-gpu-bakery/toolchains/adls-cpp-proof.lock.json",
-      "sha256": "048afdb4e1525e0e72dfd1033448e6b7776b6a71fbf04f093d13505e232d6671"
+      "path": "tools/intel-gpu-bakery/toolchains/adls-shadertoy-relaxed.lock.json",
+      "sha256": "1daad1d7672838dbeff853fcee5230db9fd0227a4295d3330fd210cebca2ea3c"
     }
   },
   "rust_symbols": {
@@ -542,8 +544,8 @@
       },
       {
         "path": "TRUEOS/crates/trueos-shader/gpgpu/kernels/edit_life_rgba8.clcpp",
-        "sha256": "9aa24ed2f32d678c6385d1d069410259306684bca14c72a6e2902ed4873e14d3",
-        "size_bytes": 10354
+        "sha256": "a61d89dc09b6b2e95adf1cc09938306762a635b88955e50ca02076e90f788578",
+        "size_bytes": 10533
       }
     ],
     "language": "C++ for OpenCL",

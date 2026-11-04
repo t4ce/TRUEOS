@@ -179,7 +179,9 @@ __kernel void edit_life_rgba8(
     uint ink = glyph_ink(glyphs, font, params, x - params[4], y - params[5]);
     float2 pixel = ((float2)((float)(x - params[4]), (float)(y - params[5])) + 0.5f)
         * (float2)((float)gw, (float)gh) / (float2)((float)params[6], (float)params[7]);
-    uint2 cell_xy = convert_uint2(pixel);
+    // Relaxed reciprocal/rounding must not turn the last pixel into an
+    // out-of-range grid load. Glyph coverage and text alpha stay integer.
+    uint2 cell_xy = min(convert_uint2(pixel), (uint2)(gw - 1u, gh - 1u));
     uint2 cell = read_cells[cell_xy.y * gw + cell_xy.x];
     float2 tile_offset = fabs(pixel - convert_float2(cell_xy) - 0.5f);
     float t = clamp((max(tile_offset.x, tile_offset.y) - 0.32f) / 0.17f, 0.0f, 1.0f);

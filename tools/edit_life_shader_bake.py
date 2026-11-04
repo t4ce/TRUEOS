@@ -62,6 +62,10 @@ def main() -> None:
     parser.add_argument("--bakery", type=Path, default=DEFAULT_BAKERY)
     parser.add_argument("--toolchain", type=Path, default=Path("/tmp/trueos-edit-life-toolchain"))
     parser.add_argument("--build-root", type=Path, default=Path("/tmp/trueos-edit-life-bake"))
+    parser.add_argument("--math-mode", choices=("strict", "relaxed"), default="relaxed",
+                        help="Use the pinned strict or visual relaxed-math profile (default: relaxed)")
+    parser.add_argument("--publish-dir", type=Path,
+                        help="Publish/verify an isolated comparison directory instead of the kernel artifact")
     parser.add_argument("--recover", action="store_true", help="Download/extract the nine existing pinned packages locally")
     parser.add_argument("--bake", action="store_true", help="Reproducibly compile, validate and publish the Life artifact")
     parser.add_argument("--verify", action="store_true", help="Compiler-free verification of the existing Life artifact")
@@ -75,14 +79,17 @@ def main() -> None:
             print(f"{name}\t{algorithm}:{digest}\t{url}")
     if args.recover:
         recover_local(toolchain, pins)
-    artifact_dir = ROOT / "crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp"
+    artifact_dir = (args.publish_dir.expanduser().resolve() if args.publish_dir else
+                    ROOT / "crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp")
     if args.bake:
+        profile, lock = ("adls-4680-r0c-shadertoy.json", "adls-shadertoy-relaxed.lock.json") \
+            if args.math_mode == "relaxed" else ("adls-4680-r0c-cpp.json", "adls-cpp-proof.lock.json")
         command = [sys.executable, str(bakery / "bake.py"),
             "--source", str(ROOT / "crates/trueos-shader/gpgpu/kernels/edit_life_rgba8.clcpp"),
             "--artifact-name", "edit_life_rgba8", "--expect-kernel", "edit_life_rgba8",
             "--rust-symbol", "edit_life_rgba8=EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT",
-            "--profile", str(bakery / "profiles/adls-4680-r0c-cpp.json"),
-            "--toolchain-lock", str(bakery / "toolchains/adls-cpp-proof.lock.json"),
+            "--profile", str(bakery / "profiles" / profile),
+            "--toolchain-lock", str(bakery / "toolchains" / lock),
             "--repro-check", "--build-root", str(args.build_root.expanduser().resolve()),
             "--clang", str(toolchain / "root/usr/lib/llvm-21/bin/clang"),
             "--llvm-spirv", str(toolchain / "root/usr/bin/llvm-spirv-21"),

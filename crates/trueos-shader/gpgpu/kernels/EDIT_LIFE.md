@@ -149,11 +149,74 @@ its retirement proof. Physical-target verification must still show Spirit
 sprite/VFX progress during Edit startup, typing, scroll and menu pause/resume,
 with no execution quarantine. Animation stays at ten generations per second.
 
-The baked shader currently uses ordinary FP32 operations for glow/composition.
-Its recorded Clang/ocloc commands enable neither `-cl-fast-relaxed-math` nor
-FP16 or explicit native math intrinsics. Conway evolution and glyph sampling
-use integer operations. Compiler math settings and baked artifacts are
-unchanged by the scheduling fix.
+The scheduling fix kept strict math. The visual bake now selects the existing
+pinned relaxed-math profile: IGC receives `-options -cl-fast-relaxed-math`.
+The frontend, source and SPIR-V are identical between compared math variants;
+the reviewed toolchain locks differ only in profile hash, with identical
+compiler binaries/libraries. This remains FP32, with no FP16 conversion.
+Conway evolution, glyph coverage, text tint and alpha use integer operations.
+The floating-point-to-grid conversion is explicitly capped before indexing
+the world. Both compared variants include that same edge clamp.
+
+## Relaxed-math comparison, 5 November 2026
+
+The fresh strict-math boot starts at
+`bld/baremetal-logs/trueos-baremetal.1.log:275456`. All eleven captured native
+timings succeeded, with no Spirit/Edit timeout or quarantine in that boot.
+The boot's diagnostic policy filters detailed GPGPU admission logs, so these
+are complete render/retirement timings rather than individual admission costs.
+
+| Strict-math phase, 1700x800 page | Total | Composition |
+| --- | ---: | ---: |
+| Startup before the first logged F12 | 2127 ms | 1695 ms |
+| Early generation before F12, five steps | 1883 ms | 1740 ms |
+| Page updates before F12 | 2487–2515 ms | 1694–1710 ms |
+| Page update after turbo request | 501 ms | 255 ms |
+| Six generations after turbo request | 258–290 ms | 237–265 ms |
+
+Post-F12 medians are 266.5 ms total and 243.5 ms composition. The F12 event
+requests 1550 MHz and samples 200 MHz at the switch; sustained actual GT clock
+is not recorded. The log also contains 468 destination-busy warnings in this
+boot. Its captured baseline is `/tmp/trueos-edit-math-baseline.json`.
+This deployed baseline predates the explicit grid-index clamp; the following
+code comparison rebuilds both math variants with that clamp present.
+
+Reproduce the comparison using the same source and pinned tools:
+
+```sh
+bash tools/build-safe.sh python3 tools/edit_life_shader_bake.py --bake --verify \
+  --math-mode strict --build-root /tmp/trueos-edit-math/bake-strict \
+  --publish-dir /tmp/trueos-edit-math/strict
+bash tools/build-safe.sh python3 tools/edit_life_shader_bake.py --bake --verify \
+  --math-mode relaxed --build-root /tmp/trueos-edit-math/bake-relaxed \
+  --publish-dir /tmp/trueos-edit-math/relaxed
+python3 tools/edit_life_shader_compare.py --root /tmp/trueos-edit-math
+python3 tools/testpy/test_edit_life_math.py
+```
+
+Both bakes pass independent clean-root byte reproducibility and `ocloc
+validate`. Disassembly of the matching guarded variants gives:
+
+| Native code metric | Strict | Relaxed | Change |
+| --- | ---: | ---: | ---: |
+| Entry bytes | 22,880 | 21,800 | -4.72% |
+| Static instructions through EOT | 1709 | 1632 | -4.51% |
+| Validated composition block instructions | 580 | 503 | -13.28% |
+| Seed/generation block instructions | 1050 | 1050 | unchanged |
+
+SIMD16, 128 GRFs, zero scratch, zero SLM and the dispatch ABI stay the same.
+The 47 memory sends and 22 integer quotient instructions are unchanged.
+The host sensitivity test checks 134 four-mode snapshots, including a complete
+4096x2160 composition. Integer simulation/glyph baselines, alpha, opaque
+text/selection/caret pixels and chrome remain exact. Of 81,871,232 output bytes,
+73,675 RGB bytes differ; the largest measured background difference is 9/255.
+ASan and UBSan pass. This uses host strict/fast math, rather than native IGC
+execution. Static instruction counts describe emitted code, not GPU time; the next
+target boot must establish the runtime gain against the strict baseline.
+The one-time `edit-life: artifact` log exposes the admitted binary hash even
+with the diagnostic log filter. The current relaxed binary is
+`e3cd3873360211b80c8173c86c2ecfc7fc0241203506fccbe94a13b180d65809`.
+Animation interval, lane priority, chunk bounds and pause policy are unchanged.
 
 ## Reproduce the local pinned setup
 
@@ -191,15 +254,19 @@ isolated setup if needed, and compile with the existing lock:
 
 ```sh
 python3 tools/edit_life_shader_bake.py --print-package-pins
-python3 tools/edit_life_shader_bake.py --recover --bake --verify
+bash tools/build-safe.sh python3 tools/edit_life_shader_bake.py --recover --bake --verify
 ```
 
 Use `--bake --verify` alone to reuse the recovered tools. `--verify` alone
 requires no compiler. `--bakery` selects the directory containing the existing
 `bake.py`; its default is the sibling workspace `tools/intel-gpu-bakery`.
+The helper defaults to `--math-mode relaxed`, selecting
+`adls-4680-r0c-shadertoy.json` with `adls-shadertoy-relaxed.lock.json` for this
+Edit artifact only. Use `--math-mode strict` to reproduce the numerical profile,
+or `--publish-dir` to keep either comparison outside the kernel artifact tree.
 
-The exact original bakery command was equivalent to the script's printed
-command, with these absolute arguments:
+The original strict-math bake on 4 November was equivalent to the script's
+printed command with `--math-mode strict` and these absolute arguments:
 
 ```sh
 python3 /home/t4ce/Repositories/tools/intel-gpu-bakery/bake.py \
@@ -248,6 +315,7 @@ python3 tools/testpy/test_edit_hex_shader.py
 python3 tools/testpy/test_edit_life_native.py
 python3 tools/testpy/test_edit_life_lane.py
 python3 tools/testpy/test_edit_life_failure.py
+python3 tools/testpy/test_edit_life_math.py
 python3 tools/edit_life_shader_bake.py --verify
 ```
 
@@ -270,6 +338,12 @@ prologue. Lane tests exercise priority, identity, nonoverlapping control storage
 optional boot admission, exact quarantine and private-resource retirement.
 Registration tests exercise failure latching, source freshness, pause/resume,
 frame detachment and cleanup wakeups using the production lifecycle functions.
+The full-shader host math test compiles strict and fast variants with memory
+and undefined-behavior sanitizers. It compares all four modes, including padded
+launches, clipped cells and viewport edges. Integer state, glyph baseline,
+alpha, opaque ink and chrome must remain exact; it reports measured background
+RGB differences. This host sensitivity check does not reproduce IGC's native
+instruction semantics or measure Intel GPU performance.
 
 An optional standalone reference timing command is
 `python3 tools/testpy/test_edit_life_model.py --benchmark`. It reports compact

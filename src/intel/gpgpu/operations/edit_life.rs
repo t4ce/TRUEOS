@@ -73,6 +73,11 @@ fn upload_edit_life_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *cached { return Some(upload); }
     let dev = super::claimed_device()?;
     let upload = upload_ppgtt_resident_artifact(dev, EDIT_LIFE_RGBA8_ARTIFACT, EDIT_LIFE_RGBA8_GPU)?;
+    crate::log_info!(target: "ui4/edit-life";
+        "edit-life: artifact lane=edit-life bin_sha256={} entry_bytes={} simd={} grfs={} scratch_bytes={} slm_bytes={}\n",
+        digest_hex(&upload.bin_sha256), EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_size,
+        EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT.simd_width, EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT.grf_count,
+        EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT.scratch_bytes, EDIT_LIFE_RGBA8_ADLS_CPP_ABI_CONTRACT.slm_bytes);
     *cached = Some(upload);
     Some(upload)
 }
