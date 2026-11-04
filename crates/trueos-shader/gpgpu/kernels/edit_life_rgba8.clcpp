@@ -162,8 +162,12 @@ __kernel void edit_life_rgba8(
         + halo_at(read_cells, (int)cell_xy.x, (int)cell_xy.y - 1, gw, gh);
     float3 effect = (float3)(4.59f, 6.12f, 9.945f) * (1.0f - strength) + pigment * strength
         + halo * 0.018f + (((cell.x >> 16) & 1u) != 0u ? pigment * tile * 0.10f : (float3)(0.0f));
-    effect *= 0.5f; // Fixed effect-only scrim. Foreground ink is untouched.
-    float alpha = (float)(ink >> 24) / 255.0f;
+    // Fixed, premultiplied half-opacity background; shader light cannot raise
+    // its opacity. Foreground coverage retains its normal source-over alpha.
+    effect = clamp(effect * 0.5f, 0.0f, 128.0f);
+    uint ink_alpha = ink >> 24;
+    float alpha = (float)ink_alpha / 255.0f;
     float3 result = rgb_float(ink) + effect * (1.0f - alpha);
-    output[y * (params[13] >> 2) + x] = pack_rgb(result) | 0xff000000u;
+    uint output_alpha = ink_alpha + (128u * (255u - ink_alpha) + 127u) / 255u;
+    output[y * (params[13] >> 2) + x] = pack_rgb(result) | (output_alpha << 24);
 }

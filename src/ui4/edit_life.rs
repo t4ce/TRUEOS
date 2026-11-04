@@ -63,18 +63,24 @@ static PAGES: Mutex<Vec<Registration>> = Mutex::new(Vec::new());
 static WAKE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 static NEXT_SERIAL: AtomicU64 = AtomicU64::new(1);
 
-/// One newest immutable input per window. Restore the just-painted source
-/// immediately, so new editor text never waits for a simulation generation.
+/// One newest immutable input per window. Keep the last completed effect
+/// visible until its successor is ready, avoiding opaque flashes while typing.
 pub(crate) fn publish_page(window: WindowId, source: FrameHandle, page: Arc<Page>) {
     if !page.valid() { remove(window); return; }
     let mut pages = PAGES.lock();
     let serial = NEXT_SERIAL.fetch_add(1, Ordering::Relaxed);
     if let Some(old) = pages.iter_mut().find(|old| old.window == window) {
-        if old.displayed.is_some() { let _ = show_source(window, source); }
+        let geometry_changed = (old.page.width, old.page.height, old.page.viewport)
+            != (page.width, page.height, page.viewport);
+        if geometry_changed && old.displayed.is_some() {
+            // Geometry changes replace the effect frame. Detach its predecessor
+            // before the worker retires it; ordinary edits keep their alpha.
+            let _ = show_source(window, source);
+            old.displayed = None;
+        }
         old.source = source;
         old.page = page;
         old.serial = serial;
-        old.displayed = None;
     } else if pages.len() < MAX_PAGES {
         pages.push(Registration { window, source, page, serial, displayed: None });
     }
@@ -149,7 +155,7 @@ impl Effect {
             reset: true, emit: true, steps: 0, quarantined: false, disabled: false };
         effect.capture(true, true);
         crate::log_info!(target: "ui4/edit-life";
-            "edit-life: enabled backend={} speed=1 generations_hz=10 trail_persistence=0.75 opaque_frame=1 immutable_glyph_mask=1\n",
+            "edit-life: enabled backend={} speed=1 generations_hz=10 trail_persistence=0.75 background_alpha=128 immutable_glyph_mask=1\n",
             if matches!(effect.backend, Backend::Native(_)) { "native-cpp-adls" } else { "cpu-reference" });
         Some(effect)
     }
@@ -194,14 +200,14 @@ impl Effect {
                             let p = &mut row[x as usize * 4..][..4];
                             if page.viewport.contains(x, y) && p[3] < 255 {
                                 let effect = life.pixel(x - page.viewport.x, y - page.viewport.y);
-                                let composed = super::edit_life_model::composite_opaque([p[0],p[1],p[2],p[3]], effect);
+                                let composed = super::edit_life_model::composite_background([p[0],p[1],p[2],p[3]], effect);
                                 p.copy_from_slice(&composed);
+                            } else {
+                                p[3] = 255;
                             }
-                            p[3] = 255;
                         }
                     }
                     super::mark_frame_buffer_cpu_authored(lease).map_err(|_| ())?;
-                    super::mark_frame_buffer_fully_opaque(lease).map_err(|_| ())?;
                     if crate::virtio_gpu_logo::output_dimensions().is_some() { super::emulator_paint::begin(lease); }
                     crate::intel::dma_flush(view.virt, view.byte_len);
                     super::publish_frame_buffer(lease).map_err(|_| ())?;
@@ -217,7 +223,6 @@ impl Effect {
                     self.reset = false;
                     self.emit = false;
                     self.steps = 0;
-                    super::mark_frame_buffer_fully_opaque(lease).map_err(|_| ())?;
                     super::publish_gpgpu_frame_buffer(lease, result.release.ok_or(())?).map_err(|_| ())?;
                 }
             }

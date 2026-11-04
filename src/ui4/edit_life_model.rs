@@ -5,6 +5,7 @@
 use alloc::vec::Vec;
 
 const MAX_SIDE: u32 = 512;
+pub(crate) const BACKGROUND_ALPHA: u8 = 128;
 const COVERAGE_THRESHOLD: u32 = 46; // GLSL step(.18, coverage), in R8 bytes.
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
@@ -181,9 +182,9 @@ impl Life {
         } else { Some(self.cells[(y as u32 * self.grid_width + x as u32) as usize]) }
     }
 
-    /// Opaque background RGB relative to the viewport. The fixed 50% dark
-    /// scrim affects the effect only; the caller composites foreground ink
-    /// afterward with its original alpha coverage.
+    /// Premultiplied background RGB at static 50% alpha, relative to the
+    /// viewport. Foreground ink is composited afterward at its original
+    /// coverage; shader light never raises the background's alpha.
     pub(crate) fn pixel(&self, x: u32, y: u32) -> [u8; 3] {
         if x >= self.width || y >= self.height { return [2, 3, 5]; }
         let px = (x as f32 + 0.5) * self.grid_width as f32 / self.width as f32;
@@ -212,7 +213,7 @@ impl Life {
             let light = base[channel] * (1.0 - strength) + pigment * strength
                 + halo[channel] * 0.018
                 + if cell.born { pigment * tile * 0.10 } else { 0.0 };
-            rgb[channel] = (light * 0.5 + 0.5).clamp(0.0, 255.0) as u8;
+            rgb[channel] = (light * 0.5 + 0.5).clamp(0.0, f32::from(BACKGROUND_ALPHA)) as u8;
         }
         rgb
     }
@@ -223,10 +224,13 @@ fn add_rgb(a: [u8; 3], b: [u8; 3]) -> [u8; 3] {
 }
 
 /// The glyph producer has already applied coverage exactly once. Composite
-/// its premultiplied ink over the effect, then publish a fully opaque pixel.
-pub(crate) fn composite_opaque(foreground: [u8; 4], effect: [u8; 3]) -> [u8; 4] {
+/// that ink over the premultiplied half-alpha background. Opaque text and
+/// overlay pixels remain opaque; uncovered background stays at alpha 128.
+pub(crate) fn composite_background(foreground: [u8; 4], effect: [u8; 3]) -> [u8; 4] {
     let inverse = u32::from(255 - foreground[3]);
-    let mut pixel = [0, 0, 0, 255];
+    let alpha = u32::from(foreground[3])
+        + (u32::from(BACKGROUND_ALPHA) * inverse + 127) / 255;
+    let mut pixel = [0, 0, 0, alpha as u8];
     for channel in 0..3 {
         pixel[channel] = (u32::from(foreground[channel])
             + (u32::from(effect[channel]) * inverse + 127) / 255).min(255) as u8;
@@ -240,13 +244,42 @@ mod tests {
 
     #[test]
     fn composition_retains_opaque_text_chrome_and_single_pass_antialiasing() {
-        let effect = [60, 120, 240];
-        assert_eq!(composite_opaque([210, 100, 33, 255], effect), [210, 100, 33, 255]);
-        assert_eq!(composite_opaque([0, 0, 0, 255], effect), [0, 0, 0, 255]);
-        assert_eq!(composite_opaque([0; 4], effect), [60, 120, 240, 255]);
+        let effect = [30, 60, 120];
+        assert_eq!(composite_background([210, 100, 33, 255], effect), [210, 100, 33, 255]);
+        assert_eq!(composite_background([0, 0, 0, 255], effect), [0, 0, 0, 255]);
+        assert_eq!(composite_background([0; 4], effect), [30, 60, 120, 128]);
         // A half-covered white glyph is already [128,128,128,128]. Applying
         // coverage again would dim it to 64 before adding the background.
-        assert_eq!(composite_opaque([128; 4], effect), [158, 188, 248, 255]);
+        assert_eq!(composite_background([128; 4], effect), [143, 158, 188, 192]);
+    }
+
+    #[test]
+    fn background_alpha_is_fixed_and_reveals_content_below() {
+        let black = composite_background([0; 4], [0; 3]);
+        assert_eq!(black, [0, 0, 0, 128]);
+        let over_desktop = |pixel: [u8; 4], desktop: [u8; 3]| -> [u8; 3] {
+            core::array::from_fn(|channel| {
+                (u32::from(pixel[channel])
+                    + (u32::from(desktop[channel]) * u32::from(255 - pixel[3]) + 127) / 255) as u8
+            })
+        };
+        assert_eq!(over_desktop(black, [20, 80, 160]), [10, 40, 80]);
+        let lit = composite_background([0; 4], [30, 60, 120]);
+        assert_eq!(lit[3], black[3], "shader color must not add opacity");
+        assert_eq!(over_desktop(lit, [20, 80, 160]), [40, 100, 200]);
+        for coverage in 0..=255 {
+            let pixel = composite_background([coverage; 4], [128; 3]);
+            assert!(pixel[..3].iter().all(|&channel| channel <= pixel[3]));
+            assert!(pixel[3] >= BACKGROUND_ALPHA);
+        }
+    }
+
+    #[test]
+    fn bright_shader_pixels_stay_premultiplied_at_half_alpha() {
+        let life = world(1, 1, &[(0, 0, [255; 3])]);
+        let effect = life.pixel(1, 1);
+        assert!(effect.iter().all(|&channel| channel <= BACKGROUND_ALPHA));
+        assert_eq!(composite_background([0; 4], effect)[3], BACKGROUND_ALPHA);
     }
     use alloc::vec;
 

@@ -8,7 +8,7 @@ Its generated Zebin, SPIR-V, manifest and ABI contract live in
 the reference and unavailable-backend fallback.
 
 The source has one SIMD16 entry point and four modes: seed/additive input,
-Conway generation, opaque composition, and input comparison-baseline copy.
+Conway generation, background composition, and input comparison-baseline copy.
 The comment at the top of the source specifies every buffer and uniform.
 The glyph mask and straight glyph-color page are read-only. A separate
 viewport-sized R8 buffer retains the last input baseline. Cells occupy two
@@ -22,10 +22,17 @@ persistence). Put a GPU cache/release dependency between every writer and the
 following reader before flipping cell buffers. Never publish the output before
 producer retirement.
 
-The composition mode copies the existing foreground RGB outside the viewport and
-uses premultiplied foreground RGB plus the effect times one minus foreground
-alpha inside. Output everywhere has alpha 255. The effect's fixed
-50% scrim never scales text, menu, status, popup, selection or caret opacity.
+The editor background, including its shader, has static alpha 128 (50% in
+RGBA8). Shader RGB is premultiplied by that alpha and capped to it, so brighter
+cells never make the background more opaque. Foreground ink is composited over
+this background with its original coverage: output alpha is
+`ink_alpha + round(128 * (255 - ink_alpha) / 255)`. Uncovered background remains
+at 128; opaque text, menus, dialogs, selection and caret remain at 255.
+Antialiased glyph edges retain their original coverage. Outside the editor
+viewport alpha stays 255. Window and hardware-plane opacity remain at 100%;
+the effect frame is published with per-pixel alpha, without a fully-opaque hint.
+Ordinary edits keep the previous completed effect visible until the next page
+is ready, avoiding a temporary opaque background on each keystroke.
 
 ## Reproduce the local pinned setup
 
