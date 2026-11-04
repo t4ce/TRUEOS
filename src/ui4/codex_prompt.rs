@@ -4,16 +4,16 @@
 //! It retains the exact receiver selected at open, so changing or retiring a
 //! Codex conversation cannot silently redirect the user's message.
 
-#[path = "codex_prompt_editor.rs"]
-mod editor;
 #[path = "codex_attachments.rs"]
 mod attachments;
+#[path = "codex_prompt_editor.rs"]
+mod editor;
 
 use alloc::{
     collections::{BTreeMap, BTreeSet},
-    vec::Vec,
     string::String,
     sync::Arc,
+    vec::Vec,
 };
 use embassy_sync::signal::Signal;
 use spin::Mutex;
@@ -45,7 +45,10 @@ struct OpenRequest {
 
 static OPEN_REQUEST: Mutex<Option<OpenRequest>> = Mutex::new(None);
 static ACTIVE_TARGET: Mutex<Option<codex::Target>> = Mutex::new(None);
-static ATTACHMENT_VISUALS: Mutex<Vec<(Arc<super::drag_drop::DragPreview>, u32, u32)>> = Mutex::new(Vec::new());
+// Reserved paths include pending drops, so admission is atomic across polls.
+static RESERVED_PATHS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static ATTACHMENT_VISUALS: Mutex<Vec<(Arc<super::drag_drop::DragPreview>, u32, u32)>> =
+    Mutex::new(Vec::new());
 
 pub(super) fn attachment_visuals() -> Vec<(Arc<super::drag_drop::DragPreview>, u32, u32)> {
     ATTACHMENT_VISUALS.lock().clone()
@@ -82,7 +85,11 @@ struct ActivePrompt {
 /// Capture its identity here, before asynchronous font/frame preparation.
 pub(crate) fn request_open(source: Ui4CursorSource, anchor: (u32, u32)) {
     if let Some(target) = codex::current_target() {
-        *OPEN_REQUEST.lock() = Some(OpenRequest {
+        let mut pending = OPEN_REQUEST.lock();
+        if pending.is_some() {
+            return;
+        }
+        *pending = Some(OpenRequest {
             source,
             anchor,
             target,
@@ -101,21 +108,40 @@ pub(super) fn request_attachments(
     data: &[u8],
     preview: Arc<super::drag_drop::DragPreview>,
 ) -> bool {
-    let Some(paths) = attachments::decode(data) else { return false; };
+    let Some(paths) = attachments::decode(data) else {
+        return false;
+    };
     let retained = *ACTIVE_TARGET.lock();
-    let Some(target) = retained.or_else(codex::current_target) else { return false; };
-    if !codex::is_target_live(&target) { return false; }
+    let Some(target) = retained.or_else(codex::current_target) else {
+        return false;
+    };
+    if !codex::is_target_live(&target) {
+        return false;
+    }
     let mut pending = OPEN_REQUEST.lock();
+    let mut reserved = RESERVED_PATHS.lock();
+    let mut combined = reserved.clone();
+    if !attachments::accumulate(&mut combined, &paths) {
+        return false;
+    }
     if let Some(request) = pending.as_mut() {
-        if request.target != target || request.previews.len() >= attachments::LIMIT
-            || !attachments::accumulate(&mut request.paths, &paths) { return false; }
+        if request.target != target
+            || request.previews.len() >= attachments::LIMIT
+            || !attachments::accumulate(&mut request.paths, &paths)
+        {
+            return false;
+        }
         request.previews.push((preview, anchor));
     } else {
         *pending = Some(OpenRequest {
-            source, anchor, target, paths,
+            source,
+            anchor,
+            target,
+            paths,
             previews: alloc::vec![(preview, anchor)],
         });
     }
+    *reserved = combined;
     OPEN_SIGNAL.signal(());
     true
 }
@@ -138,8 +164,11 @@ pub(crate) async fn ui4_codex_prompt_service_task() {
                 };
                 match opened {
                     Ok(prompt) => active = Some(prompt),
-                    Err(reason) => crate::log_warn!(target: "ui4/codex";
-                        "ui4/codex: open rejected reason={}\n", reason),
+                    Err(reason) => {
+                        RESERVED_PATHS.lock().clear();
+                        crate::log_warn!(target: "ui4/codex";
+                            "ui4/codex: open rejected reason={}\n", reason);
+                    }
                 }
             } else if let Some(prompt) = active.as_mut() {
                 if prompt.target == request.target && !prompt.submitted {
@@ -153,15 +182,11 @@ pub(crate) async fn ui4_codex_prompt_service_task() {
                 || super::window_is_closed(OWNER, prompt.window)
                 || !codex::is_target_live(&prompt.target);
             if !close {
-                                // The same bounded editor receives Lilly's introduction one
-                // scalar at a time. User input stops automatic typing immediately.
                 if prompt.seed_tick.elapsed().as_millis() >= 48 {
                     if let Some(seed) = prompt.seed {
-                        if let Some(ch) = seed.chars().next() {
-                            let _ = prompt.editor.insert(ch);
-                            prompt.seed = Some(&seed[ch.len_utf8()..]);
-                            prompt.dirty = true;
-                        } else { prompt.seed = None; }
+                        if crate::spirit::introduce_attachments(prompt.window, seed) {
+                            prompt.seed = None;
+                        }
                     }
                     prompt.seed_tick = Instant::now();
                 }
@@ -171,6 +196,7 @@ pub(crate) async fn ui4_codex_prompt_service_task() {
             if close {
                 if close_prompt(prompt) {
                     *ACTIVE_TARGET.lock() = None;
+                    RESERVED_PATHS.lock().clear();
                     ATTACHMENT_VISUALS.lock().clear();
                     super::input_broker::notify_slot4_visual_change();
                     active = None;
@@ -221,7 +247,11 @@ async fn open_prompt(request: OpenRequest) -> Result<ActivePrompt, &'static str>
         }
     };
     let x = request.anchor.0.min(screen_width - width);
-    let y = request.anchor.1.min(screen_height - height);
+    let top_space = request
+        .previews
+        .first()
+        .map_or(0, |(preview, _)| preview.height + 40);
+    let y = request.anchor.1.max(top_space).min(screen_height - height);
     let window = match super::create_window(WindowCreate {
         owner: OWNER,
         session,
@@ -300,7 +330,11 @@ fn append_attachments(
 ) {
     let first = prompt.paths.is_empty();
     if !attachments::accumulate(&mut prompt.paths, &paths) {
-        let _ = super::set_window_title(OWNER, prompt.window, "Codex · attachment limit 16 · drop not added");
+        let _ = super::set_window_title(
+            OWNER,
+            prompt.window,
+            "Codex · attachment limit 16 · drop not added",
+        );
         return;
     }
     if first && !prompt.paths.is_empty() && prompt.editor.text().is_empty() {
@@ -308,29 +342,45 @@ fn append_attachments(
     }
     for (preview, from) in previews {
         if prompt.previews.len() < attachments::LIMIT {
-            prompt.previews.push(AttachedPreview { preview, from, since: Instant::now() });
+            prompt.previews.push(AttachedPreview {
+                preview,
+                from,
+                since: Instant::now(),
+            });
         }
     }
-    let title = alloc::format!("Codex · {} attachments / 16 · Enter sends · Esc closes", prompt.paths.len());
+    let title = alloc::format!(
+        "Codex · {} attachments / 16 · Enter sends · Esc closes",
+        prompt.paths.len()
+    );
     let _ = super::set_window_title(OWNER, prompt.window, &title);
 }
 
 fn update_attachment_visuals(prompt: &ActivePrompt) {
-    let Some(window) = super::window_broker::window_snapshot(OWNER, prompt.window) else { return; };
+    let Some(window) = super::window_broker::window_snapshot(OWNER, prompt.window) else {
+        return;
+    };
     let p = window.presentation_placement;
+    if !p.visible {
+        return;
+    }
     let mut visuals = ATTACHMENT_VISUALS.lock();
     visuals.clear();
     for (index, item) in prompt.previews.iter().enumerate() {
         let t = item.since.elapsed().as_millis().min(350) as i64;
         let tx = i64::from(p.x.max(16)) - 16 + (index as i64 % 4) * i64::from(p.width / 4);
-        let ty = i64::from(p.y).saturating_sub(i64::from(item.preview.height) + 24)
-            .max(0) + (index as i64 / 4) * 4;
+        let ty = i64::from(p.y)
+            .saturating_sub(i64::from(item.preview.height) + 24)
+            .max(0)
+            + (index as i64 / 4) * 4;
         let x = (i64::from(item.from.0) * (350 - t) + tx * t) / 350;
         let y = (i64::from(item.from.1) * (350 - t) + ty * t) / 350;
         visuals.push((item.preview.clone(), x.max(0) as u32, y.max(0) as u32));
     }
     drop(visuals);
-    if !prompt.previews.is_empty() { super::input_broker::notify_slot4_visual_change(); }
+    if !prompt.previews.is_empty() {
+        super::input_broker::notify_slot4_visual_change();
+    }
 }
 
 async fn message(prompt: &ActivePrompt) -> Option<String> {
@@ -340,17 +390,38 @@ async fn message(prompt: &ActivePrompt) -> Option<String> {
         use core::fmt::Write;
         // Debug quoting preserves spaces, newlines and delimiters unambiguously.
         let _ = write!(text, "\nAttached file/folder path: {:?}", path);
-        if remaining == 0 { continue; }
-        let Ok(parsed) = crate::r::path::FsPath::parse(path, false) else { continue; };
+        if remaining == 0 {
+            continue;
+        }
+        let Ok(parsed) = crate::r::path::FsPath::parse(path, false) else {
+            continue;
+        };
         let name = parsed.to_relative_string();
-        let Some(disk) = crate::r::fs::volatile_files::selected_disk(&name) else { continue; };
+        let Some(disk) = crate::r::fs::volatile_files::selected_disk(&name) else {
+            continue;
+        };
         // A bounded probe includes one overflow byte. Large files and folders
         // stay path-only; file growth cannot turn this into an unbounded read.
-        let mut bytes = alloc::vec![0; remaining + 1];
-        if let Ok(Some(len)) = crate::r::fs::trueosfs::file_read_range_async(disk, &name, 0, &mut bytes).await {
-            if let Some(content) = attachments::inline_text(&bytes[..len], remaining) {
+        let Ok(Some(handle)) = crate::r::fs::trueosfs::file_read_open_async(disk, &name).await
+        else {
+            continue;
+        };
+        if handle.data_len() > remaining as u64 {
+            continue;
+        }
+        let mut bytes = alloc::vec![0; handle.data_len() as usize];
+        if let Ok(len) =
+            crate::r::fs::trueosfs::file_read_handle_range_async(handle, 0, &mut bytes).await
+        {
+            if len == bytes.len()
+                && let Some(content) = attachments::inline_text(&bytes, remaining)
+            {
                 remaining -= len;
-                let _ = write!(text, "\nSmall text attachment ({} bytes):\n{}\nEnd attachment.\n", len, content);
+                let _ = write!(
+                    text,
+                    "\nSmall text attachment ({} bytes):\n{}\nEnd attachment.\n",
+                    len, content
+                );
             }
         }
     }
@@ -380,9 +451,16 @@ async fn process_input(prompt: &mut ActivePrompt) -> bool {
                                 // Mark accepted before teardown. A temporarily
                                 // busy close must never submit the same text twice.
                                 if let Some(text) = message(prompt).await
-                                    && codex::submit(&prompt.target, &text).is_ok() {
+                                    && codex::submit(&prompt.target, &text).is_ok()
+                                {
                                     prompt.submitted = true;
                                     return true;
+                                } else {
+                                    let _ = super::set_window_title(
+                                        OWNER,
+                                        prompt.window,
+                                        "Codex · send unavailable or message too long · edit and retry",
+                                    );
                                 }
                             }
                         }

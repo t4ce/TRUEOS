@@ -37,15 +37,22 @@ pub(super) fn accumulate(paths: &mut Vec<String>, incoming: &[String]) -> bool {
 }
 
 pub(super) fn question(paths: &[String]) -> &'static str {
-    if paths.len() == 1 { "What to do with this file/folder? " }
-    else { "What to do with these attachments? " }
+    if paths.len() == 1 {
+        "What to do with this file/folder? "
+    } else {
+        "What to do with these attachments? "
+    }
 }
 
 pub(super) fn inline_text(bytes: &[u8], remaining: usize) -> Option<&str> {
-    if bytes.len() > remaining { return None; }
+    if bytes.len() > remaining {
+        return None;
+    }
     let text = core::str::from_utf8(bytes).ok()?;
-    (!text.chars().any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t'))
-        .then_some(text)
+    (!text
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t'))
+    .then_some(text)
 }
 
 #[cfg(test)]
@@ -59,8 +66,8 @@ mod tests {
         assert_eq!(decode(&bytes).unwrap(), [path]);
         bytes.push(1);
         assert!(decode(&bytes).is_none());
-        assert!(decode(&[1,0,0,0,255]).is_none());
-        assert!(decode(&[1,0,0,0,0]).is_none());
+        assert!(decode(&[1, 0, 0, 0, 255]).is_none());
+        assert!(decode(&[1, 0, 0, 0, 0]).is_none());
         assert!(decode(&[]).is_none());
     }
     #[test]

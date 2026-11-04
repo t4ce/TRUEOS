@@ -167,6 +167,12 @@ pub(super) struct NativeIoGuard {
     sequence: u64,
 }
 
+impl NativeIoGuard {
+    pub(super) fn keyboard(&self) -> Option<KeyboardControlDevice> {
+        LILLY_IO.lock().keyboard
+    }
+}
+
 impl Drop for NativeIoGuard {
     fn drop(&mut self) {
         let mut state = LILLY_IO.lock();
