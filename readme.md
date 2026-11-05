@@ -144,6 +144,19 @@ All of that effort aims at one thing: a machine that almost looks like one big, 
 <p align="center"><img src="tools/aiupsell/screenshots/codex-edit-lilly.png" width="100%" alt="A signed-in Codex session alongside Microsoft Edit on TRUEOS, with Lilly visible"></p>
 <p align="center"><sub>Codex, Edit, and Lilly on the desktop: a running session, not a mockup.</sub></p>
 
+<table>
+  <tr>
+    <td width="50%" align="center"><img src="tools/aiupsell/screenshots/live-flex-1-of-4.gif" width="100%" alt="Desktop, HTML in Edit, a second window, and a Codex prompt on TRUEOS"></td>
+    <td width="50%" align="center"><img src="tools/aiupsell/screenshots/live-flex-2-of-4.gif" width="100%" alt="Writing JavaScript toast code in Edit on TRUEOS"></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="tools/aiupsell/screenshots/live-flex-3-of-4.gif" width="100%" alt="The vibecode contest line and typed messages at 300% font in Edit on TRUEOS"></td>
+    <td width="50%" align="center"><img src="tools/aiupsell/screenshots/live-flex-4-of-4.gif" width="100%" alt="Typed messages at 300% font in Edit, ending on Codex output on TRUEOS"></td>
+  </tr>
+</table>
+
+<p align="center"><sub>One recording from the node, cut into four clips of four 3-second sections each.</sub></p>
+
 ## HULL: CONCEPT VS. REAL
 
 <table>

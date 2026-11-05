@@ -107,6 +107,34 @@
       "height": 288
     },
     {
+      "path": "screenshots/live-flex-1-of-4.gif",
+      "bytes": 3214837,
+      "sha256": "0469dea87ce0426827c53b9e88c7056fda4566746547f7aaeb939a91c2cf5ddf",
+      "width": 512,
+      "height": 288
+    },
+    {
+      "path": "screenshots/live-flex-2-of-4.gif",
+      "bytes": 9520705,
+      "sha256": "dc4fa66def334c68810122c5eac839a1ac2922e57478a8611bf2323a5a779315",
+      "width": 512,
+      "height": 288
+    },
+    {
+      "path": "screenshots/live-flex-3-of-4.gif",
+      "bytes": 9311876,
+      "sha256": "1d675a057299f5bf398a467a66ee33e476bb6c6bb278bb16644e0b04c5c5f442",
+      "width": 512,
+      "height": 288
+    },
+    {
+      "path": "screenshots/live-flex-4-of-4.gif",
+      "bytes": 9882824,
+      "sha256": "354466cf45f4a54a8833a79e54dc3683ac78c7c22f05c273567beecd2f1b978a",
+      "width": 512,
+      "height": 288
+    },
+    {
       "path": "screenshots/hull-live-page.png",
       "bytes": 609500,
       "sha256": "d3e3a1596dfdea9a81164af9ef06ebcc90c270a1dad9aa65556c4f35010351bb",

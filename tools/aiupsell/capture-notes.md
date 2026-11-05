@@ -38,6 +38,13 @@ Prepared on 2026-11-03. The root README uses this folder's checked-in assets;
   `vid-1793790552-700550000000.h264`, with labels. The second uses
   `vid-1793790642-790891000000.h264` without labels: removing big cubes,
   subdividing into smaller cubes, extracting cubes, and zooming out.
+- `screenshots/live-flex-1-of-4.gif` to `screenshots/live-flex-4-of-4.gif`: four
+  512x288 animated GIFs at 12.5 fps, 152 frames (about 12 s each), cut from one
+  recording, `vid-1793842311-72395000000.h264`. Each holds four 3-second sections
+  with black fades and no text. File 1 covers the desktop, HTML in Edit, a second
+  window, and a Codex prompt. File 2 covers JavaScript toast code. File 3 covers
+  the vibecode contest line and typed messages. File 4 covers 300% font typing and
+  ends on Codex output. File 4 uses a 128-color palette to stay under 10 MB.
 
 The first shell `pic` capture succeeded. Subsequent requests remained pending
 and another request reported `WD screenshot slot is busy`; the RDP still-frame
