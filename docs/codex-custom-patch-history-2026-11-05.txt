@@ -1,0 +1,956 @@
+CODEX TO TRUEOS — THE CUSTOM PATCH HISTORY
+Audited 5 November 2026 (Europe/Berlin).
+Update, 5 November 2026: removed the temporary gpt-6-luna / low default in the Codex working tree.
+The loader now uses upstream packaged defaults directly; saved model/effort settings keep their precedence.
+The chronological entries below remain the published-history snapshot.
+
+65 custom commits, 139 separately described decisions, 12 October–3 November 2026.
+GitHub branch tips were checked directly. The 195 imported upstream commits are not counted as custom patches.
+Every published custom commit is covered once, including the parity side branch and its landing merge.
+Descriptions come from diffs and checked-in evidence; the original chat prompts are not part of this record.
+This audit changes reports only. Current status means inspected source, not a fresh rig test.
+Detailed source paths, present status, and revisit controls are in the matching JSON.
+
+CHRONOLOGICAL DECISIONS
+
+01. 12 Oct 2026 13:06 — 14e8392da
+https://github.com/t4ce/codex/commit/14e8392da3cd4c980dd9af53fabf0410565fea17
+  • Disable Bedrock and AWS authentication by default: Gate Bedrock setup/login/provider support and AWS
+    SigV4 signing behind bedrock. Disabled builds return explicit errors while ChatGPT and OpenAI API
+    authentication remain available.
+  • Disable local-model management by default: Gate Ollama and LM Studio setup/model management behind
+    local-models and reject their startup requests when disabled. Text/ChatGPT sessions remain supported.
+  • Disable voice and new audio input by default: Gate audio processing, WebRTC, and TUI voice startup
+    behind voice. Reject new audio input/realtime voice while retaining response-item interfaces for text
+    sessions and history.
+  • Disable imports from other assistants by default: Gate external-agent migration and import handlers
+    behind external-agent-imports, retaining the old implementation as opt-in.
+  • Disable external reporting by default: Gate analytics transmission, OTLP exporters, and feedback uploads
+    behind external-reporting. Keep interfaces and disabled implementations so local logging/session
+    behavior can continue.
+
+02. 12 Oct 2026 14:15 — 87b1394d7
+https://github.com/t4ce/codex/commit/87b1394d7d8b5d8477b9ff12f9126abd247791d7
+  • Make system clipboard integration optional: Add system-clipboard plus a disabled backend rejecting
+    native text/image clipboard operations, OSC52, tmux, and subprocess forwarding while retaining UI
+    handlers/workers. Terminal-delivered text paste remains; ordinary builds keep system-clipboard enabled
+    by default.
+
+03. 12 Oct 2026 15:17 — c29c7bef4
+https://github.com/t4ce/codex/commit/c29c7bef4fe9c962e48a66210c351fc05368befb
+  • Document YOLO settings under TRUEOS isolation: Recommend sandbox_mode = danger-full-access and
+    approval_policy = never in the user config when VMX owns isolation, plus no-daemon/no-default-features
+    launch arguments. This is documentation, not hardcoded CLI defaults.
+  • Make the CLI manifest stage as a standalone Blueprint: Add trueos-blueprint and explicitly specify lints
+    and selected dependencies previously inherited from the workspace so the TRUEOS packer can stage the
+    package.
+
+04. 12 Oct 2026 15:54 — 0a89c5145
+https://github.com/t4ce/codex/commit/0a89c51450fba31049fbac88e506472ec9388bd1
+  • Use local WebSocket fork copies: Vendor OpenAI tokio-tungstenite/tungstenite and switch Git patches to
+    local paths, including the wrapper's local tungstenite dependency. Retain proxy/deflate support from the
+    forks.
+  • Exclude native TLS from TRUEOS HTTP builds: Disable reqwest defaults and explicitly choose TLS features.
+    Guard native-tls dependencies, fallback calls, TLS error downcasts, and related tests out of TRUEOS
+    while retaining the host fallback.
+
+05. 12 Oct 2026 16:07 — 1a9679944
+https://github.com/t4ce/codex/commit/1a9679944b4e2f553fd35066aca02c5264ae0911
+  • Replace AWS-LC as the selected TLS provider: Select rustls-rustcrypto, drop aws_lc_rs workspace rustls
+    features, disable tokio-rustls defaults, switch rcgen to ring, and patch Rama TLS to RustCrypto. Change
+    the asserted signature baseline from P-521/SHA-512 to P-256/SHA-256.
+  • Use the TRUEOS-compatible reqwest 0.13 fork: Point reqwest at vendored 0.13.3 and adapt feature
+    names/custom-CA setup. Follow io::Error inner errors to preserve nested TLS/proxy classification.
+
+06. 12 Oct 2026 16:50 — 42933cf57
+https://github.com/t4ce/codex/commit/42933cf573fd989a2044de0b96ed2b99ba444bd5
+  • Execute local commands through dedicated Shell3 sessions: Send native scripts unchanged to TRUEOS
+    command sessions, capturing output and forwarding stdin, signals, resizing, and owned lifetime. Reject
+    Unix program/argv spawning and require sandbox None because platform VM permissions own isolation.
+
+07. 12 Oct 2026 16:58 — 9b10f8e96
+https://github.com/t4ce/codex/commit/9b10f8e9643c2eb2283effa0165a8b0103feb4d3
+  • Describe and route native local command input: Add exec_command guidance for Tab/Matrix selection,
+    persistent input, and Shell3 completion; remove local shell/login/workdir properties. Route only local
+    TRUEOS commands as raw script text and preserve remote command resolution/snapshots.
+
+08. 12 Oct 2026 17:40 — 53cc6b7c6
+https://github.com/t4ce/codex/commit/53cc6b7c6526fea20539cddd0060c391c94f0745
+  • Require sh3 for TRUEOS command sessions: Wire trueos-blueprint through sh3 to the PTY utility and emit a
+    compile error on TRUEOS without it. Correct unsupported-workdir validation to inspect the separately
+    parsed environment arguments.
+  • Use the TRUEOS Starlark runtime fork: Replace registry Starlark with TRUEOS-
+    Blueprints/vendor/starlark-0.14.2-trueos. This commit wires the fork; its implementation changes are
+    maintained in the other repository.
+
+09. 12 Oct 2026 21:57 — e8b197ca2
+https://github.com/t4ce/codex/commit/e8b197ca2b51b10f813fd67691802a819e6daf04
+  • Launch local MCP servers through VMX child channels: Resolve a command to a Blueprint, start a fresh
+    child Hull, and stream newline-delimited MCP JSON over bounded child channels with backpressure. Keep
+    stderr/logging outside protocol stdout and terminate the owned VM on close/drop.
+  • Wire TRUEOS DNS/date and compatible Rama dependencies: Patch rama-dns/httpdate to vendor copies, enable
+    CLI std-system-time, and pin rama-error to the matching alpha API. Drop rmcp transport-child-process as
+    custom launchers own transport.
+  • Bypass POSIX owner and mode checks for TRUEOS socket directories: On TRUEOS, stop setting or normalizing
+    private socket-directory mode 0700 and skip shared daemon-directory uid/mode validation while retaining
+    directory and symlink checks. Use standard metadata to identify stale sockets so ordinary files are not
+    accidentally treated as removable sockets.
+
+10. 12 Oct 2026 22:58 — cbbb379de
+https://github.com/t4ce/codex/commit/cbbb379de22c96517114e711c7f9cfc8e333d25e
+  • Adapt Retry-After to the vendored HTTP-date API: Enable std-system-time and parse HTTP-date through
+    HttpDate/SystemTime while retaining numeric delays.
+  • Pin Rama helpers and generalize Unix hardening compilation: Pin rama-macros/rama-utils to alpha.4 and
+    compile the core-limit hardening failure constant for all Unix targets.
+
+11. 13 Oct 2026 00:21 — d396a341a
+https://github.com/t4ce/codex/commit/d396a341aa47954c57a02a90a05d875ef2ef8664
+  • Use the service driver instead of in-process SQLite: Patch sqlx-sqlite to the TRUEOS driver and exclude
+    direct libsqlite3-sys on TRUEOS. Route existence/integrity/quick-check handling through service APIs and
+    recognize numeric SQLite error codes without native error objects.
+  • Delegate WAL and reclamation to the SQLite Blueprint: Replace the TRUEOS client reclamation worker with
+    a no-op and skip the client WAL pragma/bundled-SQLite version assertion. Comments assign serialization,
+    persisted memory images, WAL, and reclamation to the service.
+
+12. 13 Oct 2026 00:39 — 8c1ad0045
+https://github.com/t4ce/codex/commit/8c1ad004520af2d69679231525dc78a33ce5ad2d
+  • Use a type-inferred metadata closure: Change the rollout metadata len method pointer to a closure so
+    TRUEOS Tokio metadata can supply its own type. File-size behavior is unchanged.
+
+13. 13 Oct 2026 04:01 — e6fea81f9
+https://github.com/t4ce/codex/commit/e6fea81f93a67de529a3dfb7f6fa35a98e2bb292
+  • Use real descriptors for daemon locks and stderr: Use std::fs::File for TRUEOS daemon locks instead of
+    assuming Tokio snapshot files expose OS descriptors, and open real append descriptors for child stderr.
+  • Read managed TRUEOS files through seekable handles: Use mutex-protected Read/Write/Seek objects and
+    seek/read loops for managed file blocks. Add metadata abstraction for standard and TRUEOS Tokio
+    metadata.
+  • Use TRUEOS identity and revision for history: Adapt memories metadata, derive message-history identity
+    from root/file IDs, and use committed record revision for rollout freshness. This catches equal-length
+    rewrites without relying on Unix timestamps.
+  • Reject unsupported sandbox-helper descriptor transfer: Return Unsupported for TRUEOS sandbox-helper file
+    opens requiring SCM_RIGHTS-style descriptor transfer. Do not reopen outside the helper.
+  • Document deferred pathname-socket integration: Tag socket boundaries and distinguish socket nodes,
+    rendezvous symlinks, lock files, and directories; rename the cleanup guard to ControlSocketPathGuard.
+    The document defers a future TRUEOS filesystem/vfile transport mapping.
+  • Adapt remote-control Retry-After date parsing: Enable std-system-time for app-server transport and
+    convert parsed HttpDate through SystemTime before OffsetDateTime.
+
+14. 13 Oct 2026 05:34 — b34587fc3
+https://github.com/t4ce/codex/commit/b34587fc3a0cd1de5b3974bf056ff00fc09fc184
+  • Add opt-in startup timing and benchmarks: Record process/runtime/terminal/server/thread-readiness
+    milestones and add a runner comparing disposable fresh, repeat, no-reply, and unauthenticated starts
+    plus typed-text visibility.
+  • Remove startup terminal-input replay: Delete the replay helper/tests so user input consumed with
+    terminal probe responses is discarded. At this commit the change affects Unix generally, not only
+    TRUEOS.
+  • Preserve standard HashMap and Instant across Blueprint rewriting: Add StdHashMap/StdInstant aliases in
+    CLI doctor, MCP, and sandbox debug code so packer overlays do not rewrite types crossing crate
+    boundaries.
+
+15. 13 Oct 2026 05:34 — 5e6fe3e14
+https://github.com/t4ce/codex/commit/5e6fe3e146f1c2d79fada9886ba3e25eb90b1513
+  • Render markers cleanly and fill two startup timing gaps: Write visible markers with CRLF, add account-
+    status/thread-start-begin milestones, and add benchmark --stderr to verify visible diagnostics.
+
+16. 13 Oct 2026 08:55 — 47873da26
+https://github.com/t4ce/codex/commit/47873da2605257ebb0baa1dae7d3c8fc0d5ce21d
+  • Tune standalone Blueprint release compilation: Set the CLI-local release profile to opt-level 1,
+    incremental true, and eight codegen units. Standalone Blueprint packing uses it; normal workspace builds
+    keep root profiles.
+  • Use the embedded server for a bare launch: Force no_daemon for a bare interactive TRUEOS launch without
+    a remote target, avoiding a requirement for an installed daemon package.
+  • Use a session installation ID if file locks are unsupported: If TRUEOS installation-ID locking returns
+    Unsupported, create a session UUID instead of an unlocked shared-file write; other errors still fail.
+  • Skip host screen-reader detection on TRUEOS: Select the Animated motion default and return without host
+    accessibility probing or startup config rewrite.
+  • Add startup/panic diagnostics and a fork README note: Print TRUEOS main-entry/return/pre-restore-panic
+    diagnostics, add screen-reader/cloud-auth markers, and report the platform build in the fork README.
+
+17. 13 Oct 2026 11:12 — 8ba74b60e
+https://github.com/t4ce/codex/commit/8ba74b60ef7bb61d90ef325646f3682c4ef4ec13
+  • Record fine-grained fresh-thread startup phases: Add TRUEOS trace events around client thread-start
+    preparation/RPC/hydration, server config/metadata/create, and core
+    rules/model/persistence/environment/extensions/MCP/prewarm setup. No traced operation is removed.
+
+18. 13 Oct 2026 13:11 — e0dd704f5
+https://github.com/t4ce/codex/commit/e0dd704f56081c704abc8325146cd6b2b1ac40ed
+  • Merge API/client/HTTP/WebSocket crates into transport: Fold codex-api, codex-client, http-client, and
+    websocket-client into codex-transport public modules. Update Cargo/Bazel callers and retain moved
+    unit/integration coverage.
+  • Extract shared network contracts below protocol and transport: Create network-foundation for concrete
+    error identities/source chains, retry deadlines, authorization/revocation, and RustCrypto provider.
+    Replace utils/rustls-provider and avoid dependency feedback between protocol, merged HTTP, and managed-
+    proxy TLS setup.
+  • Merge four path utility crates: Combine absolute-path, path-uri, home-dir, and path-utils into
+    utils/paths modules and update imports/build definitions.
+  • Merge four text utility crates: Combine elapsed, fuzzy-match, stream-parser, and template into
+    utils/text modules, retaining their moved implementations and coverage.
+
+19. 14 Oct 2026 09:59 — 870d99f8d
+https://github.com/t4ce/codex/commit/870d99f8dddac3803e53801b9820016ea7e3c1c2
+  • Format the consolidated crate consumers: Reorders imports and formats existing utility/transport call
+    sites across 219 files; this does not introduce another functional feature cut. Also adds assertion
+    diagnostics for transport failures.
+  • Limit transport fixture concurrency: Runs Bazel transport tests with two threads and documents clearing
+    inherited CA overrides for host TLS fixtures.
+
+20. 14 Oct 2026 10:22 — 2df7c4acb
+https://github.com/t4ce/codex/commit/2df7c4acbc839779ca6be2837b81d7c5668cec85
+  • Preserve the source-fold audit: Adds reproducible before/after graphs and migration reports for folding
+    13 utility/network source crates into four: text, paths, transport, and network foundation. The recorded
+    reduction is nine reachable packages/build units; this commit itself adds documentation and tools, not
+    the source folds.
+  • Record ELF section coalescing and symbol cleanup: Records the adopted Blueprint packing experiment:
+    reuse the existing section-coalescing policy and discard local symbols, reducing section bookkeeping
+    dramatically. The report states 17.891% overall pack savings but explicitly notes a contemporaneous
+    backend/cache change; the controlled same-input experiment measured 17.8%.
+  • Keep native archive folding as an experiment: Records that bundling a network proxy’s exclusive 44
+    archives into one did not reduce allocated bytes, and did not prove runtime equivalence. The integrated
+    rerun later achieved byte identity while preserving archive order; both records remain historical
+    evidence, rather than a feature removal.
+
+21. 14 Oct 2026 12:12 — 0ed172f00
+https://github.com/t4ce/codex/commit/0ed172f00f7753881a264c8cc77d24a5aa1b1b49
+  • Acquire the TRUEOS terminal surface before ANSI setup: Calls the native terminal lease ABI from
+    set_modes before bracketed-paste and other setup sequences, so the first ANSI write reaches the terminal
+    surface rather than the Matrix transcript. A failed or zero-epoch claim becomes an explicit error.
+
+22. 14 Oct 2026 17:32 — 7b8cf42c8
+https://github.com/t4ce/codex/commit/7b8cf42c8ae386a184cec9d726b7ef357c5b8982
+  • Make install/update management optional: Adds an install-update Cargo feature, still enabled in ordinary
+    host defaults; Blueprint builds omit managed daemon installation, duplicate package copies, updates,
+    desktop installer entry points, and daemon-based remote-control CLI commands. Bare local sessions
+    automatically use the embedded server, while explicit remote servers and stdio remain available.
+  • Disable PowerShell parsing and discovery in TRUEOS builds: The trueos-blueprint feature now enables
+    nopowersh: PowerShell unwrapping, parser, UTF-8 prefix injection, and executable discovery return
+    compatibility fallbacks, and the native target excludes its C grammar. Bash parsing and shared Tree-
+    sitter remain; normal host builds retain PowerShell support.
+
+23. 15 Oct 2026 09:03 — 29981d5c2
+https://github.com/t4ce/codex/commit/29981d5c26bc3acbab3ed4d009309ec05738f329
+  • Set a temporary low-effort Luna default: Adds TRUEOS-only packaged defaults model=gpt-5.6-luna and
+    model_reasoning_effort=low at the lowest configuration priority, so saved user/session choices still
+    win. A source comment calls this a temporary hardware bring-up default.
+  • Bundle Mozilla roots for native WebSockets: Adds webpki-roots to the TRUEOS transport and layers those
+    roots alongside native/custom CA roots, since TRUEOS cannot assume a Unix certificate directory. Host
+    tests verify the roots preserve custom trust and still reject an untrusted self-signed server.
+  • Automatically submit a diagnostic first prompt: Temporarily queues hi for an authenticated fresh TRUEOS
+    session with no explicit prompt or images. Resume, unauthenticated, and explicit-prompt paths keep their
+    original behavior.
+
+24. 15 Oct 2026 10:55 — c8e439be2
+https://github.com/t4ce/codex/commit/c8e439be270ac3fc74e326697510e7ee78c19c31
+  • Reject spawning the standalone Code Mode host on TRUEOS: Adds an explicit availability check before
+    either selecting or connecting to the process-owned Code Mode host, reporting that TRUEOS cannot spawn
+    it. This becomes a guard for the host-process implementation, rather than a permanent loss of Code Mode
+    after the next patch.
+  • Instrument step preparation phases: Adds numeric phase/capture timings for environment readiness,
+    instruction loading, capability discovery, MCP readiness, selected contributors, router construction,
+    and retained context. Events are emitted on TRUEOS, with completed/error/cancelled status.
+  • Turn the automatic greeting into a native execution probe: Changes the temporary initial hi prompt to
+    request exactly gri through Shell3, opening Gridpaper in UI4 and reporting the execution tool result.
+
+25. 15 Oct 2026 13:30 — f59c631d8
+https://github.com/t4ce/codex/commit/f59c631d833789ec327ecd947640cbe7404dd633
+  • Restore Code Mode through native QuickJS: Adds codex-code-mode-quickjs and selects it for TRUEOS in
+    ThreadManager, replacing the unsupported spawned V8 host with an in-process interpreter using the
+    existing tool-delegation authority. It supports ES modules, tool calls, cell-local variables,
+    store/load, timers, yields, termination, bounded heap/output, and cancellation; image/audio helpers and
+    external modules explicitly remain unsupported.
+  • Measure MCP discovery HTTP phases: Adds numeric timing around tools/list and discovery requests, HTTP
+    preparation/headers/body/JSON decode, and the first SSE event. Captures include bounded method labels,
+    status, bytes, and deadlines, without recording request bodies.
+  • Display Blueprint SHA instead of placeholder Cargo version: TRUEOS session titles and daemon status
+    display the first eight hexadecimal digits of TRUEOS_APP_SHA256, or package unknown; ordinary hosts
+    retain v{version}.
+
+26. 15 Oct 2026 17:54 — 50f328855
+https://github.com/t4ce/codex/commit/50f328855ba05b8d767e12fb8c12a9424f0ff81b
+  • Emit phase starts before potentially stuck work: Adds started events before turn context recording,
+    display-root discovery, skills/plugins, hooks, prompt construction, metadata, and model streaming. The
+    matching terminal event records completion/error/cancellation, allowing a non-returning operation to be
+    identified from its last start boundary.
+
+27. 15 Oct 2026 19:08 — cb371998f
+https://github.com/t4ce/codex/commit/cb371998fa9cb3f5f5b6dbf9ec638b1ec9771deb
+  • Correct Luna default model identifier: Changes the TRUEOS packaged model from gpt-5.6-luna to
+    gpt-6-luna, retaining low reasoning effort and configuration precedence.
+  • Give the fork a concrete workspace version: Updates workspace package version and local lockfile entries
+    from 0.0.0 to 0.162.0.
+
+28. 15 Oct 2026 21:06 — bb9d8df74
+https://github.com/t4ce/codex/commit/bb9d8df7405442902676967ae6e7806a63f993a8
+  • Skip transcript persistence when no hook consumes it: Previews SessionStart and UserPromptSubmit hooks
+    using a snapshot, fetching/materializing the transcript path only if a handler will run. Adds
+    context/input/checkpoint timing around the remaining persistence work.
+  • Remove avoidable HTTP body copies: Adds recv_bytes for owned Bytes chunks and uses it for MCP body/SSE
+    parsing, retaining the old Vec API and its ordering, cancellation, error, and EOF contract. MCP phase
+    timing gains wall-time, poll count, and poll-duration observations.
+  • Query the SQLite owner instead of the host filesystem: Centralizes database_exists: hosts use filesystem
+    existence, while TRUEOS opens service-owned logical DB paths read-only with create_if_missing=false.
+    Memory cleanup and thread history also honor already-open cached DBs instead of mistaking service-backed
+    images for absent local files.
+
+29. 16 Oct 2026 21:10 — 55245f0eb
+https://github.com/t4ce/codex/commit/55245f0eb485415c14dc27ec3b22bcadcfa52dac
+  • Separate stdin capability from tty mode: Unified execution now tracks stdin_open independently: native
+    Shell3 keeps write_stdin available with or without terminal geometry, while remote execution follows
+    tty/pipe_stdin and ordinary host behavior is preserved. Approval/interrupt paths consult actual input
+    capability instead of tty.
+  • Describe Shell3 session and Matrix slot lifecycles accurately: Updates exec_command guidance: Shell3
+    exit closes that shell session, while the native §<slot>§ operator frees a named Matrix slot and its
+    attachments.
+
+30. 16 Oct 2026 21:34 — 7a19e0a9d
+https://github.com/t4ce/codex/commit/7a19e0a9d8ffcf8c6e61d1f6eb0b16fd10f17e90
+  • Stop sending a synthetic startup turn: Deletes the TRUEOS diagnostic initial-prompt helper and tests,
+    returning fresh sessions to the actual supplied initial prompt. This reverses the automatic hi/gri
+    probes from 29981d5c2 and c8e439be2.
+
+31. 16 Oct 2026 21:52 — 8659da0b0
+https://github.com/t4ce/codex/commit/8659da0b04c6bb053e892e1ecdf1458894c5ecfc
+  • Bring upstream forward without losing the port: Merges upstream 0e67502123b4c6952b9fa5d672d2907fe4059f56
+    into the fork with 58 initial conflicts. The documented merge retains folded utility/transport crates,
+    RustCrypto, optional integration features, Shell3 stdin, VMX MCP, QuickJS, native filesystem
+    abstractions, and existing instrumentation.
+  • Adapt upstream remote-output collection to native stdin tracking: Preserves stdin_open while adopting
+    remote inherited-output drain semantics, final-output collection after exit, and process-identity
+    revalidation around approvals. Also retains upstream capability discovery V2, scoped credentials,
+    masking, and broker-aware proxy preparation.
+  • Keep native journal ownership while taking upstream SQLite fixes: Adopts upstream connect_once/busy
+    retry/failed-pool cleanup, journal-mode preservation, auto-vacuum initialization, and cached NFS
+    detection. Specifically excludes the WAL-setting PRAGMA on TRUEOS because journal ownership belongs to
+    the SQLite service.
+
+32. 16 Oct 2026 22:05 — c9caed277
+https://github.com/t4ce/codex/commit/c9caed277e4ac9dc35b109c6eae2abf84da1ceff
+  • Keep external reporting optional and avoid a second reqwest backend: Forwards external-reporting through
+    exec-server, disables OpenTelemetry OTLP default features, and adapts the workspace’s configured reqwest
+    client for enabled HTTP exporters. Export-specific tests are gated on the feature and were also
+    exercised with it enabled, according to the recorded validation.
+  • Restore host startup input replay while retaining the native handoff policy: Restores crossterm startup
+    typeahead replay for Unix hosts, filtering terminal color replies while preserving input/paste framing.
+    TRUEOS deliberately continues discarding bytes consumed by startup probes under its terminal handoff
+    policy.
+  • Record parity validation and normalize version-sensitive startup snapshots: Adds the initial conflict
+    list and records focused host/TRUEOS package validation results; normalizes snapshot widths affected by
+    the concrete package version. The report explicitly excludes a full repository suite and physical rig
+    execution.
+
+33. 16 Oct 2026 23:02 — 36468f31c
+https://github.com/t4ce/codex/commit/36468f31c571f53c6d26073016c0389ab9361061
+  Land parity PR #1 on main; its tree is identical to c9caed277, so its decisions are counted there and in 8659da0b0.
+
+34. 17 Oct 2026 12:12 — a0f002ab3
+https://github.com/t4ce/codex/commit/a0f002ab31cb1114571ebff3cf395af6f38b541f
+  • Detect terminal generation changes and rebuild presentation: Tracks the native terminal surface
+    generation and, on resize after ownership handoff, restores terminal modes, alternate screen, cursor
+    state, retained cells, and program status before repainting. Equal dimensions still trigger invalidation
+    when ownership generation changed; parked status leaves Shell3 interactive.
+
+35. 17 Oct 2026 21:55 — d34ce1ed5
+https://github.com/t4ce/codex/commit/d34ce1ed5b9571bd5d9a5497e1206ae888a7e46c
+  • Enforce native file permissions at the executor boundary: Routes TRUEOS filesystem helpers and
+    apply_patch through a native adapter because Linux/Seatbelt helper spawning is unavailable. It checks
+    read/write/deny rules, rejects link aliases, and requires unrestricted recursive access until per-entry
+    walkers exist; kernel app-root confinement remains the documented second boundary.
+  • Keep transcript data when timestamp updates are unsupported: Ignores only ErrorKind::Unsupported from
+    rollout modified-time refreshes, retaining transcript appends on logical-revision filesystems.
+    Permission, capacity, and real I/O errors still propagate.
+
+36. 17 Oct 2026 23:43 — 3bc7d57c6
+https://github.com/t4ce/codex/commit/3bc7d57c6a09585aa055e73d589c320ddcf6c951
+  • Expose direct UTF-8 read_file and write_file tools: Adds TRUEOS read_file/write_file builtins with exact
+    bytes, bounded whole-file reads, optional JSON validation, SHA-256 receipts, and verified readback. New
+    files use exclusive create; replacements require the hash returned by a prior read, and share patch
+    approval/granted-permission handling without retrying a potentially committed write.
+  • Commit native content identity and hash checks at the storage owner: Adds create_new/expected_sha256 to
+    filesystem APIs and RPCs plus native content_type metadata. TRUEOS writes go through
+    write_file_typed_checked, preserving existing content identity and deriving a new file’s identity from
+    bytes instead of its extension.
+  • Disable untyped native streaming replacement handles: Advertises file_write_streaming=false on TRUEOS
+    and rejects replace-mode streamed handles because they cannot declare native content identity. The local
+    stream API buffers bounded input up to 64 MiB and commits through the typed write path instead.
+  • Cap native Tokio blocking workers at eight: Sets max_blocking_threads(8) on TRUEOS because each 16 MiB
+    stack is eagerly backed from the Blueprint heap and Tokio’s default 512 workers can exhaust the 1 GiB
+    guest. Excess filesystem/plugin work queues instead; host runtime defaults remain unchanged.
+
+37. 26 Oct 2026 01:27 — 1f3471ffb
+https://github.com/t4ce/codex/commit/1f3471ffb0d1a2c34e4de485fa9a5bbc295eee82
+  • Generate a proposed next user message after a completed response: A default-on next_prompt_suggestions
+    feature requests a bounded suggestion from a tool-free ephemeral thread, preferring gpt-5.6-luna with
+    low effort when available and otherwise using the current model. It uses up to six recent user/final-
+    assistant messages and suppresses suggestions during active goals, queued input, review, replay, or an
+    occupied composer.
+  • Keep suggestions separate from real drafts and submission: Dim placeholder text becomes an editable
+    draft only after acceptance; typing, Escape, attachments, new turns, reconnects, and thread switches
+    invalidate it so a late result cannot replace user input. Original acceptance was Tab; TRUEOS acceptance
+    is changed to Enter by b7af47b5c.
+  • Update Tokio utilities: The shared tokio-util dependency moves from 0.7.18 to 0.7.20, with the
+    corresponding lockfile update. The diff does not state an original rationale.
+
+38. 27 Oct 2026 22:01 — 3d2654a95
+https://github.com/t4ce/codex/commit/3d2654a953d52859e8d571c26b2a0af2b6a4f2d3
+  • Use the relocated shared vendor forks: Reqwest now resolves from TRUEOS-Buildins; httpdate and rustls-
+    rustcrypto resolve from TRUEOS/vendor, and a getrandom 0.4.3 crates.io patch points there too. The
+    lockfile follows these path changes.
+
+39. 28 Oct 2026 02:25 — d4d8f255d
+https://github.com/t4ce/codex/commit/d4d8f255d6428c1341a3bb5d9326b3a9c2ce3bc7
+  • Expose list_directory and file_info without a shell: TRUEOS gains sorted/paged directory discovery and
+    metadata tools using the selected environment filesystem and its sandbox context. Tool and environment
+    instructions explicitly distinguish runtime paths from build-host checkout paths.
+  • Read native directory kinds through the typed VFS API: TRUEOS directory reads use list_dir_typed rather
+    than Tokio POSIX directory iteration, preserving native file/directory classification and rejecting a
+    truncated native listing instead of presenting it as complete.
+  • Embed Shell3 command groups at build time: The core build script parses the TRUEOS Shell3 registry with
+    syn and writes a static command catalog into OUT_DIR; CODEX_TRUEOS_SHELL3_REGISTRY can override the
+    source. Non-TRUEOS builds receive an empty catalog.
+  • Synchronize saved authentication on TRUEOS: After writing and flushing auth.json, TRUEOS also calls
+    sync_all before returning success.
+  • Send startup diagnostics to the resident logger: TRUEOS startup messages and panic-before-restore
+    diagnostics move from stderr to tracing, preventing them from painting over the TUI. Very early timing
+    milestones are subsequently routed directly to the C ABI logger in 1d8b87880.
+
+40. 28 Oct 2026 02:57 — 048120780
+https://github.com/t4ce/codex/commit/048120780836844f8c11a32ab4013d947418cb08
+  • Answer help within Codex: The always-registered TRUEOS help tool combines the embedded Shell3 command
+    groups with bounded live AKA names read from vFile:startup. A standalone local exec_command cmd="help"
+    is intercepted without creating a shell; explicit shell/workdir/permission options on that shortcut are
+    rejected and callers are directed to the help tool.
+  • Calculate through TRUEOS native operations: The calculate tool lists the native operation registry or
+    evaluates one registered operation over bounded finite f64 arguments without launching a process. It
+    validates names and arity and represents nonfinite results explicitly rather than emitting invalid JSON
+    numbers.
+  • Teach the model how to use native capabilities: TRUEOS environment and exec-command descriptions direct
+    discovery to help and direct numeric work to calculate, while retaining remote environments own shell
+    semantics.
+
+41. 28 Oct 2026 05:07 — 55c41450d
+https://github.com/t4ce/codex/commit/55c41450d9c638afcc9fe146ef1bc799b345d847
+  • Compile out the terminal-pet subsystem on TRUEOS: TRUEOS no longer builds the Codex terminal-pet loader,
+    CDN client, catalog, picker, preview, animation state, or ambient-pet notifications; an informational
+    handler says resident Spirit manages Lilly. Pet selection and pet-disable persistence remain available
+    on other platforms.
+  • Separate terminal image transport from pets: Kitty and Sixel image transport modules move to
+    terminal_image so conversation image rendering remains built even when terminal pets are excluded.
+    TRUEOS also reserves no transcript columns for a terminal pet.
+
+42. 28 Oct 2026 05:35 — 1dfd86f6c
+https://github.com/t4ce/codex/commit/1dfd86f6c353c9016c995d80c02d068c29aa3d86
+  • Give the model native Spirit interaction: A permanently registered spirit tool exposes windows, focus,
+    observe, pointer, type, key, move, and emotion through the resident native API; observe returns the
+    actual PNG to image-capable models. Calls remain serial, local-only, and distinguish a BUSY action that
+    queued nothing from an error with unknown completion.
+  • Validate Spirit without the full host dependency graph: A standalone workspace imports the production
+    handler and public native wrappers against deterministic ABI fixtures, covering schemas, coordinates,
+    text limits, images, errors, and exactly-once dispatch. It does not contact live input or window
+    services.
+
+43. 28 Oct 2026 22:28 — 2318631aa
+https://github.com/t4ce/codex/commit/2318631aacf18670e7b3c16a80a549a425289a98
+  • Replace pet slash commands with Spirit integration information: On TRUEOS the slash-command spelling
+    becomes /spirit, with /pet and /pets no longer accepted and no inline pet arguments; it is usable during
+    a task. Help and model instructions describe Spirit as automatically configured at boot with Lilly as
+    the avatar and owning presentation and input sequencing.
+
+44. 28 Oct 2026 23:05 — e72f66c55
+https://github.com/t4ce/codex/commit/e72f66c55591b2241ce63d2bd236c203a42ec7cb
+  • Show subagents through native Spirit snapshots: The embedded app server observes existing thread
+    registries and lifecycle/attention state and publishes complete versioned snapshots, with event wakes
+    and a two-second resync. It retains the last accepted snapshot on errors, publishes disconnected state
+    at shutdown, and excludes ephemeral/internal feature threads.
+
+45. 28 Oct 2026 23:49 — 83c4ee5a0
+https://github.com/t4ce/codex/commit/83c4ee5a09c7a2213ed6f766a43f2723ea770e1c
+  • Complete metadata backfill directly for genuinely empty history: When no sessions or archived_sessions
+    directory exists and the database still has an untouched pending backfill, startup atomically marks it
+    complete without claiming a worker lease. Existing leases, checkpoints, and failed probes keep the
+    normal path; reading an existing backfill row also avoids rewriting it first.
+  • Encode each text frame before writing to TRUEOS stdout: TRUEOS reuses a byte buffer for ANSI diff
+    encoding and submits it with one write_all, avoiding a guest stdout mutex acquisition for each formatted
+    cell. Write errors still propagate immediately and the caller retains flush boundaries.
+
+46. 29 Oct 2026 00:05 — 0d3e26e6c
+https://github.com/t4ce/codex/commit/0d3e26e6cb55d3c877da5732e36085ef862d3d74
+  • Select native thread carrier policy before creating threads: CODEX_TRUEOS_THREAD_PLACEMENT selects
+    single, isolated, or spread and CODEX_TRUEOS_BACKGROUND_CARRIERS bounds background carriers to 1–4, with
+    the default single/2. The main child is marked foreground before admission and foreground-active on
+    entry; unavailable default placement is tolerated, while explicitly requested unsupported placement
+    errors.
+  • Keep native agent paths and nicknames distinct: Spirit snapshots now retain the canonical path in name
+    and expose the nickname in its own field for loaded and unloaded agents.
+
+47. 29 Oct 2026 00:29 — 6df928a9e
+https://github.com/t4ce/codex/commit/6df928a9e47f27ea697992c7530d81a4d85e712d
+  • Read carrier placement from trueos-threads.conf: TRUEOS accepts a bounded UTF-8 mode and optional cap
+    from $CODEX_HOME/trueos-threads.conf when neither placement environment variable is supplied. Either
+    environment variable overrides the whole file, while missing files retain the default and
+    malformed/unreadable explicit profiles fail clearly.
+
+48. 29 Oct 2026 00:57 — 05c4fbbba
+https://github.com/t4ce/codex/commit/05c4fbbba9a7bbc61d9386a1b2d9b132b6de6445
+  • Read real agent trees and scope parent lookup per tree: The Spirit projection now reads each live
+    session existing registry instead of constructing a fresh manager registry, deduplicates shared
+    registries, and resolves unloaded-child parents within their own tree. This preserves children evicted
+    from runtime and avoids mixing identical /root/... paths across sessions.
+
+49. 29 Oct 2026 01:19 — d543a3cbd
+https://github.com/t4ce/codex/commit/d543a3cbd7d876c6ce28e8d64a38b1e0febc7aef
+  • Make snapshot tests detect accidental fresh-registry reads: The fake runtime now stores registry
+    ownership on the session and makes the manager helper return a fresh empty tree, matching the production
+    distinction corrected by 05c4fbbba. This commit changes the fixture, not runtime behavior.
+
+50. 29 Oct 2026 02:10 — 1d8b87880
+https://github.com/t4ce/codex/commit/1d8b8788005935e6fea46f633ee60ca832350abe
+  • Accept native input-grid text through the normal user-message queue: A bounded inbox polls vFile:codex-
+    input/<thread> and delivers each complete user-authored frame only to its original ready primary
+    conversation, without interpreting slash or exclamation prefixes. The reader owns in-flight VFS reads
+    through completion and stops fetching until the pending prompt is accepted.
+  • Log startup milestones before tracing exists: Opt-in startup timing uses trueos_cabi_log directly on
+    TRUEOS so placement/arg0 milestones are visible before a tracing subscriber exists and never contaminate
+    terminal bytes.
+  • Document workload verification for Blueprint packing: The packing guide records the normal cargo bp
+    codex-cli flow, hashes and workload receipts, required strong kernel hook imports, carrier-profile
+    selection, and startup log capture. This commit documents the external packer contract; it does not
+    change compiler settings.
+
+51. 29 Oct 2026 02:23 — b10e0ea2a
+https://github.com/t4ce/codex/commit/b10e0ea2a92a5270b7cfd73a5c75186240f13b3d
+  • Retire native prompt readiness before server shutdown: Native input now requires both the displayed and
+    actual chat-widget thread to match the primary thread; shutdown closes the scope, finishes an existing
+    VFS read, stops acceptance waits, and publishes the offline endpoint before the app server shuts down.
+
+52. 29 Oct 2026 03:12 — b7af47b5c
+https://github.com/t4ce/codex/commit/b7af47b5c479ebde10a15127aa90edd42ac7db7b
+  • Default native exec to captured command text rather than an interactive terminal: Nonempty commands
+    without tty now close stdin after the batch and return plain captured text, with a session ID used only
+    for polling ongoing work. Empty commands intentionally create reusable plain sessions, tty=true retains
+    interactive Shell3 keys/geometry, and nonterminal sessions no longer expose a resizer.
+  • Document captured-mode commands and live app discovery: Help and tool descriptions use mode-qualified
+    forms such as adm ram and hv status and direct live installed-app discovery to exec_command cmd="cmd
+    help". The static help catalog continues to omit installed AppDB names.
+  • Accept suggested prompts with Enter on TRUEOS: TRUEOS uses Enter to copy a next-prompt suggestion into
+    the editable draft because Shell3 reserves Tab for leaving the VM terminal; sending still requires a
+    subsequent submission. Linux retains Tab, and Escape/Backspace/typing dismiss suggestions.
+
+53. 29 Oct 2026 05:14 — 2b428ba8a
+https://github.com/t4ce/codex/commit/2b428ba8a2135f1a404043e588f87ec187965e4a
+  • Interrupt native captured sessions without sending command text: A lone Ctrl-C byte in a plain native
+    session sends Signal::Interrupt; a failed interrupt attempts termination and ends the writer. Explicit
+    terminals continue receiving keyboard bytes.
+  • Add services readiness discovery to local help: Help now advertises services or adm services as the
+    central service readiness/start snapshot, refreshed approximately once per second.
+
+54. 29 Oct 2026 06:26 — 202e32d8d
+https://github.com/t4ce/codex/commit/202e32d8d7a9458e4490dc84dc59b63804a47e60
+  • Replace host IDE socket IPC with the native Edit broker on TRUEOS: The trueos_ide tool discovers
+    workspaces and reads/writes source, compiles, checks/cancels builds, and runs projects through bounded,
+    serialized VFS broker requests with endpoint/request identity checks. TRUEOS /ide context uses that
+    broker and injects project, database, compiler, entry, endpoint, revision, active file, selection, and
+    tabs; other platforms retain their extension IPC path.
+  • Use full optimization for standalone Blueprint release packing: The CLI package release profile changes
+    opt-level 1/incremental/eight codegen units to opt-level 3, fat LTO, one codegen unit, no incremental
+    compilation, panic=abort, and no pre-pack stripping. Comments limit this package profile to standalone
+    Blueprint packing; ordinary workspace builds use root profiles.
+
+55. 29 Oct 2026 06:31 — 73a27ba59
+https://github.com/t4ce/codex/commit/73a27ba59b3d67168df9c1b66c1cafe65c68391d
+  • Open a project through native Edit startup scripts: trueos_ide action=open reuses a matching
+    project/database workspace or launches edit once in a new Shell3 destination, validates
+    project/database/compiler/entry fields, and waits for its endpoint/context. It rejects ambiguous matches
+    or incompatible compiler/entry instead of silently choosing a workspace.
+
+56. 29 Oct 2026 16:56 — 746db3ec5
+https://github.com/t4ce/codex/commit/746db3ec51e987ad7ef1006bbc53801c58fb4174
+  • Sleep between native IDE polls rather than busy yielding: Open-workspace discovery and empty broker
+    replies now wait up to 25 ms per poll, bounded by the remaining deadline. Async tools use Tokio sleep
+    while synchronous /ide context uses the native sleep function.
+
+57. 30 Oct 2026 06:20 — b1529ab40
+https://github.com/t4ce/codex/commit/b1529ab40421699c31a2c0f417e26c8eff15f95e
+  • Use the launch endpoint as the implicit IDE target: CLI startup consumes vFile:launch once and stores
+    its Codex start endpoint; implicit tool and /ide context requests use that owner even when multiple Edit
+    windows exist. A launch with this endpoint automatically enables IDE context, and a disappeared
+    originating workspace does not redirect requests to a survivor.
+
+58. 30 Oct 2026 14:00 — de43fb870
+https://github.com/t4ce/codex/commit/de43fb8708be9bd27b1e989bf75bd4d43a396e26
+  • Cache immutable projection headers for each live writer incarnation: A OnceCell attached to the live
+    recorder stores the initial history ordinal and subagent-history boundary after the first successful
+    header read. Shutdown/resume/revert create a new cache, failed reads retry, and offline materialization
+    still reads durable state.
+
+59. 31 Oct 2026 07:03 — 5968eb523
+https://github.com/t4ce/codex/commit/5968eb5230181dc16dc40247eb6b43be835cb43a
+  • Defer full initial WebSocket prewarming on TRUEOS: Fresh TRUEOS sessions default to auth-only warming
+    and omit the optional full turn/context/tool/router/prompt preparation plus WebSocket prewarm task.
+    CDX_STARTUP_PREWARM=1 restores the original provider-gated initial preparation, while explicit later
+    idle warmup and normal turn transport retain their existing behavior.
+  • Coalesce the first duplicate automatic skills refresh: TRUEOS drops exactly the first same-cwd session-
+    configuration refresh because startup already launched a background forced skills read. Explicit
+    refreshes, later sessions, different cwd values, and existing result/error handling keep the normal
+    path; CDX_STARTUP_SKILLS_COALESCE=0 restores the duplicate foreground request.
+  • Paint the configured session explicitly after attachment: Startup keeps a pending foreground handoff
+    paint until history/draft restoration and protected-event processing permit a successful render. This
+    avoids depending solely on a later scheduled frame or terminal-input wake.
+  • Keep one Tokio async worker by default and bound explicit experiments: TRUEOS sets worker_threads from
+    the successfully admitted carrier-placement snapshot: single allows one and isolated/spread allow 1–N
+    with N capped at four, selected through TOKIO_WORKER_THREADS. The existing eight blocking-worker cap
+    remains; extra carrier capacity alone does not automatically increase the async pool.
+  • Prevent dotenv from changing reserved native launch identity: On TRUEOS, case-sensitive TRUEOS_
+    variables from dotenv are ignored before set_var; this preserves kernel launch identity and access
+    scope. A static diagnostic is emitted once when a reserved key is skipped.
+  • Share bounded opt-in startup measurements across crates: A std-only startup-timing crate adds named
+    spans, wall/poll measurements, launch request/instance/archive identity, and a 256-span limit, with
+    native logger or optional TSV sinks. Startup, model refresh, database opens/migrations, backfill, thread
+    creation/attachment, skills, and dispatch/handoff gain these probes without logging user payloads.
+  • Retain startup baseline, build, and controlled-experiment evidence: The commit adds the execution map
+    and captured loader/runtime/prewarm/skills/watermark reports under docs/codex-cli. These documents
+    distinguish source candidates, measured wall time, poll time, and unresolved input latency.
+
+60. 31 Oct 2026 09:01 — 3f3fc4db9
+https://github.com/t4ce/codex/commit/3f3fc4db90ff7653c18ba32b547a435fb1eb113e
+  • Publish same-binary startup reversal evidence: The retained same-kernel/binary control records
+    attachment-to-ready at 21 ms with skills coalescing versus 19003 ms with CDX_STARTUP_SKILLS_COALESCE=0.
+    Full prewarm remained compatible with a short 32 ms handoff, while early draft echo still showed
+    separate multi-second delays.
+  • Record that a pre-Tokio filesystem stall was fixed in kernel service placement: Matched experiments
+    identified an awaited native range read when the initial Codex carrier shared AP14 with the permanent
+    Skhynix service; the documented production repair requires that service on independently polled BSP0.
+    The actual kernel implementation is outside this Codex commit, which stores provenance, retirement
+    gates, and live serial-launch evidence.
+  • Keep async-worker and early-input conclusions qualified: The report retains one async worker as
+    production default, excludes runs with incomplete VM retirement or pre-runtime filesystem failures, and
+    records remaining early input latency separately. It documents exact-incarnation retirement checks for
+    future experiments rather than treating a stop acknowledgement as retirement.
+
+61. 31 Oct 2026 10:32 — 617bd07f6
+https://github.com/t4ce/codex/commit/617bd07f6ee43ce72bd14d9fef265021551c44b5
+  • Let the model discover native API documentation without building: trueos_ide gains api_reference and its
+    topic argument, while IDE context includes the versioned API index and renders its summary into the
+    prompt. The operation is read-only and leaves project files and compiler state untouched.
+
+62. 03 Nov 2026 05:36 — 8badf4b4b
+https://github.com/t4ce/codex/commit/8badf4b4bc0b95cf8c87677e2e8bd6c5d2f02e3a
+  • Open and run HTML projects without a native compile step: The tool accepts kind=native or html; HTML
+    open requests use an HTML starter/preview path and reject a compiler, while run saves and opens the
+    standalone preview Blueprint. Context handles optional compilers and labels the project target as HTML
+    preview.
+
+63. 03 Nov 2026 05:51 — 76ec9af39
+https://github.com/t4ce/codex/commit/76ec9af3982e9002367be737e632e20d300a522d
+  • Use the root qjs package as the native engine dependency: trueos-qjs now aliases package qjs at TRUEOS-
+    Blueprints/apps/qjs with default features disabled and native-engine enabled, replacing the old nested
+    crates/trueos-qjs path. This is a dependency-layout change; it does not deactivate Code Mode.
+
+64. 03 Nov 2026 08:55 — 57fe4595c
+https://github.com/t4ce/codex/commit/57fe4595ca32eba46227653b8efb60e9092b6559
+  • Hard-disable plugin feature families on TRUEOS: Plugins, RemotePlugin, RecommendedPlugins,
+    PluginSharing, and PluginHooks are now unsupported on TRUEOS in defaults, config/enable calls, and
+    enabled() checks even for imported feature sets. The comment specifically prevents startup catalog
+    refreshes from running when a shared config enables plugins; Apps, SQLite, and ToolSuggest remain
+    independently usable.
+
+65. 03 Nov 2026 09:46 — 8ebb23020
+https://github.com/t4ce/codex/commit/8ebb23020037949cfa97381792339e14a44cb56a
+  • Restore browser handoff through Hull rather than host webbrowser launching: OAuth/login, onboarding,
+    usage/history links, and transcript links share codex_utils_process::open_browser; on TRUEOS it launches
+    hull in a new Shell3 with one validated open command. Other targets still use webbrowser, which becomes
+    target-specific rather than a direct dependency of login, rmcp-client, and tui.
+  • Restrict Hull handoff to its supported URL forms: The wrapper accepts bounded HTTPS URLs or
+    http://127.0.0.1 with an explicit nonzero port, rejecting credentials, whitespace/control characters,
+    unsupported schemes, and script injection before constructing the launch command. This limits browser
+    handoff targets but does not remove manual authorization URL output.
+
+DECISIONS TO REVISIT — SOURCE STATUS TODAY
+
+Plugins hard-disabled [retained]
+TRUEOS rejects plugins, remote_plugin, recommended_plugins, plugin_sharing, and plugin_hooks even if
+configuration enables them. Apps remain a separate feature.
+Revisit: Change the TRUEOS supported_on_target policy; ordinary feature toggles cannot restore these
+plugins.
+Commits: 57fe4595c
+
+Bedrock and AWS authentication optional [retained]
+Bedrock login/provider support and AWS signing are excluded by default, with explicit disabled errors.
+Revisit: Build with the bedrock Cargo feature; native dependencies still need target validation.
+Commits: 14e8392da
+
+Local model setup optional [retained]
+Ollama and LM Studio setup/model management are excluded by default.
+Revisit: Build with local-models; this does not by itself supply working native external processes.
+Commits: 14e8392da
+
+Voice and new audio input optional [retained]
+WebRTC/audio processing and voice startup are excluded by default.
+Revisit: Build with voice after confirming the native media runtime.
+Commits: 14e8392da
+
+External assistant imports optional [retained]
+External-agent settings/history import handlers are excluded by default.
+Revisit: Build with external-agent-imports.
+Commits: 14e8392da
+
+External reporting optional [retained]
+Analytics transmission, OTLP exporters, and feedback uploads are excluded by default; local metrics/logging
+remain.
+Revisit: Build with external-reporting.
+Commits: 14e8392da, c9caed277
+
+Clipboard backend omitted from Blueprint build [retained]
+The no-default-features native build omits native clipboard access, OSC52/tmux forwarding, and clipboard
+subprocesses. Terminal-delivered text paste remains.
+Revisit: Select system-clipboard and provide a backend that works on TRUEOS.
+Commits: 87b1394d7
+
+Managed install/update and daemon features omitted [retained]
+The Blueprint build omits install-update: managed copies, updates, desktop install, daemon remote-control
+commands, and agents overview. Local sessions use the embedded server.
+Revisit: Revisit platform package ownership and the install-update feature together.
+Commits: 7b8cf42c8
+
+PowerShell interpretation omitted [retained]
+The Blueprint feature selects nopowersh, disabling PowerShell parser/unwrapping, discovery, and encoding-
+prefix injection.
+Revisit: Remove nopowersh from the native feature selection only when its native dependencies are ready.
+Commits: 7b8cf42c8
+
+Terminal pets replaced by Spirit [retained]
+TRUEOS compiles out terminal-pet CDN/catalog/picker/animation and exposes /spirit instead. Conversation
+image transport remains available.
+Revisit: Revisit target gates and slash-command policy if both companion systems should coexist.
+Commits: 55c41450d, 2318631aa
+
+Temporary model default removed [removed_in_working_tree]
+Removed on 5 November 2026 at user request. All targets use upstream packaged defaults directly, and saved
+model/reasoning settings retain their existing precedence.
+Status: Source reversal implemented; the published commit ledger above remains historical.
+Commits: 29981d5c2, cb371998f
+
+Native Code Mode has a smaller output surface [retained]
+TRUEOS uses in-process QuickJS instead of the unsupported spawned host. Image/audio output helpers and
+external modules remain unsupported.
+Revisit: Extend the native engine or add a supported host runtime; there is no single flag for full parity.
+Commits: c8e439be2, f59c631d8
+
+Initial full prewarm deferred [retained]
+Fresh native sessions warm auth but defer the optional full turn preparation and WebSocket prewarm. Normal
+turn transport still runs.
+Revisit: CDX_STARTUP_PREWARM=1 restores provider-gated initial full prewarm.
+Commits: 5968eb523
+
+Duplicate initial skills request coalesced [retained]
+TRUEOS omits one duplicate same-cwd automatic skills refresh. The retained same-binary measurement records
+21 ms with coalescing versus 19003 ms without it.
+Revisit: CDX_STARTUP_SKILLS_COALESCE=0 restores that duplicate request; the measured delay argues for
+keeping the optimization.
+Commits: 5968eb523, 3f3fc4db9
+
+Startup-probe input still discarded on TRUEOS [retained]
+The early global removal of startup input replay was reversed for Unix hosts, while TRUEOS keeps its discard
+policy.
+Revisit: Revisit native terminal handoff and probe replay together; merely restoring host replay does not
+establish native correctness.
+Commits: b34587fc3, c9caed277
+
+Screen-reader probing skipped [retained]
+TRUEOS skips host screen-reader detection and selects Animated as its initial motion default.
+Revisit: Revisit the native accessibility/motion default and a supported detection mechanism.
+Commits: 47873da26
+
+SQLite housekeeping belongs to the service [retained]
+The native client skips direct SQLite linkage, client reclamation, and WAL-setting pragmas because the
+Blueprint service owns them.
+Revisit: Check the service contract before changing client policy; this is delegated ownership.
+Commits: d396a341a, 8659da0b0
+
+Restricted recursive filesystem operations limited [retained]
+Native filesystem checks reject restricted recursive operations without sufficiently broad access until per-
+entry enforcement exists.
+Revisit: Implement per-entry policy enforcement if restricted recursive traversal is needed.
+Commits: d34ce1ed5
+
+Untyped streamed replacements disabled [retained]
+TRUEOS advertises file_write_streaming=false and rejects untyped replacement handles. The local stream
+adapter buffers at most 64 MiB and commits through typed writes.
+Revisit: Add a typed streaming protocol preserving native content identity and digest checks.
+Commits: 3bc7d57c6
+
+Native worker pools deliberately bounded [retained]
+Production defaults use one async worker and at most eight blocking workers. Explicit placement experiments
+allow isolated/spread carriers and up to four async workers.
+Revisit: Use placement environment/profile controls and TOKIO_WORKER_THREADS within admitted limits; review
+the blocking cap against current stack/heap costs.
+Commits: 3bc7d57c6, 0d3e26e6c, 6df928a9e, 5968eb523
+
+AWS-LC replaced independently of AWS auth [retained]
+The selected primary TLS provider is RustCrypto, and the asserted signature baseline changed from P-521 to
+P-256. AWS-LC packages still exist in the full lockfile.
+Revisit: Review crypto compatibility as a separate decision from enabling Bedrock.
+Commits: 1a9679944
+
+Thirteen source crates folded into four [retained]
+Transport, network foundation, paths, and text replace thirteen original packages, reducing the reachable
+package/build-unit count by nine. This is separate from duplicate transitive-version cleanup.
+Revisit: Unfold only with evidence that the original compilation boundaries help; the implementations were
+moved rather than removed.
+Commits: e0dd704f5, 2df7c4acb
+
+YOLO recorded as user configuration [configuration_guidance]
+The patch documents danger-full-access plus approval_policy=never under VMX isolation. It does not hardcode
+those values as universal CLI defaults.
+Revisit: Inspect or change the selected user/profile configuration; repository history alone does not
+establish the live setting.
+Commits: c29c7bef4
+
+Socket-directory POSIX checks bypassed [retained]
+TRUEOS socket-directory preparation skips Unix owner/mode validation and 0700 enforcement while retaining
+directory checks. The comments describe this as temporary while native access-key enforcement is integrated.
+Revisit: Revisit these target gates against the current TRUEOSFS access-key contract; do not assume later
+kernel access-key work automatically changed this client code.
+Commits: e8b197ca2
+
+Automatic diagnostic startup prompts already removed [already_reversed]
+The temporary hi prompt became a gri execution probe, then the automatic startup turn was deleted.
+Revisit: No further revert is needed for this probe.
+Commits: 29981d5c2, c8e439be2, 7a19e0a9d
+
+Standalone Blueprint release tuning already revised [already_revised]
+Early standalone builds used opt-level 1 with eight codegen units and incremental compilation. Later native
+packing moved to opt-level 3, fat LTO, one unit, incremental=false, and panic=abort.
+Revisit: The current package profile is already the later optimization policy.
+Commits: 47873da26, 202e32d8d
+
+DIRECT HOST / BUILD INTEGRATION — SELECTED SUPPORTING EVENTS
+This section covers selected direct integration, not the complete operating-system or SDK history.
+
+TRUEOS-Blueprints — Register the external Codex app
+Added codex-cli from the sibling fork to the Blueprint app catalog and supplied the RustCrypto Rama TLS
+patch. Codex was initially an optional catalog app.
+Status: Catalog optionality was later removed in 00f54e9e.
+https://github.com/t4ce/TRUEOS-Blueprints/commit/40bbb0ab30080781c12da8e4d8ac1a818a428418
+
+TRUEOS-Blueprints — Keep native network link inputs in their original order
+Added a Cargo-graph-derived ownership plan for Codex network archives and coalesced the large Codex ELF
+section layout. The implementation preserves the original archives and their order because merging archives
+had changed live section contents without saving allocated bytes.
+Status: Retained; this is link organization, not removal of networking.
+https://github.com/t4ce/TRUEOS-Blueprints/commit/1d3d96a8f9ea47f73fb57dc97a07d18ff3581913
+
+TRUEOS-Blueprints — Strip package-local symbols, retain them for stack captures
+Codex packaging discards local symbols to improve archive compression. Diagnostic stack-capture builds keep
+them and save the Cargo unit graph.
+Status: Retained with the stack-capture exception.
+https://github.com/t4ce/TRUEOS-Blueprints/commit/ecd107ca586ba4f4340dc656b8123ed91921e43c
+https://github.com/t4ce/TRUEOS-Blueprints/commit/cd62f49c1cc4b67ca4c04dd83b0fe1e90ff0ae2c
+
+TRUEOS — Observe Codex progress outside its executor
+Added an observer on the BSP and extended it with filesystem, transport, and guest allocator progress
+records. This makes stalled native work observable without requiring the Codex carrier to run.
+Status: Later generalized to multiple carriers.
+https://github.com/t4ce/TRUEOS/commit/67816b092428250a1bc564974b44c3c1341b91d4
+https://github.com/t4ce/TRUEOS/commit/c55d6f8003edcca8ee9d5ce660cae7468dc24c61
+https://github.com/t4ce/TRUEOS/commit/c8edef924ff289c55adc31ac7ca206c394c8d2ba
+
+TRUEOS-Blueprints — Make Codex a regular catalog app
+Removed the optional flag from codex-cli in the app catalog.
+Status: Reverses the initial optional catalog registration.
+https://github.com/t4ce/TRUEOS-Blueprints/commit/00f54e9e96b2a02a54fd5366745c2efbdd19c9ad
+
+TRUEOS — Give named Codex launches a shared stable home
+The app-home regression captured the policy that ordinary and named codex/codex-check launches share
+apps/codex or apps/codex-check. The corresponding fork change appears in d4d8f255d.
+Status: Superseded by separate named container roots in 22625dfa6; container zero keeps the bare root.
+https://github.com/t4ce/TRUEOS/commit/28f9bb2a8cf8ff131fb3f420be741d2e869cdda1
+
+TRUEOS — Observe multiple Codex carriers with bounded logs
+Changed the progress observer to rotate across active carriers and drain timing summaries after jobs retire.
+Transport counters remain visible while Codex is idle.
+Status: Retained; later gained native filesystem records.
+https://github.com/t4ce/TRUEOS/commit/a970a65e3e7105b228dead3ffb9f25f6ba01f0cb
+https://github.com/t4ce/TRUEOS/commit/71c7b5dfa4a7df915251822e241f80f36ea029c2
+https://github.com/t4ce/TRUEOS/commit/60c08f00a718192957f3224a1191ef5eb63f64f1
+
+TRUEOS — Deliver the native composer to the exact live conversation
+Added a native prompt editor and a bounded whole-message input service tied to the VM run and conversation
+identity. The follow-up preserves accepted text when a receiver lease changes and prevents delivery to a
+different conversation.
+Status: Retained and later extended with attachments; fork-side receiver is in 1d8b87880 and b10e0ea2a.
+https://github.com/t4ce/TRUEOS/commit/293c43eb812fa67865afe5508b52d0906af8c952
+https://github.com/t4ce/TRUEOS/commit/05a5bcb53925523487efdbed6afde410c1345b6f
+
+TRUEOS-Blueprints — Prove the packed app contains its workload hooks
+Added hash-bound source and Blueprint receipts plus ELF checks for the real thread-placement, child-role,
+and activity imports. Cached Codex packs are checked against their selected sources and container digest.
+Status: Retained; build evidence does not itself select a runtime placement mode.
+https://github.com/t4ce/TRUEOS-Blueprints/commit/0d149b7db015e2e5e53057bba9359a5ea49dad48
+
+TRUEOS-Blueprints — Allow cargo bp codex as a package name
+Mapped the friendly codex lookup name to the actual codex-cli Cargo package.
+Status: Retained.
+https://github.com/t4ce/TRUEOS-Blueprints/commit/e4c1f2232ae677ad7881e6a7bd8ae59f1b431ff5
+
+TRUEOS — Check the Edit-to-Codex launch boundary
+Added a focused harness for Edit launch, exact IDE endpoint attachment, app download, launch admission, and
+failure cleanup.
+Status: Supporting regression evidence; fork-side IDE attachment is b1529ab40.
+https://github.com/t4ce/TRUEOS/commit/c70dcb99233358e957024bfaf0dd1f0d1451e5e6
+
+TRUEOS — Record startup and filesystem timings
+Added reports for source-stamped startup phases and bounded native filesystem observations, then exposed
+filesystem progress outside the VM carrier. Missing records are kept as missing rather than treated as
+successful completion.
+Status: Supporting instrumentation, not a feature disable.
+https://github.com/t4ce/TRUEOS/commit/b657502ff00c82cb247d494d7052e967bffe90f0
+https://github.com/t4ce/TRUEOS/commit/4d6c70fa0e720a4d547b5e766942b1cc9d6b2cd7
+
+TRUEOS — Keep disk completions runnable during synchronous application entry
+Introduced an explicit BSP worker policy and selected it for the Skhynix UAS disk service, so Codex startup
+cannot occupy the executor that must complete its awaited disk read. Other disk registration APIs retain the
+current-executor policy.
+Status: Production kernel change behind the fork startup-block-service evidence in 3f3fc4db9.
+https://github.com/t4ce/TRUEOS/commit/4d6c70fa0e720a4d547b5e766942b1cc9d6b2cd7
+
+TRUEOS — Check the native IDE client separately
+Added a harness that compiles the real Codex IDE client and shared wire protocol independently, including
+HTML-open validation.
+Status: Supporting regression evidence for 8badf4b4b.
+https://github.com/t4ce/TRUEOS/commit/e0c7853271e4b0029ac013ca0c607503a5a22fa7
+
+TRUEOS — Record and test the plugin block
+Saved the plugin startup failure evidence and a harness for the fork platform policy. The report identifies
+background catalog refresh as the trigger and records the rebuilt package.
+Status: Supporting evidence for 57fe4595c; Apps remain outside the blocked plugin family.
+https://github.com/t4ce/TRUEOS/commit/b27edbffce8ec7b0c5c0c74929516cb8fc2cae8c
+
+TRUEOS — Record and test Hull browser routing
+Saved evidence and a focused harness for routing Codex browser actions through Hull, covering usage links,
+transcript links, onboarding, and OAuth flows.
+Status: Supporting evidence for 8ebb23020.
+https://github.com/t4ce/TRUEOS/commit/10160cdd45ec085144399550b3ef1f08cafc7572
+
+TRUEOS — Separate named app containers again
+Stopped forcing named Codex instances into the shared bare home and moved named roots to flat
+apps/<app>_<instance> paths. Explicit container ID zero keeps the historical bare root across reboots.
+Status: Already reverses the shared-named-home decision; ordinary Codex remains apps/codex. The .codex
+subtree is durable; supporting app files remain in RAM.
+https://github.com/t4ce/TRUEOS/commit/22625dfa699938de39593cb2a848d6dd02159c6f
+
+TRUEOS — Add path-only drag attachments
+Added bounded attachment-path decoding and Codex composer drag-and-drop without eagerly reading file bytes
+during the drag.
+Status: Retained with the following Spirit introduction changes.
+https://github.com/t4ce/TRUEOS/commit/9b526aa7ae39379dcf4f614e9b5072a4bd90e87c
+
+TRUEOS — Introduce dropped attachments through Spirit
+Connected dropped attachment text to Lilly through her paired keyboard and the existing native input lease.
+Status: Follow-up lifecycle handling in 351ba783f.
+https://github.com/t4ce/TRUEOS/commit/12091ebef0d662662a176f30ef8c3ae53b3581fd
+
+TRUEOS — Preserve the attachment introduction until keyboard completion
+Added explicit introduction ownership, completion/cancellation handling, and prompt-editor regressions for
+the Spirit-driven attachment flow.
+Status: Latest selected direct integration change in this audit.
+https://github.com/t4ce/TRUEOS/commit/351ba783fbb458688c6e7ab35ed67c60e85a2f4b
+

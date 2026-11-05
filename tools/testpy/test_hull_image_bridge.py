@@ -25,6 +25,7 @@ def function(source: str, name: str) -> str:
 def main() -> None:
     bridge = (ROOT / 'src/ui4/blueprint_ui4/hull_image_api.rs').read_text()
     parent = (ROOT / 'src/ui4/blueprint_ui4.rs').read_text()
+    surfaces = (ROOT / 'src/intel/gpgpu/types/surfaces.rs').read_text()
     abi = (ROOT / 'crates/trueos-v/src/bp_abi.rs').read_text()
     harness = (ROOT / 'tools/testpy/hull_image_bridge/harness.rs').read_text()
     tests = (ROOT / 'tools/testpy/hull_image_bridge/tests.rs').read_text()
@@ -35,6 +36,7 @@ def main() -> None:
         harness = harness.replace('@BRIDGE_PATH@', json.dumps(str(source)))
         harness = harness.replace('@ALLOCATE@', function(parent, 'allocate_sprite_gpu_va'))
         harness = harness.replace('@DESTROY@', function(parent, 'destroy_rgba8_surface'))
+        harness = harness.replace('@SURFACES@', surfaces[:surfaces.index('/// Exact private address space')])
         info = abi[:abi.index('pub const UI4_HULL_IMAGE_PENDING')]
         harness = harness.replace('@ABI@', info)
         fixture = directory / 'harness.rs'

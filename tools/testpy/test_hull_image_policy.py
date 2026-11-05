@@ -149,6 +149,47 @@ mod integration_tests {
     }
 
     #[test]
+    fn optional_live_svg_proxy_pngs_pass_production_decode_with_transparency() {
+        let Some(directory)=std::env::var_os("HULL_SVG_LIVE_FIXTURES") else {return;};
+        for name in ["commons-logo.png","wikimedia-footer.png"] {
+            let bytes=std::fs::read(std::path::Path::new(&directory).join(name)).unwrap();
+            let decoded=media::decode_ui4_bounded(&bytes).unwrap();
+            assert_eq!(decoded.info.source_format,2);
+            assert!(decoded.info.width<=128 && decoded.info.height<=128);
+            let zero=decoded.rgba.chunks_exact(4).filter(|p|p[3]==0).count();
+            let partial=decoded.rgba.chunks_exact(4).filter(|p|p[3]>0 && p[3]<255).count();
+            let opaque=decoded.rgba.chunks_exact(4).filter(|p|p[3]==255).count();
+            assert!(zero>0 && partial>0 && opaque>0,"{name} lost transparent or antialiased pixels");
+            println!("live SVG PNG {name}: {}x{} bytes={} transparent={zero} partial={partial} opaque={opaque}",decoded.info.width,decoded.info.height,bytes.len());
+        }
+    }
+
+    #[test]
+    fn optional_wikipedia_logos_pass_the_actual_bounded_media_decoder() {
+        let Some(directory)=std::env::var_os("HULL_WIKIPEDIA_LOGO_FIXTURES") else {return;};
+        let directory=std::path::Path::new(&directory);
+        let conversion=crate::hull_svg_policy::conversion_url(
+            "https://de.wikipedia.org/static/images/mobile/copyright/wikipedia-wordmark-en.svg",120,18).unwrap();
+        assert!(std::fs::read_to_string(directory.join("http.json")).unwrap().contains(&conversion));
+        for (name,width,height) in [
+            ("portal-ball.png",200,183),("article-ball.png",100,100),("article-wordmark.png",120,18),
+        ] {
+            let bytes=std::fs::read(directory.join(name)).unwrap();
+            let info=policy::preflight(&bytes).unwrap();
+            assert_eq!((info.format,info.width,info.height),(2,width,height),"{name} preflight");
+            let decoded=media::decode_ui4_bounded(&bytes).unwrap_or_else(|e|panic!("{name}: {e}"));
+            assert_eq!((decoded.info.source_format,decoded.info.width,decoded.info.height),(2,width,height),"{name} decode");
+            assert_eq!(decoded.rgba.len(),width as usize*height as usize*4);
+            let transparent=decoded.rgba.chunks_exact(4).filter(|p|p[3]==0).count();
+            let partial=decoded.rgba.chunks_exact(4).filter(|p|p[3]>0 && p[3]<255).count();
+            let opaque=decoded.rgba.chunks_exact(4).filter(|p|p[3]==255).count();
+            assert!(transparent>0 && partial>0 && opaque>0,"{name} lost meaningful alpha");
+            std::fs::write(directory.join(format!("{name}.rgba")),&decoded.rgba).unwrap();
+            println!("Wikipedia PNG {name}: {}x{} encoded={} rgba={} transparent={transparent} partial={partial} opaque={opaque}",width,height,bytes.len(),decoded.rgba.len());
+        }
+    }
+
+    #[test]
     fn png_indexed_unpacking_preserves_palette_alpha() {
         let bytes = include_bytes!("indexed.png");
         let image = png::decode_png_rgba_bounded(bytes, policy::MAX_SOURCE_BYTES, 8192).unwrap();
@@ -268,14 +309,17 @@ mod service {
     use alloc::{collections::VecDeque, string::String, sync::Arc, vec::Vec};
     use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use spin::Mutex;
-    use crate::policy::{self, ERR_INVALID};
+    use crate::policy::{self, ERR_INVALID, ERR_TOO_LARGE, MAX_ENCODED_BYTES};
     use crate::r::fs::request_broker as fs;
     use crate::ui;
+    use crate::test_time::{Duration,Timer};
     #[derive(Clone, Copy, Default)]
     pub(crate) struct ImageInfo { state:u32, sprite_id:u32, width:u32, height:u32, generation:u64, error:i32, reserved:u32 }
     SERVICE_CONSTANTS
     static NEXT_ID: AtomicU32 = AtomicU32::new(1);
     static REGISTRY: Mutex<Registry> = Mutex::new(Registry::new());
+    static DECODING: AtomicBool = AtomicBool::new(false);
+    SERVICE_DECODE_PERMIT
     SERVICE_TYPES
     fn ensure_workers() -> Result<(),i32> { Ok(()) }
     fn cache_scope(_: &str, _: &str, _: &str) -> Result<Option<Cache>,i32> { Ok(None) }
@@ -285,12 +329,26 @@ mod service {
         let guard = TEST_LOCK.lock().unwrap();
         *REGISTRY.lock() = Registry::new();
         NEXT_ID.store(1, Ordering::Relaxed);
+        crate::WARNINGS.lock().unwrap().clear();
         crate::hv::RUN.store(1, Ordering::Relaxed);
         ui::INCARNATION.store(1, Ordering::Relaxed);
         ui::BUSY.store(false, Ordering::Relaxed);
         ui::RELEASES.store(0, Ordering::Relaxed);
         fs::FILES.lock().clear(); fs::READS.store(0, Ordering::Relaxed);
         fs::FORCE_LENGTH.store(0, Ordering::Relaxed);
+        DECODING.store(false,Ordering::Relaxed);
+        crate::r::net::https::REQUESTS.lock().clear();
+        crate::r::net::https::REPLIES.lock().clear();
+        crate::r::net::https::CANCEL_AFTER_FETCH.store(false,Ordering::Relaxed);
+        crate::hull_svg_cache::VALUES.lock().clear();
+        crate::hull_svg_cache::WRITES.lock().clear();
+        crate::hull_svg_cache::FAIL_WRITE.store(false,Ordering::Relaxed);
+        ui::INSTALLS.store(0,Ordering::Relaxed);
+        ui::INSTALL_ERROR.store(0,Ordering::Relaxed);
+        ui::PREPARES.store(0,Ordering::Relaxed);
+        ui::PREPARE_BUSY.store(0,Ordering::Relaxed);
+        ui::PREPARE_ERROR.store(0,Ordering::Relaxed);
+        ui::CANCEL_PREPARE.store(false,Ordering::Relaxed);
         guard
     }
     fn admit(owner:u32, window:u32, url:&str, w:u32, h:u32, generation:u64) -> Result<i32,i32> {
@@ -432,7 +490,7 @@ mod service {
     #[test]
     fn complete_cache_hits_need_matching_url_length_digest_and_format() {
         let _guard = setup();
-        let cache=Cache { disk:1,directory:"cache".into() };
+        let cache=Cache { disk:1,directory:"cache".into(),svg_database:"svg.redb".into() };
         let url="https://example.test/a.png?q=1";
         let body=include_bytes!("rgba.png");
         fs::FILES.lock().insert("cache/source.png".into(),body.to_vec());
@@ -448,10 +506,185 @@ mod service {
     #[test]
     fn oversized_cache_records_are_rejected_before_reading_their_body() {
         let _guard = setup();
-        let cache=Cache { disk:1,directory:"cache".into() };
+        let cache=Cache { disk:1,directory:"cache".into(),svg_database:"svg.redb".into() };
         fs::FORCE_LENGTH.store(policy::MAX_ENCODED_BYTES+1,Ordering::Relaxed);
         assert!(read_bounded(&cache,"source.png",policy::MAX_ENCODED_BYTES).is_none());
         assert_eq!(fs::READS.load(Ordering::Relaxed),0);
+    }
+
+    fn job(url:&str)->Job {
+        admit(7,1,url,128,128,9).unwrap();
+        let mut job=REGISTRY.lock().queue.pop_front().unwrap();
+        job.cache=Some(Cache {disk:1,directory:"cache".into(),svg_database:"svg.redb".into()});
+        job
+    }
+    fn ready<T>(future:impl core::future::Future<Output=T>)->T {
+        let mut future=Box::pin(future);
+        let mut context=core::task::Context::from_waker(core::task::Waker::noop());
+        match future.as_mut().poll(&mut context) {
+            core::task::Poll::Ready(value)=>value,
+            core::task::Poll::Pending=>panic!("deterministic service mocks unexpectedly suspended"),
+        }
+    }
+    fn reply(url:&str,bytes:&[u8]) {
+        crate::r::net::https::REPLIES.lock().insert(url.into(),Ok(bytes.to_vec()));
+    }
+    fn requested()->Vec<String> {
+        crate::r::net::https::REQUESTS.lock().iter().map(|r|r.0.clone()).collect()
+    }
+    fn converted(job:&Job)->String {
+        crate::hull_svg_policy::conversion_url(&job.url,job.width,job.height).unwrap()
+    }
+
+    #[test]
+    fn image_errors_distinguish_network_decode_and_publication_without_url_secrets() {
+        {
+            let _guard=setup();let job=job("https://example.test/globe.png?token=secret");
+            crate::r::net::https::REPLIES.lock().insert(job.url.clone(),Err("dns Timeout".into()));
+            assert_eq!(ready(process(&job)),Err(ERR_FAILED));
+            let logs=crate::WARNINGS.lock().unwrap();
+            assert!(logs.iter().any(|s|s.contains("stage=fetch")&&s.contains("reason=dns Timeout")));
+            assert!(logs.iter().all(|s|!s.contains("token=")&&!s.contains("secret")));
+        }
+        {
+            let _guard=setup();let job=job("https://example.test/globe.png");reply(&job.url,b"invalid PNG");
+            assert!(ready(process(&job)).is_err());
+            assert!(crate::WARNINGS.lock().unwrap().iter().any(|s|s.contains("stage=decode")&&s.contains("encoded_bytes=11")));
+        }
+        {
+            let _guard=setup();let job=job("https://example.test/globe.png");reply(&job.url,include_bytes!("rgba.png"));
+            ui::INSTALL_ERROR.store(-6,Ordering::Relaxed);
+            assert_eq!(ready(process(&job)),Err(-6));
+            assert!(crate::WARNINGS.lock().unwrap().iter().any(|s|s.contains("stage=publish")&&s.contains("code=-6")));
+        }
+    }
+
+    #[test]
+    fn busy_upload_preparation_reuses_decoded_pixels_and_recovers_without_refetch() {
+        let _guard=setup();let job=job("https://example.test/globe.png");
+        reply(&job.url,include_bytes!("rgba.png"));
+        ui::PREPARE_BUSY.store(2,Ordering::Relaxed);
+        assert_eq!(ready(process(&job)),Ok(()));
+        assert_eq!(ui::PREPARES.load(Ordering::Relaxed),3);
+        assert_eq!(ui::INSTALLS.load(Ordering::Relaxed),1);
+        assert_eq!(status(7,1,job.life.id).unwrap().state,1);
+        assert_eq!(requested(),[job.url]);
+        assert!(crate::WARNINGS.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn upload_preparation_retry_is_bounded_and_permanent_errors_fail_immediately() {
+        for error in [ERR_BUSY,ERR_FAILED] {
+            let _guard=setup();let job=job("https://example.test/globe.png");
+            reply(&job.url,include_bytes!("rgba.png"));
+            ui::PREPARE_ERROR.store(error,Ordering::Relaxed);
+            assert_eq!(ready(process(&job)),Err(error));
+            assert_eq!(ui::PREPARES.load(Ordering::Relaxed),if error==ERR_BUSY{500}else{1});
+            assert_eq!(ui::INSTALLS.load(Ordering::Relaxed),0);
+            assert!(crate::WARNINGS.lock().unwrap().iter().any(|s|s.contains("stage=prepare-upload")));
+        }
+    }
+
+    #[test]
+    fn cancelled_preparation_retry_never_publishes_or_refetches() {
+        let _guard=setup();let job=job("https://example.test/globe.png");
+        reply(&job.url,include_bytes!("rgba.png"));
+        ui::PREPARE_BUSY.store(1,Ordering::Relaxed);
+        ui::CANCEL_PREPARE.store(true,Ordering::Relaxed);
+        assert_eq!(ready(process(&job)),Err(ERR_NOT_FOUND));
+        assert_eq!(ui::PREPARES.load(Ordering::Relaxed),1);
+        assert_eq!(ui::INSTALLS.load(Ordering::Relaxed),0);
+        assert_eq!(requested(),[job.url]);
+    }
+
+    #[test]
+    fn remote_svg_fetches_only_the_bounded_png_conversion() {
+        let _guard=setup();let job=job("https://example.test/logo.svg?theme=dark&v=1");
+        let proxy=converted(&job);reply(&proxy,include_bytes!("rgba.png"));
+        let (bytes,key)=ready(encoded_source(&job)).unwrap();
+        assert_eq!(bytes,include_bytes!("rgba.png"));assert_eq!(key,Some(proxy.clone()));
+        assert_eq!(requested(),[proxy]);
+        let requests=crate::r::net::https::REQUESTS.lock();
+        assert_eq!((requests[0].1,requests[0].2),(FETCH_TIMEOUT_MS,MAX_ENCODED_BYTES));
+        assert!(crate::hull_svg_cache::WRITES.lock().is_empty());
+    }
+    #[test]
+    fn extensionless_svg_is_sniffed_then_converted_but_rasters_stay_native() {
+        let _guard=setup();
+        let svg=job("https://example.test/asset?id=svg");let proxy=converted(&svg);
+        reply(&svg.url,b"<?xml version=\"1.0\"?><!-- logo --><svg xmlns=\"http://www.w3.org/2000/svg\"/>");
+        reply(&proxy,include_bytes!("rgba.png"));
+        assert_eq!(ready(encoded_source(&svg)).unwrap().1,Some(proxy.clone()));
+        assert_eq!(requested(),[svg.url.clone(),proxy]);
+        crate::r::net::https::REQUESTS.lock().clear();
+        let raster=job("https://example.test/asset?id=png");reply(&raster.url,include_bytes!("rgba.png"));
+        assert_eq!(ready(encoded_source(&raster)).unwrap(),(include_bytes!("rgba.png").to_vec(),None));
+        assert_eq!(requested(),[raster.url]);
+    }
+    #[test]
+    fn svg_cache_hit_avoids_network_and_missing_or_invalid_cache_retries_conversion() {
+        for cached in [None,Some(b"corrupt entry".as_slice()),Some(include_bytes!("rgba.png").as_slice())] {
+            let _guard=setup();let job=job("https://example.test/cached.svg");let proxy=converted(&job);
+            if let Some(bytes)=cached {
+                crate::hull_svg_cache::VALUES.lock().insert((1,"svg.redb".into(),proxy.clone()),bytes.to_vec());
+            }
+            reply(&proxy,include_bytes!("rgba.png"));
+            let (bytes,key)=ready(encoded_source(&job)).unwrap();assert_eq!(bytes,include_bytes!("rgba.png"));
+            if cached==Some(include_bytes!("rgba.png").as_slice()) {
+                assert_eq!(key,None);assert!(requested().is_empty());
+            } else {
+                assert_eq!(key,Some(proxy.clone()));assert_eq!(requested(),[proxy]);
+            }
+        }
+    }
+    #[test]
+    fn provider_error_documents_non_png_and_fetch_errors_are_not_converted_assets() {
+        for body in [b"<!doctype html><html>provider error</html>".as_slice(),b"not a png",include_bytes!("sample.jpg")] {
+            let _guard=setup();let job=job("https://example.test/logo.svg");reply(&converted(&job),body);
+            assert!(ready(encoded_source(&job)).is_err());assert!(crate::hull_svg_cache::WRITES.lock().is_empty());
+        }
+        let _guard=setup();let job=job("https://example.test/logo.svg");
+        crate::r::net::https::REPLIES.lock().insert(converted(&job),Err("HTTP429 provider rate limit".into()));
+        assert_eq!(ready(encoded_source(&job)),Err(ERR_FAILED));
+        assert!(crate::hull_svg_cache::WRITES.lock().is_empty());
+    }
+    #[test]
+    fn png_conversion_is_persisted_only_after_real_decode_and_successful_publication() {
+        let _guard=setup();let job=job("https://example.test/logo.svg");let proxy=converted(&job);
+        reply(&proxy,include_bytes!("rgba.png"));
+        assert_eq!(ready(process(&job)),Ok(()));
+        assert_eq!(status(7,1,job.life.id).unwrap().state,1);
+        assert_eq!(ui::INSTALLS.load(Ordering::Relaxed),1);
+        assert_eq!(&*crate::hull_svg_cache::WRITES.lock(),&[(1,"svg.redb".into(),proxy,include_bytes!("rgba.png").to_vec())]);
+    }
+    #[test]
+    fn conversion_decoder_or_publication_failure_and_stale_response_never_persist() {
+        {
+            let _guard=setup();let job=job("https://example.test/bad-pixels.svg");
+            let malformed=include_bytes!("invalid-pixels.png");assert_eq!(policy::preflight(malformed).unwrap().format,2);
+            reply(&converted(&job),malformed);
+            assert!(ready(process(&job)).is_err());assert_eq!(ui::INSTALLS.load(Ordering::Relaxed),0);
+            assert!(crate::hull_svg_cache::WRITES.lock().is_empty());
+        }
+        {
+            let _guard=setup();let job=job("https://example.test/publication-failed.svg");
+            reply(&converted(&job),include_bytes!("rgba.png"));ui::INSTALL_ERROR.store(ERR_FAILED,Ordering::Relaxed);
+            assert_eq!(ready(process(&job)),Err(ERR_FAILED));assert!(crate::hull_svg_cache::WRITES.lock().is_empty());
+        }
+        {
+            let _guard=setup();let job=job("https://example.test/cancelled.svg");
+            reply(&converted(&job),include_bytes!("rgba.png"));
+            crate::r::net::https::CANCEL_AFTER_FETCH.store(true,Ordering::Relaxed);
+            assert_eq!(ready(process(&job)),Err(ERR_NOT_FOUND));assert!(crate::hull_svg_cache::WRITES.lock().is_empty());
+            assert_eq!(ui::INSTALLS.load(Ordering::Relaxed),0);
+        }
+    }
+    #[test]
+    fn cache_write_failure_cannot_undo_an_already_published_svg() {
+        let _guard=setup();let job=job("https://example.test/logo.svg");reply(&converted(&job),include_bytes!("rgba.png"));
+        crate::hull_svg_cache::FAIL_WRITE.store(true,Ordering::Relaxed);
+        assert_eq!(ready(process(&job)),Ok(()));assert_eq!(status(7,1,job.life.id).unwrap().state,1);
+        assert_eq!(ui::INSTALLS.load(Ordering::Relaxed),1);assert_eq!(crate::hull_svg_cache::WRITES.lock().len(),1);
     }
 }
 '''
@@ -464,22 +697,72 @@ SERVICE_MOCKS = r'''
     pub fn vm_run_generation(_:u8)->Option<u64> { Some(RUN.load(Ordering::Relaxed)) }
 }
 #[cfg(test)] mod ui {
-    use core::sync::atomic::{AtomicBool,AtomicU64,AtomicUsize,Ordering};
+    use core::sync::atomic::{AtomicBool,AtomicI32,AtomicU64,AtomicUsize,Ordering};
     pub static INCARNATION:AtomicU64=AtomicU64::new(1);
     pub static BUSY:AtomicBool=AtomicBool::new(false);
     pub static RELEASES:AtomicUsize=AtomicUsize::new(0);
+    pub static INSTALLS:AtomicUsize=AtomicUsize::new(0);
+    pub static INSTALL_ERROR:AtomicI32=AtomicI32::new(0);
+    pub static PREPARES:AtomicUsize=AtomicUsize::new(0);
+    pub static PREPARE_BUSY:AtomicUsize=AtomicUsize::new(0);
+    pub static PREPARE_ERROR:AtomicI32=AtomicI32::new(0);
+    pub static CANCEL_PREPARE:AtomicBool=AtomicBool::new(false);
     pub fn authenticate_window(_:u32,_:u32)->Result<u64,i32> {
         if BUSY.load(Ordering::Relaxed) {Err(-7)} else {Ok(INCARNATION.load(Ordering::Relaxed))}
     }
     pub fn release_rgba(_:u32,_:u32,_:u64,_:u32)->i32 { RELEASES.fetch_add(1,Ordering::Relaxed);0 }
+    pub fn prepare_rgba(width:u32,height:u32,pixels:&[u8])->Result<(),i32>{
+        assert_eq!(pixels.len(),width as usize*height as usize*4);
+        PREPARES.fetch_add(1,Ordering::Relaxed);
+        if CANCEL_PREPARE.load(Ordering::Relaxed){crate::hv::RUN.store(2,Ordering::Relaxed);}
+        if PREPARE_BUSY.fetch_update(Ordering::Relaxed,Ordering::Relaxed,|n|n.checked_sub(1)).is_ok(){return Err(-7);}
+        let error=PREPARE_ERROR.load(Ordering::Relaxed);if error!=0{return Err(error);}
+        Ok(())
+    }
+    pub fn install_prepared(_:u32,_:u32,_:u64,_:u32,_:&mut ())->Result<u32,i32>{
+        let error=INSTALL_ERROR.load(Ordering::Relaxed);if error!=0{return Err(error);}
+        INSTALLS.fetch_add(1,Ordering::Relaxed);Ok(42)
+    }
+}
+#[cfg(test)] mod test_time {
+    pub use std::time::Duration;
+    pub struct Timer;
+    impl Timer {pub async fn after(_:Duration){}}
+}
+#[cfg(test)] mod hull_svg_cache {
+    use alloc::{collections::BTreeMap,string::String,vec::Vec};
+    use core::sync::atomic::{AtomicBool,Ordering};
+    pub static VALUES:spin::Mutex<BTreeMap<(u32,String,String),Vec<u8>>>=spin::Mutex::new(BTreeMap::new());
+    pub static WRITES:spin::Mutex<Vec<(u32,String,String,Vec<u8>)>>=spin::Mutex::new(Vec::new());
+    pub static FAIL_WRITE:AtomicBool=AtomicBool::new(false);
+    pub async fn read(disk:u32,path:&str,key:&str)->Option<Vec<u8>>{
+        VALUES.lock().get(&(disk,path.into(),key.into())).filter(|bytes|crate::policy::preflight(bytes).is_ok_and(|info|info.format==2)).cloned()
+    }
+    pub async fn write(disk:u32,path:&str,key:&str,bytes:&[u8])->Result<(),i32>{
+        assert!(crate::ui::INSTALLS.load(Ordering::Relaxed)>0,"cache write preceded sprite publication");
+        WRITES.lock().push((disk,path.into(),key.into(),bytes.into()));
+        if FAIL_WRITE.load(Ordering::Relaxed){Err(-6)}else{Ok(())}
+    }
 }
 #[cfg(test)] mod disc { pub mod block {pub type DeviceHandle=u32;} }
 #[cfg(test)] mod r {
     pub mod net { pub mod https {
+        use alloc::{collections::BTreeMap,string::String,vec::Vec};
+        use core::sync::atomic::{AtomicBool,Ordering};
+        pub static REQUESTS:spin::Mutex<Vec<(String,u32,usize)>>=spin::Mutex::new(Vec::new());
+        pub static REPLIES:spin::Mutex<BTreeMap<String,Result<Vec<u8>,String>>>=spin::Mutex::new(BTreeMap::new());
+        pub static CANCEL_AFTER_FETCH:AtomicBool=AtomicBool::new(false);
         pub struct MediaFetchCancellation(core::sync::atomic::AtomicBool);
         impl MediaFetchCancellation {
             pub fn new()->Self {Self(core::sync::atomic::AtomicBool::new(false))}
             pub fn cancel(&self) {self.0.store(true,core::sync::atomic::Ordering::Release);}
+        }
+        pub async fn get_image_bytes_shared(url:&str,timeout:u32,max:usize,cancellation:&MediaFetchCancellation)->Result<Vec<u8>,String>{
+            REQUESTS.lock().push((url.into(),timeout,max));
+            if cancellation.0.load(Ordering::Relaxed){return Err("cancelled".into());}
+            let result=REPLIES.lock().get(url).cloned().unwrap_or_else(||Err("unconfigured test URL".into()));
+            if CANCEL_AFTER_FETCH.load(Ordering::Relaxed){crate::ui::INCARNATION.store(2,Ordering::Relaxed);}
+            result
         }
     }}
     pub mod fs {pub mod request_broker {
@@ -508,9 +791,12 @@ def service_harness() -> str:
     types = source[source.index("struct Life {"):source.index("\nfn ensure_workers(")]
     functions = "\n".join(production_item(source, name) for name in (
         "request_inner", "status", "release", "reset", "complete_error", "read_bounded", "read_cache",
+        "asset_failure", "encoded_source", "converted_svg", "process", "resize", "decode_permit",
     ))
+    permit = source[source.index("struct DecodePermit;"):source.index("async fn decode_permit(")]
     return (SERVICE_MOCKS + SERVICE_TESTS.replace("SERVICE_CONSTANTS", constants)
-            .replace("SERVICE_TYPES", types).replace("SERVICE_FUNCTIONS", functions))
+            .replace("SERVICE_TYPES", types).replace("SERVICE_FUNCTIONS", functions)
+            .replace("SERVICE_DECODE_PERMIT", permit))
 
 
 def bounded_media_harness() -> str:
@@ -545,6 +831,8 @@ def main() -> None:
         harness = r'''#![allow(dead_code)]
 extern crate alloc;
 #[macro_export] macro_rules! log { ($($tt:tt)*) => { let _ = format_args!($($tt)*); } }
+static WARNINGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+#[macro_export] macro_rules! log_warn { (target: $target:expr; $($tt:tt)*) => { crate::WARNINGS.lock().unwrap().push(format!($($tt)*)); } }
 mod wait {
     pub struct WaitQueue;
     impl WaitQueue {
@@ -556,9 +844,10 @@ mod wait {
 mod workers { pub fn has_background_worker_slot() -> bool { false } }
 '''
         harness += f"#[path={json.dumps(str(ROOT / 'src/r/services/hull_image_policy.rs'))}] pub(crate) mod policy;\n"
+        harness += f"#[path={json.dumps(str(ROOT / 'src/r/services/hull_svg_policy.rs'))}] pub(crate) mod hull_svg_policy;\n"
         harness += "mod graphics {\n" + modules + "\npub(crate) use ico as ico_codec;\npub(crate) use png as png_codec;\npub(crate) use jpeg as jpeg_codec;\npub(crate) use bmp as bmp_codec;\npub(crate) use webp as webp_codec;\n"
         harness += f"#[path={json.dumps(str(source / 'png_decode_pool.rs'))}] mod png_decode_pool;\n}}\n"
-        (source / "lib.rs").write_text(harness + bounded_media_harness() + TESTS + service_harness())
+        (source / "lib.rs").write_text(harness + bounded_media_harness() + "#[cfg(test)] use media as media_service;\n" + TESTS + service_harness())
         rgba = bytes([255,0,0,255, 0,255,0,128, 0,0,255,0, 255,255,255,255])
         (source / "rgba.png").write_bytes(png(2, 2, 6, b"\0" + rgba[:8] + b"\0" + rgba[8:]))
         (source / "large-icon.png").write_bytes(png(256,256,6,(b"\0"+bytes([11,22,33,128])*256)*256))
@@ -569,6 +858,7 @@ mod workers { pub fn has_background_worker_slot() -> bool { false } }
         (source / "duplicate-header.png").write_bytes(png(2, 2, 6, b"\0" * 18,
             before_data=chunk(b"IHDR", struct.pack(">IIBBBBB", 8192, 8192, 8, 6, 0, 0, 0))))
         (source / "oversized.png").write_bytes(png(8192, 8192, 6, b""))
+        (source / "invalid-pixels.png").write_bytes(png(2, 2, 6, b""))
         # Benign 2x2 colour swatches encoded once with Pillow/libwebp; no runtime
         # host encoder dependency and no website image bytes are checked in.
         webp_fixtures = {
@@ -595,6 +885,9 @@ sha2 = {{ version = "=0.10.9", default-features = false }}
 spin = "0.10"
 [patch.crates-io]
 zune-core = {{ path = {json.dumps(str(ROOT / 'vendor/zune-core-0.5.1'))} }}
+fdeflate = {{ path = {json.dumps(str(ROOT / 'vendor/fdeflate-0.3.7'))} }}
+simd-adler32 = {{ path = {json.dumps(str(ROOT / 'vendor/simd-adler32-0.3.8'))} }}
+crc32fast = {{ path = {json.dumps(str(ROOT / 'vendor/crc32fast-1.5.0'))} }}
 ''')
         environment = dict(os.environ)
         environment["CARGO_TARGET_DIR"] = str(ROOT / "tgt/hull-image-host-tests")

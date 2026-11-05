@@ -209,6 +209,7 @@ hyper = { version = "1.10.0", default-features = false, features = ["client", "h
 rdrand = { version = "0.8", default-features = false }
 redb = { version = "=4.4.0", default-features = false, features = ["experimental-api-5"] }
 trueos-ide = { path = "../TRUEOS-Blueprints/crates/trueos-ide", default-features = false, features = ["store-core"] }
+trueos-redb = { path = "../TRUEOS-Blueprints/crates/trueos-redb", default-features = false }
 
 [profile.dev]
 panic = "abort"

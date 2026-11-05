@@ -2,7 +2,8 @@
 //!
 //! Two workers may fetch; one may decode/resize. The ABI admits work and
 //! polls tickets only. All encoded/decoded bytes remain in the kernel. Existing
-//! cache entries may be read, but this service creates no directories or files.
+//! raster cache entries may be read. Only remotely converted SVG assets are
+//! persisted, in a separate bounded redb image beside the page directories.
 use alloc::{collections::VecDeque, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use spin::Mutex;
@@ -72,6 +73,7 @@ struct Window {
 struct Cache {
     disk: crate::disc::block::DeviceHandle,
     directory: String,
+    svg_database: String,
 }
 struct Job {
     life: Arc<Life>,
@@ -151,9 +153,21 @@ fn cache_scope(root: &str, host: &str, url: &str) -> Result<Option<Cache>, i32> 
         // A missing/unavailable disk only disables persistence.
         return Ok(None);
     };
+    let svg_path = alloc::format!("{}/svg-assets.redb", root.trim_end_matches('/'));
+    let Some(svg_resolved) = crate::r::io::env::resolve_fs_path(&svg_path, false) else {
+        return Ok(None);
+    };
+    let Ok((svg_disk, svg_database)) = crate::r::io::async_fs_cabi::selected_disk(&svg_resolved)
+    else {
+        return Ok(None);
+    };
+    if svg_disk != disk {
+        return Ok(None);
+    }
     Ok(Some(Cache {
         disk,
         directory: String::from(directory),
+        svg_database: String::from(svg_database),
     }))
 }
 
@@ -410,30 +424,29 @@ async fn worker_task() {
     }
 }
 
+fn asset_failure(job: &Job, stage: &str, code: i32, reason: impl core::fmt::Display) -> i32 {
+    // Keep failures actionable without logging signed URL query strings.
+    let source = job.url.split('?').next().unwrap_or("");
+    crate::log_warn!(target: "ui4";
+        "hull-image: ticket={} stage={} code={} source={} reason={}\n",
+        job.life.id, stage, code, source, reason);
+    code
+}
+
 async fn process(job: &Job) -> Result<(), i32> {
-    let cached = job
-        .cache
-        .as_ref()
-        .and_then(|cache| read_cache(cache, &job.url));
-    if !job.life.live() {
-        return Err(ERR_NOT_FOUND);
-    }
-    let encoded = match cached {
-        Some(bytes) => bytes,
-        None => crate::r::net::https::get_image_bytes_shared(
-            &job.url,
-            FETCH_TIMEOUT_MS,
-            MAX_ENCODED_BYTES,
-            &job.life.fetch,
-        )
-        .await
-        .map_err(|_| ERR_FAILED)?,
-    };
+    let (encoded, svg_cache_key) = encoded_source(job).await?;
     if !job.life.live() {
         return Err(ERR_NOT_FOUND);
     }
     let permit = decode_permit(&job.life).await?;
-    let decoded = super::media_service::decode_ui4_bounded(&encoded)?;
+    let decoded = super::media_service::decode_ui4_bounded(&encoded).map_err(|code| {
+        asset_failure(
+            job,
+            "decode",
+            code,
+            format_args!("encoded_bytes={}", encoded.len()),
+        )
+    })?;
     let (width, height) = policy::contained_extent(
         decoded.info.width,
         decoded.info.height,
@@ -454,7 +467,28 @@ async fn process(job: &Job) -> Result<(), i32> {
     }
     // Allocation, pixel copy, and GPU cache flush occur before taking the registry
     // lock. Installation only validates/switches the prepared retained source.
-    let mut prepared = ui::prepare_rgba(width, height, &pixels)?;
+    // Retired sources may temporarily hold the physical image budget. Keep the
+    // decoded pixels while that budget drains, just as installation keeps its
+    // prepared source while a draw retires.
+    let mut prepared = None;
+    for _ in 0..500 {
+        if !job.life.live() {
+            return Err(ERR_NOT_FOUND);
+        }
+        match ui::prepare_rgba(width, height, &pixels) {
+            Ok(image) => {
+                prepared = Some(image);
+                break;
+            }
+            Err(ERR_BUSY) => Timer::after(Duration::from_millis(10)).await,
+            Err(code) => {
+                return Err(asset_failure(job, "prepare-upload", code, "RGBA preparation failed"));
+            }
+        }
+    }
+    let mut prepared = prepared.ok_or_else(|| {
+        asset_failure(job, "prepare-upload", ERR_BUSY, "RGBA preparation stayed busy")
+    })?;
     drop(pixels);
     let mut published = false;
     // A busy GPU/upload preserves prepared pixels. Retry off the caller's
@@ -494,13 +528,106 @@ async fn process(job: &Job) -> Result<(), i32> {
                 break;
             }
             Err(ERR_BUSY) => Timer::after(Duration::from_millis(10)).await,
-            Err(error) => return Err(error),
+            Err(error) => {
+                return Err(asset_failure(
+                    job,
+                    "publish",
+                    error,
+                    "sprite installation failed",
+                ));
+            }
         }
     }
     if !published {
-        return Err(ERR_BUSY);
+        return Err(asset_failure(
+            job,
+            "publish",
+            ERR_BUSY,
+            "sprite installation stayed busy",
+        ));
+    }
+    // Only complete PNGs that passed the real decoder and reached publication
+    // enter this cache. Persistence never gates GPU publication or page layout.
+    if let (Some(cache), Some(key)) = (&job.cache, svg_cache_key) {
+        if job.life.live() {
+            if let Err(error) =
+                super::hull_svg_cache::write(cache.disk, &cache.svg_database, &key, &encoded).await
+            {
+                crate::log_warn!(target: "ui4";
+                    "hull-image: SVG PNG cache write failed code={}\n", error);
+            }
+        }
     }
     Ok(())
+}
+
+/// SVG conversion feeds the very same bounded raster decoder/upload path.
+/// Extensionless assets are fetched normally, then recognized by their XML root;
+/// raster responses and unrelated unsupported formats are never sent to wsrv.
+async fn encoded_source(job: &Job) -> Result<(Vec<u8>, Option<String>), i32> {
+    if !job.life.live() {
+        return Err(ERR_NOT_FOUND);
+    }
+    if super::hull_svg_policy::svg_url(&job.url) {
+        return converted_svg(job).await;
+    }
+    let cached = job
+        .cache
+        .as_ref()
+        .and_then(|cache| read_cache(cache, &job.url));
+    let encoded = match cached {
+        Some(bytes) => bytes,
+        None => crate::r::net::https::get_image_bytes_shared(
+            &job.url,
+            FETCH_TIMEOUT_MS,
+            MAX_ENCODED_BYTES,
+            &job.life.fetch,
+        )
+        .await
+        .map_err(|error| asset_failure(job, "fetch", ERR_FAILED, error))?,
+    };
+    if !job.life.live() {
+        return Err(ERR_NOT_FOUND);
+    }
+    if super::hull_svg_policy::svg_document(&encoded) {
+        converted_svg(job).await
+    } else {
+        Ok((encoded, None))
+    }
+}
+
+async fn converted_svg(job: &Job) -> Result<(Vec<u8>, Option<String>), i32> {
+    let url = super::hull_svg_policy::conversion_url(&job.url, job.width, job.height)?;
+    if let Some(cache) = &job.cache {
+        if let Some(bytes) =
+            super::hull_svg_cache::read(cache.disk, &cache.svg_database, &url).await
+        {
+            if !job.life.live() {
+                return Err(ERR_NOT_FOUND);
+            }
+            return Ok((bytes, None));
+        }
+    }
+    if !job.life.live() {
+        return Err(ERR_NOT_FOUND);
+    }
+    let bytes = crate::r::net::https::get_image_bytes_shared(
+        &url,
+        FETCH_TIMEOUT_MS,
+        MAX_ENCODED_BYTES,
+        &job.life.fetch,
+    )
+    .await
+    .map_err(|error| asset_failure(job, "svg-fetch", ERR_FAILED, error))?;
+    if !job.life.live() {
+        return Err(ERR_NOT_FOUND);
+    }
+    // A provider error document or unexpected output cannot be treated as a
+    // converted asset. The normal decoder validates the full PNG immediately.
+    if policy::preflight(&bytes)?.format != 2 {
+        return Err(policy::ERR_UNSUPPORTED);
+    }
+    Ok((bytes, Some(url)))
 }
 
 fn resize(source: &[u8], sw: u32, sh: u32, width: u32, height: u32) -> Result<Vec<u8>, i32> {

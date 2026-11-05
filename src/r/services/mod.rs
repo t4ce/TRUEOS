@@ -13,6 +13,8 @@ pub(crate) mod hull_font_service;
 pub(crate) mod hull_download_service;
 pub(crate) mod hull_image_policy;
 pub(crate) mod hull_image_service;
+mod hull_svg_cache;
+mod hull_svg_policy;
 pub(crate) mod image_open_service;
 pub mod keyboard_control_service;
 pub mod media_service;

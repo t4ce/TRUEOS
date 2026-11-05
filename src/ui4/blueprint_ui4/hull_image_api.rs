@@ -382,6 +382,13 @@ pub(crate) fn prepare_rgba(width: u32, height: u32, rgba: &[u8]) -> Result<Prepa
     reserve_image_bytes(bytes)?;
     let Some((phys, virt)) = crate::dma::alloc_ppgtt(bytes, crate::intel::WARM_ALIGN) else {
         release_image_bytes(bytes);
+        let pmm = crate::phys::pmm_stats();
+        crate::log_error!(target: "ui4/blueprint-frame";
+            "hull-image: prepare-upload failed stage=system-memory extent={}x{} pitch={} requested_bytes={} image_bytes={} pmm_free_bytes={} pmm_largest_free_region={} pmm_free_regions={}\n",
+            width, height, pitch, bytes, IMAGE_BYTES.load(Ordering::Relaxed),
+            pmm.map_or(0, |stats| stats.free_bytes),
+            pmm.map_or(0, |stats| stats.largest_free_region),
+            pmm.map_or(0, |stats| stats.free_regions));
         return Err(ERROR_UI4);
     };
     unsafe {
@@ -453,15 +460,19 @@ pub(crate) fn install_prepared(
     let id = surface.hull_images.next_sprite;
     let next = id.checked_add(1).ok_or(ERROR_BUSY)?;
     let gpu = allocate_sprite_gpu_va(surface, id, image.bytes).ok_or(ERROR_BUSY)?;
-    let gpu_surface = GpgpuRgba8Surface::new(
+    let Some(gpu_surface) = GpgpuRgba8Surface::new(
         image.phys,
         gpu,
         image.bytes,
         image.width,
         image.height,
         image.pitch,
-    )
-    .ok_or(ERROR_UI4)?;
+    ) else {
+        crate::log_error!(target: "ui4/blueprint-frame";
+            "hull-image: publish failed stage=surface-validation owner={:?} window={} extent={}x{} pitch={} bytes={} phys=0x{:X} gpu=0x{:X}\n",
+            owner, window_id, image.width, image.height, image.pitch, image.bytes, image.phys, gpu);
+        return Err(ERROR_UI4);
+    };
     surface.sprites.push((
         id,
         BlueprintSpriteSource::Uploaded(OwnedRgba8Surface {

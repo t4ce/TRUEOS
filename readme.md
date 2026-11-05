@@ -12,9 +12,19 @@ The agent is **Codex CLI**: OpenAI's official Rust CLI, compiled with `rustc` fo
 Sign in with your Codex account; sign-in pages open in Hull. Your account's usage limits still apply.
 **Meet Lilly**, the animated face of Spirit on your desktop. She shows when the agent is working, waiting for you, or ready for review.
 
+TRUEOS is a research and engineering tool for developers and hobbyists. Tech enthusiasts can get the most out of it: driver support is still small, but the tooling to wire that last mile, with AI or with both hands, is wide open in [tools/](tools/).
+
 The privilege to use AI will lead to new generations of algorithms.
 While a lot of effort goes into the production of hardware, maintaining large data centers, energy, and bandwidth requires infrastructure for the power demand inherent to the raw computation of inference.
 This enormous effort enables us to enjoy that privilege of intelligence, and that revolution leads to a Codex of 10 keypoints dedicated to AI.
+
+> [!IMPORTANT]
+> **QEMU and KVM work. The VirGL path is basic.** It is a small virgl wire encoder with a minimal UI4 composition: enough for a feel of the desktop with a shell. It is not recommended beyond basic checks, and it is not the experience to have fun with. What it misses is the roughly 100,000 lines of custom Intel driver in [src/intel](src/intel/), a significant part of the display engine. That leaves two choices:
+>
+> 1. **Accept TRUEOS as a bare-metal, primary hypervisor kernel.** This is the default and the real experience. Boot it on a supported Intel machine, as described below.
+> 2. **Develop the hardware acceleration features in Rust yourself.**
+>
+> Both are legitimate. Advancing the VirGL encoder would be a quick, iterative job, but the author has already built the native Intel stack, so that path is open for anyone who wants it. Mesa and Vulkan are powerful stacks, and someone dedicated to figuring them out for QEMU is welcome: we take that.
 
 ## § PREFACE: EVERY HAND THAT EVER LEFT A MARK
 
@@ -246,6 +256,12 @@ bash tools/trueos-boot/prepare.sh --release
 ```
 
 You need the sibling [TRUEOS-Buildins](https://github.com/t4ce/TRUEOS-Buildins) and [TRUEOS-Blueprints](https://github.com/t4ce/TRUEOS-Blueprints) checkouts and the pinned [nightly-2026-07-10 toolchain](https://github.com/t4ce/TRUEOS-Rust-Toolchain-nightly-2026-07-10).
+
+## THE INTERIOR IS MISSING
+
+The bare-metal boot is the default experience, and the real one. It is a framework that lets people fill in the parts where it is no longer about the architect. The architecture is in the repo. The interior is still missing, *psst… it's missing ;)*
+
+Interior builders, this part is yours. Find something you always wanted to try, and TRUEOS may make it easier than you expect. Start with the [Blueprint catalog](https://github.com/t4ce/TRUEOS-Blueprints) or the [Builtins](https://github.com/t4ce/TRUEOS-Buildins).
 
 <details>
 <summary><strong>FOR THE PEOPLE WHO WANT TO READ THE KERNEL</strong></summary>

@@ -1,0 +1,230 @@
+CODEX TO TRUEOS — FAST REPLAY
+All 65 custom commits, oldest first. Commit subjects mostly say only "ok"; these summaries come from their diffs.
+The complete decision ledger and source/status/revisit details are in codex-custom-patch-history-2026-11-05.txt/json.
+The 195 imported upstream commits are not counted as your custom patches.
+
+01. 12 Oct 14e8392da — Make five integrations optional and off by default.
+https://github.com/t4ce/codex/commit/14e8392da3cd4c980dd9af53fabf0410565fea17
+
+02. 12 Oct 87b1394d7 — Create a replaceable clipboard backend that can be compiled out.
+https://github.com/t4ce/codex/commit/87b1394d7d8b5d8477b9ff12f9126abd247791d7
+
+03. 12 Oct c29c7bef4 — Prepare standalone Blueprint staging and document externally managed isolation.
+https://github.com/t4ce/codex/commit/c29c7bef4fe9c962e48a66210c351fc05368befb
+
+04. 12 Oct 0a89c5145 — Vendor the WebSocket forks and isolate native TLS from TRUEOS.
+https://github.com/t4ce/codex/commit/0a89c51450fba31049fbac88e506472ec9388bd1
+
+05. 12 Oct 1a9679944 — Switch the primary TLS stack from AWS-LC to vendored RustCrypto.
+https://github.com/t4ce/codex/commit/1a9679944b4e2f553fd35066aca02c5264ae0911
+
+06. 12 Oct 42933cf57 — Introduce TRUEOS Shell3 command sessions.
+https://github.com/t4ce/codex/commit/42933cf573fd989a2044de0b96ed2b99ba444bd5
+
+07. 12 Oct 9b10f8e96 — Teach tools native Shell3 semantics while keeping remote shell behavior.
+https://github.com/t4ce/codex/commit/9b10f8e9643c2eb2283effa0165a8b0103feb4d3
+
+08. 12 Oct 53cc6b7c6 — Require explicit Shell3 selection and use the TRUEOS Starlark fork.
+https://github.com/t4ce/codex/commit/53cc6b7c6526fea20539cddd0060c391c94f0745
+
+09. 12 Oct e8b197ca2 — Run local MCP Blueprint servers in owned VMX child Hulls.
+https://github.com/t4ce/codex/commit/e8b197ca2b51b10f813fd67691802a819e6daf04
+
+10. 12 Oct cbbb379de — Complete HTTP-date compatibility and pin the Rama alpha stack.
+https://github.com/t4ce/codex/commit/cbbb379de22c96517114e711c7f9cfc8e333d25e
+
+11. 13 Oct d396a341a — Use the SQLite Blueprint service for TRUEOS state storage.
+https://github.com/t4ce/codex/commit/d396a341aa47954c57a02a90a05d875ef2ef8664
+
+12. 13 Oct 8c1ad0045 — Fix metadata inference for TRUEOS Tokio.
+https://github.com/t4ce/codex/commit/8c1ad004520af2d69679231525dc78a33ce5ad2d
+
+13. 13 Oct e6fea81f9 — Adapt descriptors, metadata, history identity, and socket boundaries to TRUEOS.
+https://github.com/t4ce/codex/commit/e6fea81f93a67de529a3dfb7f6fa35a98e2bb292
+
+14. 13 Oct b34587fc3 — Measure startup, remove input replay, and preserve standard cross-crate types.
+https://github.com/t4ce/codex/commit/b34587fc3a0cd1de5b3974bf056ff00fc09fc184
+
+15. 13 Oct 5e6fe3e14 — Refine visible startup diagnostics and benchmark coverage.
+https://github.com/t4ce/codex/commit/5e6fe3e146f1c2d79fada9886ba3e25eb90b1513
+
+16. 13 Oct 47873da26 — Make bare TRUEOS launches reach the embedded TUI and skip unsupported probes.
+https://github.com/t4ce/codex/commit/47873da2605257ebb0baa1dae7d3c8fc0d5ce21d
+
+17. 13 Oct 8ba74b60e — Trace initial thread startup across client, app server, and core.
+https://github.com/t4ce/codex/commit/8ba74b60ef7bb61d90ef325646f3682c4ef4ec13
+
+18. 13 Oct e0dd704f5 — Consolidate thirteen crates into four shared compilation units.
+https://github.com/t4ce/codex/commit/e0dd704f56081c704abc8325146cd6b2b1ac40ed
+
+19. 14 Oct 870d99f8d — Finish formatting after the utility/transport crate folds; make consolidated socket
+tests easier to run.
+https://github.com/t4ce/codex/commit/870d99f8dddac3803e53801b9820016ea7e3c1c2
+
+20. 14 Oct 2df7c4acb — Check in the dependency-graph investigation, experiment evidence, and implementation
+report.
+https://github.com/t4ce/codex/commit/2df7c4acbc839779ca6be2837b81d7c5668cec85
+
+21. 14 Oct 0ed172f00 — Claim the native terminal lease before sending the first ANSI mode-setting write.
+https://github.com/t4ce/codex/commit/0ed172f00f7753881a264c8cc77d24a5aa1b1b49
+
+22. 14 Oct 7b8cf42c8 — Separate platform-owned installation from Codex self-management and disable
+PowerShell interpretation for Shell3 builds.
+https://github.com/t4ce/codex/commit/7b8cf42c8ae386a184cec9d726b7ef357c5b8982
+
+23. 15 Oct 29981d5c2 — Add native WebSocket trust roots plus temporary model/startup defaults for hardware
+bring-up.
+https://github.com/t4ce/codex/commit/29981d5c26bc3acbab3ed4d009309ec05738f329
+
+24. 15 Oct c8e439be2 — Measure step capture and block the unsupported subprocess Code Mode backend; update
+the bring-up probe.
+https://github.com/t4ce/codex/commit/c8e439be270ac3fc74e326697510e7ee78c19c31
+
+25. 15 Oct f59c631d8 — Provide native QuickJS Code Mode, trace MCP latency, and show the loaded package
+identity.
+https://github.com/t4ce/codex/commit/f59c631d833789ec327ecd947640cbe7404dd633
+
+26. 15 Oct 50f328855 — Extend phase tracing through turn preparation and sampling, with start boundaries
+that survive hangs.
+https://github.com/t4ce/codex/commit/50f328855ba05b8d767e12fb8c12a9424f0ff81b
+
+27. 15 Oct cb371998f — Correct the temporary model slug and replace workspace version 0.0.0 with 0.162.0.
+https://github.com/t4ce/codex/commit/cb371998fa9cb3f5f5b6dbf9ec638b1ec9771deb
+
+28. 15 Oct bb9d8df74 — Avoid empty-hook persistence work, reduce MCP copies, and fix service-owned SQLite
+existence checks.
+https://github.com/t4ce/codex/commit/bb9d8df7405442902676967ae6e7806a63f993a8
+
+29. 16 Oct 55245f0eb — Keep Shell3 input open even without terminal formatting and clarify native session
+semantics.
+https://github.com/t4ce/codex/commit/55245f0eb485415c14dc27ec3b22bcadcfa52dac
+
+30. 16 Oct 7a19e0a9d — Remove automatic diagnostic prompt submission after the bring-up probe.
+https://github.com/t4ce/codex/commit/7a19e0a9d8ffcf8c6e61d1f6eb0b16fd10f17e90
+
+31. 16 Oct 8659da0b0 — Integrate 195 upstream commits while preserving native port decisions; this is the
+parity branch merge.
+https://github.com/t4ce/codex/commit/8659da0b04c6bb053e892e1ecdf1458894c5ecfc
+
+32. 16 Oct c9caed277 — Repair optional reporting after parity and restore startup typeahead on Unix hosts.
+https://github.com/t4ce/codex/commit/c9caed277e4ac9dc35b109c6eae2abf84da1ceff
+
+33. 16 Oct 36468f31c — Land parity PR #1 on main; its tree is identical to c9caed277, so its decisions are
+counted there and in 8659da0b0.
+https://github.com/t4ce/codex/commit/36468f31c571f53c6d26073016c0389ab9361061
+
+34. 17 Oct a0f002ab3 — Restore terminal presentation when Shell3 hands the surface back to Codex.
+https://github.com/t4ce/codex/commit/a0f002ab31cb1114571ebff3cf395af6f38b541f
+
+35. 17 Oct d34ce1ed5 — Use native filesystem policy checks instead of spawning a sandbox helper, and
+tolerate unsupported transcript timestamps.
+https://github.com/t4ce/codex/commit/d34ce1ed5b9571bd5d9a5497e1206ae888a7e46c
+
+36. 17 Oct 3bc7d57c6 — Add exact text-file tools and atomic typed writes; cap the native blocking worker
+pool.
+https://github.com/t4ce/codex/commit/3bc7d57c6a09585aa055e73d589c320ddcf6c951
+
+37. 26 Oct 1f3471ffb — Add editable next-message suggestions to the shared Linux/TRUEOS composer.
+https://github.com/t4ce/codex/commit/1f3471ffb0d1a2c34e4de485fa9a5bbc295eee82
+
+38. 27 Oct 3d2654a95 — Realign shared networking and randomness vendor paths.
+https://github.com/t4ce/codex/commit/3d2654a953d52859e8d571c26b2a0af2b6a4f2d3
+
+39. 28 Oct d4d8f255d — Add direct native filesystem discovery, a Shell3 catalog generator, durable auth
+writes, and quieter startup logging.
+https://github.com/t4ce/codex/commit/d4d8f255d6428c1341a3bb5d9326b3a9c2ce3bc7
+
+40. 28 Oct 048120780 — Add local help and native calculator tools.
+https://github.com/t4ce/codex/commit/048120780836844f8c11a32ab4013d947418cb08
+
+41. 28 Oct 55c41450d — Replace Codex terminal pets on TRUEOS with the resident Spirit avatar while
+preserving conversation images.
+https://github.com/t4ce/codex/commit/55c41450d9c638afcc9fe146ef1bc799b345d847
+
+42. 28 Oct 1dfd86f6c — Add direct Spirit/UI4 model access and a standalone production-handler validation
+harness.
+https://github.com/t4ce/codex/commit/1dfd86f6c353c9016c995d80c02d068c29aa3d86
+
+43. 28 Oct 2318631aa — Expose the native companion as /spirit rather than /pets.
+https://github.com/t4ce/codex/commit/2318631aacf18670e7b3c16a80a549a425289a98
+
+44. 28 Oct e72f66c55 — Publish authoritative agent and attention snapshots to resident Spirit.
+https://github.com/t4ce/codex/commit/e72f66c55591b2241ce63d2bd236c203a42ec7cb
+
+45. 28 Oct 83c4ee5a0 — Reduce fresh-profile database work and batch TRUEOS terminal drawing.
+https://github.com/t4ce/codex/commit/83c4ee5a09c7a2213ed6f766a43f2723ea770e1c
+
+46. 29 Oct 0d3e26e6c — Add explicit TRUEOS carrier placement experiments and separate Spirit agent
+nicknames.
+https://github.com/t4ce/codex/commit/0d3e26e6cb55d3c877da5732e36085ef862d3d74
+
+47. 29 Oct 6df928a9e — Add a persistent per-profile carrier-placement setting.
+https://github.com/t4ce/codex/commit/6df928a9e47f27ea697992c7530d81a4d85e712d
+
+48. 29 Oct 05c4fbbba — Correct native agent snapshots to inspect each live session registry.
+https://github.com/t4ce/codex/commit/05c4fbbba9a7bbc61d9386a1b2d9b132b6de6445
+
+49. 29 Oct d543a3cbd — Bring the app-server Spirit fixture into line with the real session registry model.
+https://github.com/t4ce/codex/commit/d543a3cbd7d876c6ce28e8d64a38b1e0febc7aef
+
+50. 29 Oct 1d8b87880 — Consume native Codex input-grid prompts, preserve early logging, and document
+verified packing.
+https://github.com/t4ce/codex/commit/1d8b8788005935e6fea46f633ee60ca832350abe
+
+51. 29 Oct b10e0ea2a — Tighten native prompt thread binding and finish pending reads during shutdown.
+https://github.com/t4ce/codex/commit/b10e0ea2a92a5270b7cfd73a5c75186240f13b3d
+
+52. 29 Oct b7af47b5c — Make default native exec a finite captured batch and adapt suggestion acceptance to
+TRUEOS keys.
+https://github.com/t4ce/codex/commit/b7af47b5c479ebde10a15127aa90edd42ac7db7b
+
+53. 29 Oct 2b428ba8a — Deliver captured-mode Ctrl-C through the native control channel.
+https://github.com/t4ce/codex/commit/2b428ba8a2135f1a404043e588f87ec187965e4a
+
+54. 29 Oct 202e32d8d — Add a native Edit workspace tool/context bridge and optimize Blueprint release
+builds.
+https://github.com/t4ce/codex/commit/202e32d8d7a9458e4490dc84dc59b63804a47e60
+
+55. 29 Oct 73a27ba59 — Allow the model to attach to or launch a named native Edit project.
+https://github.com/t4ce/codex/commit/73a27ba59b3d67168df9c1b66c1cafe65c68391d
+
+56. 29 Oct 746db3ec5 — Pace native IDE discovery/reply polling.
+https://github.com/t4ce/codex/commit/746db3ec51e987ad7ef1006bbc53801c58fb4174
+
+57. 30 Oct b1529ab40 — Bind a Codex launched from Edit to its originating workspace.
+https://github.com/t4ce/codex/commit/b1529ab40421699c31a2c0f417e26c8eff15f95e
+
+58. 30 Oct de43fb870 — Avoid repeatedly reopening whole rollout files for live SQLite history projection.
+https://github.com/t4ce/codex/commit/de43fb8708be9bd27b1e989bf75bd4d43a396e26
+
+59. 31 Oct 5968eb523 — Instrument startup and change initial prewarm/skills scheduling without changing
+ordinary turn transport.
+https://github.com/t4ce/codex/commit/5968eb5230181dc16dc40247eb6b43be835cb43a
+
+60. 31 Oct 3f3fc4db9 — Record live proof of the duplicate-skills fix and native disk-service placement
+repair.
+https://github.com/t4ce/codex/commit/3f3fc4db90ff7653c18ba32b547a435fb1eb113e
+
+61. 31 Oct 617bd07f6 — Expose versioned TRUEOS platform API references through Edit context and tools.
+https://github.com/t4ce/codex/commit/617bd07f6ee43ce72bd14d9fef265021551c44b5
+
+62. 03 Nov 8badf4b4b — Extend the Edit bridge to HTML projects and standalone preview.
+https://github.com/t4ce/codex/commit/8badf4b4bc0b95cf8c87677e2e8bd6c5d2f02e3a
+
+63. 03 Nov 76ec9af39 — Point Code Mode at the consolidated QJS app package.
+https://github.com/t4ce/codex/commit/76ec9af3982e9002367be737e632e20d300a522d
+
+64. 03 Nov 57fe4595c — Make TRUEOS plugin deactivation unconditional across feature entry points.
+https://github.com/t4ce/codex/commit/57fe4595ca32eba46227653b8efb60e9092b6559
+
+65. 03 Nov 8ebb23020 — Launch browser links and OAuth through native Hull on TRUEOS.
+https://github.com/t4ce/codex/commit/8ebb23020037949cfa97381792339e14a44cb56a
+
+The first commit contains five separate switches: Bedrock/AWS authentication, local models, voice/audio,
+external-agent imports, and external reporting. The full ledger splits these and other multi-purpose commits.
+
+Already reversed: automatic hi/gri startup prompts; host startup typeahead replay.
+Already revised in host integration: named Codex instances no longer all share the bare app home.
+Reversed on 5 November in the working tree: removed gpt-6-luna / low defaults; upstream selection and saved settings apply.
+YOLO: documented user config, not a hardcoded universal CLI default.
+Plugins: a TRUEOS hard block, unlike the optional Cargo integrations.

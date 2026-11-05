@@ -4,6 +4,10 @@ extern crate self as spin;
 extern crate self as v;
 extern crate self as trueos_vm;
 use std::sync::{MutexGuard, TryLockError};
+#[macro_export]
+macro_rules! log_error {
+    (target: $target:expr; $($args:tt)*) => { let _ = format_args!($($args)*); };
+}
 pub struct Mutex<T>(std::sync::Mutex<T>);
 impl<T> Mutex<T> {
     pub const fn new(value: T) -> Self { Self(std::sync::Mutex::new(value)) }
@@ -33,8 +37,15 @@ pub mod intel {
     pub fn align_up(n: usize, align: usize) -> Option<usize> { n.checked_add(align - 1).map(|x| x & !(align - 1)) }
     pub fn dma_flush(_: *mut u8, _: usize) {}
 }
+pub mod phys {
+    #[derive(Clone, Copy)]
+    pub struct PmmStats { pub free_bytes: u64, pub largest_free_region: u64, pub free_regions: usize }
+    pub fn pmm_stats() -> Option<PmmStats> { None }
+}
 pub mod dma {
+    pub static FAIL_NEXT_ALLOCATION: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
     pub fn alloc_ppgtt(bytes: usize, align: usize) -> Option<(u64, *mut u8)> {
+        if FAIL_NEXT_ALLOCATION.swap(false, core::sync::atomic::Ordering::Relaxed) { return None; }
         let layout = std::alloc::Layout::from_size_align(bytes, align).ok()?;
         let pointer = unsafe { std::alloc::alloc(layout) };
         (!pointer.is_null()).then_some((pointer as u64, pointer))
@@ -55,18 +66,12 @@ mod fixture {
     pub const UI4_SCENE_SPRITE_GPU: u64 = 0x3800_0000;
     pub const UI4_SCENE_SOLID_SOURCE_BYTES: usize = 4096;
     pub const UI4_SCENE_SPRITE_MAX_BYTES: usize = 128 * 1024 * 1024;
-    #[derive(Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum WindowOwner { Kernel, Vm(u8) }
     #[derive(Clone, Copy)]
     pub struct WindowId(pub u32);
     impl WindowId { pub fn raw(self) -> u32 { self.0 } }
-    #[derive(Clone, Copy)]
-    pub struct GpgpuRgba8Surface { pub phys: u64, pub gpu: u64, pub bytes: usize, pub width: u32, pub height: u32, pub pitch_bytes: u32 }
-    impl GpgpuRgba8Surface {
-        pub fn new(phys: u64, gpu: u64, bytes: usize, width: u32, height: u32, pitch_bytes: u32) -> Option<Self> {
-            Some(Self { phys, gpu, bytes, width, height, pitch_bytes })
-        }
-    }
+    @SURFACES@
     pub struct NonzeroAlphaRun;
     pub struct OwnedRgba8Surface {
         pub hull_image_budget_bytes: usize, pub opaque: bool, pub premultiplied: bool,
