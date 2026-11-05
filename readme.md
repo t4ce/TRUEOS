@@ -41,6 +41,16 @@ The next generation of algorithms will stand on the same first stone.
 
 *Thank you, carvers, copyists, and everyone who explained a thing twice.*
 
+## § STEPS OF GUIDANCE
+
+These come in this order, ahead of anything else in this document:
+
+- **A.** Security of all participants. This matters most.
+- **B.** The system runs fine for the daily tasks it has to solve.
+- **C.** It should be a fun experience.
+
+We are not at that stage yet. We are driving there at full speed, because security needs features first, and then the security work is built on those features.
+
 ## THE CODEX OF 10 KEYPOINTS, DEDICATED TO AI
 
 Each bar counts building blocks already in the code, not benchmarks. Keypoints 8–10 come from the platform vision below.
@@ -126,6 +136,8 @@ Idle cores halt, and work wakes them. Token maxing is the mood. Useful work per 
 ## WORK IN HARMONY: ASYNC PARTS, ONE SMOOTH MACHINE
 
 The cores, the GPU and its encoder, and the network card each run on their own timing. The craft is in making them work in harmony, so throughput stays balanced and the parts keep each other fed. That takes *hard effort and a lot of craftsmanship*. We start with a concept that runs slowly, work out the nuts and bolts, and only then scale it up. A careful eye stays on the watts: the RAPL readout is already in tree, and measured numbers come next. Every result is held to a direct side-by-side comparison, like the ones below.
+
+It is important to be mindful of a person's craft. A craftsperson always prepares the next iteration through their actions, so it can be equally or better prepared. That is a routine of sorts: clean the tools and put them back in place after the job is done for the day, so the workshop feels pleasant when the sun rises again.
 
 All of that effort aims at one thing: a machine that almost looks like one big, synchronously running, never-stuttering electric field of glory.
 
