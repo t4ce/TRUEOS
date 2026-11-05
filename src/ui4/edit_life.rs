@@ -292,7 +292,7 @@ impl Effect {
             let page = &self.input.page;
             let source_view = super::published_rgba_view(source_lease).map_err(|_| ())?;
             if (source_view.width, source_view.height) != (page.width, page.height) { return Err(()); }
-            match &mut self.backend {
+            let release = match &mut self.backend {
                 Backend::Reference(life) => {
                     let view = super::writable_rgba_view(lease).map_err(|_| ())?;
                     let out = unsafe { core::slice::from_raw_parts_mut(view.virt, view.byte_len) };
@@ -313,7 +313,7 @@ impl Effect {
                     super::mark_frame_buffer_cpu_authored(lease).map_err(|_| ())?;
                     if crate::virtio_gpu_logo::output_dimensions().is_some() { super::emulator_paint::begin(lease); }
                     crate::intel::dma_flush(view.virt, view.byte_len);
-                    super::publish_frame_buffer(lease).map_err(|_| ())?;
+                    None
                 }
                 Backend::Native(native) => {
                     let dst = super::gpgpu_rgba_surface(lease).map_err(|_| ())?;
@@ -330,27 +330,48 @@ impl Effect {
                     self.reset = false;
                     self.emit = false;
                     self.steps = 0;
-                    if super::publish_gpgpu_frame_buffer(lease, result.release.ok_or(())?).is_err() {
-                        self.disabled = true;
-                        return Err(());
-                    }
+                    Some(result.release.ok_or(())?)
                 }
-            }
-            // No suspension between generation validation and window commit.
-            // A newer capture can never be overwritten by an old effect frame.
+            };
+            // Validate before changing FramePool's front. A stale completed
+            // write must remain cancellable: publishing it without notifying
+            // the broker can leave the old displayed buffer pinned forever.
+            // The input lock covers both publication boundaries, never GPU work.
             let mut pages = PAGES.lock();
             let current = pages.iter_mut().find(|r| r.window == self.input.window
                 && r.serial == self.input.serial && r.source == self.input.source
                 && !r.paused && !r.failed).ok_or(())?;
-            if current.displayed == Some(self.frame) {
-                super::publish_window_frame(OWNER, current.window, DamageRect::FULL).map_err(|_| ())?;
-            } else {
+            let replacement = if current.displayed == Some(self.frame) { None } else {
                 let (placement, epoch) = super::window_resize_state(OWNER, current.window).map_err(|_| ())?;
                 if (placement.width, placement.height) != (page.width, page.height) { return Err(()); }
-                super::commit_window_frame_replacement(OWNER, current.window, self.frame,
-                    placement, epoch, DamageRect::FULL).map_err(|_| ())?;
-                current.displayed = Some(self.frame);
+                Some((placement, epoch))
+            };
+            match release {
+                Some(release) => {
+                    if super::publish_gpgpu_frame_buffer(lease, release).is_err() {
+                        self.disabled = true;
+                        return Err(());
+                    }
+                }
+                None => { super::publish_frame_buffer(lease).map_err(|_| ())?; }
             }
+            let replacing = replacement.is_some();
+            let publication = if let Some((placement, epoch)) = replacement {
+                super::commit_window_frame_replacement(OWNER, current.window, self.frame,
+                    placement, epoch, DamageRect::FULL)
+            } else {
+                super::publish_window_frame(OWNER, current.window, DamageRect::FULL)
+            };
+            if publication.is_err() {
+                // The write lease was consumed by front publication. Retrying
+                // acquisition could strand the old displayed reader forever.
+                self.disabled = true;
+                crate::log_error!(target: "ui4/edit-life";
+                    "edit-life: broker publication failed window={} serial={} action=opaque-source-and-latch gpu-retired=1\n",
+                    self.input.window.raw(), self.input.serial);
+                return Err(());
+            }
+            if replacing { current.displayed = Some(self.frame); }
             Ok(())
         })();
         // An uncertain GPU read must keep this exact source allocation pinned,

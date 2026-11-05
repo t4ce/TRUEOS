@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 extern crate alloc;
+extern crate self as trueos_crypto;
+pub struct AccountId;
 
 #[macro_export]
 macro_rules! log_info { ($($args:tt)*) => {}; }
@@ -32,8 +34,9 @@ mod shell3 {
     thread_local! { static WORLD: RefCell<World> = RefCell::default(); }
     mod service {
         pub fn microfont_scale() -> u32 { 1 }
-        pub fn launch_bytes_with_script(
+        pub fn launch_bytes_with_script_for_account(
             archive: String, bytes: Vec<u8>, frontend: u64, script: Option<String>,
+            _: Option<crate::AccountId>,
         ) -> Result<super::QueuedApp, &'static str> {
             super::WORLD.with_borrow_mut(|world| {
                 assert!(world.bound, "launch must follow frontend/window binding");
@@ -44,7 +47,7 @@ mod shell3 {
         }
     }
     mod tui {
-        pub fn bind_ui4_window(_: u64, _: u32) {
+        pub fn bind_ui4_window(_: u64, _: u32, _: u32) {
             super::WORLD.with_borrow_mut(|world| world.bound = true);
         }
     }
@@ -63,6 +66,7 @@ mod shell3 {
         fn rendered_lines(&self) -> Vec<Vec<u8>> { vec![vec![]] }
         fn reveals(&self) {}
         fn matrix_area(&self) {}
+        fn edit_life(&self) {}
     }
     mod update {
         pub fn take_updates(_: &mut super::Snapshot, _: super::Snapshot, _: &[()]) {}
@@ -79,6 +83,7 @@ mod shell3 {
         calls: usize,
     }
     impl Show {
+        fn font_scale(&self) -> u32 { 1 }
         fn window(&self) -> Option<u32> { self.window }
         fn is_closed(&self) -> bool { self.window.is_none() || self.closed }
         fn is_closing(&self) -> bool { self.closing }
@@ -91,7 +96,7 @@ mod shell3 {
         }
         fn resize_needed(&self) -> bool { false }
         async fn present(
-            &mut self, _: &[&[u8]], _: usize, _: usize, _: &(), _: (), _: (),
+            &mut self, _: &[&[u8]], _: usize, _: usize, _: &(), _: (), _: (), _: (),
         ) -> Result<(), &'static str> {
             self.calls += 1;
             self.window = Some(7);
@@ -123,6 +128,7 @@ mod shell3 {
                 pending_startup: Some(startup::Startup::Blueprint {
                     archive: "/apps/common/ide/builds/1-7/4/example.bp".into(),
                     bytes: vec![1, 2, 3], script: Some("ide example".into()),
+                    access_account: None,
                 }),
                 show: Show::default(), tui_frontend: 33,
                 update_baseline: Snapshot, update_callbacks: vec![],
@@ -132,6 +138,7 @@ mod shell3 {
         }
         fn reconcile_matrix_selection(&mut self) {}
         fn font_scale_needed(&self) -> bool { false }
+        fn requested_font_scale(&self) -> u32 { 1 }
         fn set(&mut self, columns: usize, rows: usize) { self.columns = columns; self.rows_count = rows; }
         async fn resize_ui4_to_current(&mut self) -> Result<(), &'static str> { Ok(()) }
         fn capture_update_snapshot(&self) -> Snapshot { Snapshot }

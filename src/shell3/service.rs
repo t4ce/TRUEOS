@@ -687,6 +687,8 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
             let Some(event) = event else { break };
             for shell in &mut owned_shells.shells {
                 if shell.show_handles_window(event.window) {
+                    let scale = super::tui::font_scale_for_window(event.window)
+                        .unwrap_or_else(|| shell.show.font_scale());
                     if super::tui::active(
                         shell.tui_frontend,
                         shell.active_matrix_slot_name().as_deref(),
@@ -696,10 +698,10 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                             shell.tui_frontend,
                             shell.active_matrix_slot_name().as_deref(),
                             &event,
-                            shell.show.font_scale(),
+                            scale,
                         );
                     } else {
-                        let Some((cell_width, cell_height)) = crate::r::services::shell3_font_service::cell_extent(shell.show.font_scale()) else { continue; };
+                        let Some((cell_width, cell_height)) = crate::r::services::shell3_font_service::cell_extent(scale) else { continue; };
                         let position = (event.local_x >= 0 && event.local_y >= 0).then_some((
                             event.local_y.max(0) as usize / (cell_height as usize),
                             event.local_x.max(0) as usize / (cell_width as usize),

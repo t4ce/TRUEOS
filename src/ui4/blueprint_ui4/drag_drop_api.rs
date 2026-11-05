@@ -133,7 +133,12 @@ pub unsafe extern "C" fn trueos_cabi_ui4_drag_take_v1(
             // Leased terminal apps consume character coordinates; scene frames
             // consume pixels. Use the same scale as Shell3's UI4 rasterizer.
             if window_id == 0 && len != 0 {
-                let Some((width, height)) = crate::shell3::service::ui4_cell_extent() else { return ERROR_CONTEXT; };
+                let scale = crate::shell3::tui::font_scale_for_window(target.window)
+                    .unwrap_or(crate::r::services::shell3_font_service::DEFAULT_UI4_FONT_SCALE);
+                let Some((width, height)) = crate::r::services::shell3_font_service::cell_extent(scale)
+                    else { return ERROR_CONTEXT; };
+                let (Ok(width), Ok(height)) = (i32::try_from(width), i32::try_from(height))
+                    else { return ERROR_CONTEXT; };
                 let x = i32::from_le_bytes(out[4..8].try_into().unwrap()) / width;
                 let y = i32::from_le_bytes(out[8..12].try_into().unwrap()) / height;
                 out[4..8].copy_from_slice(&x.to_le_bytes());

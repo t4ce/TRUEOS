@@ -860,7 +860,7 @@ impl Shell3 {
             return Err("shell3-show-wrong-executor");
         }
         if self.font_scale_needed() {
-            let scale = service::microfont_scale();
+            let scale = self.requested_font_scale();
             let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)
                 .ok_or("shell3-font-physical-size-unavailable")?;
             let (width, height) = self
@@ -875,8 +875,8 @@ impl Shell3 {
                 self.resize_ui4_to_current().await?;
             }
             crate::log_info!(target: "service";
-                "sh3srv: microfont scale={}x slot={} extent={}x{} grid={}x{}\n",
-                scale, self.executor_slot, width, height, self.columns, self.rows_count,
+                "sh3srv: font size={} percent slot={} extent={}x{} grid={}x{}\n",
+                scale * 50, self.executor_slot, width, height, self.columns, self.rows_count,
             );
         }
         if self.show.window().is_none() {
@@ -914,7 +914,7 @@ impl Shell3 {
                 )
                 .await?;
             if let Some(window) = self.show.window() {
-                tui::bind_ui4_window(self.tui_frontend, window);
+                tui::bind_ui4_window(self.tui_frontend, window, self.show.font_scale());
             }
             self.pending_presentation = None;
             if self.capture_update_snapshot() == snapshot {
@@ -932,7 +932,12 @@ impl Shell3 {
     }
 
     pub(super) fn font_scale_needed(&self) -> bool {
-        self.show.font_scale() != service::microfont_scale()
+        self.show.font_scale() != self.requested_font_scale()
+    }
+
+    fn requested_font_scale(&self) -> u32 {
+        tui::font_scale(self.tui_frontend, self.active_matrix_slot_name().as_deref())
+            .unwrap_or_else(service::microfont_scale)
     }
 
     pub(super) fn presentation_pending(&self) -> bool {

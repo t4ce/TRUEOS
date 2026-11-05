@@ -61,7 +61,7 @@ impl Route {
 }
 struct Registry {
     routes: Vec<Route>,
-    ui4_windows: Vec<(u64, crate::ui4::WindowId)>,
+    ui4_windows: Vec<(u64, crate::ui4::WindowId, u32)>,
     revisions: Vec<(u64, u64)>,
     next_revision: u64,
     remote_frontends: Vec<(u64, remote::Output)>,
@@ -120,7 +120,7 @@ fn program_status_priority(status: ProgramStatus) -> u8 {
     }
 }
 
-pub(super) fn bind_ui4_window(frontend: u64, window: crate::ui4::WindowId) {
+pub(super) fn bind_ui4_window(frontend: u64, window: crate::ui4::WindowId, scale: u32) {
     let mut routes = ROUTES.lock();
     if let Some(entry) = routes
         .ui4_windows
@@ -128,8 +128,9 @@ pub(super) fn bind_ui4_window(frontend: u64, window: crate::ui4::WindowId) {
         .find(|entry| entry.0 == frontend)
     {
         entry.1 = window;
+        entry.2 = scale;
     } else {
-        routes.ui4_windows.push((frontend, window));
+        routes.ui4_windows.push((frontend, window, scale));
     }
     drop(routes);
     // A terminal lease may be claimed while launch feedback still owns the
@@ -137,6 +138,12 @@ pub(super) fn bind_ui4_window(frontend: u64, window: crate::ui4::WindowId) {
     if let Some(vm) = vm_for_window(window) {
         crate::ui4::blueprint_ui4::collapse_api::refresh_terminal(crate::ui4::WindowOwner::Vm(vm));
     }
+}
+
+/// Coordinate conversions follow the font that reached the window, including
+/// while a newer requested size is waiting for successful presentation.
+pub(crate) fn font_scale_for_window(window: crate::ui4::WindowId) -> Option<u32> {
+    ROUTES.lock().ui4_windows.iter().find(|entry| entry.1 == window).map(|entry| entry.2)
 }
 
 /// Registration belongs to a local lease, including the launch-feedback phase
@@ -1097,6 +1104,19 @@ pub(super) fn active(frontend: u64, name: Option<&str>) -> bool {
             && Some(route.lease.name()) == name
             && route.active()
     })
+}
+
+/// Font requests belong only to this selected, locally rendered terminal.
+/// Inactive routes and SSH peers never change another shell's character grid.
+pub(super) fn font_scale(frontend: u64, name: Option<&str>) -> Option<u32> {
+    let routes = ROUTES.lock();
+    if routes.remote_frontends.iter().any(|entry| entry.0 == frontend) { return None; }
+    routes.routes.iter().find(|route| {
+        route.frontend == Some(frontend)
+            && route.selected
+            && Some(route.lease.name()) == name
+            && route.active()
+    }).and_then(|route| route.screen.font_scale())
 }
 
 /// Only a currently owned lease may request mouse capture from the client.

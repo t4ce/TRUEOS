@@ -27,6 +27,22 @@ change. The font service warms a retained R8 bitmap atlas alongside the existing
 line/quad atlas at that same cell size before publishing font readiness.
 MicroFont's runtime `hex` feature remains disabled.
 
+Edit's right-aligned Font Size picker selects 50% through 400% in eight steps,
+with 100% as the default. Its trailing header space is reserved before the
+ordinary menus; narrow headers show only the percentage. The picker scrolls
+in short windows and returns focus to the page after selection or Escape.
+Opening it uses the ordinary popup pause boundary.
+
+Font size is local to the selected terminal lease. A bounded
+`OSC 777;font-scale;1;N` request selects native scale 1 through 8, with scale 2
+equal to the existing default. Requests commit with synchronized terminal
+frames, survive resize and clear on reset or alternate-screen exit. Shell3
+uses its existing cell-size, grid-resize and two-buffer invalidation path;
+the line/quad and canonical bitmap sources are reused at every size. Menu and
+status text retain the raster face while the enabled editor page uses hex.
+Pointer and file-drop coordinates follow the size successfully presented to
+that window, including while a newer requested size is pending.
+
 `tools/edit_hex_font.py` generates the 724 shared full 66-bit masks from
 `vendor/microfont/data/line-v1`, including ten lowercase compositions assembled
 from validated canonical bitmap fragments. The Rust table and OpenCL sampler
@@ -386,8 +402,31 @@ the output pixels or synchronization proof. The fence's precise latency is
 not isolated by the existing measurements; this is a measured bottleneck with
 a structural correction, not a demonstrated runtime speedup yet.
 
-Target runtime speedup remains unmeasured for this candidate. The inherited VFE
-configuration is unchanged: Intel's own Gen12LP preamble also uses one large
+The expanded-texel boot admits `5e637cb1...` and confirms the copy improvement:
+1700x800 mode-2 walker time is about 1.3–3.3 ms after F12, versus 212–230 ms
+in the previous canonical build. Sampled later generation totals are 17–46 ms;
+one 600-render sample is 22 ms. Queue time remains variable and these are
+observed samples, rather than a controlled sustained-clock benchmark.
+
+The same boot exposed a separate publication race during cursor-only clicks.
+The effect published its completed buffer into FramePool before checking that
+its input serial was still current. If a click changed that serial during GPU
+work, the broker never learned about the new front. The old displayed buffer
+could remain reader-pinned as the back buffer, while the new front was excluded
+from writable-buffer acquisition. This stranded animation until another input
+caused a broker publication; it was not an inactive page or GPU quarantine.
+
+The producer now checks the input after GPU retirement and before changing the
+front buffer. It holds the page-registration lock through FramePool publication
+and broker publication, without holding it during GPU work. Superseded completed
+writes are cancelled while still unpublished. A broker failure after front
+publication stops on the latest ordinary source instead of silently retrying
+with an unreachable back buffer. This race fix still needs target verification.
+The per-pixel alpha contract is unchanged: uncovered background remains 153,
+the display expansion preserves its stored alpha, and only chrome is forced to
+255. FramePool keeps the effect's fully-opaque hint clear.
+
+The inherited VFE configuration is unchanged: Intel's own Gen12LP preamble also uses one large
 URB entry, so its size alone does not prove restricted EU occupancy. See the
 [official Intel preamble](https://raw.githubusercontent.com/intel/compute-runtime/master/shared/source/gen12lp/preamble_gen12lp.cpp).
 
@@ -490,6 +529,8 @@ python3 tools/testpy/test_edit_life_encoder.py
 python3 tools/testpy/test_edit_life_imports.py
 python3 tools/testpy/test_edit_life_lane.py
 python3 tools/testpy/test_edit_life_failure.py
+python3 tools/testpy/test_edit_life_publication.py
+python3 tools/testpy/test_terminal_font_scale.py
 python3 tools/testpy/test_edit_life_math.py
 python3 tools/testpy/test_edit_life_division.py
 python3 tools/edit_life_shader_bake.py --verify
@@ -521,6 +562,16 @@ Lane tests exercise priority, identity, nonoverlapping control storage,
 optional boot admission, exact quarantine and private-resource retirement.
 Registration tests exercise failure latching, source freshness, pause/resume,
 frame detachment and cleanup wakeups using the production lifecycle functions.
+Six publication tests execute the production render method with cursor/source,
+pause and failure changes during CPU/native authoring. Superseded outputs must
+leave the front unchanged and their write lease reusable; a fresh render must
+publish without another input event. Geometry preflight, post-publication broker
+failure, transient busy buffers and uncertain GPU lease retention are covered.
+The old render method fails the stale-front assertion in the same fixture.
+Font-size tests cover strict OSC parsing, synchronized updates, resize/reset,
+per-terminal isolation, applied-size coordinate conversion and scene drop
+coordinates. Edit's host binary tests exercise all eight single-click choices,
+narrow headers, five/six-row scrolling, keyboard selection and focus return.
 The full-shader host math test compiles strict and fast variants with memory
 and undefined-behavior sanitizers. Its 599 snapshots cover all six modes,
 including padded launches, clipped cells and viewport edges. It checks body

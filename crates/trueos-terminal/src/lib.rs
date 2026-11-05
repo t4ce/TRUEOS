@@ -4,6 +4,7 @@ extern crate alloc;
 
 pub mod program_status;
 pub mod edit_life;
+mod font_scale;
 
 use alloc::{string::String, vec, vec::Vec};
 
@@ -116,6 +117,7 @@ struct SynchronizedScreen {
     cells: Vec<Cell>,
     cursor: Cursor,
     edit_life: Option<edit_life::EditLife>,
+    font_scale: Option<u32>,
 }
 
 /// A compact, fixed-cell terminal screen for the UI4 shell frontend.
@@ -142,6 +144,7 @@ pub struct Terminal {
     osc_buf: Vec<u8>,
     osc_overflow: bool,
     edit_life: Option<edit_life::EditLife>,
+    font_scale: Option<u32>,
     synchronized: Option<SynchronizedScreen>,
     utf8_buf: [u8; 4],
     utf8_len: usize,
@@ -178,6 +181,7 @@ impl Terminal {
             osc_buf: Vec::new(),
             osc_overflow: false,
             edit_life: None,
+            font_scale: None,
             synchronized: None,
             utf8_buf: [0; 4],
             utf8_len: 0,
@@ -205,6 +209,15 @@ impl Terminal {
         match self.synchronized.as_ref() {
             Some(screen) => screen.edit_life.as_ref(),
             None => self.edit_life.as_ref(),
+        }
+    }
+
+    /// This terminal's committed font request. Scale 2 is the normal size;
+    /// scales 1 through 8 cover 50% through 400%. Resizing preserves it.
+    pub fn font_scale(&self) -> Option<u32> {
+        match self.synchronized.as_ref() {
+            Some(screen) => screen.font_scale,
+            None => self.font_scale,
         }
     }
 
@@ -322,6 +335,7 @@ impl Terminal {
     /// Clear the screen and all parser/cursor state without changing its size.
     pub fn reset(&mut self) {
         self.edit_life = None;
+        self.font_scale = None;
         self.synchronized = None;
         self.cells.fill(Cell::blank());
         self.current_style = CellStyle::default();
@@ -492,6 +506,13 @@ impl Terminal {
     }
 
     fn finish_osc(&mut self) {
+        if !self.osc_overflow
+            && let Some(scale) = font_scale::parse(&self.osc_buf)
+            && self.font_scale != Some(scale)
+        {
+            self.font_scale = Some(scale);
+            self.dirty = true;
+        }
         if !self.osc_overflow
             && let Some(report) = edit_life::parse(&self.osc_buf)
             && self.edit_life.as_ref() != Some(&report)
@@ -676,6 +697,7 @@ impl Terminal {
                 1015 => self.mouse_urxvt_encoding = enabled,
                 47 | 1047 | 1049 if !enabled => {
                     if self.edit_life.take().is_some() { self.dirty = true; }
+                    if self.font_scale.take().is_some() { self.dirty = true; }
                     self.synchronized = None;
                 }
                 2026 => {
@@ -684,6 +706,7 @@ impl Terminal {
                             cells: self.cells.clone(),
                             cursor: self.cursor(),
                             edit_life: self.edit_life.clone(),
+                            font_scale: self.font_scale,
                         });
                     } else if !enabled {
                         self.synchronized = None;
@@ -1471,6 +1494,73 @@ mod tests {
         assert_eq!(terminal.edit_life(), Some(&active));
         assert_eq!(terminal.cells(), page_cells);
         assert!(!terminal.take_dirty());
+    }
+
+    #[test]
+    fn font_scale_commits_complete_reports_and_ignores_malformed_updates() {
+        let mut terminal = Terminal::new(8, 3);
+        terminal.take_dirty();
+        for byte in b"A\x1b]777;font-scale;1;3\x1b" {
+            terminal.feed(core::slice::from_ref(byte));
+        }
+        assert_eq!(terminal.font_scale(), None, "unterminated metadata must remain private");
+        terminal.feed(b"\\B");
+        assert_eq!(terminal.font_scale(), Some(3));
+        assert_eq!(terminal.cells()[0].glyph, 'A');
+        assert_eq!(terminal.cells()[1].glyph, 'B');
+        assert!(terminal.take_dirty());
+        terminal.feed(b"\x1b]777;font-scale;1;3\x07");
+        assert!(!terminal.take_dirty(), "unchanged metadata does not redraw");
+        for report in [
+            "\x1b]777;font-scale;1;0\x07", "\x1b]777;font-scale;1;9\x07",
+            "\x1b]777;font-scale;1;3;\x07", "\x1b]777;font-scale;2;8\x07",
+        ] {
+            terminal.feed(report.as_bytes());
+            assert_eq!(terminal.font_scale(), Some(3));
+            assert!(!terminal.take_dirty());
+        }
+        terminal.feed(b"\x1b]777;font-scale;1;8");
+        terminal.feed(&vec![b'0'; MAX_OSC_BYTES]);
+        terminal.feed(b"\x07C");
+        assert_eq!(terminal.font_scale(), Some(3));
+        assert_eq!(terminal.cells()[2].glyph, 'C');
+    }
+
+    #[test]
+    fn font_scale_and_cells_commit_in_one_synchronized_frame() {
+        let mut terminal = Terminal::new(8, 3);
+        terminal.feed(b"A\x1b]777;font-scale;1;2\x07");
+        terminal.take_dirty();
+        terminal.feed(b"\x1b[?2026h\x1b[1GB\x1b]777;font-scale;1;8\x07");
+        assert_eq!(terminal.font_scale(), Some(2));
+        assert_eq!(terminal.cells()[0].glyph, 'A');
+        assert!(!terminal.take_dirty());
+        terminal.feed(b"\x1b[?2026");
+        assert_eq!(terminal.font_scale(), Some(2));
+        terminal.feed(b"l");
+        assert_eq!(terminal.font_scale(), Some(8));
+        assert_eq!(terminal.cells()[0].glyph, 'B');
+        assert!(terminal.take_dirty());
+        assert!(!terminal.take_dirty());
+    }
+
+    #[test]
+    fn font_scale_survives_resize_but_clears_with_terminal_ownership() {
+        let mut terminal = Terminal::new(8, 3);
+        terminal.feed(b"\x1b]777;font-scale;1;1\x07");
+        terminal.resize(4, 2);
+        assert_eq!(terminal.font_scale(), Some(1), "resize must not oscillate back to the default scale");
+        terminal.reset();
+        assert_eq!(terminal.font_scale(), None, "a newly claimed terminal starts at its host default");
+        for mode in [47, 1047, 1049] {
+            terminal.feed(b"\x1b]777;font-scale;1;7\x07");
+            terminal.take_dirty();
+            terminal.feed(alloc::format!("\x1b[?{mode}l").as_bytes());
+            assert_eq!(terminal.font_scale(), None);
+            assert!(terminal.take_dirty());
+        }
+        terminal.feed(b"\x1b]777;font-scale;1;4\x07\x1bc");
+        assert_eq!(terminal.font_scale(), None);
     }
 
     #[test]

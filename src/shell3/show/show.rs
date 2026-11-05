@@ -173,6 +173,10 @@ impl Show {
                     .map_err(|_| "shell3-show-scale-state")?;
                 placement.width = extent.0;
                 placement.height = extent.1;
+                if let Some((output_width, output_height)) = crate::ui4::output_dimensions() {
+                    placement.x = placement.x.clamp(0, output_width.saturating_sub(extent.0) as i32);
+                    placement.y = placement.y.clamp(0, output_height.saturating_sub(extent.1) as i32);
+                }
                 crate::ui4::set_window_placement(OWNER, surface.window, placement)
                     .map_err(|_| "shell3-show-scale-minimum")?;
             }

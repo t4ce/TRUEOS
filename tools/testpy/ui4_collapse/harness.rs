@@ -27,7 +27,7 @@ mod shell3 {
         }
         struct Registry {
             routes: Vec<Route>,
-            ui4_windows: Vec<(u64, crate::ui4::WindowId)>,
+            ui4_windows: Vec<(u64, crate::ui4::WindowId, u32)>,
             remote_frontends: Vec<(u64, ())>,
         }
         static ROUTES: spin::Mutex<Registry> = spin::Mutex::new(Registry {
@@ -48,7 +48,7 @@ mod shell3 {
             routes.routes[0].selected = window != 0;
             drop(routes);
             if window != 0 {
-                bind_ui4_window(1, crate::ui4::WindowId(window));
+                bind_ui4_window(1, crate::ui4::WindowId(window), 2);
             }
         }
     }
