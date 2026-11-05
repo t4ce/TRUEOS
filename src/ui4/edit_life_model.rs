@@ -5,6 +5,7 @@
 use alloc::vec::Vec;
 
 const MAX_SIDE: u32 = 512;
+const MAX_CANONICAL_PIXELS: usize = 2 * 1024 * 1024;
 pub(crate) const BACKGROUND_ALPHA: u8 = 153; // Static 60% opacity.
 const COVERAGE_THRESHOLD: u32 = 46; // GLSL step(.18, coverage), in R8 bytes.
 
@@ -26,6 +27,9 @@ pub(crate) struct Life {
     previous: Vec<u8>,
     previous_hex: Vec<[u32; 4]>,
     previous_hex_layout: Option<[u32; 3]>,
+    canonical_rgba: Vec<[u8; 4]>,
+    visible_width: u32,
+    visible_height: u32,
     initialized: bool,
     generation: u64,
 }
@@ -44,6 +48,7 @@ impl Life {
         next.resize(count, Cell::default());
         Some(Self { width, height, grid_width, grid_height, cells, next,
             previous: Vec::new(), previous_hex: Vec::new(), previous_hex_layout: None,
+            canonical_rgba: Vec::new(), visible_width: grid_width, visible_height: grid_height,
             initialized: false, generation: 0 })
     }
 
@@ -67,6 +72,10 @@ impl Life {
         if end > mask.len() || end.checked_mul(4).is_none_or(|end| end > colors.len()) {
             return false;
         }
+        let switching_from_hex = self.previous_hex_layout.is_some();
+        if !self.resize_grid(width.div_ceil(3).min(MAX_SIDE), height.div_ceil(3).min(MAX_SIDE)) {
+            return false;
+        }
         // The bitmap path uses a cell-sized baseline. Allocate the legacy
         // per-pixel comparison image only when this reference API is used.
         let Some(pixels) = (width as usize).checked_mul(height as usize) else { return false; };
@@ -76,7 +85,7 @@ impl Life {
             }
             self.previous.resize(pixels, 0);
         }
-        let reseed = reset || !self.initialized || self.previous_hex_layout.is_some();
+        let reseed = reset || !self.initialized || switching_from_hex;
         if reseed || emit {
             for y in 0..self.grid_height {
                 for x in 0..self.grid_width {
@@ -111,44 +120,58 @@ impl Life {
         if reseed { self.generation = 0; }
         self.previous_hex_layout = None;
         self.previous_hex.clear();
+        self.canonical_rgba = Vec::new();
+        self.visible_width = self.grid_width;
+        self.visible_height = self.grid_height;
         self.initialized = true;
         true
     }
 
     /// Snapshot viewport-local cells [glyph, foreground, background, flags].
-    /// Both masks are sampled from the same retained bitmap as the text
-    /// painter; the previous input stays one compact record per glyph cell.
+    /// The world is exactly six by eleven pixels per terminal cell. Glyph
+    /// bits seed those same pixels directly; physical size affects only the
+    /// final nearest-neighbor copy, never Conway or its retained page input.
     pub(crate) fn snapshot_hex(&mut self, cells: &[[u32; 4]], columns: u32,
         cell_width: u32, cell_height: u32, reset: bool, emit: bool) -> bool {
-        if cell_width == 0 || cell_height == 0 || columns != self.width.div_ceil(cell_width) {
+        if cell_width < 6 || cell_height < 11 || cell_width > 256 || cell_height > 256
+            || columns != self.width.div_ceil(cell_width) {
             return false;
         }
         let Some(count) = columns.checked_mul(self.height.div_ceil(cell_height))
             .and_then(|count| usize::try_from(count).ok()) else { return false; };
         if cells.len() != count { return false; }
-        if self.previous_hex.try_reserve_exact(count.saturating_sub(self.previous_hex.len())).is_err() {
-            return false;
-        }
+        let Some(grid_width) = columns.checked_mul(6) else { return false; };
+        let Some(grid_height) = self.height.div_ceil(cell_height).checked_mul(11) else { return false; };
+        let Some(pixels) = (grid_width as usize).checked_mul(grid_height as usize)
+            .filter(|&pixels| pixels <= MAX_CANONICAL_PIXELS) else { return false; };
+        if self.previous_hex.try_reserve_exact(count.saturating_sub(self.previous_hex.len())).is_err()
+            || self.canonical_rgba.try_reserve_exact(pixels.saturating_sub(self.canonical_rgba.len())).is_err()
+            || !self.resize_grid(grid_width, grid_height) { return false; }
+        self.canonical_rgba.resize(pixels, [0; 4]);
+        self.visible_width = (self.width - 1) / cell_width * 6
+            + ((self.width - 1) % cell_width) * 6 / cell_width + 1;
+        self.visible_height = (self.height - 1) / cell_height * 11
+            + ((self.height - 1) % cell_height) * 11 / cell_height + 1;
         let layout = [columns, cell_width, cell_height];
         let reseed = reset || !self.initialized || self.previous_hex_layout != Some(layout);
         if reseed || emit {
             for y in 0..self.grid_height {
                 for x in 0..self.grid_width {
-                    let (coverage, rgb) = self.input_cell(x, y, |sx, sy| {
-                        let (coverage, rgb) = hex_input(cells, columns, cell_width, cell_height, sx, sy);
-                        let coverage = if !reseed {
-                            coverage.saturating_sub(hex_input(&self.previous_hex, columns,
-                                cell_width, cell_height, sx, sy).0)
-                        } else { coverage };
-                        (coverage, rgb)
-                    });
                     let index = (y * self.grid_width + x) as usize;
+                    if x >= self.visible_width || y >= self.visible_height {
+                        self.cells[index] = Cell::default();
+                        continue;
+                    }
+                    let (coverage, rgb) = hex_input(cells, columns, 6, 11, x, y);
+                    let coverage = if !reseed {
+                        coverage.saturating_sub(hex_input(&self.previous_hex, columns, 6, 11, x, y).0)
+                    } else { coverage };
                     let old = self.cells[index];
                     if reseed {
-                        let alive = coverage >= COVERAGE_THRESHOLD;
+                        let alive = coverage != 0;
                         self.cells[index] = Cell { alive, trail: if alive { 255 } else { 0 },
                             born: alive, rgb: if alive { rgb } else { [0; 3] } };
-                    } else if coverage >= COVERAGE_THRESHOLD {
+                    } else if coverage != 0 {
                         self.cells[index] = Cell { alive: true, trail: 255,
                             born: old.born || !old.alive,
                             rgb: if old.alive { add_rgb(old.rgb, rgb) } else { rgb } };
@@ -162,6 +185,23 @@ impl Life {
         self.previous = Vec::new();
         if reseed { self.generation = 0; }
         self.initialized = true;
+        self.resolve_hex();
+        true
+    }
+
+    fn resize_grid(&mut self, width: u32, height: u32) -> bool {
+        if (width, height) == (self.grid_width, self.grid_height) { return true; }
+        let Some(count) = (width as usize).checked_mul(height as usize) else { return false; };
+        let mut cells = Vec::new();
+        let mut next = Vec::new();
+        if cells.try_reserve_exact(count).is_err() || next.try_reserve_exact(count).is_err() { return false; }
+        cells.resize(count, Cell::default());
+        next.resize(count, Cell::default());
+        self.cells = cells;
+        self.next = next;
+        self.grid_width = width;
+        self.grid_height = height;
+        self.initialized = false;
         true
     }
 
@@ -210,6 +250,11 @@ impl Life {
         if !self.initialized { return; }
         for y in 0..self.grid_height as i32 { for x in 0..self.grid_width as i32 {
             let index = (y as u32 * self.grid_width + x as u32) as usize;
+            if self.previous_hex_layout.is_some()
+                && (x as u32 >= self.visible_width || y as u32 >= self.visible_height) {
+                self.next[index] = Cell::default();
+                continue;
+            }
             let old = self.cells[index];
             let mut count = 0;
             let mut first = [0; 3];
@@ -237,6 +282,7 @@ impl Life {
         }}
         core::mem::swap(&mut self.cells, &mut self.next);
         self.generation = self.generation.saturating_add(1);
+        if self.previous_hex_layout.is_some() { self.resolve_hex(); }
     }
 
     fn cell(&self, x: i32, y: i32) -> Option<Cell> {
@@ -245,11 +291,56 @@ impl Life {
         } else { Some(self.cells[(y as u32 * self.grid_width + x as u32) as usize]) }
     }
 
+    fn canonical_background(&self, x: u32, y: u32) -> [u8; 3] {
+        let cell = self.cell(x as i32, y as i32).unwrap_or_default();
+        let strength = (if cell.alive { 0.85 } else { 0.0 })
+            + f32::from(cell.trail) / 255.0 * 0.15;
+        let mut halo = [0.0; 3];
+        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let neighbor = self.cell(x as i32 + dx, y as i32 + dy).unwrap_or_default();
+            for channel in 0..3 {
+                halo[channel] += f32::from(neighbor.rgb[channel]) * f32::from(neighbor.trail) / 255.0;
+            }
+        }
+        core::array::from_fn(|channel| {
+            let pigment = f32::from(cell.rgb[channel]);
+            let light = pigment * strength + halo[channel] * 0.018
+                + if cell.born { pigment * 0.10 } else { 0.0 };
+            (light * 0.6 + 0.5).clamp(0.0, f32::from(BACKGROUND_ALPHA)) as u8
+        })
+    }
+
+    fn resolve_hex(&mut self) {
+        let Some([columns, _, _]) = self.previous_hex_layout else { return; };
+        for y in 0..self.grid_height { for x in 0..self.grid_width {
+            let index = (y * self.grid_width + x) as usize;
+            self.canonical_rgba[index] = if x < self.visible_width && y < self.visible_height {
+                let ink = hex_ink(&self.previous_hex, columns, 6, 11, x, y);
+                composite_background(ink, self.canonical_background(x, y))
+            } else { [0, 0, 0, BACKGROUND_ALPHA] };
+        }}
+    }
+
+    /// Presentation is one integer nearest-neighbor lookup. No glyph mask,
+    /// Conway neighborhood, floating-point shading or blending runs here.
+    pub(crate) fn hex_pixel(&self, x: u32, y: u32) -> [u8; 4] {
+        if x >= self.width || y >= self.height { return [0; 4]; }
+        let Some([_, cell_width, cell_height]) = self.previous_hex_layout else { return [0; 4]; };
+        let gx = x / cell_width * 6 + (x % cell_width) * 6 / cell_width;
+        let gy = y / cell_height * 11 + (y % cell_height) * 11 / cell_height;
+        self.canonical_rgba.get((gy * self.grid_width + gx) as usize).copied().unwrap_or([0; 4])
+    }
+
     /// Premultiplied background RGB at static 60% alpha, relative to the
     /// viewport. Foreground ink is composited afterward at its original
     /// coverage; shader light never raises the background's alpha.
     pub(crate) fn pixel(&self, x: u32, y: u32) -> [u8; 3] {
         if x >= self.width || y >= self.height { return [0; 3]; }
+        if let Some([_, cell_width, cell_height]) = self.previous_hex_layout {
+            let gx = x / cell_width * 6 + (x % cell_width) * 6 / cell_width;
+            let gy = y / cell_height * 11 + (y % cell_height) * 11 / cell_height;
+            return self.canonical_background(gx, gy);
+        }
         let px = (x as f32 + 0.5) * self.grid_width as f32 / self.width as f32;
         let py = (y as f32 + 0.5) * self.grid_height as f32 / self.height as f32;
         let gx = px as i32;
@@ -488,56 +579,113 @@ mod tests {
         [glyph, u32::from_le_bytes(foreground), u32::from_le_bytes(background), flags]
     }
 
-    fn expanded_hex(cells: &[[u32; 4]], columns: u32, cell_width: u32, cell_height: u32,
-        width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
-        let mut mask = Vec::new();
-        let mut colors = Vec::new();
-        for y in 0..height { for x in 0..width {
-            let (coverage, rgb) = hex_input(cells, columns, cell_width, cell_height, x, y);
-            mask.push(coverage);
-            colors.extend_from_slice(&[rgb[0], rgb[1], rgb[2], coverage]);
-        }}
-        (mask, colors)
-    }
-
     #[test]
-    fn compact_hex_snapshot_matches_expanded_mask_through_emit_erase_and_scroll() {
-        // The viewport clips the final column and row. Sampling still uses
-        // the full physical glyph cell, exactly as the terminal painter does.
-        let (cell_width, cell_height) = (7, 13);
-        let (width, height, columns) = (12, 23, 2);
-        let mut cells = vec![
+    fn canonical_seed_and_generations_are_identical_at_every_physical_font_size() {
+        let cells = vec![
             hex_cell('A', [250, 10, 20, 255], [0, 0, 0, 255], 0),
             hex_cell('g', [20, 240, 40, 255], [0, 0, 0, 255], 0),
             hex_cell(' ', [0, 0, 250, 255], [44, 44, 44, 255], 1),
             hex_cell('\u{10ffff}', [77, 88, 99, 255], [0, 0, 0, 255], 2),
         ];
-        let mut compact = Life::new(width, height).unwrap();
-        let mut expanded = Life::new(width, height).unwrap();
-        assert!(compact.previous.is_empty(), "no per-pixel allocation before legacy snapshot");
-        for round in 0..6 {
-            if round == 1 {
-                cells[1] = hex_cell('Q', [10, 30, 250, 255], [0, 0, 0, 255], 2);
-            } else if round == 2 {
-                cells[0] = hex_cell(' ', [255; 4], [0, 0, 0, 255], 0);
-            } else if round == 3 {
-                cells[0] = hex_cell('W', [220, 30, 50, 255], [0, 0, 0, 255], 0);
-            }
-            let reset = round == 5;
-            let emit = round != 3;
-            let (mask, colors) = expanded_hex(&cells, columns, cell_width, cell_height, width, height);
-            assert!(compact.snapshot_hex(&cells, columns, cell_width, cell_height, reset, emit));
-            assert!(expanded.snapshot(&mask, &colors, width, [0, 0, width, height], reset, emit));
-            assert_eq!(compact.cells, expanded.cells, "snapshot round={round}");
-            assert_eq!(compact.generation(), expanded.generation());
-            assert!(compact.previous.is_empty());
-            assert_eq!(compact.previous_hex, cells);
-            for _ in 0..2 {
-                compact.step();
-                expanded.step();
-                assert_eq!(compact.cells, expanded.cells, "generation round={round}");
+        let mut reference = Life::new(12, 22).unwrap();
+        assert!(reference.snapshot_hex(&cells, 2, 6, 11, false, true));
+        assert_eq!((reference.grid_width, reference.grid_height), (12, 22));
+        for y in 0..22 { for x in 0..12 {
+            let (coverage, rgb) = hex_input(&cells, 2, 6, 11, x, y);
+            let actual = reference.cells[(y * 12 + x) as usize];
+            assert_eq!(actual.alive, coverage != 0, "direct bitmap bit at {x},{y}");
+            assert_eq!(actual.rgb, if coverage != 0 { rgb } else { [0; 3] });
+        }}
+        for (cell_width, cell_height) in [(6, 11), (7, 13), (17, 31), (23, 42)] {
+            let mut life = Life::new(cell_width * 2, cell_height * 2).unwrap();
+            assert!(life.snapshot_hex(&cells, 2, cell_width, cell_height, false, true));
+            assert_eq!(life.cells, reference.cells);
+            assert_eq!(life.canonical_rgba, reference.canonical_rgba);
+            let mut expected = Life::new(12, 22).unwrap();
+            assert!(expected.snapshot_hex(&cells, 2, 6, 11, false, true));
+            for _ in 0..3 {
+                for y in 0..life.height { for x in 0..life.width {
+                    let gx = x / cell_width * 6 + (x % cell_width) * 6 / cell_width;
+                    let gy = y / cell_height * 11 + (y % cell_height) * 11 / cell_height;
+                    assert_eq!(life.hex_pixel(x, y), expected.canonical_rgba[(gy * 12 + gx) as usize]);
+                }}
+                life.step();
+                expected.step();
+                assert_eq!(life.cells, expected.cells);
+                assert_eq!(life.canonical_rgba, expected.canonical_rgba);
             }
         }
+    }
+
+    #[test]
+    fn canonical_emission_is_positive_bitmap_delta_and_no_emit_refreshes_baseline() {
+        let blank = [hex_cell(' ', [255; 4], [0, 0, 0, 255], 0)];
+        let ink = [hex_cell('A', [20, 40, 60, 255], [0, 0, 0, 255], 0)];
+        let full = [hex_cell('█', [255; 4], [0, 0, 0, 255], 0)];
+        let mut life = Life::new(17, 31).unwrap();
+        assert!(life.snapshot_hex(&blank, 1, 17, 31, false, true));
+        assert!(occupied(&life).is_empty());
+        assert!(life.snapshot_hex(&ink, 1, 17, 31, false, true));
+        let seeded = life.cells.clone();
+        assert!(seeded.iter().any(|cell| cell.alive));
+        assert!(life.snapshot_hex(&ink, 1, 17, 31, false, true));
+        assert_eq!(life.cells, seeded, "unchanged ink must not add color or extra life");
+        life.step();
+        let advanced = life.cells.clone();
+        assert!(life.snapshot_hex(&full, 1, 17, 31, false, false));
+        assert_eq!(life.cells, advanced);
+        assert!(life.snapshot_hex(&full, 1, 17, 31, false, true));
+        assert_eq!(life.cells, advanced, "no-emit still advanced the positive-delta baseline");
+        assert!(life.snapshot_hex(&blank, 1, 17, 31, false, true));
+        assert_eq!(life.cells, advanced, "erasing ink never kills a running world");
+        assert!(life.snapshot_hex(&blank, 1, 17, 31, true, true));
+        assert!(occupied(&life).is_empty());
+        assert_eq!(life.generation(), 0);
+    }
+
+    #[test]
+    fn clipped_glyph_tail_is_dead_and_cannot_evolve_into_visible_page() {
+        let cells = [hex_cell('█', [255; 4], [0, 0, 0, 255], 0)];
+        let mut life = Life::new(2, 2).unwrap();
+        assert!(life.snapshot_hex(&cells, 1, 7, 13, false, true));
+        assert_eq!((life.grid_width, life.grid_height), (6, 11));
+        assert_eq!((life.visible_width, life.visible_height), (1, 1));
+        assert_eq!(occupied(&life), vec![(0, 0)]);
+        for _ in 0..4 {
+            life.step();
+            assert!(occupied(&life).is_empty());
+            assert!(life.cells.iter().all(|cell| !cell.alive && !cell.born));
+        }
+        for (index, pixel) in life.canonical_rgba.iter().enumerate().skip(1) {
+            assert_eq!(*pixel, [0, 0, 0, BACKGROUND_ALPHA], "hidden canonical pixel {index}");
+        }
+    }
+
+    #[test]
+    fn canonical_pixel_budget_rejects_before_changing_retained_world() {
+        let mut life = Life::new(1800, 1500).unwrap();
+        let normal = vec![hex_cell('A', [255; 4], [0, 0, 0, 255], 0); 8 * 6];
+        assert!(life.snapshot_hex(&normal, 8, 256, 256, false, true));
+        let retained = life.cells.clone();
+        let too_many = vec![normal[0]; 300 * 137];
+        assert!(!life.snapshot_hex(&too_many, 300, 6, 11, true, true));
+        assert_eq!(life.cells, retained);
+    }
+
+    #[test]
+    fn physical_2560_width_uses_exact_17_pixel_cells_without_cumulative_drift() {
+        let cells = vec![hex_cell('A', [255; 4], [0, 0, 0, 255], 0); 151];
+        let mut life = Life::new(2560, 31).unwrap();
+        assert!(life.snapshot_hex(&cells, 151, 17, 31, false, true));
+        assert_eq!(life.grid_width, 906);
+        for y in 0..31 { for x in 0..2560 {
+            let gx = x / 17 * 6 + (x % 17) * 6 / 17;
+            let gy = y * 11 / 31;
+            assert_eq!(life.hex_pixel(x, y), life.canonical_rgba[(gy * 906 + gx) as usize]);
+        }}
+        assert_eq!(life.visible_width, 904);
+        assert_eq!((2559 / 17) * 6 + (2559 % 17) * 6 / 17, 903);
+        assert_ne!(2559 * 906 / 2560, 903, "whole-viewport scaling would drift away from the text cells");
     }
 
     #[test]
@@ -551,7 +699,8 @@ mod tests {
         for (input, columns, width, height) in [
             (&cells[..3], 2, 6, 11), (&cells[..], 0, 6, 11),
             (&cells[..], 2, 0, 11), (&cells[..], 2, 6, 0),
-            (&cells[..], 3, 6, 11),
+            (&cells[..], 3, 6, 11), (&cells[..], 3, 5, 11),
+            (&cells[..], 2, 6, 10),
         ] {
             assert!(!life.snapshot_hex(input, columns, width, height, true, true));
             assert_eq!(life.cells, before);

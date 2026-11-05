@@ -304,11 +304,7 @@ impl Effect {
                         for x in 0..page.width {
                             let p = &mut row[x as usize * 4..][..4];
                             if page.viewport.contains(x, y) {
-                                let effect = life.pixel(x - page.viewport.x, y - page.viewport.y);
-                                let ink = super::edit_life_model::hex_ink(&page.cells, page.columns,
-                                    page.cell_width, page.cell_height, x - page.viewport.x, y - page.viewport.y);
-                                let composed = super::edit_life_model::composite_background(ink, effect);
-                                p.copy_from_slice(&composed);
+                                p.copy_from_slice(&life.hex_pixel(x - page.viewport.x, y - page.viewport.y));
                             } else {
                                 p[3] = 255;
                             }

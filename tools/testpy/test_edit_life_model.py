@@ -61,8 +61,7 @@ fn main() {
     let mut checksum = 0u64;
     for y in 0..height {
         for x in 0..width {
-            let ink = model::hex_ink(&cells, columns, cell_width, cell_height, x, y);
-            checksum += model::composite_background(ink, life.pixel(x, y))[0] as u64;
+            checksum += life.hex_pixel(x, y)[0] as u64;
         }
     }
     println!("host_cpu_display_us={} checksum={checksum}", start.elapsed().as_micros());

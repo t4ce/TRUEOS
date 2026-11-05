@@ -18,11 +18,12 @@ const EDIT_LIFE_BINDING: usize = 0x840;
 const EDIT_LIFE_SURFACES: usize = 0x880;
 const EDIT_LIFE_PAYLOAD: usize = 0xB00;
 const EDIT_LIFE_UNIFORMS: usize = 0xC00;
-const EDIT_LIFE_UNIFORM_WORDS: usize = 1044;
+const EDIT_LIFE_UNIFORM_WORDS: usize = 32;
 const EDIT_LIFE_UNIFORM_BYTES: usize = EDIT_LIFE_UNIFORM_WORDS * 4;
 const EDIT_LIFE_BATCH_USED_BYTES: usize = (EDIT_LIFE_UNIFORMS + EDIT_LIFE_UNIFORM_BYTES + 63) & !63;
 const EDIT_LIFE_RESULT_USED_BYTES: usize = 256;
 const EDIT_LIFE_MAX_PAGE_PIXELS: u64 = 4096 * 2160;
+const EDIT_LIFE_MAX_CANONICAL_PIXELS: u64 = 2 * 1024 * 1024;
 const EDIT_LIFE_BATCH_ENTER_SLOT: usize = 40;
 const EDIT_LIFE_PRE_WALKER_SLOT: usize = 42;
 const EDIT_LIFE_POST_WALKER_SLOT: usize = 44;
@@ -36,7 +37,7 @@ static EDIT_LIFE_PPGTT_ROOT: AtomicU64 = AtomicU64::new(0);
 static EDIT_LIFE_PPGTT_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 // IDD thread preemption is disabled by the proven compute descriptor. Bound
 // each independently retired walker so an editor page cannot monopolize RCS.
-const EDIT_LIFE_SEED_MAX_LANES: u64 = 16 * 1024;
+const EDIT_LIFE_SEED_MAX_LANES: u64 = 64 * 1024;
 const EDIT_LIFE_STEP_MAX_LANES: u64 = 64 * 1024;
 const EDIT_LIFE_COMPOSITE_MAX_LANES: u64 = 128 * 1024;
 
@@ -44,7 +45,7 @@ fn edit_life_dispatch_rows(mode: u32, width: u32, height: u32, first_row: u32) -
     if width == 0 || first_row >= height { return None; }
     let maximum = match mode {
         0 => EDIT_LIFE_SEED_MAX_LANES,
-        1 | 3 => EDIT_LIFE_STEP_MAX_LANES,
+        1 | 3 | 4 => EDIT_LIFE_STEP_MAX_LANES,
         2 => EDIT_LIFE_COMPOSITE_MAX_LANES,
         _ => return None,
     };
@@ -62,23 +63,35 @@ fn edit_life_reciprocal(divisor: u32) -> Option<u32> {
     Some(if divisor == 1 { 0 } else { (1u64 << 32).div_ceil(u64::from(divisor)) as u32 })
 }
 
+fn edit_life_canonical_geometry(viewport: GpgpuRect, cell_width: u32, cell_height: u32)
+    -> Option<(u32, u32, u32, u32)>
+{
+    if viewport.is_empty() || cell_width < 6 || cell_height < 11
+        || cell_width > 256 || cell_height > 256 { return None; }
+    let columns = viewport.width.div_ceil(cell_width);
+    let rows = viewport.height.div_ceil(cell_height);
+    let grid_width = columns.checked_mul(6)?;
+    let grid_height = rows.checked_mul(11)?;
+    if u64::from(grid_width) * u64::from(grid_height) > EDIT_LIFE_MAX_CANONICAL_PIXELS
+        || u64::from(grid_width).div_ceil(16) * 16 > EDIT_LIFE_SEED_MAX_LANES
+    { return None; }
+    Some((columns, rows, grid_width, grid_height))
+}
+
 fn edit_life_geometry_uniforms(viewport: GpgpuRect, grid_width: u32, grid_height: u32,
     cell_width: u32, cell_height: u32) -> Option<Vec<u32>>
 {
-    if grid_width == 0 || grid_height == 0 || grid_width > 512 || grid_height > 512 { return None; }
+    let (_, _, expected_width, expected_height) = edit_life_canonical_geometry(viewport, cell_width, cell_height)?;
+    if (grid_width, grid_height) != (expected_width, expected_height) { return None; }
     let mut uniforms = Vec::new();
     uniforms.try_reserve_exact(EDIT_LIFE_UNIFORM_WORDS).ok()?;
     uniforms.resize(EDIT_LIFE_UNIFORM_WORDS, 0);
     uniforms[16] = edit_life_reciprocal(cell_width)?;
     uniforms[17] = edit_life_reciprocal(cell_height)?;
-    uniforms[18] = (u64::from(viewport.width) * 87 / u64::from(grid_width)) as u32;
-    uniforms[19] = (u64::from(viewport.height) * 87 / u64::from(grid_height)) as u32;
-    for (origin, count, extent) in [(20, grid_width, viewport.width), (532, grid_height, viewport.height)] {
-        for index in 0..count {
-            let center = ((u64::from(index) * 2 + 1) * u64::from(extent) * 128 / u64::from(count)) as i64 - 128;
-            uniforms[origin + index as usize] = i32::try_from(center).ok()? as u32;
-        }
-    }
+    uniforms[19] = ((viewport.width - 1) / cell_width) * 6
+        + (((viewport.width - 1) % cell_width) * 6 / cell_width) + 1;
+    uniforms[20] = ((viewport.height - 1) / cell_height) * 11
+        + (((viewport.height - 1) % cell_height) * 11 / cell_height) + 1;
     Some(uniforms)
 }
 
@@ -151,7 +164,7 @@ const _: () = {
     assert!(EDIT_LIFE_RGBA8_GPU + EDIT_LIFE_RGBA8_ADLS_BIN.len() as u64 <= HELIO_RETAINED_TRANSFORM_ADLS_GPU);
     assert!(EDIT_LIFE_SURFACES + 8 * 64 <= EDIT_LIFE_PAYLOAD);
     assert!(EDIT_LIFE_PAYLOAD + EDIT_LIFE_INDIRECT_BYTES <= EDIT_LIFE_UNIFORMS);
-    assert!(EDIT_LIFE_BATCH_USED_BYTES == 0x1C80);
+    assert!(EDIT_LIFE_BATCH_USED_BYTES == 0xC80);
     assert!(EDIT_LIFE_BATCH_USED_BYTES <= DIRECT_RCS_BATCH_BYTES);
     assert!((EDIT_LIFE_POST_SLOT + 2) * 4 <= EDIT_LIFE_RESULT_USED_BYTES);
     assert!(EDIT_LIFE_MAX_PAGE_PIXELS * 255 < (1u64 << 32));
@@ -199,7 +212,9 @@ pub(crate) struct EditLifeState {
     glyphs: GpgpuOwnedRgba8Surface,
     previous: GpgpuOwnedRgba8Surface,
     font: GpgpuOwnedRgba8Surface,
+    canonical: GpgpuOwnedRgba8Surface,
     geometry_uniforms: Vec<u32>,
+    canonical_valid: bool,
     read: usize,
     uploaded: bool,
     pending_snapshot: bool,
@@ -217,15 +232,15 @@ impl EditLifeState {
         if width == 0 || height == 0 || cell_width == 0 || cell_height == 0
             || cell_width > 256 || cell_height > 256
             || u64::from(width) * u64::from(height) > EDIT_LIFE_MAX_PAGE_PIXELS
+            || u64::from(width).div_ceil(16) * 16 > EDIT_LIFE_COMPOSITE_MAX_LANES
             || viewport.x < 0 || viewport.y < 0
             || viewport.is_empty()
             || (viewport.x as u32).checked_add(viewport.width).is_none_or(|right| right > width)
             || (viewport.y as u32).checked_add(viewport.height).is_none_or(|bottom| bottom > height)
             || edit_life_rcs_context_is_quarantined()
         { return None; }
+        let (columns, rows, grid_width, grid_height) = edit_life_canonical_geometry(viewport, cell_width, cell_height)?;
         upload_edit_life_kernel()?;
-        let grid_width = viewport.width.div_ceil(3).min(512);
-        let grid_height = viewport.height.div_ceil(3).min(512);
         let cell_words = grid_width.checked_mul(grid_height)?.checked_mul(2)?;
         let geometry_uniforms = edit_life_geometry_uniforms(viewport, grid_width, grid_height, cell_width, cell_height)?;
         let glyph_count = width.div_ceil(cell_width).checked_mul(height.div_ceil(cell_height))?;
@@ -236,7 +251,7 @@ impl EditLifeState {
         super::dma_flush(font.virt, core::mem::size_of_val(font_masks));
         Some(Self {
             width, height, viewport, grid_width, grid_height, cell_width, cell_height,
-            columns: viewport.width.div_ceil(cell_width), rows: viewport.height.div_ceil(cell_height),
+            columns, rows,
             // A one-row allocation keeps uint2 cells tightly packed without
             // inserting the RGBA helper's 64-byte padding between cell rows.
             cells: [edit_life_allocation(cell_words, 1)?, edit_life_allocation(cell_words, 1)?],
@@ -244,7 +259,8 @@ impl EditLifeState {
             // terminal capacity lets gutter shifts reuse the same inputs.
             glyphs: edit_life_allocation(glyph_count.checked_mul(4)?, 1)?,
             previous: edit_life_allocation(glyph_count.checked_mul(2)?, 1)?,
-            font, geometry_uniforms,
+            font, canonical: edit_life_allocation(grid_width, grid_height)?, geometry_uniforms,
+            canonical_valid: false,
             read: 0, uploaded: false, pending_snapshot: false,
             initialized: false, quarantined: false,
             timing_kinds: 0, renders: 0, slow_renders: 0,
@@ -264,17 +280,18 @@ impl EditLifeState {
             || (viewport.y as u32).checked_add(viewport.height).is_none_or(|bottom| bottom > self.height)
         { return false; }
         if viewport == self.viewport { return true; }
-        let grid_width = viewport.width.div_ceil(3).min(512);
-        let grid_height = viewport.height.div_ceil(3).min(512);
+        let Some((columns, rows, grid_width, grid_height)) =
+            edit_life_canonical_geometry(viewport, self.cell_width, self.cell_height)
+            else { return false; };
         let Some(cell_bytes) = (grid_width as usize).checked_mul(grid_height as usize)
             .and_then(|cells| cells.checked_mul(8)) else { return false; };
-        let columns = viewport.width.div_ceil(self.cell_width);
-        let rows = viewport.height.div_ceil(self.cell_height);
         let Some(glyph_bytes) = (columns as usize).checked_mul(rows as usize)
             .and_then(|cells| cells.checked_mul(8)) else { return false; };
         if self.cells.iter().any(|cells| cells.surface().bytes < cell_bytes)
             || self.previous.surface().bytes < glyph_bytes
             || self.glyphs.surface().bytes < glyph_bytes.saturating_mul(2)
+            || grid_width > self.canonical.surface().width
+            || grid_height > self.canonical.surface().height
         { return false; }
         let Some(geometry_uniforms) = edit_life_geometry_uniforms(viewport, grid_width, grid_height,
             self.cell_width, self.cell_height) else { return false; };
@@ -285,6 +302,7 @@ impl EditLifeState {
         self.columns = columns;
         self.rows = rows;
         self.initialized = false;
+        self.canonical_valid = false;
         self.pending_snapshot = true;
         true
     }
@@ -304,6 +322,7 @@ impl EditLifeState {
         super::dma_flush(self.glyphs.virt, core::mem::size_of_val(cells));
         self.uploaded = true;
         self.pending_snapshot = true;
+        self.canonical_valid = false;
         true
     }
 
@@ -338,7 +357,7 @@ impl EditLifeState {
             && edit_life_prepare_ppgtt(state)
             && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
         for resource in [self.cells[0].surface(), self.cells[1].surface(),
-            self.glyphs.surface(), self.previous.surface(), self.font.surface()]
+            self.glyphs.surface(), self.previous.surface(), self.font.surface(), self.canonical.surface()]
         {
             prepared = prepared && direct_rcs_map_ppgtt_kernel(state, resource.gpu, resource.phys, resource.bytes);
         }
@@ -365,11 +384,11 @@ impl EditLifeState {
         let mut submitted = false;
         let mut marker = 0;
         let mut passes = 0u32;
-        let mut pass_ms = [0u64; 4];
+        let mut pass_ms = [0u64; 5];
         // Sample startup/input/reset and occasional steady frames. Production
         // frames otherwise keep the ordinary release packets unchanged.
         let probe = self.timing_kinds & kind_bit == 0 || self.renders < 2 || self.renders % 120 == 0;
-        let mut pass_timing = [EditLifePassTiming::default(); 4];
+        let mut pass_timing = [EditLifePassTiming::default(); 5];
         let mut run = |this: &mut Self, mode: u32, reseed: bool| {
             let pass_started = direct_rcs_now_tick();
             let outcome = this.dispatch(dev, state, upload, dst, source, mode, reseed,
@@ -385,7 +404,7 @@ impl EditLifeState {
         if self.pending_snapshot || reseed {
             if reseed || emit {
                 ok = run(self, 0, reseed);
-                if ok { self.read = 1 - self.read; }
+                if ok { self.read = 1 - self.read; self.canonical_valid = false; }
             }
             if ok { ok = run(self, 3, false); }
             if ok { self.pending_snapshot = false; self.initialized = true; }
@@ -393,7 +412,11 @@ impl EditLifeState {
         for _ in 0..steps {
             if !ok { break; }
             ok = run(self, 1, false);
-            if ok { self.read = 1 - self.read; }
+            if ok { self.read = 1 - self.read; self.canonical_valid = false; }
+        }
+        if ok && !self.canonical_valid {
+            ok = run(self, 4, false);
+            if ok { self.canonical_valid = true; }
         }
         if ok { ok = run(self, 2, false); }
         if ok || !submitted {
@@ -421,9 +444,9 @@ impl EditLifeState {
         {
             self.timing_kinds |= kind_bit;
             crate::log_info!(target: "ui4/edit-life";
-                "intel/gpgpu: edit-life timing kind={} ok={} extent={}x{} grid={}x{} steps={} passes={} ppgtt_prepares=1 lock_ms={} setup_ms={} seed_ms={} baseline_ms={} step_ms={} composite_ms={} submit_ms={} total_ms={} renders={} slow_renders={}\n",
+                "intel/gpgpu: edit-life timing kind={} ok={} extent={}x{} grid={}x{} steps={} passes={} ppgtt_prepares=1 lock_ms={} setup_ms={} seed_ms={} baseline_ms={} step_ms={} resolve_ms={} upscale_ms={} submit_ms={} total_ms={} renders={} slow_renders={}\n",
                 kind, ok as u8, self.width, self.height, self.grid_width, self.grid_height,
-                steps, passes, lock_ms, setup_ms, pass_ms[0], pass_ms[3], pass_ms[1], pass_ms[2],
+                steps, passes, lock_ms, setup_ms, pass_ms[0], pass_ms[3], pass_ms[1], pass_ms[4], pass_ms[2],
                 submit_ms, total_ms, self.renders, self.slow_renders);
         }
         if probe {
@@ -443,7 +466,7 @@ impl EditLifeState {
 
     fn quarantine(&mut self) {
         self.quarantined = true;
-        for resource in [&self.cells[0], &self.cells[1], &self.glyphs, &self.previous, &self.font] {
+        for resource in [&self.cells[0], &self.cells[1], &self.glyphs, &self.previous, &self.font, &self.canonical] {
             resource.quarantine_backing();
         }
     }
@@ -453,7 +476,7 @@ impl EditLifeState {
         mut timing: Option<&mut EditLifePassTiming>) -> DirectRcsDispatchOutcome
     {
         let (width, height) = match mode {
-            0 | 1 => (self.grid_width, self.grid_height),
+            0 | 1 | 4 => (self.grid_width, self.grid_height),
             2 => (self.width, self.height),
             3 => (self.columns, self.rows),
             _ => return DirectRcsDispatchOutcome::default(),
@@ -549,18 +572,16 @@ const fn edit_life_abi_matches() -> bool {
             || contract.bindings[index].bti as usize != index { return false; }
         index += 1;
     }
-    // The sole generated stateful buffer offset stays zero in the cleared
-    // payload. All other implicit fields are written by the encoder below.
+    // This kernel has no implicit buffer offset. The three generated launch
+    // fields are written by the encoder below.
     let implicit = contract.implicit_payload_args;
-    implicit.len() == 4
+    implicit.len() == 3
         && matches!(implicit[0].kind, GpgpuArtifactImplicitArgKind::GlobalIdOffset)
         && implicit[0].offset_bytes == 0 && implicit[0].size_bytes == 12
         && matches!(implicit[1].kind, GpgpuArtifactImplicitArgKind::LocalSize)
         && implicit[1].offset_bytes == 12 && implicit[1].size_bytes == 12
         && matches!(implicit[2].kind, GpgpuArtifactImplicitArgKind::EnqueuedLocalSize)
         && implicit[2].offset_bytes == 32 && implicit[2].size_bytes == 12
-        && matches!(implicit[3].kind, GpgpuArtifactImplicitArgKind::BufferOffset { arg_index: 0 })
-        && implicit[3].offset_bytes == 112 && implicit[3].size_bytes == 4
 }
 
 fn encode_edit_life_batch(state: DirectRcsState, upload: UploadedKernelArtifact,
@@ -575,8 +596,10 @@ fn encode_edit_life_batch(state: DirectRcsState, upload: UploadedKernelArtifact,
         core::ptr::write_bytes(state.result_virt, 0, EDIT_LIFE_RESULT_USED_BYTES);
     }
     let uniforms_gpu = state.gpu_va.batch + EDIT_LIFE_UNIFORMS as u64;
+    let font_or_canonical = if mode == 2 { life.canonical.surface() } else { life.font.surface() };
+    let output = if mode == 4 { life.canonical.surface() } else { dst };
     let resources = [life.cells[life.read].surface(), life.cells[1 - life.read].surface(),
-        life.glyphs.surface(), life.previous.surface(), life.font.surface(), source, dst];
+        life.glyphs.surface(), life.previous.surface(), font_or_canonical, source, output];
     let mut buffers = [(0u64, 0usize); 8];
     for (index, resource) in resources.into_iter().enumerate() { buffers[index] = (resource.gpu, resource.bytes); }
     buffers[7] = (uniforms_gpu, EDIT_LIFE_UNIFORM_BYTES);
@@ -605,8 +628,10 @@ fn encode_edit_life_batch(state: DirectRcsState, upload: UploadedKernelArtifact,
         let uniforms = [mode, reset as u32, life.width, life.height,
             life.viewport.x as u32, life.viewport.y as u32, life.viewport.width, life.viewport.height,
             life.grid_width, life.grid_height, life.columns, life.rows,
-            source.pitch_bytes, dst.pitch_bytes, life.cell_width, life.cell_height];
+            source.pitch_bytes, output.pitch_bytes, life.cell_width, life.cell_height];
         core::ptr::copy_nonoverlapping(uniforms.as_ptr(), state.batch_virt.add(EDIT_LIFE_UNIFORMS) as *mut u32, uniforms.len());
+        core::ptr::write_volatile((state.batch_virt.add(EDIT_LIFE_UNIFORMS) as *mut u32).add(18),
+            life.canonical.surface().pitch_bytes);
     }
     let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, EDIT_LIFE_BATCH_USED_BYTES / 4) };
     let mut cursor = 0;

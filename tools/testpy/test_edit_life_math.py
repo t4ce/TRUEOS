@@ -2,10 +2,8 @@
 """Compare the complete production Conway shader under strict and fast host math.
 
 OpenCL address spaces, vector constructors and builtins are adapted to host
-C++; shader arithmetic and all four kernel branches remain unchanged. The
+C++; shader arithmetic and all five kernel branches remain unchanged. The
 executables run with address/undefined-behavior sanitizers and padded launches.
-An optional --reference-source snapshot must match the new strict result
-byte-for-byte. The maintained test never depends on mutable Git history.
 This checks host floating-point sensitivity, not native Intel GPU performance
 or exact equivalence to IGC's -cl-fast-relaxed-math implementation.
 """
@@ -22,11 +20,10 @@ import tempfile
 
 from test_edit_hex_shader import KERNEL, ROOT, host_vectors
 
-# An FP-rounded cell boundary may select a neighboring halo while its own
-# tile is dark. Four full-strength neighbors contribute at most
-# 4 * 255 * .018 * .6 = 11.016 RGB units, plus final byte rounding.
-VISUAL_RGB_TOLERANCE = 12
-
+# Coordinates, glyph lookup and output alpha are integer-only. Floating
+# lighting runs once per canonical pixel; fast arithmetic may move the final
+# rounded RGB byte by one, never choose a different glyph/world pixel.
+VISUAL_RGB_TOLERANCE = 1
 
 ADAPTER = r'''
 #include <algorithm>
@@ -46,19 +43,19 @@ typedef uint uint4 __attribute__((vector_size(16), aligned(4)));
 typedef float float2 __attribute__((vector_size(8), aligned(4)));
 typedef float float3 __attribute__((vector_size(16), aligned(4)));
 static uint global_x, global_y;
-static inline uint get_global_id(uint axis) { return axis == 0 ? global_x : global_y; }
-static inline uint max(uint a, uint b) { return std::max(a, b); }
+[[maybe_unused]] static inline uint get_global_id(uint axis) { return axis == 0 ? global_x : global_y; }
+[[maybe_unused]] static inline uint max(uint a, uint b) { return std::max(a, b); }
 [[maybe_unused]] static inline uint2 min(uint2 a, uint2 b) { return uint2{std::min(a[0], b[0]), std::min(a[1], b[1])}; }
-static inline float max(float a, float b) { return std::max(a, b); }
-static inline int clamp(int v, int low, int high) { return std::clamp(v, low, high); }
-static inline float clamp(float v, float low, float high) { return std::clamp(v, low, high); }
-static inline float3 clamp(float3 v, float low, float high) {
+[[maybe_unused]] static inline float max(float a, float b) { return std::max(a, b); }
+[[maybe_unused]] static inline int clamp(int v, int low, int high) { return std::clamp(v, low, high); }
+[[maybe_unused]] static inline float clamp(float v, float low, float high) { return std::clamp(v, low, high); }
+[[maybe_unused]] static inline float3 clamp(float3 v, float low, float high) {
     return float3{clamp(v[0], low, high), clamp(v[1], low, high), clamp(v[2], low, high)};
 }
-static inline float2 fabs(float2 v) { return float2{std::fabs(v[0]), std::fabs(v[1])}; }
-static inline uint2 convert_uint2(float2 v) { return __builtin_convertvector(v, uint2); }
-static inline uint3 convert_uint3(float3 v) { return __builtin_convertvector(v, uint3); }
-static inline float2 convert_float2(uint2 v) { return __builtin_convertvector(v, float2); }
+[[maybe_unused]] static inline float2 fabs(float2 v) { return float2{std::fabs(v[0]), std::fabs(v[1])}; }
+[[maybe_unused]] static inline uint2 convert_uint2(float2 v) { return __builtin_convertvector(v, uint2); }
+[[maybe_unused]] static inline uint3 convert_uint3(float3 v) { return __builtin_convertvector(v, uint3); }
+[[maybe_unused]] static inline float2 convert_float2(uint2 v) { return __builtin_convertvector(v, float2); }
 '''
 
 
@@ -76,29 +73,29 @@ static void scenario(uint width, uint height, uint left, uint top, uint vp_width
     uint cell_width, uint cell_height, const std::vector<uint>& font,
     uint space, const std::vector<uint>& glyph_ids, bool composite_only = false)
 {
-    const uint grid_width = std::min(512u, (vp_width + 2) / 3);
-    const uint grid_height = std::min(512u, (vp_height + 2) / 3);
     const uint columns = (vp_width + cell_width - 1) / cell_width;
     const uint rows = (vp_height + cell_height - 1) / cell_height;
-    const uint source_pitch = width + 7, output_pitch = width + 11;
-    uint p[1044] = {0, 1, width, height, left, top, vp_width, vp_height,
+    const uint grid_width = columns * 6, grid_height = rows * 11;
+    assert(grid_width * grid_height <= 2u * 1024u * 1024u);
+    const uint source_pitch = width + 7, output_pitch = width + 11, canonical_pitch = grid_width + 5;
+    uint p[32] = {0, 1, width, height, left, top, vp_width, vp_height,
         grid_width, grid_height, columns, rows, source_pitch * 4, output_pitch * 4,
         cell_width, cell_height};
     p[16] = static_cast<uint>(((std::uint64_t(1) << 32) + cell_width - 1) / cell_width);
     p[17] = static_cast<uint>(((std::uint64_t(1) << 32) + cell_height - 1) / cell_height);
-    p[18] = static_cast<uint>(std::uint64_t(vp_width) * 87 / grid_width);
-    p[19] = static_cast<uint>(std::uint64_t(vp_height) * 87 / grid_height);
-    for (uint x = 0; x < grid_width; ++x)
-        p[20 + x] = static_cast<uint>(((std::uint64_t(x) * 2 + 1) * vp_width * 128 / grid_width) - 128);
-    for (uint y = 0; y < grid_height; ++y)
-        p[532 + y] = static_cast<uint>(((std::uint64_t(y) * 2 + 1) * vp_height * 128 / grid_height) - 128);
+    p[18] = canonical_pitch * 4;
+    p[19] = (vp_width - 1) / cell_width * 6 + (vp_width - 1) % cell_width * 6 / cell_width + 1;
+    p[20] = (vp_height - 1) / cell_height * 11 + (vp_height - 1) % cell_height * 11 / cell_height + 1;
     std::vector<uint> read(grid_width * grid_height * 2);
     std::vector<uint> write(read.size(), 0xd15ea5edu);
     std::vector<uint> glyphs(columns * rows * 4);
     std::vector<uint> previous(columns * rows * 2);
     std::vector<uint> source(source_pitch * height), output(output_pitch * height, 0xa5b6c7d8u);
+    std::vector<uint> canonical(canonical_pitch * grid_height, 0xcac4e5edu);
     uint random = width * 71237u + height * 131u + 1;
-    for (uint i = 0; i < grid_width * grid_height; ++i) {
+    for (uint y = 0; y < grid_height; ++y) for (uint x = 0; x < grid_width; ++x) {
+        const uint i = y * grid_width + x;
+        if (x >= p[19] || y >= p[20]) continue;
         uint value = random_word(random);
         read[i * 2] = (value & 1u) | (((value >> 8) & 255u) << 8) | (((value >> 16) & 1u) << 16);
         read[i * 2 + 1] = random_word(random) & 0x00ffffffu;
@@ -106,14 +103,14 @@ static void scenario(uint width, uint height, uint left, uint top, uint vp_width
     for (uint& value : source) value = random_word(random);
     for (uint i = 0; i < columns * rows; ++i) {
         glyphs[i * 4] = glyph_ids[i % glyph_ids.size()];
-        // Include opaque/default text, partially opaque syntax ink, invisible
-        // ink, opaque selections/carets and underlined cells.
+        // Include default white, partly opaque syntax ink, invisible ink,
+        // opaque selection/caret backgrounds and underlined cells.
         const uint alphas[] = {255, 255, 128, 0, 254, 1, 127};
         glyphs[i * 4 + 1] = (random_word(random) & 0x00ffffffu) | (alphas[i % 7] << 24);
         glyphs[i * 4 + 2] = (random_word(random) & 0x00ffffffu) | 0xff000000u;
         glyphs[i * 4 + 3] = i % 4;
-        if (i % 7 == 0) glyphs[i * 4 + 1] = 0xffffffffu; // Current default white.
-        if (i % 13 == 1) { // Inverted block caret, independent of background lighting.
+        if (i % 7 == 0) glyphs[i * 4 + 1] = 0xffffffffu;
+        if (i % 13 == 1) {
             glyphs[i * 4 + 1] = 0xff000000u;
             glyphs[i * 4 + 2] = 0xffffffffu;
             glyphs[i * 4 + 3] |= 1u;
@@ -121,69 +118,112 @@ static void scenario(uint width, uint height, uint left, uint top, uint vp_width
         previous[i * 2] = space;
         previous[i * 2 + 1] = 0;
     }
-    const auto immutable_source = source;
-    const auto immutable_font = font;
+    const auto immutable_source = source, immutable_font = font;
     uint sequence = 0;
     auto run = [&](uint mode, uint reset) {
         p[0] = mode; p[1] = reset;
         const auto before_read = read, before_write = write, before_previous = previous;
-        const auto before_output = output, before_glyphs = glyphs;
-        const std::vector<uint> before_params(p, p + 1044);
-        const uint domain_width = mode < 2 ? grid_width : mode == 3 ? columns : width;
-        const uint domain_height = mode < 2 ? grid_height : mode == 3 ? rows : height;
-        // Launch the same SIMD16-rounded X domain as hardware, plus edge Y
-        // invocations which must return without reading or writing storage.
+        const auto before_output = output, before_canonical = canonical, before_glyphs = glyphs;
+        const std::vector<uint> before_params(p, p + 32);
+        const uint domain_width = mode == 3 ? columns : mode == 2 ? width : grid_width;
+        const uint domain_height = mode == 3 ? rows : mode == 2 ? height : grid_height;
+        // Hardware launches SIMD16-rounded X; extra Y invocations exercise
+        // every branch's guard without trusting exact dispatch dimensions.
         for (global_y = 0; global_y < domain_height + 3; ++global_y) {
             for (global_x = 0; global_x < ((domain_width + 15) / 16) * 16; ++global_x) {
                 edit_life_rgba8(reinterpret_cast<const uint2*>(read.data()),
                     reinterpret_cast<uint2*>(write.data()), reinterpret_cast<const uint4*>(glyphs.data()),
-                    reinterpret_cast<uint2*>(previous.data()), reinterpret_cast<const uint4*>(font.data()),
-                    source.data(), output.data(), p);
+                    reinterpret_cast<uint2*>(previous.data()),
+                    reinterpret_cast<const uint4*>(mode == 2 ? canonical.data() : font.data()),
+                    source.data(), mode == 4 ? canonical.data() : output.data(), p);
             }
         }
         assert(read == before_read && glyphs == before_glyphs && source == immutable_source && font == immutable_font);
-        assert(std::equal(p, p + 1044, before_params.begin()));
+        assert(std::equal(p, p + 32, before_params.begin()));
         if (mode != 0 && mode != 1) assert(write == before_write);
         if (mode != 3) assert(previous == before_previous);
         if (mode != 2) assert(output == before_output);
-        if (mode == 2) {
-            for (uint y = 0; y < height; ++y) {
-                for (uint x = 0; x < output_pitch; ++x) {
-                    uint pixel = output[y * output_pitch + x];
-                    if (x >= width) assert(pixel == 0xa5b6c7d8u);
-                    else if (x < left || y < top || x - left >= vp_width || y - top >= vp_height)
-                        assert(pixel == (source[y * source_pitch + x] | 0xff000000u));
-                    else {
-                        uint ink = glyph_ink(reinterpret_cast<const uint4*>(glyphs.data()),
-                            reinterpret_cast<const uint4*>(font.data()), p, x - left, y - top);
-                        if ((ink >> 24) == 255) assert(pixel == ink);
-                        assert((pixel & 255u) <= (pixel >> 24));
-                        assert(((pixel >> 8) & 255u) <= (pixel >> 24));
-                        assert(((pixel >> 16) & 255u) <= (pixel >> 24));
-                    }
+        if (mode != 4) assert(canonical == before_canonical);
+        if (mode == 0 || mode == 1) {
+            for (uint y = 0; y < grid_height; ++y) for (uint x = 0; x < grid_width; ++x) {
+                const uint at = y * grid_width + x;
+                if (x >= p[19] || y >= p[20]) {
+                    assert(write[at * 2] == 0 && write[at * 2 + 1] == 0);
+                } else if (mode == 0) {
+                    const uint glyph_at = y / 11 * columns + x / 6;
+                    const uint coverage = glyph_coverage(reinterpret_cast<const uint4*>(font.data()),
+                        uint2{glyphs[glyph_at * 4], glyphs[glyph_at * 4 + 3]}, x % 6, y % 11);
+                    const uint old_coverage = glyph_coverage(reinterpret_cast<const uint4*>(font.data()),
+                        uint2{before_previous[glyph_at * 2], before_previous[glyph_at * 2 + 1]}, x % 6, y % 11);
+                    if (reset) {
+                        assert(write[at * 2] == (coverage ? 0x0001ff01u : 0));
+                        assert(write[at * 2 + 1] == (coverage ? glyphs[glyph_at * 4 + 1] & 0x00ffffffu : 0));
+                    } else if (coverage <= old_coverage) {
+                        assert(write[at * 2] == before_read[at * 2]);
+                        assert(write[at * 2 + 1] == before_read[at * 2 + 1]);
+                    } else assert((write[at * 2] & 0xffffu) == 0xff01u);
                 }
+            }
+        }
+        if (mode == 3) for (uint i = 0; i < columns * rows; ++i) {
+            assert(previous[i * 2] == glyphs[i * 4]);
+            assert(previous[i * 2 + 1] == glyphs[i * 4 + 3]);
+        }
+        if (mode == 4) {
+            for (uint y = 0; y < grid_height; ++y) for (uint x = 0; x < canonical_pitch; ++x) {
+                uint pixel = canonical[y * canonical_pitch + x];
+                if (x >= grid_width) assert(pixel == 0xcac4e5edu);
+                else if (x >= p[19] || y >= p[20]) assert(pixel == 0x99000000u);
+                else {
+                    uint ink = glyph_ink(reinterpret_cast<const uint4*>(glyphs.data()),
+                        reinterpret_cast<const uint4*>(font.data()), p, x, y);
+                    if ((ink >> 24) == 255) assert(pixel == ink); // Text/caret/selection exact RGB.
+                    uint alpha = (ink >> 24) + (153 * (255 - (ink >> 24)) + 127) / 255;
+                    assert((pixel >> 24) == alpha);
+                    for (uint shift : {0, 8, 16}) assert(((pixel >> shift) & 255u) <= alpha);
+                }
+            }
+        }
+        if (mode == 2) {
+            for (uint y = 0; y < height; ++y) for (uint x = 0; x < output_pitch; ++x) {
+                uint pixel = output[y * output_pitch + x];
+                if (x >= width) assert(pixel == 0xa5b6c7d8u);
+                else if (x < left || y < top || x - left >= vp_width || y - top >= vp_height)
+                    assert(pixel == (source[y * source_pitch + x] | 0xff000000u));
+                else {
+                    uint px = x - left, py = y - top;
+                    uint gx = px / cell_width * 6 + px % cell_width * 6 / cell_width;
+                    uint gy = py / cell_height * 11 + py % cell_height * 11 / cell_height;
+                    assert(pixel == canonical[gy * canonical_pitch + gx]); // Pure per-cell nearest copy.
+                }
+            }
+            if (vp_width == 2560 && cell_width == 17) {
+                assert(p[19] == 904 && grid_width == 906);
+                assert((2559 / 17) * 6 + (2559 % 17) * 6 / 17 == 903);
+                assert(2559 * grid_width / vp_width != 903); // Global scaling would visibly drift.
             }
         }
         uint header[] = {width, height, mode, sequence++};
         assert(std::fwrite(header, sizeof(uint), 4, stdout) == 4);
-        words(write); words(previous); words(mode == 2 ? output : std::vector<uint>{});
+        words(write); words(previous);
+        words(mode == 4 ? canonical : std::vector<uint>{});
+        words(mode == 2 ? output : std::vector<uint>{});
         if (mode == 0 || mode == 1) read.swap(write);
     };
-    // Begin with varied occupancy/trails/births to exercise composition even
-    // when a tiny page has too few glyph pixels to seed a live world.
-    run(2, 0);
+    // Varied initial world exercises lighting even on tiny glyph inputs.
+    run(4, 0); run(2, 0);
     if (composite_only) return;
-    run(0, 1); run(3, 0); run(2, 0);
-    for (uint generation = 0; generation < 3; ++generation) { run(1, 0); run(2, 0); }
+    run(0, 1); run(3, 0); run(4, 0); run(2, 0);
+    for (uint generation = 0; generation < 3; ++generation) { run(1, 0); run(4, 0); run(2, 0); }
     for (uint i = 0; i < columns * rows; i += 3) {
         glyphs[i * 4] = glyph_ids[(i + 5) % glyph_ids.size()];
         glyphs[i * 4 + 3] ^= 2u;
     }
-    run(0, 0); run(3, 0); run(2, 0);
-    // Whitespace-only updates still advance the compact baseline, followed by
-    // an unchanged input emission and an explicit scroll-style reseed.
+    run(0, 0); run(3, 0); run(4, 0); run(2, 0);
+    // Whitespace-only changes advance the baseline without emitting; the
+    // unchanged input then emits nothing, and reset clears the visible world.
     for (uint i = 0; i < columns * rows; ++i) { glyphs[i * 4] = space; glyphs[i * 4 + 3] = 0; }
-    run(3, 0); run(0, 0); run(2, 0); run(0, 1); run(3, 0); run(2, 0);
+    run(3, 0); run(0, 0); run(4, 0); run(2, 0); run(0, 1); run(3, 0); run(4, 0); run(2, 0);
 }
 int main() {
     const std::vector<uint> font = {@FONT_WORDS@};
@@ -192,12 +232,12 @@ int main() {
     scenario(1, 1, 0, 0, 1, 1, 6, 11, font, space, glyphs);
     scenario(19, 29, 2, 3, 15, 23, 7, 13, font, space, glyphs);
     scenario(97, 63, 5, 7, 89, 51, 17, 31, font, space, glyphs);
+    scenario(131, 69, 1, 2, 129, 65, 17, 31, font, space, glyphs);
     scenario(257, 143, 12, 11, 241, 127, 12, 22, font, space, glyphs);
     scenario(1281, 721, 17, 31, 1259, 677, 23, 42, font, space, glyphs);
     scenario(4093, 73, 1, 1, 4091, 71, 7, 13, font, space, glyphs);
     scenario(73, 2053, 1, 1, 71, 2051, 17, 31, font, space, glyphs);
-    // Exercise every pixel and all capped grid indices at the native maximum
-    // page dimensions without repeating the cold seed/emit scenarios there.
+    scenario(2560, 63, 0, 1, 2560, 62, 17, 31, font, space, glyphs);
     scenario(4096, 2160, 3, 1, 4091, 2157, 23, 42, font, space, glyphs, true);
 }
 '''
@@ -245,7 +285,7 @@ def records(path: Path):
         header = struct.unpack_from("<4I", data, offset)
         offset += 16
         buffers = []
-        for _ in range(3):
+        for _ in range(4):
             count, = struct.unpack_from("<I", data, offset)
             offset += 4
             buffers.append(memoryview(data)[offset:offset + count * 4])
@@ -257,7 +297,6 @@ def records(path: Path):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--compiler")
-    parser.add_argument("--reference-source", type=Path)
     args = parser.parse_args()
     compiler = compiler_path(args.compiler)
     version = subprocess.check_output([compiler, "--version"], text=True).splitlines()[0]
@@ -267,8 +306,6 @@ def main() -> None:
         strict_flags = ["-fno-fast-math", "-ffp-contract=off"]
         current_source = KERNEL.read_text()
         profiles = [("strict", strict_flags, current_source), ("fast", ["-ffast-math"], current_source)]
-        if args.reference_source:
-            profiles.insert(0, ("deployed", strict_flags, args.reference_source.read_text()))
         for name, flags, shader in profiles:
             source = directory / (name + ".cpp")
             source.write_text(fixture_source(shader))
@@ -281,8 +318,6 @@ def main() -> None:
             with output.open("wb") as stream:
                 subprocess.run([str(binary)], stdout=stream, env={**os.environ, "ASAN_OPTIONS": "detect_leaks=1"}, check=True)
             outputs[name] = output
-        if args.reference_source:
-            assert outputs["deployed"].read_bytes() == outputs["strict"].read_bytes(), "new integer addressing/seed tables changed reference strict output"
         compared, changed, largest, above_one = 0, 0, 0, 0
         strict, fast = list(records(outputs["strict"])), list(records(outputs["fast"]))
         assert len(strict) == len(fast)
@@ -290,11 +325,12 @@ def main() -> None:
             assert header == other_header
             assert a[0] == b[0], (header, "integer simulation changed")
             assert a[1] == b[1], (header, "integer glyph baseline changed")
-            assert len(a[2]) == len(b[2])
-            compared += len(a[2])
-            if a[2] == b[2]:
+            rgba_a, rgba_b = bytes(a[2]) + bytes(a[3]), bytes(b[2]) + bytes(b[3])
+            assert len(rgba_a) == len(rgba_b)
+            compared += len(rgba_a)
+            if rgba_a == rgba_b:
                 continue
-            for index, (left, right) in enumerate(zip(a[2], b[2])):
+            for index, (left, right) in enumerate(zip(rgba_a, rgba_b)):
                 if index % 4 == 3:
                     assert left == right, (header, index // 4, "alpha changed")
                 else:
@@ -303,11 +339,11 @@ def main() -> None:
                     changed += delta != 0
                     above_one += delta > 1
                     assert delta <= VISUAL_RGB_TOLERANCE, (header, index // 4, index % 4, left, right)
-        reference_result = "reference snapshot vs new strict exact; " if args.reference_source else ""
-        print(f"{version}: {reference_result}new strict vs -ffast-math; {len(strict)} four-mode snapshots, "
+        print(f"{version}: strict vs -ffast-math; {len(strict)} five-mode snapshots, "
               f"{compared} output bytes, changed_rgb_bytes={changed}, max_rgb_delta={largest}, "
               f"rgb_deltas_above_one={above_one}; "
-              "integer state/glyphs/alpha exact; ASan/UBSan and padded edge launches passed")
+              "integer state/glyphs/alpha exact; opaque ink exact; pure nearest copy exact; "
+              "ASan/UBSan and padded edge launches passed")
 
 
 if __name__ == "__main__":

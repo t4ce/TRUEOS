@@ -9,8 +9,9 @@ the reference for outputs without a compatible native backend. A native
 initialization failure on supported hardware stops the effect rather than
 silently selecting the CPU implementation.
 
-The source has one SIMD16 entry point and four modes: seed/additive input,
-Conway generation, background composition, and input comparison-baseline copy.
+The source has one SIMD16 entry point and five modes: direct bitmap seed/additive
+input (0), Conway generation (1), display expansion (2), input comparison-baseline
+copy (3), and canonical text/background resolution (4).
 The comment at the top of the source specifies every buffer and uniform.
 Life cells occupy two u32 words, separating binary occupancy from RGB, trail
 strength and birth. Animation stays at ten generations per second, with fixed
@@ -42,6 +43,32 @@ uploads the shared 11,584-byte mask table once per effect and keeps an 8-byte
 comparison record per terminal cell. Both seeding and final text composition
 sample that exact same font data. The CPU reference samples the shared masks
 and retains compact comparison records too.
+
+The simulation and retained RGBA image are exactly `columns*6` by `rows*11`:
+one font bit, one Conway cell, one resolved pixel. Seeding reads that bit
+directly, without bilinear taps or sampling a rasterized page. Resolution does
+the glyph composition, color, trail and neighboring-cell glow once per canonical
+pixel. Its RGBA image stays cached until input, viewport or Life state changes.
+Several generations require only one final resolution pass.
+
+The physical display pass performs only integer coordinate mapping, one canonical
+RGBA load and one output store inside the editor. For each axis it uses
+`(pixel/cell_size)*native_size + (pixel%cell_size)*native_size/cell_size`, where
+`native_size` is 6 or 11. This preserves each glyph's exact nearest-neighbor
+expansion even when the final physical cell is clipped; globally scaling the
+whole grid would drift relative to the font. Physical cells must be at least
+6x11. Canonical RGBA accesses use the allocated pitch, including row padding.
+Invisible pixels in a clipped final cell are zeroed during seeding and every
+generation, so hidden glyph bits cannot influence the visible world.
+
+The old 512-cell side cap and physical-page/3 simulation grid do not apply to
+the bitmap path. The canonical allocation is bounded to 2,097,152 pixels rather
+than silently resampling larger inputs. Two eight-byte worlds plus the RGBA
+image use about 20 bytes per canonical pixel, before padding and compact input.
+For example, a full 1700x800 viewport with 17x32 physical cells has a 600x275
+canonical image: 165,000 heavy shading invocations instead of 1,360,000. The
+display copy still writes every physical pixel. Actual editor viewports exclude
+the menu, status and gutter, and are smaller than this full-page example.
 
 For each immutable page: seed on first input or a changed scroll revision;
 otherwise add positive coverage differences only on a changed emission
@@ -102,8 +129,8 @@ retry or replacement of that physical root. Identical retained mappings incur
 no PTE writes; changed mappings are preflighted, published and invalidated
 before use. Borrowed source/destination imports are removed after retirement.
 Each ordered pass is split into independently retired row chunks, bounded by
-16K launched lanes for seeding, 64K for generation/comparison and 128K for
-composition. Bounds include padded SIMD16 lanes. The generated descriptor
+64K launched lanes for seed/generation/comparison/resolution and 128K for
+display expansion. Bounds include padded SIMD16 lanes. The generated descriptor
 disables thread preemption, so a single whole-page walker would bypass this
 scheduling boundary. Every chunk requires both its completion marker and the
 saved context HEAD reaching the published TAIL before batch/payload reuse.
@@ -118,7 +145,8 @@ read bytes, alongside existing native submission timings.
 
 Runtime `edit-life: capture`, `edit-life: enabled`, and `edit-life timing` logs
 separate compact text capture, initial allocation/upload, page-table setup, seeding,
-baseline copying, and composition. These timings use the `ui4/edit-life` log
+baseline copying, generation, canonical resolution (`resolve_ms`) and physical
+expansion (`upscale_ms`). These timings use the `ui4/edit-life` log
 target so they remain visible with the Blueprint/HV diagnostic profile.
 
 Native initialization, input, render or frame-publication failure latches the
@@ -159,10 +187,12 @@ The frontend, source and SPIR-V are identical between compared math variants;
 the reviewed toolchain locks differ only in profile hash, with identical
 compiler binaries/libraries. This remains FP32, with no FP16 conversion.
 Conway evolution, glyph coverage, text tint and alpha use integer operations.
-The floating-point-to-grid conversion is explicitly capped before indexing
-the world. Both compared variants include that same edge clamp.
+The canonical pipeline uses integer indexing throughout; floating point is
+confined to visual color/glow resolution, never the display expansion.
 
-## Relaxed-math comparison, 5 November 2026
+## Historical full-resolution math comparison, 5 November 2026
+
+The following measurements predate the canonical pipeline described above.
 
 The fresh strict-math boot starts at
 `bld/baremetal-logs/trueos-baremetal.1.log:275456`. All eleven captured native
@@ -225,7 +255,7 @@ These code counts describe the math-only revision, before the next section's
 source optimization; the reproduction commands compare whichever source is
 currently checked out.
 
-## Removing repeated division and submission work
+## Historical full-resolution division and submission changes
 
 The deployed relaxed-math boot starts at log line 278730 and confirms that
 compiler relaxation alone did not fix runtime performance. Comparable turbo
@@ -239,7 +269,7 @@ The source had four variable integer divisions per output pixel to rediscover
 the terminal cell and the glyph pixel. Seed sampling repeated the same work
 at every bilinear tap, plus 64-bit geometry divisions for every Life cell.
 Physical font dimensions and page geometry are invariant between resizes.
-The producer now caches a 4,176-byte uniform table with width/height reciprocal
+That revision cached a 4,176-byte uniform table with width/height reciprocal
 constants and the exact fixed-point seed centers/reach. The shader replaces
 division with `mul_hi(n, ceil(2^32/d))`, exact for the enforced page bound
 `n <= 4096*2160` and physical font sizes `1 <= d <= 256`; size one is explicit.
@@ -249,7 +279,7 @@ page layout, Conway sampling and visual composition remain the same.
 
 Each chunk previously cleared/flushed the entire 262,144-byte batch and
 4,096-byte result allocation, although almost all of it was unused. The encoder
-now touches 7,296 batch bytes and 256 result bytes, covering commands, surfaces,
+touched 7,296 batch bytes and 256 result bytes, covering commands, surfaces,
 the exact payload, geometry table, markers and timestamps. Retaining the PPGTT
 also removes its repeated 2 MiB initialization/flush. All reuse still requires
 the exact lane's marker and saved HEAD retirement proof.
@@ -275,7 +305,7 @@ Composition's static count grows from 503 to 558 while removing all eight of
 its integer-quotient instructions and adding early returns. Instruction counts
 do not predict the removed operations' latency or GPU scheduling cost. SIMD16,
 128 GRFs, zero scratch, zero SLM and the eight-buffer ABI remain unchanged.
-The current binary hash is
+That intermediate binary hash was
 `9ec0aa04ff39d6e0cd22b4eeb9e7779f212e7c19400138abdd2040ccbf47b9a3`.
 
 Sampled `edit-life: GPU probe` records split each pass into chunk count,
@@ -289,16 +319,37 @@ markers distinguish shader execution from submission overhead on the next boot.
 They do not weaken timeout, quarantine or resource ownership rules.
 
 The production reciprocal helper passes 1,164,664 divisor/boundary/random cases.
-The native geometry builder is tested against the original wide arithmetic,
-and all 134 full-shader strict snapshots match deployed revision
+In that revision the native geometry builder matched the original wide arithmetic,
+and all 134 full-shader strict snapshots matched deployed revision
 `17270fef458e72deaf06bf23cb1b0cf28de3dea8` byte for byte, including complete
 4096x2160 composition, input/reset/generation state, text and alpha. The optional
-reference snapshot is `/tmp/trueos-edit-fast/deployed.clcpp`:
+reference snapshot was `/tmp/trueos-edit-fast/deployed.clcpp`. That comparison
+predates the intentional canonical-grid change; the current five-mode fixture
+validates the new geometry and pure-copy behavior instead.
 
-```sh
-python3 tools/testpy/test_edit_life_division.py
-python3 tools/testpy/test_edit_life_math.py --reference-source /tmp/trueos-edit-fast/deployed.clcpp
-```
+## Canonical bitmap pipeline
+
+The current source removes full-resolution font lookup and lighting altogether.
+Its 32-word parameter block contains only geometry, exact division reciprocals,
+canonical image pitch and clipped visible extents; the seed-axis table is gone.
+The encoder touches 3,200 batch bytes and 256 result bytes per chunk. World,
+font, baseline and canonical-image mappings remain retained, with the same
+borrowed-frame retirement and quarantine rules described above.
+
+Mode 4 binds the retained canonical image as its output; mode 2 reads that
+image through the font binding, which it no longer needs for glyph lookup.
+The same eight explicit pointer arguments are retained. The generated contract
+contains three implicit payload arguments; compiler metadata, rather than an
+assumed count, defines their exact offsets. Each pass fully retires before its
+buffers are consumed or rebound by the next pass.
+
+The current executable hash is
+`6da8e0cd10e8ee9dc6c6881c6aa94727d7bf90f91a1b01aeb8c3b2dcfb781a8d`.
+Two clean bake roots produce identical artifacts and `ocloc validate` accepts
+the executable. It uses SIMD16, 128 GRFs, no scratch and no SLM. The native entry
+is 17,048 bytes. These checks establish the artifact and dispatch contract;
+they do not establish physical GPU performance. Compare `resolve_ms`,
+`upscale_ms` and the corresponding mode-4/mode-2 GPU probes after deployment.
 
 Target runtime speedup remains unmeasured for this candidate. The inherited VFE
 configuration is unchanged: Intel's own Gen12LP preamble also uses one large
@@ -400,6 +451,7 @@ python3 tools/testpy/test_edit_hex_font.py
 python3 tools/testpy/test_edit_hex_paint.py
 python3 tools/testpy/test_edit_hex_shader.py
 python3 tools/testpy/test_edit_life_native.py
+python3 tools/testpy/test_edit_life_encoder.py
 python3 tools/testpy/test_edit_life_imports.py
 python3 tools/testpy/test_edit_life_lane.py
 python3 tools/testpy/test_edit_life_failure.py
@@ -421,20 +473,26 @@ Rust, canonical source bits and the actual compiled C++ sampler, including
 noninteger physical cell sizes, underlining and all 66 mask bits. Paint tests
 exercise metadata-only font toggles and both-buffer invalidation.
 Native dispatch tests compile the production row partitioner and dispatch
-method across 288 padded dimensions/modes, checking coverage, retirement before
+method across 360 padded dimensions/modes, checking coverage, retirement before
 reuse and stopping after a failed chunk. Packet tests compile the actual shared
-prologue. Import-retirement tests check exact physical ownership, missing and
+prologue. Encoder tests execute the actual five-mode encoder against bounded
+storage, inspecting all eight bindings, padded canonical pitch, uniform payloads
+and the exact batch/result clear ranges. Import-retirement tests check exact physical ownership, missing and
 partial imports, cache-policy role reuse, pending work and failure retention.
 Lane tests exercise priority, identity, nonoverlapping control storage,
 optional boot admission, exact quarantine and private-resource retirement.
 Registration tests exercise failure latching, source freshness, pause/resume,
 frame detachment and cleanup wakeups using the production lifecycle functions.
 The full-shader host math test compiles strict and fast variants with memory
-and undefined-behavior sanitizers. It compares all four modes, including padded
-launches, clipped cells and viewport edges. Integer state, glyph baseline,
+and undefined-behavior sanitizers. Its 245 snapshots cover all five modes, including padded
+launches, clipped cells and viewport edges. It also checks the display pass
+against a pure integer reference copy independently of canonical shading.
+Integer state, glyph baseline,
 alpha, opaque ink and chrome must remain exact; it reports measured background
 RGB differences. This host sensitivity check does not reproduce IGC's native
 instruction semantics or measure Intel GPU performance.
+The canonical fixture compares 101,099,600 RGBA bytes between strict and fast
+host math; the current run has zero differing RGB bytes and exact alpha.
 
 An optional standalone reference timing command is
 `python3 tools/testpy/test_edit_life_model.py --benchmark`. It reports compact

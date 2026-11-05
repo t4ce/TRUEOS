@@ -51,7 +51,8 @@ def main() -> None:
     packet_helpers = "\n".join(function(commands, name) for name in (
         "direct_rcs_push", "direct_rcs_push_pipe_control_full", "direct_rcs_push_pipe_control"))
     arithmetic = "\n".join(function(native, name) for name in (
-        "edit_life_reciprocal", "edit_life_geometry_uniforms", "edit_life_prepare_ppgtt", "edit_life_phase_us"))
+        "edit_life_reciprocal", "edit_life_canonical_geometry", "edit_life_geometry_uniforms",
+        "edit_life_prepare_ppgtt", "edit_life_phase_us"))
     timing = "#[derive(Default)]\n" + block(native, "struct EditLifePassTiming")
     native_constants = constant_closure(native, dispatch + rows + arithmetic
         + "EDIT_LIFE_MAX_PAGE_PIXELS EDIT_LIFE_BATCH_USED_BYTES EDIT_LIFE_RESULT_USED_BYTES")
@@ -72,6 +73,18 @@ def main() -> None:
     assert "super::dma_flush(state.batch_virt, EDIT_LIFE_BATCH_USED_BYTES)" in encoder
     assert "super::dma_flush(state.result_virt, EDIT_LIFE_RESULT_USED_BYTES)" in encoder
     assert "buffers[7] = (uniforms_gpu, EDIT_LIFE_UNIFORM_BYTES)" in encoder
+    assert "let font_or_canonical = if mode == 2 { life.canonical.surface() } else { life.font.surface() }" in encoder
+    assert "let output = if mode == 4 { life.canonical.surface() } else { dst }" in encoder
+    assert "life.glyphs.surface(), life.previous.surface(), font_or_canonical, source, output" in encoder
+    assert "source.pitch_bytes, output.pitch_bytes" in encoder
+    assert re.search(r"\.add\(18\),\s*life\.canonical\.surface\(\)\.pitch_bytes", encoder)
+    render = function(native, "render")
+    assert render.index("if ok && !self.canonical_valid") < render.index("ok = run(self, 2, false)")
+    assert "ok = run(self, 4, false)" in render
+    assert "if ok { self.canonical_valid = true; }" in render
+    assert "self.canonical_valid = false" in function(native, "upload")
+    assert "self.canonical_valid = false" in function(native, "set_viewport")
+    assert "&self.canonical" in function(native, "quarantine")
 
     harness = r'''
 #![allow(dead_code, unused_variables)]
@@ -84,6 +97,7 @@ use super::*;
 #[derive(Clone, Copy)] struct DirectRcsState { ppgtt_phys: u64 }
 const STATE: DirectRcsState = DirectRcsState { ppgtt_phys: 0x1000 };
 #[derive(Clone, Copy)] struct GpgpuRect { width: u32, height: u32 }
+impl GpgpuRect { fn is_empty(self)->bool { self.width==0 || self.height==0 } }
 static EDIT_LIFE_PPGTT_ROOT: AtomicU64 = AtomicU64::new(0);
 static EDIT_LIFE_PPGTT_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 static INITIALIZATIONS: AtomicUsize = AtomicUsize::new(0);
@@ -158,7 +172,7 @@ fn quarantine_direct_rcs_lane(lane: DirectRcsLane, reason: &'static str) {
 }
 pub(super) fn run() {
     let mut cases = 0;
-    for mode in 0..4 {
+    for mode in 0..5 {
         for width in [1u32, 15, 16, 17, 79, 511, 512, 513, 1919, 1920, 3840, 4096] {
             for height in [1u32, 2, 31, 512, 1080, 2160] {
                 *TRACE.lock().unwrap() = Trace::default();
@@ -196,8 +210,8 @@ pub(super) fn run() {
     }
     assert_eq!(edit_life_dispatch_rows(0, 0, 1, 0), None);
     assert_eq!(edit_life_dispatch_rows(0, 1, 1, 1), None);
-    assert_eq!(edit_life_dispatch_rows(4, 1, 1, 0), None);
-    assert_eq!(edit_life_dispatch_rows(0, 16_385, 1, 0), None);
+    assert_eq!(edit_life_dispatch_rows(5, 1, 1, 0), None);
+    assert_eq!(edit_life_dispatch_rows(0, 65_537, 1, 0), None);
     *TRACE.lock().unwrap() = Trace { fail_poll: 2, ..Trace::default() };
     let life = EditLifeState { grid_width: 512, grid_height: 512, width: 1, height: 1, columns: 1, rows: 1 };
     let failed = life.dispatch(Dev, STATE, UploadedKernelArtifact, GpgpuRgba8Surface, GpgpuRgba8Surface, 0, true, None);
@@ -220,7 +234,7 @@ pub(super) fn run() {
     assert!(!edit_life_prepare_ppgtt(STATE));
     assert!(!edit_life_prepare_ppgtt(STATE));
     assert_eq!(INITIALIZATIONS.load(Ordering::Relaxed),1,"failed initialization must not repair itself");
-    assert_eq!(EDIT_LIFE_BATCH_USED_BYTES,7296);
+    assert_eq!(EDIT_LIFE_BATCH_USED_BYTES,3200);
     assert_eq!(EDIT_LIFE_RESULT_USED_BYTES,256);
     assert_eq!(edit_life_reciprocal(0),None);
     assert_eq!(edit_life_reciprocal(257),None);
@@ -237,20 +251,45 @@ pub(super) fn run() {
         }
     }
     for (width,height) in [(1u32,1u32),(17,31),(1023,511),(1920,1080),(4096,2160)] {
-        let gw=width.div_ceil(3).min(512); let gh=height.div_ceil(3).min(512);
+        let (columns,rows,gw,gh)=edit_life_canonical_geometry(GpgpuRect{width,height},17,31).unwrap();
+        assert_eq!(columns,width.div_ceil(17)); assert_eq!(rows,height.div_ceil(31));
+        assert_eq!(gw,columns*6); assert_eq!(gh,rows*11);
         let table=edit_life_geometry_uniforms(GpgpuRect{width,height},gw,gh,17,31).unwrap();
-        assert_eq!(table.len(),1044);
+        assert_eq!(table.len(),32);
         assert_eq!(table[16],edit_life_reciprocal(17).unwrap());
         assert_eq!(table[17],edit_life_reciprocal(31).unwrap());
-        assert_eq!(u128::from(table[18]),u128::from(width)*87/u128::from(gw));
-        assert_eq!(u128::from(table[19]),u128::from(height)*87/u128::from(gh));
-        for (origin,count,extent) in [(20,gw,width),(532,gh,height)] {
-            for at in 0..count {
-                let original=(((u128::from(at)*2+1)*u128::from(extent)*128/u128::from(count)) as i64)-128;
-                assert_eq!(i64::from(table[origin+at as usize] as i32),original);
-            }
+        assert_eq!(table[18],0,"encoder supplies the actual retained RGBA pitch");
+        assert_eq!(table[19],((width-1)/17)*6+(((width-1)%17)*6/17)+1);
+        assert_eq!(table[20],((height-1)/31)*11+(((height-1)%31)*11/31)+1);
+        assert!(table[19]<=gw && table[20]<=gh);
+    }
+    // Visible canonical bounds equal the largest texel the exact final copy
+    // can address, including clipped cells and noninteger upscales.
+    for cell in 6..=256u32 {
+        for extent in 1..=513u32 {
+            let viewport=GpgpuRect{width:extent,height:1};
+            let (_,_,gw,gh)=edit_life_canonical_geometry(viewport,cell,11).unwrap();
+            let p=edit_life_geometry_uniforms(viewport,gw,gh,cell,11).unwrap();
+            let last=extent-1;
+            assert_eq!(p[19],(last/cell)*6+((last%cell)*6/cell)+1);
         }
     }
+    for cell in 11..=256u32 {
+        for extent in 1..=513u32 {
+            let viewport=GpgpuRect{width:1,height:extent};
+            let (_,_,gw,gh)=edit_life_canonical_geometry(viewport,6,cell).unwrap();
+            let p=edit_life_geometry_uniforms(viewport,gw,gh,6,cell).unwrap();
+            let last=extent-1;
+            assert_eq!(p[20],(last/cell)*11+((last%cell)*11/cell)+1);
+        }
+    }
+    assert!(edit_life_canonical_geometry(GpgpuRect{width:4096,height:2160},1,1).is_none());
+    assert!(edit_life_canonical_geometry(GpgpuRect{width:1,height:1},0,11).is_none());
+    assert!(edit_life_canonical_geometry(GpgpuRect{width:1,height:1},5,11).is_none());
+    assert!(edit_life_canonical_geometry(GpgpuRect{width:1,height:1},6,10).is_none());
+    assert!(edit_life_canonical_geometry(GpgpuRect{width:1,height:1},6,257).is_none());
+    assert!(edit_life_geometry_uniforms(GpgpuRect{width:1920,height:1080},512,512,17,31).is_none(),
+        "canonical dimensions must never be independently capped or resampled");
     println!("native EditLife dispatch passed: {cases} padded partitions, exact lane/retirement/timestamp phases, retained PPGTT, footprint and geometry uniforms");
 }
 }

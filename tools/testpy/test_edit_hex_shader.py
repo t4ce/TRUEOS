@@ -16,7 +16,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 KERNEL = ROOT / "crates/trueos-shader/gpgpu/kernels/edit_life_rgba8.clcpp"
-PARAM_WORDS = 1044
+PARAM_WORDS = 32
 
 
 def cell_reciprocal(divisor: int) -> int:
@@ -59,7 +59,6 @@ def main() -> None:
     ids = {codepoint: index for index, (codepoint, _) in enumerate(masks)}
     shader = KERNEL.read_text()
     coverage = c_function(shader, "glyph_coverage")
-    division = c_function(shader, "fast_cell_div")
     ink = shader[shader.index("static inline uint glyph_ink("):shader.index("static inline float3 halo_at(")]
     with tempfile.TemporaryDirectory(prefix="trueos-edit-hex-shader-") as temporary:
         directory = Path(temporary)
@@ -67,13 +66,12 @@ def main() -> None:
         wrapper.write_text("""#include <cstdint>
 #define __global
 using uint = std::uint32_t;
-static inline uint mul_hi(uint a, uint b) { return static_cast<uint>((std::uint64_t(a) * b) >> 32); }
 typedef uint uint2 __attribute__((vector_size(8), aligned(4)));
 // GCC requires a power-of-two vector size; the unused fourth uint3 lane does
 // not participate in either the OpenCL helper's result or its arithmetic.
 typedef uint uint3 __attribute__((vector_size(16), aligned(4)));
 typedef uint uint4 __attribute__((vector_size(16), aligned(4)));
-""" + "#include " + json.dumps(str(generator.OPENCL)) + "\n" + host_vectors(division + coverage + ink) + """
+""" + "#include " + json.dumps(str(generator.OPENCL)) + "\n" + host_vectors(coverage + ink) + """
 extern "C" uint sample_coverage(const uint4 *font, uint index, uint flags, uint x, uint y) {
     return glyph_coverage(font, uint2{index, flags}, x, y);
 }
@@ -120,45 +118,44 @@ extern "C" void sample_ink(const uint4 *cells, const uint4 *font, const uint *pa
         ]
         glyphs = [ids[ord(character)] for character in "Ag █ĩ?─"] + [0xFFFFFFFF]
         tested = 0
-        for cell_width, cell_height in [(6, 11), (12, 22), (17, 31), (23, 42)]:
-            # The last column and row are clipped by the viewport. Their glyph
-            # mapping must retain the full original cell dimensions.
-            width, height = cell_width * 2 - 3, cell_height * 2 - 5
-            params = (uint * PARAM_WORDS)()
-            params[10], params[11], params[14], params[15] = 2, 2, cell_width, cell_height
-            params[16], params[17] = cell_reciprocal(cell_width), cell_reciprocal(cell_height)
-            result = (uint * (width * height))()
-            for start in range(0, len(glyphs), 4):
-                for foreground, background in styles:
-                    for flags in range(4):
-                        packed_fg = int.from_bytes(bytes(foreground), "little")
-                        packed_bg = int.from_bytes(bytes(background), "little")
-                        cells = [(glyphs[(start + index) % len(glyphs)], packed_fg, packed_bg, flags)
-                                 for index in range(4)]
-                        records = (uint * 16)(*(word for cell in cells for word in cell))
-                        sample_ink(records, table, params, width, height, result)
-                        for y in range(height):
-                            for x in range(width):
-                                cell = cells[(y // cell_height) * 2 + x // cell_width]
-                                glyph = cell[0] if cell[0] < len(masks) else ids[ord("?")]
-                                native_x = (x % cell_width) * 6 // cell_width
-                                native_y = (y % cell_height) * 11 // cell_height
-                                mask = masks[glyph][1]
-                                coverage = 255 if ((flags & 2 and native_y == 10)
-                                                      or mask & (1 << (65 - native_y * 6 - native_x))) else 0
-                                alpha = (coverage * foreground[3] + 127) // 255
-                                bg = background if flags & 1 else [0, 0, 0, 0]
-                                expected = [
-                                    (foreground[channel] * alpha
-                                     + ((bg[channel] * bg[3] + 127) // 255) * (255 - alpha) + 127) // 255
-                                    for channel in range(3)
-                                ]
-                                expected.append(alpha + (bg[3] * (255 - alpha) + 127) // 255)
-                                actual = int(result[y * width + x]).to_bytes(4, "little")
-                                assert actual == bytes(expected), (cell_width, cell_height, x, y, flags, foreground, bg,
-                                                                    actual, expected)
-                                tested += 1
-        print(f"OpenCL glyph helpers passed: {len(masks)} full masks, {tested} scaled/clipped tint pixels")
+        # This helper is canonical: two 6x11 cells per axis, with the last
+        # column/row clipped. Physical nearest expansion is covered by the
+        # complete five-mode shader test, independently of font sampling.
+        width, height = 9, 17
+        params = (uint * PARAM_WORDS)()
+        params[10], params[11], params[14], params[15] = 2, 2, 6, 11
+        result = (uint * (width * height))()
+        for start in range(0, len(glyphs), 4):
+            for foreground, background in styles:
+                for flags in range(4):
+                    packed_fg = int.from_bytes(bytes(foreground), "little")
+                    packed_bg = int.from_bytes(bytes(background), "little")
+                    cells = [(glyphs[(start + index) % len(glyphs)], packed_fg, packed_bg, flags)
+                             for index in range(4)]
+                    records = (uint * 16)(*(word for cell in cells for word in cell))
+                    sample_ink(records, table, params, width, height, result)
+                    for y in range(height):
+                        for x in range(width):
+                            cell = cells[(y // 11) * 2 + x // 6]
+                            glyph = cell[0] if cell[0] < len(masks) else ids[ord("?")]
+                            native_x = x % 6
+                            native_y = y % 11
+                            mask = masks[glyph][1]
+                            coverage = 255 if ((flags & 2 and native_y == 10)
+                                                  or mask & (1 << (65 - native_y * 6 - native_x))) else 0
+                            alpha = (coverage * foreground[3] + 127) // 255
+                            bg = background if flags & 1 else [0, 0, 0, 0]
+                            expected = [
+                                (foreground[channel] * alpha
+                                 + ((bg[channel] * bg[3] + 127) // 255) * (255 - alpha) + 127) // 255
+                                for channel in range(3)
+                            ]
+                            expected.append(alpha + (bg[3] * (255 - alpha) + 127) // 255)
+                            actual = int(result[y * width + x]).to_bytes(4, "little")
+                            assert actual == bytes(expected), (x, y, flags, foreground, bg,
+                                                                actual, expected)
+                            tested += 1
+        print(f"OpenCL glyph helpers passed: {len(masks)} full masks, {tested} canonical/clipped tint pixels")
 
 
 if __name__ == "__main__":
