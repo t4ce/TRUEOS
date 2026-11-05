@@ -3,6 +3,12 @@ extern crate alloc;
 #[path = "happy_eyeballs.rs"]
 mod happy_eyeballs;
 
+#[path = "download_diagnostics.rs"]
+mod download_diagnostics;
+
+#[path = "image_retry.rs"]
+mod image_retry;
+
 use crate::r::cabi_codes::*;
 
 use alloc::boxed::Box;
@@ -139,6 +145,7 @@ fn finish_json_post_operation(op_id: u32) {
 struct CabiNetFetchBytesResult {
     rc: Option<i32>,
     body: Vec<u8>,
+    final_url: Option<String>,
 }
 
 /// Decoded `OP_BP_FETCH_POST_JSON_BYTES_START` request.
@@ -336,6 +343,8 @@ pub struct HttpsJsonResponse {
     pub content_encoding: Option<String>,
     pub content_type: Option<String>,
     pub content_disposition: Option<String>,
+    pub retry_after: Option<String>,
+    pub date: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -906,6 +915,12 @@ fn complete_http_response(
     let location = header_value(headers, b"location")
         .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
         .map(String::from);
+    let retry_after = header_value(headers, b"retry-after")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let date = header_value(headers, b"date")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
     let content_encoding = header_value(headers, b"content-encoding")
         .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
         .map(String::from);
@@ -926,6 +941,8 @@ fn complete_http_response(
                 content_encoding,
                 content_type,
                 content_disposition,
+                retry_after,
+                date,
             }),
         );
     }
@@ -950,6 +967,8 @@ fn complete_http_response(
             content_encoding,
             content_type,
             content_disposition,
+            retry_after,
+            date,
             body: body[..len].to_vec(),
         }));
     }
@@ -965,6 +984,12 @@ fn complete_http_head_response(response: &[u8]) -> Result<Option<HttpsJsonRespon
     let status = parse_http_status(response).ok_or_else(|| String::from("bad status"))?;
     let headers = &response[..header_end];
     let location = header_value(headers, b"location")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let retry_after = header_value(headers, b"retry-after")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let date = header_value(headers, b"date")
         .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
         .map(String::from);
     let content_encoding = header_value(headers, b"content-encoding")
@@ -985,6 +1010,8 @@ fn complete_http_head_response(response: &[u8]) -> Result<Option<HttpsJsonRespon
         content_encoding,
         content_type,
         content_disposition,
+        retry_after,
+        date,
     }))
 }
 
@@ -1026,6 +1053,12 @@ fn http_response_from_bytes(
     let location = header_value(headers, b"location")
         .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
         .map(String::from);
+    let retry_after = header_value(headers, b"retry-after")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let date = header_value(headers, b"date")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
     let content_encoding = header_value(headers, b"content-encoding")
         .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
         .map(String::from);
@@ -1047,6 +1080,8 @@ fn http_response_from_bytes(
             content_encoding,
             content_type,
             content_disposition,
+            retry_after,
+            date,
         });
     }
 
@@ -1074,6 +1109,8 @@ fn http_response_from_bytes(
             content_encoding,
             content_type,
             content_disposition,
+            retry_after,
+            date,
             body: body[..len].to_vec(),
         });
     }
@@ -1087,6 +1124,8 @@ fn http_response_from_bytes(
         content_encoding,
         content_type,
         content_disposition,
+        retry_after,
+        date,
         body: body.to_vec(),
     })
 }
@@ -1135,6 +1174,24 @@ async fn fetch_https_bytes_with_context(
     happy_eyeballs: bool,
     referrer: Option<&str>,
 ) -> Result<Vec<u8>, String> {
+    fetch_https_response_bytes_with_context(target, timeout_ms, max_bytes, happy_eyeballs, referrer)
+        .await
+        .map(|response| response.body)
+}
+
+/// Transport URL and bytes from the same completed GET, after redirects.
+pub(crate) struct FetchedBytes {
+    pub(crate) final_url: String,
+    pub(crate) body: Vec<u8>,
+}
+
+async fn fetch_https_response_bytes_with_context(
+    target: &FetchTarget,
+    timeout_ms: u32,
+    max_bytes: usize,
+    happy_eyeballs: bool,
+    referrer: Option<&str>,
+) -> Result<FetchedBytes, String> {
     let mut request = HttpsRequest {
         method: "GET",
         headers_only: false,
@@ -1219,7 +1276,7 @@ async fn fetch_https_bytes_with_context(
                 .ok_or_else(|| String::from("redirect missing location"))?;
             current = resolve_fetch_redirect(&target, &location)?;
         } else {
-            return success_body(response);
+            return success_body(response).map(|body| FetchedBytes { final_url: current, body });
         }
     }
     Err(String::from("too many redirects"))
@@ -1316,6 +1373,7 @@ async fn request_https_response_once_cancellable(
     max_bytes: usize,
     cancellation: Option<&JsonPostCancellation>,
 ) -> Result<HttpsJsonResponse, String> {
+    let started = Instant::now();
     let readiness = crate::r::readiness::wait_for(
         crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
     );
@@ -1327,6 +1385,7 @@ async fn request_https_response_once_cancellable(
         readiness.await;
     }
 
+    let ready_ms = Instant::now().saturating_duration_since(started).as_millis();
     let device_index = NetProfile::default()
         .resolve_device_index()
         .ok_or_else(|| String::from("no nic"))?;
@@ -1338,8 +1397,18 @@ async fn request_https_response_once_cancellable(
     } else {
         resolve.await?
     };
+    let resolved_ms = Instant::now().saturating_duration_since(started).as_millis();
 
     let seq = HTTPS_FETCH_TLS_SEQ.fetch_add(1, Ordering::Relaxed);
+    if crate::log_os::flags::HTTP_FETCH_DIAG_PROFILE_ENABLED {
+        crate::log_important!(target: "net"; "download-http: {}\n", serde_json::json!({
+            "schema":"download_http_v1", "event":"connect", "connection":seq,
+            "url":download_diagnostics::public_url(&fetch_target_url(target)),
+            "device":device_index, "family":"ipv4", "peer":ip, "port":target.port,
+            "ready_ms":ready_ms, "dns_ms":resolved_ms.saturating_sub(ready_ms),
+            "timeout_ms":timeout_ms,
+        }));
+    }
     let owner = leak_str(format!("https-fetch-{}@{}", seq, device_index));
     let cmds = Queue::new_leaked(
         leak_str(format!("{}-cmd", owner)),
@@ -1364,6 +1433,14 @@ async fn request_https_response_once_cancellable(
     )
     .await;
     let _ = fence_https_owner(cmds).await;
+    if crate::log_os::flags::HTTP_FETCH_DIAG_PROFILE_ENABLED {
+        crate::log_important!(target: "net"; "download-http: {}\n", serde_json::json!({
+            "schema":"download_http_v1", "event":"complete", "connection":seq,
+            "url":download_diagnostics::public_url(&fetch_target_url(target)),
+            "elapsed_ms":Instant::now().saturating_duration_since(started).as_millis(),
+            "status":result.as_ref().ok().map(|r|r.status), "error":result.as_ref().err(),
+        }));
+    }
     if let Err(err) = &result {
         crate::log_warn!(target: "net"; "https-fetch: failed host={} reason={}\n", target.host, err);
     }
@@ -1437,6 +1514,34 @@ async fn request_https_response(
     .await
 }
 
+fn log_download_response(
+    target: &FetchTarget,
+    ip: [u8; 4],
+    request: &HttpsRequest<'_>,
+    raw: &[u8],
+    response: &HttpsJsonResponse,
+    started: Instant,
+    handshake_ms: Option<u64>,
+    first_data_ms: Option<u64>,
+) {
+    if !crate::log_os::flags::HTTP_FETCH_DIAG_PROFILE_ENABLED
+        || !matches!(request.method, "GET" | "HEAD")
+        || request_has_header(request, "Authorization")
+    {
+        return;
+    }
+    let user_agent = request.headers.iter().find(|(k,_)|k.eq_ignore_ascii_case("User-Agent"))
+        .map(|(_,v)|v.as_str()).unwrap_or(DEFAULT_USER_AGENT);
+    let peer = if ip == [0; 4] { String::from("preconnected") }
+        else { format!("{}.{}.{}.{}",ip[0],ip[1],ip[2],ip[3]) };
+    let record = download_diagnostics::response(
+        &fetch_target_url(target), request.method, Some(user_agent), &peer,
+        final_response_bytes(raw).unwrap_or(raw), response.status, &response.body,
+        Instant::now().saturating_duration_since(started).as_millis(), handshake_ms, first_data_ms,
+    );
+    crate::log_important!(target: "net"; "download-http: {}\n", record);
+}
+
 async fn request_https_response_preconnected(
     target: &FetchTarget,
     ip: [u8; 4],
@@ -1450,6 +1555,9 @@ async fn request_https_response_preconnected(
     cancellation: Option<&JsonPostCancellation>,
     connected: Option<vnet::NetHandle>,
 ) -> Result<HttpsJsonResponse, String> {
+    let started = Instant::now();
+    let mut handshake_ms = connected.map(|_|0);
+    let mut first_data_ms = None;
     let request_data = build_http_request(target, request)?;
 
     if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
@@ -1513,6 +1621,7 @@ async fn request_https_response_preconnected(
                     if tls_handle != Some(handle) || sent_request {
                         continue;
                     }
+                    handshake_ms = Some(Instant::now().saturating_duration_since(started).as_millis());
                     if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
                         return Err(String::from(HTTPS_REQUEST_CANCELLED));
                     }
@@ -1527,11 +1636,13 @@ async fn request_https_response_preconnected(
                     if tls_handle != Some(handle) {
                         continue;
                     }
+                    first_data_ms.get_or_insert_with(||Instant::now().saturating_duration_since(started).as_millis());
                     if request.headers_only || request.method == "HEAD" {
                         match append_head_response_headers(&mut response, data.as_slice()) {
-                            Ok(Some(response)) => {
+                            Ok(Some(parsed)) => {
+                                log_download_response(target,ip,request,&response,&parsed,started,handshake_ms,first_data_ms);
                                 let _ = cmds.push(TlsCommand::Close { handle });
-                                return Ok(response);
+                                return Ok(parsed);
                             }
                             Ok(None) => {}
                             Err(err) => {
@@ -1554,9 +1665,10 @@ async fn request_https_response_preconnected(
                     }
                     response.extend_from_slice(data.as_slice());
                     match complete_http_response(response.as_slice(), max_bytes) {
-                        Ok(Some(response)) => {
+                        Ok(Some(parsed)) => {
+                            log_download_response(target,ip,request,&response,&parsed,started,handshake_ms,first_data_ms);
                             let _ = cmds.push(TlsCommand::Close { handle });
-                            return decode_response_content(response, max_bytes);
+                            return decode_response_content(parsed, max_bytes);
                         }
                         Ok(None) => {}
                         Err(err) => {
@@ -1572,13 +1684,14 @@ async fn request_https_response_preconnected(
                                 if sent_request { "after submitting request" } else { "before TLS handshake completed" }));
                         }
                         if request.headers_only || request.method == "HEAD" {
-                            return complete_http_head_response(response.as_slice())?
-                                .ok_or_else(|| bad_response_message(response.as_slice()));
+                            let parsed = complete_http_head_response(response.as_slice())?
+                                .ok_or_else(|| bad_response_message(response.as_slice()))?;
+                            log_download_response(target,ip,request,&response,&parsed,started,handshake_ms,first_data_ms);
+                            return Ok(parsed);
                         }
-                        return decode_response_content(
-                            http_response_from_bytes(response.as_slice(), max_bytes)?,
-                            max_bytes,
-                        );
+                        let parsed = http_response_from_bytes(response.as_slice(), max_bytes)?;
+                        log_download_response(target,ip,request,&response,&parsed,started,handshake_ms,first_data_ms);
+                        return decode_response_content(parsed,max_bytes);
                     }
                 }
                 TlsEvent::Error { msg } => {
@@ -1633,6 +1746,14 @@ pub async fn get_bytes_shared(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<Vec<u8>, String> {
+    get_bytes_response_shared(url, timeout_ms, max_bytes).await.map(|response| response.body)
+}
+
+pub(crate) async fn get_bytes_response_shared(
+    url: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+) -> Result<FetchedBytes, String> {
     let target = parse_fetch_url(url).map_err(String::from)?;
     match target.scheme {
         "http" => crate::surfer::html_shack::fetch_bytes_via_pool(
@@ -1641,8 +1762,8 @@ pub async fn get_bytes_shared(
             max_bytes,
         )
         .await
-        .map(|fetch| fetch.bytes),
-        "https" => fetch_https_bytes(&target, timeout_ms.max(1), max_bytes).await,
+        .map(|fetch| FetchedBytes { final_url: fetch.url, body: fetch.bytes }),
+        "https" => fetch_https_response_bytes_with_context(&target, timeout_ms.max(1), max_bytes, false, None).await,
         _ => Err(String::from("unsupported scheme")),
     }
 }
@@ -1745,9 +1866,11 @@ pub(crate) async fn probe_navigation_headers_shared(
     Err(String::from("too many redirects"))
 }
 
-/// A cancellable finite GET for background image assets. Redirects use the
-/// existing URI resolver and one total deadline; cancellation closes/fences the
-/// active TLS owner instead of abandoning a still-running socket future.
+static IMAGE_HOST_BACKOFF: Mutex<image_retry::HostBackoffTable> = Mutex::new(image_retry::HostBackoffTable::new());
+
+/// A cancellable finite GET for background image assets. Redirects and at most
+/// two 429 retries share one total deadline. Retry waits retain the caller's
+/// pending image operation and share host pacing across image workers.
 pub(crate) async fn get_image_bytes_shared(
     url: &str,
     timeout_ms: u32,
@@ -1759,80 +1882,122 @@ pub(crate) async fn get_image_bytes_shared(
         headers_only: false,
         content_type: None,
         headers: vec![
-            (
-                String::from("Accept"),
-                String::from("image/png,image/jpeg,image/bmp,image/webp,*/*;q=0.1"),
-            ),
+            (String::from("Accept"), String::from("image/png,image/jpeg,image/bmp,image/webp,*/*;q=0.1")),
             (String::from("Accept-Encoding"), String::from("identity")),
-            (
-                String::from("User-Agent"),
-                String::from("TRUEOS Hull raster/1"),
-            ),
+            (String::from("User-Agent"), String::from("TRUEOS Hull raster/1")),
         ],
         body: &[],
     };
     let mut current = String::from(url);
-    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms.max(1) as u64);
+    let budget_ms = u64::from(timeout_ms.clamp(1, 15_000));
+    let deadline = Instant::now() + EmbassyDuration::from_millis(budget_ms);
     let mut seen = alloc::collections::BTreeSet::new();
+    let mut retries = 0u32;
     for hop in 0..=5 {
-        if cancellation.0.is_cancelled() {
-            return Err(String::from(HTTPS_REQUEST_CANCELLED));
-        }
-        // Share image admission's URL policy for every redirect, so credentials,
-        // oversized URLs and non-HTTPS locations cannot bypass the first check.
+        if cancellation.0.is_cancelled() { return Err(String::from(HTTPS_REQUEST_CANCELLED)); }
         current = crate::r::services::hull_image_policy::canonical_url(&current)
             .map_err(|_| String::from("unsupported image redirect URL"))?;
-        if !seen.insert(current.clone()) {
-            return Err(String::from("redirect loop"));
-        }
+        if !seen.insert(current.clone()) { return Err(String::from("redirect loop")); }
         let target = parse_fetch_url(&current).map_err(String::from)?;
         if target.scheme == "http" {
-            // Admission above permits only an explicit loopback preview port.
+            // Admission permits only a loopback preview port. Its existing pool
+            // path remains unchanged; remote image GETs below expose statuses.
             let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
+            if remaining == 0 { return Err(String::from("timeout")); }
             let fetch = crate::surfer::html_shack::fetch_bytes_via_pool(current, remaining, max_bytes);
             return await_json_post_or_cancel(fetch, &cancellation.0).await
                 .map_err(|_| String::from(HTTPS_REQUEST_CANCELLED))?
                 .map(|response| response.bytes);
         }
-
-        let remaining = deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis();
-        if remaining == 0 {
-            return Err(String::from("timeout"));
-        }
-        let response = request_https_response_once_cancellable(
-            &target,
-            &request,
-            remaining.min(u32::MAX as u64) as u32,
-            max_bytes,
-            Some(&cancellation.0),
-        );
-        let mut response = core::pin::pin!(response);
-        let mut timeout = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(remaining)));
-        let mut expired = false;
-        let response = core::future::poll_fn(|cx| {
-            if !expired && timeout.as_mut().poll(cx).is_ready() {
-                expired = true;
-                cancellation.cancel();
+        let host = format!("{}:{}", target.host.to_ascii_lowercase(), target.port);
+        let mut retry_marker = None;
+        let response = loop {
+            wait_image_host_slot(&host, &current, deadline, budget_ms, retry_marker.take(), cancellation).await?;
+            let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
+            if remaining == 0 { return Err(String::from("timeout")); }
+            let response = request_https_response_once_cancellable(
+                &target, &request, remaining.min(u32::MAX as u64) as u32,
+                max_bytes, Some(&cancellation.0),
+            );
+            let mut response = core::pin::pin!(response);
+            let mut timeout = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(remaining)));
+            let mut expired = false;
+            let response = core::future::poll_fn(|cx| {
+                if !expired && timeout.as_mut().poll(cx).is_ready() {
+                    expired = true;
+                    cancellation.cancel();
+                }
+                // Retire the TLS cancellation fence before dropping its owner.
+                response.as_mut().poll(cx)
+            }).await?;
+            if cancellation.0.is_cancelled() { return Err(String::from(HTTPS_REQUEST_CANCELLED)); }
+            if deadline.saturating_duration_since(Instant::now()).as_millis() == 0 {
+                return Err(String::from("timeout"));
             }
-            // Keep polling after cancellation until the TLS owner fence retires;
-            // dropping the response future here would leave live socket work.
-            response.as_mut().poll(cx)
-        })
-        .await?;
+            if response.status != 429 { break response; }
+            let Some(delay_ms) = image_retry::retry_after_delay_ms(
+                response.retry_after.as_deref(), response.date.as_deref(),
+                crate::chronos::best_effort_unix_time_seconds(),
+            ) else { return success_body(response); };
+            let response_at_ms = Instant::now().as_millis();
+            IMAGE_HOST_BACKOFF.lock().record_rate_limit(&host, response_at_ms, delay_ms);
+            if retries == 2 { return success_body(response); }
+            retries += 1;
+            retry_marker = Some((retries, delay_ms, response_at_ms));
+        };
         if !matches!(response.status, 301 | 302 | 303 | 307 | 308) {
             return success_body(response);
         }
-        if hop == 5 {
-            return Err(String::from("too many redirects"));
-        }
-        let location = response
-            .location
-            .ok_or_else(|| String::from("redirect missing location"))?;
+        if hop == 5 { return Err(String::from("too many redirects")); }
+        let location = response.location.ok_or_else(|| String::from("redirect missing location"))?;
         current = resolve_fetch_redirect(&target, &location)?;
     }
     Err(String::from("too many redirects"))
+}
+
+async fn wait_image_host_slot(
+    host: &str,
+    url: &str,
+    deadline: Instant,
+    budget_ms: u64,
+    mut retry: Option<(u32, u64, u64)>,
+    cancellation: &MediaFetchCancellation,
+) -> Result<(), String> {
+    let mut extension = false;
+    loop {
+        if cancellation.0.is_cancelled() { return Err(String::from(HTTPS_REQUEST_CANCELLED)); }
+        let now = Instant::now().as_millis();
+        let slot = IMAGE_HOST_BACKOFF.lock().reserve(host, now, deadline.as_millis())
+            .ok_or_else(|| String::from("timeout"))?;
+        let delay_ms = slot.saturating_sub(now);
+        let remaining_ms = deadline.as_millis().saturating_sub(now);
+        if let Some((attempt, retry_after_ms, response_at_ms)) = retry.take() {
+            crate::log_important!(target: "net"; "download-http: {}\n", serde_json::json!({
+                "schema":"download_http_v1", "event":"retry", "scope":"image", "status":429,
+                "url":download_diagnostics::public_url(url), "attempt":attempt, "max_retries":2,
+                "delay_ms":delay_ms, "retry_after_ms":retry_after_ms,
+                "elapsed_since_response_ms":now.saturating_sub(response_at_ms),
+                "elapsed_ms":budget_ms.saturating_sub(remaining_ms), "remaining_ms":remaining_ms, "budget_ms":budget_ms,
+            }));
+        } else if extension {
+            crate::log_important!(target: "net"; "download-http: {}\n", serde_json::json!({
+                "schema":"download_http_v1", "event":"image_backoff", "reason":"cooldown-extended",
+                "url":download_diagnostics::public_url(url), "delay_ms":delay_ms,
+                "remaining_ms":remaining_ms, "budget_ms":budget_ms,
+            }));
+        }
+        if delay_ms != 0 {
+            await_json_post_or_cancel(Timer::after(EmbassyDuration::from_millis(delay_ms)), &cancellation.0).await
+                .map_err(|_| String::from(HTTPS_REQUEST_CANCELLED))?;
+        }
+        if cancellation.0.is_cancelled() { return Err(String::from(HTTPS_REQUEST_CANCELLED)); }
+        let now = Instant::now().as_millis();
+        if now >= deadline.as_millis() { return Err(String::from("timeout")); }
+        if IMAGE_HOST_BACKOFF.lock().cooldown_until(host, now) <= now { return Ok(()); }
+        // A later response extended this host's Retry-After. Reserve again
+        // instead of sending under the now-stale earlier reservation.
+        extension = true;
+    }
 }
 
 pub async fn get_bytes_bearer_shared(
@@ -2108,7 +2273,7 @@ fn spawn_fetch_bytes(
         }
         let fetched = if let Some(referrer) = referrer.as_deref() {
             match checked_media_target(&url) {
-                Ok(target) => fetch_https_bytes_with_context(
+                Ok(target) => fetch_https_response_bytes_with_context(
                     &target,
                     timeout_ms,
                     max_bytes,
@@ -2122,18 +2287,18 @@ fn spawn_fetch_bytes(
         } else if happy_eyeballs {
             match parse_fetch_url(&url) {
                 Ok(target) if target.scheme == "https" => {
-                    fetch_https_bytes_with_policy(&target, timeout_ms, max_bytes, true)
+                    fetch_https_response_bytes_with_context(&target, timeout_ms, max_bytes, true, None)
                         .await
                         .map_err(|err| fetch_error_to_code(&err))
                 }
-                _ => fetch_bytes(url, timeout_ms, max_bytes).await,
+                _ => fetch_bytes_response(url, timeout_ms, max_bytes).await,
             }
         } else {
-            fetch_bytes(url, timeout_ms, max_bytes).await
+            fetch_bytes_response(url, timeout_ms, max_bytes).await
         };
-        let (rc, body) = match fetched {
-            Ok(bytes) => (0, bytes),
-            Err(rc) => (rc, Vec::new()),
+        let (rc, body, final_url) = match fetched {
+            Ok(response) => (0, response.body, Some(response.final_url)),
+            Err(rc) => (rc, Vec::new(), None),
         };
         if crate::log_os::flags::HTTP_FETCH_DIAG_PROFILE_ENABLED {
             crate::log_info!(target: "net"; "asset-fetch: complete id={} rc={} bytes={} elapsed_ms={}\n", op_id, rc, body.len(), Instant::now().saturating_duration_since(started).as_millis());
@@ -2141,8 +2306,17 @@ fn spawn_fetch_bytes(
         if let Some(slot) = CABI_NET_FETCH_BYTES_RESULTS.lock().get_mut(&op_id) {
             slot.rc = Some(rc);
             slot.body = body;
+            slot.final_url = final_url;
         }
     });
+}
+
+async fn fetch_bytes_response(url: String, timeout_ms: u32, max_bytes: usize) -> Result<FetchedBytes, i32> {
+    get_bytes_response_shared(url.as_str(), timeout_ms, max_bytes).await.map_err(|error| {
+        let host = parse_fetch_url(&url).map(|target| target.host).unwrap_or_default();
+        crate::log_warn!(target: "net"; "asset-fetch: failed host={} reason={}\n", host, error);
+        fetch_error_to_code(&error)
+    })
 }
 
 fn spawn_post_json_file(
@@ -2370,6 +2544,27 @@ pub(crate) fn cabi_net_fetch_bytes_discard_host(op_id: u32) -> i32 {
     0
 }
 
+/// Response metadata is non-consuming. Fetch it before the final body read,
+/// which retains its existing operation-consuming behavior.
+pub(crate) fn cabi_net_fetch_bytes_final_url_read_chunk_host(
+    op_id: u32,
+    offset: usize,
+    out: &mut [u8],
+) -> isize {
+    let results = CABI_NET_FETCH_BYTES_RESULTS.lock();
+    let Some(entry) = results.get(&op_id) else { return FS_ERR_NOT_FOUND as isize; };
+    let Some(rc) = entry.rc else { return FS_ERR_NOT_FOUND as isize; };
+    if rc != 0 { return rc as isize; }
+    let Some(url) = &entry.final_url else { return FS_ERR_BAD_PARAM as isize; };
+    if offset > url.len() { return FS_ERR_BAD_PARAM as isize; }
+    if out.is_empty() {
+        return if offset == 0 { url.len() as isize } else { FS_ERR_BAD_PARAM as isize };
+    }
+    let count = out.len().min(url.len() - offset);
+    out[..count].copy_from_slice(&url.as_bytes()[offset..offset + count]);
+    count as isize
+}
+
 unsafe fn abi_str<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
     if ptr.is_null() || len == 0 {
         return None;
@@ -2506,6 +2701,31 @@ fn cabi_net_fetch_bytes_discard_guest(op_id: u32) -> i32 {
     } else {
         FS_ERR_BAD_PARAM
     }
+}
+
+fn cabi_net_fetch_bytes_final_url_guest(op_id: u32, out: &mut [u8]) -> isize {
+    let (status, value) = trueos_vm::vmcall::call(
+        trueos_vm::vmcall::OP_BP_FETCH_BYTES_FINAL_URL_V1, u64::from(op_id), 0,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK { return FS_ERR_BAD_PARAM as isize; }
+    let available = (value as i64) as isize;
+    if available < 0 || out.is_empty() { return available; }
+    if out.len() < available as usize { return FS_ERR_TOO_LARGE as isize; }
+    let mut copied = 0;
+    while copied < available as usize {
+        let want = (available as usize - copied).min(trueos_vm::vmcall::PAYLOAD_CAP);
+        let Some(packed) = pack_fetch_bytes_vm_read(copied, want) else { return FS_ERR_TOO_LARGE as isize; };
+        let (status, value) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_FETCH_BYTES_FINAL_URL_V1, u64::from(op_id), packed,
+            &[], &mut out[copied..copied + want],
+        );
+        if status != trueos_vm::vmcall::STATUS_OK { return FS_ERR_BAD_PARAM as isize; }
+        let count = (value as i64) as isize;
+        if count < 0 { return count; }
+        if count as usize != want { return FS_ERR_IO as isize; }
+        copied += want;
+    }
+    copied as isize
 }
 
 fn guest_monotonic_ms() -> Option<u64> {
@@ -2704,6 +2924,26 @@ pub extern "C" fn trueos_cabi_net_fetch_bytes_discard(op_id: u32) -> i32 {
     }
 }
 
+/// Copy the final transport URL of a completed GET without consuming its
+/// body. A zero capacity queries the required length; a short buffer fails.
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_net_fetch_bytes_final_url(
+    op_id: u32,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if out_cap != 0 && out_ptr.is_null() { return FS_ERR_BAD_PARAM as isize; }
+    let out = if out_cap == 0 { &mut [] } else { unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) } };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        cabi_net_fetch_bytes_final_url_guest(op_id, out)
+    } else {
+        let available = cabi_net_fetch_bytes_final_url_read_chunk_host(op_id, 0, &mut []);
+        if available < 0 || out.is_empty() { return available; }
+        if out.len() < available as usize { return FS_ERR_TOO_LARGE as isize; }
+        cabi_net_fetch_bytes_final_url_read_chunk_host(op_id, 0, out)
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_net_fetch_bytes_wait(op_id: u32, timeout_ms: u64) -> i32 {
     if op_id == 0 {
@@ -2844,6 +3084,7 @@ mod tests {
             CabiNetFetchBytesResult {
                 rc: Some(0),
                 body: body.clone(),
+                final_url: None,
             },
         );
 

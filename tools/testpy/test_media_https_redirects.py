@@ -137,7 +137,7 @@ async fn request_https_response_once_cancellable(
         Step::Reply {status,location,body,elapsed,cancel}=> {
             CLOCK.with(|clock|clock.set(clock.get()+elapsed));
             if cancel {cancellation.unwrap().cancel();}
-            Ok(HttpsJsonResponse{status,location,body,content_encoding:None,content_type:None,content_disposition:None})
+            Ok(HttpsJsonResponse{status,location,body,content_encoding:None,content_type:None,content_disposition:None,retry_after:None,date:None})
         }
         Step::Error(error)=>Err(error.into()),
         Step::WaitForCancellation=> {
@@ -263,6 +263,22 @@ TESTS = r'''
         setup([reply(302,Some("//cdn.test/movie.mp4")),reply(206,None)]);
         assert!(fetch("https://page.test/start",None).is_ok());
         TRANSPORT.with(|t|assert_eq!(t.borrow().requests[1].url,"https://cdn.test:443/movie.mp4"));
+    }
+    #[test]fn completed_get_metadata_keeps_the_final_host_directory_and_query() {
+        setup([reply(302,Some("../moved/start")),reply(307,Some("https://cdn.test/assets/page.html?token=a%2Fb#local")),reply(200,None)]);
+        let target=parse_fetch_url("https://old.test/original/index.html").unwrap();
+        let response=run(fetch_https_response_bytes_with_context(&target,50,4096,true,None)).unwrap();
+        assert_eq!(response.final_url,"https://cdn.test/assets/page.html?token=a%2Fb");
+        assert_eq!(response.body,[1,2,3]);
+        TRANSPORT.with(|t|assert_eq!(t.borrow().requests.last().unwrap().url,"https://cdn.test:443/assets/page.html?token=a%2Fb"));
+    }
+    #[test]fn nonredirected_get_metadata_and_legacy_body_wrapper_are_consistent() {
+        let target=parse_fetch_url("https://page.test:8443/directory/page.html?q=a%2Fb").unwrap();
+        setup([reply(200,None)]);
+        let response=run(fetch_https_response_bytes_with_context(&target,50,4096,false,None)).unwrap();
+        assert_eq!(response.final_url,"https://page.test:8443/directory/page.html?q=a%2Fb");
+        setup([reply(200,None)]);
+        assert_eq!(run(fetch_https_bytes_with_context(&target,50,4096,false,None)).unwrap(),response.body);
     }
     #[test]fn forwards_profile_headers_on_each_hop() {
         for profile in ["media-range","media-norange","plain-range","plain-norange"] {

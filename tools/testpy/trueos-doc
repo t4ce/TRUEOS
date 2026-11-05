@@ -167,14 +167,28 @@ TOPICS: dict[str, dict[str, Any]] = {
                          '../tools/emulator-log-capture.sh'],
              'build_integration': 'cargo rig/rigreal do not start or rotate log collectors. Confirm the drain is '
                                   'running before attributing a capture to the current boot.'},
-    "blueprints": {'summary': 'Blueprint packages are the normal AppDB application format. Kernel builtins are built from '
-                              '../TRUEOS-Buildins with cargo rig or cargo rigreal.',
+    "blueprints": {'summary': 'Blueprint packages are the normal AppDB application format. For kernel builtins, run '
+                              'cargo rigreal from TRUEOS; it builds the configured sibling TRUEOS-Buildins.',
                    'repository': '../TRUEOS-Buildins',
                    'build_topic': 'rig-builds',
+                   'standalone_apps': {
+                       'repository': '../TRUEOS-Blueprints',
+                       'working_directory': '../TRUEOS-Blueprints',
+                       'invocation': 'cargo bp <selector>',
+                       'example': 'cargo bp osm',
+                       'artifact': '../TRUEOS-Blueprints/dist/<selector>.bp',
+                       'publication': 'The normal package workflow automatically publishes to the configured apps share, making the built artifact available to the bare-metal rig through ordinary app delivery and the regular AppDB.',
+                       'standing_authorization': 'The user intends and authorizes the usual automatic refresh whenever app compilation is part of requested implementation, fixes, or validation. Invoke the workflow without separate publication confirmation; keep its configured refresh enabled.',
+                       'failure_handling': 'Diagnose actual build or publication failures. Successful automatic refresh is the intended outcome of compilation.',
+                   },
                    'boundary': 'The standalone TRUEOS-Blueprints publishing repository is separate. It is not required to '
                                'build or publish this kernel builtin generation.',
                    'sources': ['../TRUEOS-Buildins/buildins.json',
                                '../TRUEOS-Buildins/tools/build.py',
+                               '../TRUEOS-Blueprints/.cargo/config.toml',
+                               '../TRUEOS-Blueprints/src/cli.rs',
+                               '../TRUEOS-Blueprints/src/main.rs',
+                               '../TRUEOS-Blueprints/src/publish.rs',
                                'tools/appdb-seed/src/main.rs',
                                'src/app_db.rs']},
     "webcamframe": {
@@ -265,7 +279,7 @@ TOPICS: dict[str, dict[str, Any]] = {
             {
                 "name": "dependency-graph",
                 "title": "TRUEOS Dependency Graph",
-                "path": '../tools/docs/depgraph/index.html',
+                "path": 'tools/depgraph/index.html',
                 "fact_scope": "Interactive TRUEOS crate/dependency depth graph with package nodes and directed dependency edges.",
                 "related_topics": [],
             },
@@ -277,7 +291,7 @@ TOPICS: dict[str, dict[str, Any]] = {
                 "related_topics": ["apps", "tui"],
             },
         ],
-        "sources": ['../tools/docs/CompositorUI.html', '../tools/docs/execution.html', '../tools/docs/intel-uhd770-cpu-reference.html', '../tools/docs/depgraph/index.html', '../tools/docs/docs/HYPERVISOR_STATE_MACHINE.html'],
+        "sources": ['../tools/docs/CompositorUI.html', '../tools/docs/execution.html', '../tools/docs/intel-uhd770-cpu-reference.html', 'tools/depgraph/index.html', '../tools/docs/docs/HYPERVISOR_STATE_MACHINE.html'],
     },
     "apps": {'summary': 'Shell3 CMD launches exact names from the regular AppDB, including the embedded kernel '
                         'builtins and downloaded apps.',
@@ -286,6 +300,7 @@ TOPICS: dict[str, dict[str, Any]] = {
              'lifecycle': 'HV exposes status, peer, probe and start/stop/pause/resume/kill pickers. Selected VM '
                           'slots expose tui/env/smp/esc/stop/pause/resume/kill controls.',
              'build_topic': 'rig-builds',
+             'standalone_build_topic': 'blueprints',
              'sources': ['src/shell3/names.rs', 'src/shell3/service.rs', 'src/shell3/lifecycle.rs', 'src/app_db.rs']},
     'shell3': {'summary': 'Shell3 is the current local and SSH command surface, with CMD, ADM, and HV modes over '
                 'shared Matrix slots.',
@@ -303,10 +318,13 @@ TOPICS: dict[str, dict[str, Any]] = {
      'sources': ['src/shell3/shell3.rs::set_mode',
                  'src/shell3/shell3.rs::echo_recognized_prompt',
                  'src/shell3/names.rs']},
-    'rig-builds': {'summary': 'Working end-to-end physical rig workflow: cargo rig builds builtins and the kernel, '
+    'rig-builds': {'summary': 'Normal builtin/kernel build workflow: cargo rigreal from TRUEOS builds builtins and the kernel, '
                 'publishes native UEFI PXE files, then requests one reset.',
-     'invocation': 'cargo rig',
+     'invocation': 'cargo rigreal',
+     'working_directory': 'TRUEOS repository root',
+     'development_invocation': 'cargo rig',
      'release_invocation': 'cargo rigreal',
+     'standing_authorization': 'For requested builtin or kernel compilation, invoke cargo rigreal directly. Its AppDB refresh, boot publication, and one physical rig reset are the intended build-and-test workflow and need no separate confirmation.',
      'setup': 'tools/install-rig-commands.sh installs the two Cargo command links into CARGO_HOME/bin '
               '(default ~/.cargo/bin); that directory must be on PATH.',
      'workflow': ['Build every app configured by ../TRUEOS-Buildins/buildins.json using the pinned Rust '
@@ -575,10 +593,11 @@ def webcamframe_availability(root: Path) -> dict[str, Any]:
 def compact_context(root: Path) -> dict[str, Any]:
     commands = command_registry(root)
     return {
-        "purpose": "Current TRUEOS builtin/kernel rig workflow, cloud releases, and Shell3 access.",
+        "purpose": "Current TRUEOS app build/refresh and builtin/kernel rig workflows, cloud releases, and Shell3 access.",
+        "standalone_apps": TOPICS["blueprints"]["standalone_apps"],
         "rig_builds": {
             key: TOPICS["rig-builds"][key]
-            for key in ("invocation", "release_invocation", "workflow", "build_outputs", "live_update", "release_profile", "verification")
+            for key in ("invocation", "working_directory", "development_invocation", "release_invocation", "standing_authorization", "workflow", "build_outputs", "live_update", "release_profile", "verification")
         },
         "cloud_release": {key: TOPICS['cloud-release'][key]
                           for key in ('workflow', 'invocation', 'version', 'asset', 'release_notes')},
@@ -603,7 +622,7 @@ def compact_context(root: Path) -> dict[str, Any]:
         },
         "references": {"documents": [item["path"] for item in TOPICS["references"]["documents"]]},
         "next_queries": ["tools/testpy/trueos-doc topic " + name
-                         for name in ("rig-builds", "cloud-release", "rig", "shell3", "tui", "logs", "trueosfs-http", "references")],
+                         for name in ("blueprints", "rig-builds", "cloud-release", "rig", "shell3", "tui", "logs", "trueosfs-http", "references")],
     }
 
 

@@ -32,7 +32,8 @@ def run(*args: str, **kwargs) -> dict:
 class TrueosDocTests(unittest.TestCase):
     def test_context_uses_current_build_access_and_shell(self) -> None:
         data = run()
-        self.assertEqual(data['rig_builds']['invocation'], 'cargo rig')
+        self.assertEqual(data['rig_builds']['invocation'], 'cargo rigreal')
+        self.assertEqual(data['rig_builds']['development_invocation'], 'cargo rig')
         self.assertEqual(data['rig_builds']['release_invocation'], 'cargo rigreal')
         self.assertEqual(data['rig_builds']['build_outputs']['published_runtime'],
                          'tgt/pxe-current/TRUEOS.elf')
@@ -101,7 +102,7 @@ const HV_GROUP_1: [NameEntry; 1] = [
             with self.subTest(name=name):
                 data = run('topic', name)
                 self.assertEqual(data['name'], 'rig-builds')
-                self.assertEqual(data['invocation'], 'cargo rig')
+                self.assertEqual(data['invocation'], 'cargo rigreal')
                 encoded = json.dumps(data)
                 self.assertNotIn('make iso', encoded)
                 self.assertNotIn('smb://', encoded)
@@ -152,11 +153,10 @@ const HV_GROUP_1: [NameEntry; 1] = [
         self.assertIn('https://trueos.eu/TrueOS.lz4', update['online_install'])
         self.assertEqual(run()['rig_builds']['live_update'], update)
 
-    def test_references_resolve_to_the_outsourced_document_tree(self) -> None:
+    def test_document_references_resolve_from_the_repository_root(self) -> None:
         data = run('topic', 'html')
         self.assertEqual(len(data['documents']), 5)
         for document in data['documents']:
-            self.assertTrue(document['path'].startswith('../tools/docs/'))
             self.assertTrue((ROOT / document['path']).is_file(), document['path'])
 
     def test_trueosfs_http_retains_root_aware_download_contract(self) -> None:

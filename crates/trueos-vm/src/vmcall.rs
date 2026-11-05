@@ -331,6 +331,7 @@ pub const OP_BP_NET_POLL: u32 = 0x22;
 pub const OP_BP_FETCH_BYTES_START: u32 = 0x23;
 pub const OP_BP_FETCH_BYTES_RESULT_LEN: u32 = 0x24;
 pub const OP_BP_FETCH_BYTES_READ: u32 = 0x25;
+pub const OP_BP_FETCH_BYTES_FINAL_URL_V1: u32 = 0x246;
 pub const OP_BP_FETCH_BYTES_DISCARD: u32 = 0x26;
 pub const OP_BP_FETCH_FILE_START: u32 = 0x27;
 pub const OP_BP_FETCH_FILE_RESULT: u32 = 0x28;

@@ -1,5 +1,6 @@
 extern crate alloc;
 
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -150,6 +151,21 @@ pub fn fetch_bytes_result_len(op_id: u32) -> Result<usize, i32> {
         return Err(len as i32);
     }
     Ok(len as usize)
+}
+
+/// Final URL from the same completed GET. Read before the body, whose final
+/// chunk consumes the operation. This metadata read leaves the body intact.
+#[inline]
+pub fn fetch_bytes_final_url(op_id: u32) -> Result<String, i32> {
+    let len = unsafe { vcabi::trueos_cabi_net_fetch_bytes_final_url(op_id, core::ptr::null_mut(), 0) };
+    if len < 0 { return Err(len as i32); }
+    if len == 0 { return Err(-4); }
+    if len > 64 * 1024 { return Err(-7); }
+    let mut bytes = vec![0u8; len as usize];
+    let got = unsafe { vcabi::trueos_cabi_net_fetch_bytes_final_url(op_id, bytes.as_mut_ptr(), bytes.len()) };
+    if got < 0 { return Err(got as i32); }
+    if got != len { return Err(-2); }
+    String::from_utf8(bytes).map_err(|_| -1)
 }
 
 #[inline]

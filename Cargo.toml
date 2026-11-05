@@ -206,6 +206,7 @@ serde = { workspace = true, features = ["alloc", "derive"] }
 serde_json = { workspace = true, features = ["alloc"] }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
 hyper = { version = "1.10.0", default-features = false, features = ["client", "http1", "server"] }
+httpdate = { version = "1.0.3", default-features = false }
 rdrand = { version = "0.8", default-features = false }
 redb = { version = "=4.4.0", default-features = false, features = ["experimental-api-5"] }
 trueos-ide = { path = "../TRUEOS-Blueprints/crates/trueos-ide", default-features = false, features = ["store-core"] }

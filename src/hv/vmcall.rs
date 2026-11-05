@@ -322,6 +322,7 @@ pub const OP_BP_NET_POLL: u32 = 0x22; // response payload is optional wire Event
 pub const OP_BP_FETCH_BYTES_START: u32 = 0x23; // flags: bit0 Happy Eyeballs, bit1 URL\0Referer; response is op id
 pub const OP_BP_FETCH_BYTES_RESULT_LEN: u32 = 0x24; // arg0 is op id, response is signed len/rc
 pub const OP_BP_FETCH_BYTES_READ: u32 = 0x25; // arg0 op id,arg1 offset:cap,response payload bytes
+pub const OP_BP_FETCH_BYTES_FINAL_URL_V1: u32 = 0x246; // arg0 op id,arg1 zero=>len or offset:cap=>non-consuming URL bytes
 pub const OP_BP_FETCH_BYTES_DISCARD: u32 = 0x26; // arg0 is op id
 pub const OP_BP_FETCH_FILE_START: u32 = 0x27; // arg0 url len, payload is URL || cache path
 pub const OP_BP_FETCH_FILE_RESULT: u32 = 0x28; // arg0 is op id, response is signed rc/pending
@@ -4222,6 +4223,33 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
             let rc = crate::r::net::https::cabi_net_fetch_bytes_discard_host(arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FETCH_BYTES_FINAL_URL_V1 => {
+            if arg0 > u64::from(u32::MAX) {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            if arg1 == 0 {
+                let rc = crate::r::net::https::cabi_net_fetch_bytes_final_url_read_chunk_host(arg0 as u32, 0, &mut []);
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some((offset, want)) = crate::r::net::https::decode_fetch_bytes_vm_read(arg1) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let out = unsafe { &mut (&mut (*p).payload)[..want] };
+            let rc = crate::r::net::https::cabi_net_fetch_bytes_final_url_read_chunk_host(arg0 as u32, offset, out);
+            if rc > want as isize {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, if rc > 0 { rc as u32 } else { 0 });
             DispatchOutcome::Resume
         }
         OP_BP_FETCH_FILE_START => {

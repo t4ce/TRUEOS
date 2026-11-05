@@ -41,4 +41,5 @@
 # Additive owner-bound Spirit agent snapshot v1; every existing declaration unchanged.
 # Additive launch-scoped placement and continuation-scoped role/activity v1; all prior signatures verified unchanged.
 # Additive bounded subdocument fetch with host-applied Referer context; all previous signatures verified unchanged.
-c5ef36dd797248ccaeac397ab357ff8f5f40835c37eeaece978922437738f955
+# Additive non-consuming final GET URL metadata; all 369 previous signatures verified unchanged.
+b8748fc59bf97b8ca55d6b631aaa03a59062c9fb51375e23bb42a03032e10ed4

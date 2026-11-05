@@ -1301,6 +1301,8 @@ unsafe extern "C" {
     pub safe fn trueos_cabi_net_fetch_result(op_id: u32) -> i32;
     pub fn trueos_cabi_net_fetch_bytes_result_len(op_id: u32) -> isize;
     pub fn trueos_cabi_net_fetch_bytes_read(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize;
+    /// Non-consuming final GET URL; query with out_cap=0 before reading body.
+    pub fn trueos_cabi_net_fetch_bytes_final_url(op_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize;
     pub safe fn trueos_cabi_net_fetch_discard(op_id: u32) -> i32;
     pub safe fn trueos_cabi_net_fetch_bytes_discard(op_id: u32) -> i32;
     pub safe fn trueos_cabi_net_fetch_wait(op_id: u32, timeout_ms: u64) -> i32;

@@ -1,0 +1,3484 @@
+CODEX UPSTREAM PARITY — GROUPED BY TRUEOS REVIEW EFFORT
+5 November 2026, Europe/Berlin. Native TRUEOS Blueprint target (target_os=trueos).
+
+Published fork: 8ebb23020037949cfa97381792339e14a44cb56a
+Upstream snapshot: d786ff91fad8e7ddab8653ee07bc6313a6fcb03d
+Last parity upstream: 0e67502123b4c6952b9fa5d672d2907fe4059f56 (16 October 2026)
+848 missing commits. This report classifies that exact snapshot, without merging source.
+The uncommitted Luna/low-default reversal is preserved and is excluded from the published-tip merge preview.
+
+REVIEW QUEUES — EACH COMMIT APPEARS ONCE
+
+ 15  Other-platform production only — Light source/gate review
+Reviewed production behavior is excluded by Windows/macOS/Linux target gates on native target_os=trueos.
+Test-only and platform build/CI commits are counted in their respective nonruntime groups.
+Action: Retain the upstream implementation behind its target gates, translate folded imports/file locations
+as needed, and check shared interfaces. A native TRUEOS test run does not validate Windows/macOS/Linux
+execution.
+
+ 52  Tests, documentation, and inert cleanup — Low runtime review
+Dedicated tests/snapshots, reviewed inline-test-only changes, or inert source cleanup. This snapshot
+contains 51 test-only commits and one deletion of blank placeholder files; no docs-only exemption was
+assigned to bundled prompt/skill instructions.
+Action: Carry the coverage and mechanical changes forward. Run relevant TRUEOS regressions when they
+exercise native or shared behavior; excluded-platform tests need no native runtime exercise.
+
+ 35  Host tooling, CI, SDK, and distribution — Low native-runtime review
+Automation, package installers/wrappers, external SDK, repository tooling, and distribution work without a
+native Rust runtime implementation change.
+Action: Keep source/distribution compatibility, resolve mechanical conflicts, and avoid spending native
+application test effort on host-only tooling.
+
+ 23  Build and dependency changes — Build/feature review
+Manifests, lockfiles, build scripts, or vendored build changes without ordinary runtime implementation
+changes. Some affect only Bazel/host builds; Cargo versions, feature selection, native libraries, and
+compiler flags can affect TRUEOS.
+Action: Review the actual native graph and source overlays before calling these trivial. Keep optional
+integrations, native TLS/SQLite/QuickJS dependencies, and target gates consistent.
+
+103  Shared runtime or mixed changes outside detected custom paths — Shared/native behavior review
+Runtime-relevant or unproven changes with no detected overlap with fork-modified paths or folded crate
+scopes. Clean source integration does not prove native compatibility.
+Action: Review the behavior and dependencies, preserve upstream ordering, and validate the affected
+native/shared path.
+
+620  Shared runtime or mixed changes overlapping TRUEOS patches — Adaptation review
+Runtime-relevant or unproven changes touch net fork-modified paths or a crate moved by TRUEOS. Some overlap
+is import churn from crate consolidation, so this is a review queue rather than a count of difficult
+semantic conflicts.
+Action: Adapt upstream behavior to the existing Shell3, typed filesystem, SQLite service, QuickJS,
+Spirit/TUI, transport consolidation, and optional-feature boundaries.
+
+102 commits have low native-runtime review scope; 23 need build/dependency review; 723 remain shared/mixed review.
+These are conservative review queues, not 723 proven difficult code changes.
+Platform-only source can still require an import/API/conflict fix even though TRUEOS excludes its behavior.
+No blanket exemption applies merely because a title mentions Windows or a feature is disabled at runtime.
+
+SOURCE INTEGRATION EFFORT — MERGE PREVIEW
+
+ 96  Import/reexport-only content conflicts
+  5  Import conflicts also containing cfg gates
+ 12  Cargo manifest content conflicts
+  1  Lockfile content conflicts
+ 77  Body/signature conflicts (includes test-extraction cases)
+  3  Fork-modified files deleted upstream
+  5  Fork-deleted files modified upstream
+ 12  New files needing placement in folded directories
+211 paths total: 191 content conflicts, 8 modify/delete, 12 file-location.
+96 import-only paths are mechanical candidates; changed gates/public interfaces still need review.
+Text conflicts do not count all semantic work, and a clean merge does not prove compatibility.
+
+DELIBERATE TRUEOS PATCH FAMILIES TO PRESERVE
+
+Folded transport, paths, text, and network contracts
+Many conflicts are old crate names meeting new upstream imports. Keep the 13-to-four consolidation, move new
+upstream files into its current modules, and translate imports instead of restoring the deleted crate tree.
+Boundary: Import-only conflict markers are usually mechanical, but new public types and errors must remain
+shared across protocol, transport, and auth. HTTP behavior and native TLS changes inside the folded files
+belong in a separate semantic review.
+
+Shell3 command preparation and captured sessions
+Upstream extracted command preparation into ParsedExecCommand and prepared execution structures. Carry the
+native Shell3 text, captured stdin, interrupt, and local-versus-remote rules into those new structures.
+Boundary: This is live TRUEOS execution behavior. Taking the upstream host command preparation verbatim can
+rebuild Unix argv, shell snapshots, or terminal behavior that Shell3 deliberately bypasses.
+
+Native filesystem, auth persistence, SQLite, and history ownership
+Upstream changes SQLite log locations, NFS journaling/migration, history materialization, auth replacement
+writes, and safe host writes. Retain native typed file permissions and the service-owned database namespace
+while adapting those new contracts.
+Boundary: POSIX pathname checks, file locks, hard-link assumptions, and WAL settings are not substitutes for
+the TRUEOS storage owner. Some conflicted host fallback files can be reconciled without native testing,
+while service paths and typed writes require target validation.
+
+Native QuickJS Code Mode provider
+Upstream added bounded output collection and optional server-side truncation around Code Mode session
+providers. Keep native QuickJS selection and decide how those output contracts apply to it.
+Boundary: The direct textual conflict is in core/src/thread_manager.rs, where upstream wraps the provider
+after choosing the host implementation. V8 build changes can be parked, but shared session/output contracts
+still cross into native QuickJS even if they merge cleanly.
+
+Plugins and optional integration boundaries
+Upstream adds plugin processes, cloud providers, runtime auth, local feedback saving, and new initialization
+paths. Keep each existing build gate attached to the right operation as the surrounding code moves.
+Boundary: Off by default does not make a shared interface trivial. Preserve the TRUEOS hard plugin block and
+the independent Bedrock, voice, import, reporting, clipboard, and install/update feature gates; new runtime
+or provider entry points need a boundary review even without a text conflict.
+
+Native TUI startup, prompt inbox, terminal ownership, Spirit, and next prompts
+Upstream reworked the TUI around independent backend sessions and changed image/tmux rendering. Reattach
+native prompt lifetime handling, terminal leases, Spirit image separation, startup measurements, and
+suggestion state to those new owners.
+Boundary: Backend identity, startup completion, prompt submission, and shutdown are live shared control
+flow. Tmux-specific rendering can stay out of the native test scope, but its new return values and shared
+image APIs must preserve native terminal ownership.
+
+Configuration, environment identity, and shared runtime authentication
+Upstream changes config bootstrap and shares authentication across model, account, and backend clients.
+Adapt the folded transport types and native identity/durable-auth behavior to those new signatures.
+Boundary: Persisted configuration must retain precedence, and dotenv must not overwrite the native launch
+identity. The already-authorized removal of packaged Luna/low defaults is a local change outside this
+published-HEAD merge preview and must be carried along.
+
+Session, Guardian, and MCP lifecycle refactors
+Upstream moves Guardian review types and changes session environment selection, hook preparation, and MCP
+termination. Preserve native timing and VMX child ownership while taking the new shared lifecycle contracts.
+Boundary: Some large-looking conflicts are upstream extracting inline tests into separate files. Changes to
+lock ordering, environment ownership, cancellation, and VMX termination still need semantic review even when
+most surrounding edits are relocation.
+
+Windows-specific source placement and reconciliation
+Seven conflicted paths are explicitly Windows code: three new proxy-auth files/tests to relocate, three
+content conflicts, and one removed deny-read walker. Their behavior can stay outside native runtime
+validation while their imports, declarations, and directory placement remain consistent.
+Boundary: This path-based count is narrow: shared client_builder/dialer/TUI files also contain Windows or
+host-only branches. A Windows-specific patch that edits a shared manifest or transport interface cannot be
+dismissed solely from its title.
+
+Host sandbox test relocation
+Upstream extracted Linux bubblewrap tests to a separate module while TRUEOS changed their shared path
+imports. Keep the upstream test organization and translated utility imports.
+Boundary: This is a host sandbox test-module conflict, so it is a source-reconciliation candidate outside
+native runtime validation. Shared policy types imported by the tests must still follow the consolidated
+crate map.
+
+REVIEWED MIXED PLATFORM/SHARED COMMITS — KEEP VISIBLE
+
+d13db678cb53  Stop applying macOS background priority to managed daemons (#54763)
+Removes macOS taskpolicy, but also restructures the shared PID daemon launch path and removes the cross-
+platform async managed_process API.
+https://github.com/openai/codex/commit/d13db678cb5390f77d7fa6ba762f85b787fedcec
+
+c6e29b4fcb1f  Migrate the Windows MXC sandbox to `mxc-sdk` (#55378)
+Native MXC execution is Windows-gated, but mxc-sdk replaces an unconditional mxc-sandbox dependency and
+changes shared workspace and Bazel resolution.
+https://github.com/openai/codex/commit/c6e29b4fcb1fa1ac127f5fa9346fe3c7022ff091
+
+6bae551093d2  Bound managed app-server and updater stderr logging (#55856)
+Bounded stderr queues/writers and managed daemon startup are shared, despite a Windows backend path in the
+commit.
+https://github.com/openai/codex/commit/6bae551093d24ad6539a7daba2d9a13b80b28d15
+
+f496b09bd141  Retry proxy CONNECT challenges with Windows authentication (#56000)
+Windows proxy retries also restructure the common HTTP pool, request timeout, route builder and TLS fallback
+paths.
+https://github.com/openai/codex/commit/f496b09bd141af0a6ec1a7ebf3e5fc557ac795dc
+
+0bc73bbeb18d  Add opt-in protocol discovery for local stdio MCP servers (#57210)
+MCP protocol discovery and stdio lifecycle change shared runtime code and add generic Unix process-group
+waiting.
+https://github.com/openai/codex/commit/0bc73bbeb18ddadf69c2e4c0da4322949de73dc6
+
+0818b918672d  Add native Windows MSVC V8 source archive builds (#57269)
+Windows V8 toolchains are selected by Windows platform, but generic V8 build metadata, source portability
+patches and rules_cc module wiring also change.
+https://github.com/openai/codex/commit/0818b918672db10145e93c95b9624e9512348748
+
+615a8c98d64a  Fix macOS standalone release pruning (#57503)
+macOS lsof handling is platform-specific, but installer release_is_unused and both prune call sites are
+shared.
+https://github.com/openai/codex/commit/615a8c98d64a12226d70b2a2fe6bc5a1ce35c9ec
+
+c8e73bf71981  Use the native clipboard for WSL SSH sessions with X11 forwarding (#57504)
+WSL runtime behavior changes only on Linux, but the shared CopyEnvironment struct and clipboard-routing code
+change and compile across hosts.
+https://github.com/openai/codex/commit/c8e73bf7198152ecc1158b148105d054add7a525
+
+582a8812e023  Reload remote executor credentials safely across token rotation (#58251)
+Remote credential rotation and atomic credential storage change shared authentication, not just the new
+Windows DACL helper.
+https://github.com/openai/codex/commit/582a8812e023b08cbf10b4603ac41644b8d99261
+
+dbaead0106de  Classify daemon auto-start failures in TUI telemetry (#59058)
+Daemon telemetry classification changes shared start APIs, error types and TUI startup flow.
+https://github.com/openai/codex/commit/dbaead0106de82bd129a4f6f503d173ad5109f68
+
+5667598c8d8d  Use resolved filesystem permissions in Windows sandbox policies (#59233)
+Windows enforcement policy changes also modify portable windows module APIs and deny-read resolver exports
+compiled on all hosts.
+https://github.com/openai/codex/commit/5667598c8d8d57ae5dd2cbaeed1db2ceb2462c8d
+
+61506432d60f  Expand Windows deny-read globs without invoking ripgrep (#59250)
+Windows deny-glob scan removes ripgrep but changes portable resolver public APIs and an unconditional ignore
+dependency.
+https://github.com/openai/codex/commit/61506432d60f83485fb7440633e1d3d194f1bf71
+
+93b4e5b4c647  Stop TUI voice calls when the OS session locks (#59330)
+OS backends are gated, while shared realtime state, AppEvent, media startup and fallback observer compile
+across hosts.
+https://github.com/openai/codex/commit/93b4e5b4c6474cdbf12614c4ac3acbd006fbee89
+
+021fccb04650  Stabilize cross-platform tests and directory-change fork permissions (#59369)
+Many cross-platform test repairs plus actual shared directory-change fork permission behavior.
+https://github.com/openai/codex/commit/021fccb046508938c4754982efccfb51d6e8356e
+
+ALL 848 COMMITS, GROUPED; OLDEST FIRST WITHIN EACH GROUP
+
+OTHER-PLATFORM PRODUCTION ONLY (15)
+
+b9775a0d57b0  Honor home deletion preferences during Windows uninstall (#54708)
+  Flags: touches conflicted paths, includes build/dependencies
+  Windows sandbox service uninstall cleanup and home-deletion preferences.
+https://github.com/openai/codex/commit/b9775a0d57b09b43e5bab17a245ec053cc6b4426
+
+bb8f5304fcd9  Fall back when macOS rejects high stdio descriptors (#55278)
+  The new EBADF-compatible spawn fallback executes only on macOS.
+https://github.com/openai/codex/commit/bb8f5304fcd9f901d8e0747fccb8c8904cbc504e
+
+18795fc12571  Support Windows registry overrides for `requirements.toml` (#55456)
+  Flags: touches conflicted paths, folded crate adaptation, includes build/dependencies
+  Registry requirements-file override and winreg linkage are Windows-only.
+https://github.com/openai/codex/commit/18795fc12571a3530d3e4ac18366e41cd2f57448
+
+d34f104c22ae  Reject unpackaged Windows sandbox provisioning clients (#55593)
+  Tightens package-identity authorization in the Windows provisioning service.
+https://github.com/openai/codex/commit/d34f104c22ae815fc213641b8a637c5947f14ac1
+
+d5bc4161b658  Add a Windows proxy authentication tunnel helper (#55994)
+  Flags: touches conflicted paths, folded crate adaptation, includes build/dependencies
+  Adds an uncalled-until-Windows-selected proxy-auth helper with Windows-only native dependencies.
+https://github.com/openai/codex/commit/d5bc4161b658cff3f2176aa422a52b3a06928214
+
+be537fb60c96  Remove the `u64` cast from WSL DrvFS detection (#56214)
+  Changes only Linux WSL DrvFS fstatfs comparison.
+https://github.com/openai/codex/commit/be537fb60c96d2f89c2ee4be161edb7206bf791e
+
+d4bdafd378a8  Preserve `SystemRoot` for Windows filesystem sandbox helpers (#56468)
+  Adds SystemRoot only to the Windows filesystem-helper environment allowlist.
+https://github.com/openai/codex/commit/d4bdafd378a8e328a67a4cd3557b5fe634af378c
+
+af2e52c858cf  Fail closed on unreadable glob search root metadata errors (#57186)
+  Flags: touches conflicted paths
+  Linux Bubblewrap deny-glob metadata errors now fail closed.
+https://github.com/openai/codex/commit/af2e52c858cf7b16157e945725fd84bd6b90399a
+
+3f74ff28fa09  Avoid object-identity preflight for MXC path grants (#57353)
+  Flags: touches conflicted paths
+  Removes MXC object-identity normalization from Windows request policy conversion.
+https://github.com/openai/codex/commit/3f74ff28fa09530bd5bcfcbfcbb86553636dde94
+
+77f0cbfdd52e  Limit MXC volume expansion probes to symbolic links (#57515)
+  Flags: touches conflicted paths
+  Changes MXC writable volume expansion probing only.
+https://github.com/openai/codex/commit/77f0cbfdd52e813dbbed661e5524e9cc3f160096
+
+c8bd6c1da978  Exclude unrelated network shares from MXC default reads (#57783)
+  Filters implicit Windows network-share reads during MXC volume discovery.
+https://github.com/openai/codex/commit/c8bd6c1da9782bb92cf300a8768f87232b2d5631
+
+23934d31b15b  Skip read-only volume-root expansion in the MXC sandbox (#57985)
+  Flags: touches conflicted paths
+  Removes read-only volume expansion in MXC policy conversion.
+https://github.com/openai/codex/commit/23934d31b15b1127c83535f84854e5009f7cd51d
+
+b5c5d462dce8  Create missing parent directories for MXC deny paths on Windows (#58168)
+  Flags: touches conflicted paths
+  Creates missing deny-path parents only when building a Windows MXC policy.
+https://github.com/openai/codex/commit/b5c5d462dce8208f5cef386f7fa686a221b9ff37
+
+3abe09d017c0  Mark deny-path parent directories created by the Windows MXC launcher (#59240)
+  Flags: touches conflicted paths
+  Marks new deny-path directories from the Windows MXC launcher.
+https://github.com/openai/codex/commit/3abe09d017c0f68df363bcbd19d49fa0278c3588
+
+c0100ad4ecd2  Remove the legacy Seatbelt network policy wrapper (#59632)
+  Flags: touches conflicted paths
+  Removes unused legacy Seatbelt network policy wrapper and related macOS tests.
+https://github.com/openai/codex/commit/c0100ad4ecd2251c2b48b68534db08afac78c606
+
+TESTS, DOCUMENTATION, AND INERT CLEANUP (52)
+
+4635d489254b  Stabilize daemon reconnect and Rosetta package startup tests (#55274)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/4635d489254ba6d80eb6d2ef501929b0c617b6ec
+
+46d252f8bf8b  Make the startup migration contention test deterministic (#55524)
+  Adds per-store synchronization gate and calls exclusively behind #[cfg(test)], plus startup contention
+  tests.
+https://github.com/openai/codex/commit/46d252f8bf8b09f4ef765bc72e40f02c229da3e6
+
+5ac988843600  Move Linux sandbox unit tests into separate files (#55620)
+  Flags: touches conflicted paths
+  Extracts existing #[cfg(test)] Linux sandbox modules into *_tests.rs files; production bodies unchanged.
+https://github.com/openai/codex/commit/5ac9888436003b24f748bb5938629a7bf0bfbc50
+
+4faf60f1265a  Pause relay test time while inspecting handshake diagnostics (#55848)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/4faf60f1265a495a68fd792701c60fa334714683
+
+d138398cef7d  Expand enterprise MCP authorization lifecycle test coverage (#55883)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/d138398cef7d49e46fe33f1d0ddbd2ca0ed16aa4
+
+3206e532d751  Assert shell tool overlap directly in the parallelism test (#56006)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/3206e532d7515c50f22af6dad3a20b9f3c38b639
+
+bc45d61a9a0c  Pause Tokio time in the reused Guardian session test (#56007)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/bc45d61a9a0c5382d5ee342c1bf5c740f9ef1b77
+
+aafd81a7ad3b  Avoid nested CLI startup in the MCP OAuth persistence test (#56018)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/aafd81a7ad3be2d8ddc3439056841af306cbddcc
+
+004c13292f3e  Fix entrypoint lookup in package debug-symbol smoke tests (#56032)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/004c13292f3ef05e51e2e90e5a2dc6b13b651916
+
+61f34c35af77  Fix the MCP auth status test's IdP OAuth configuration (#56139)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/61f34c35af77777db4d77d0ea2aeb8547a6b4523
+
+8ba7aed55f85  Stabilize the marketplace staging cleanup test (#56210)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/8ba7aed55f85cdea4876c906a26275fac291d82c
+
+96a0d8d551a1  Use cargo_bin in the Windows sandbox manifest test (#56220)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/96a0d8d551a1419e78c5d83f8dc3bdc066826324
+
+7ace9c6aa2e3  Make Opus encoder test timestamps follow sample time (#56233)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/7ace9c6aa2e30b2381364d640930fe99c7b534ef
+
+a3d93e1e692f  Make the code mode yield/resume test yield explicitly between phases (#56236)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/a3d93e1e692f1144cf8685175a5d1f6bf7294f57
+
+c22765480030  Consolidate Rust unit tests under dedicated test modules (#56247)
+  Flags: touches conflicted paths, folded crate adaptation
+  Moves existing test-only module declarations, inline tests, and test-support reexports into dedicated test
+  modules; production library bodies unchanged.
+https://github.com/openai/codex/commit/c227654800307e23f440efaaa86131fabbd9388c
+
+ef33e43a159b  Fix MCP cancellation tests to use the metadata callback (#56292)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/ef33e43a159beeeb95dddf7cde05926cc9871929
+
+eca79b000c48  Use fixed-token auth fixtures in Vertex tests (#56293)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/eca79b000c48bace74eaef474ec4c5d1ae5ba34a
+
+dc4844c907f8  Add TLS forwarding tests for MITM SigV4 requests (#56301)
+  Adds cfg(test)-gated CA helper and forwarding test module plus dedicated TLS MITM tests; runtime bodies
+  unchanged.
+https://github.com/openai/codex/commit/dc4844c907f8ce118c52619ed139f296dcb37705
+
+2130b56710d4  Make the Realtime V2 background-agent steering test deterministic (#56453)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/2130b56710d45edfdc91744e53e2440d27321a16
+
+d8acdf151577  Make sandbox mount cleanup tests tolerate file descriptor reuse (#56454)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/d8acdf151577132d4ee1de47a4d1822ae5acb762
+
+e7d32ee040dd  Prevent credential collisions in registry auth test fixtures (#57234)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/e7d32ee040dd6f7d66c9429e192b755a0a3dccd7
+
+49d6fe5bd0c5  Exercise V2 spawning in subagent context inheritance tests (#57238)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/49d6fe5bd0c55ab2fa73ee35f80733ea4be3bc6f
+
+3d8ca703aa3d  Make the MCP HTTP probe timeout test deterministic (#57239)
+  Flags: touches conflicted paths
+  Every hunk in cli/src/doctor.rs is inside the cfg(test) tests module; production HTTP probe unchanged.
+https://github.com/openai/codex/commit/3d8ca703aa3d86888d77f82319a7a740e00550fc
+
+7a9625f3eec6  Pause Tokio time in startup draft handoff tests (#57243)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/7a9625f3eec687329bf75ea5ab2b3b718edb59ca
+
+cc6baf9c32c6  Wait for process completion in the unified exec reuse test (#57244)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/cc6baf9c32c6149108fa8ec855d2b731e3ff14a7
+
+e84504b2c716  Stabilize the rejected queue message test (#57245)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/e84504b2c716ec16018a396b0a7b7026387ac9ac
+
+b6ad8ea1fcd5  Test goal provenance in existing workers' Guardian reviews (#57430)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/b6ad8ea1fcd5562a7d3003887930be7d84824307
+
+b89952d582be  Fix guardian handoff mocks for native history tests (#57468)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/b89952d582beaae3af3ddd7b679286cbb094f8b9
+
+6b3b67d71f51  Test encrypted native call history across Guardian reviews (#57474)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/6b3b67d71f51db1922813dfcf64c424d3f68e5d3
+
+c8091aeeeea4  Remove empty local staging routing files (#57593)
+  Flags: folded crate adaptation
+  Deletes two placeholder Rust files containing one blank line each; no executable tokens are changed.
+https://github.com/openai/codex/commit/c8091aeeeea42169ac2c9342af1a6487f991dea9
+
+f021168bde53  Wait for turn profiles before asserting sampling counts in trace tests (#57692)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/f021168bde5357009fceb0477835ad90bd54c17c
+
+5fd36fc55021  Remove `free_guardian` configuration from Guardian tests (#57729)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/5fd36fc5502136160a28a6bebec3590b0df9179a
+
+79be2e201fb6  Initialize `native_call` in agent host test fixtures (#58057)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/79be2e201fb61e105178a62c8d8d77fa5ed6ad93
+
+d04071d3ff51  Stabilize cancellation and tracing tests (#58171)
+  Only changed production-path hunks are inside core tools/parallel.rs test module; all remaining paths
+  dedicated tests.
+https://github.com/openai/codex/commit/d04071d3ff517193d405901c46ac2839041f2a4e
+
+a727f1f11ae0  Test V8 inline typed array storage limits (#58385)
+  Every change in v8-poc/src/lib.rs is inside cfg(test) tests; adds typed-array limit test helper/coverage.
+https://github.com/openai/codex/commit/a727f1f11ae06dcb196cd028a31900dbfd2f68ed
+
+68334831d812  Extract model-provider unit tests into separate files (#58936)
+  Flags: touches conflicted paths
+  Extracts model-provider cfg(test) modules and support into dedicated files; production auth/provider
+  implementations unchanged.
+https://github.com/openai/codex/commit/68334831d81220374a3b5805b7e41b85f94e88e0
+
+172d8fc59333  Verify queued network approval wakeups before polling again (#58937)
+  Flags: touches conflicted paths
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/172d8fc593330a194fd7f5afa5ff8be471835abe
+
+0a2d5f556de6  Move protocol permissions tests into a separate file (#58966)
+  Moves protocol permissions cfg(test) tests to permissions_tests.rs; production permissions unchanged.
+https://github.com/openai/codex/commit/0a2d5f556de6e3b2c340d7f0635a1daf4040c30a
+
+93f9f1a59263  Test connection events against active environment selections (#59001)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/93f9f1a592635a10854687954aad5a53e41654d5
+
+616cab3a3529  Clarify argument meanings in marketplace and guardian tests (#59076)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/616cab3a3529f572c3385098c12698278770ea98
+
+ac91c14443c1  Make native startup libraries available to Windows voice-host tests (#59082)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/ac91c14443c11c4279a9305099354e443c6fa7d4
+
+d39349009a09  Remove a redundant permission profile clone in exec policy tests (#59124)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/d39349009a09b990cbcf73dde1afd6209e4bcb17
+
+fc39cfcacd8c  Add context to Guardian test setup failures (#59125)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/fc39cfcacd8c6efaf561269e882ea76bdc1dff42
+
+61635845491f  Move Guardian unit tests into their owning crates (#59159)
+  Flags: touches conflicted paths
+  Moves Guardian tests to owning crates and removes cfg(test) host shims/imports; production Guardian
+  behavior unchanged.
+https://github.com/openai/codex/commit/61635845491fd720bb49909466aa19fe5633c773
+
+c0d2a6fac4dd  Clarify token-count and screen-ownership arguments in tests (#59161)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/c0d2a6fac4dd1e95c536df43f4808f13ed49539f
+
+1f8bf31b8fc3  Use the public managed-features constructor in the guardian config test (#59217)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/1f8bf31b8fc3b96b690862bb9dc598782328f47f
+
+8da8b0c7f75a  Fix test fixtures for Bazel sandboxes and Windows voice runtimes (#59231)
+  Flags: touches conflicted paths
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/8da8b0c7f75a627cfcba5229eba931c5af36240c
+
+b34808060a51  Normalize loading bullets in the safety recourse snapshot test (#59263)
+  Flags: touches conflicted paths
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/b34808060a51e98b8cb3dcf77824703757737cda
+
+389d99fa4dab  Fix missing item ID generators in retained instruction tests (#59403)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/389d99fa4dab6191573e759e85de64fd44be8726
+
+464239de0acc  Honor the configured credential store in gateway test fixtures (#59495)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/464239de0acc873363b34dc49491ab05de96fe0f
+
+6744e5eb79ec  Fix the workspace policy test's auth loading call (#59501)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/6744e5eb79ec23b96cdfacf713b348a74f410702
+
+c90354172c5c  Use paused time throughout the Noise relay recovery test (#59544)
+  All changed paths are dedicated tests, test support, smoke tests, or test snapshots; no production path
+  changed.
+https://github.com/openai/codex/commit/c90354172c5c49535b122443e9a8ed52c2233b80
+
+HOST TOOLING, CI, SDK, AND DISTRIBUTION (35)
+
+859bbc87fc80  Keep prereleases in draft until release assets finish uploading (#54716)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/859bbc87fc80c18a72e08b181e301ddb4f8dabea
+
+221e4e7c0538  Preserve prereleased events when creating GitHub prereleases (#54724)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/221e4e7c05386d06aa7b91da2a9b04f7f2bd921f
+
+835d3049f03e  Enable BuildBuddy for voice release builds (#54737)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/835d3049f03ea71491299b2548c5ab8fa932f897
+
+89461ea68338  Prune unused standalone releases after successful installation (#55149)
+https://github.com/openai/codex/commit/89461ea6833832b0551ce24ee32205824d5c108d
+
+4dbd9d30ea04  Ignore the basic-toml advisory in dependency audits (#55547)
+  Flags: includes build/dependencies
+  Only Cargo dependency-audit exception/policy configuration changed.
+https://github.com/openai/codex/commit/4dbd9d30ea0466ec5bb1524f24c56cfc8ee4c5b1
+
+9cb547349e7b  Consolidate Bazel CI setup into `prepare-bazel-ci` (#56222)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/9cb547349e7b16d7b00738e7a11b1a1dd28e6366
+
+22db5847c834  Bump Bazelisk to 1.30.0 in the Bazel CI setup action (#56246)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/22db5847c834266986a53b782f2de21e8e834e0a
+
+8eaf5fd115f0  Bump uv to 0.13.5 in CI and release workflows (#56248)
+  CI/release uv tool pins plus Python tests/requirements-uv.txt only.
+https://github.com/openai/codex/commit/8eaf5fd115f036d207be236009938261758e30f2
+
+0eb98b46176f  Upgrade Python SDK model generation to datamodel-code-generator 0.64.0 (#56272)
+https://github.com/openai/codex/commit/0eb98b46176fd41fc285e5e2f82218bf0ccd70f5
+
+9100b9c3d38c  Pin Linux artifact signing to Cosign v3.1.4 (#56288)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/9100b9c3d38c0a9c33653f1760be307f195ee7a6
+
+66f6da603648  Lock Python release build tools with uv (#56290)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/66f6da60364847b5244d550497fb742cbbae4119
+
+f627672c4988  Centralize Node.js version selection on 24.22.1 (#57168)
+https://github.com/openai/codex/commit/f627672c4988fdb9adcdf026facd14e341550229
+
+2d4c13152420  Update prebuilt argument-comment-lint to `rust-v0.164.0` (#57170)
+https://github.com/openai/codex/commit/2d4c131524206afa898a53f96413d779718fd978
+
+e1c87d1c2d62  Ignore the crypto-bigint timing advisory in dependency checks (#57206)
+  Flags: includes build/dependencies
+  Only Cargo dependency-audit exception/policy configuration changed.
+https://github.com/openai/codex/commit/e1c87d1c2d623a69007c8d0bedf497d379371e7c
+
+438cfc55c841  Record reviewed exceptions for zstd security advisories (#57255)
+  Flags: includes build/dependencies
+  Only Cargo dependency-audit exception/policy configuration changed.
+https://github.com/openai/codex/commit/438cfc55c8411e682db77444af509833c2045eb5
+
+4aca387e3ea9  Bump `openai/fence` to `v0.12.2` in the blob size policy (#57307)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/4aca387e3ea9ac32382d814735e80cb7c2b327b9
+
+9510f36df2c9  Preserve child signal failures in the npm wrapper (#57352)
+https://github.com/openai/codex/commit/9510f36df2c9f0133d0fd4f271224aec14d86cd0
+
+615a8c98d64a  Fix macOS standalone release pruning (#57503)
+  Flags: mixed platform/shared
+  All changed paths concern host tooling/distribution/SDK/CI, with optional docs/tests; no Rust runtime or
+  native Cargo/build source path changed.
+https://github.com/openai/codex/commit/615a8c98d64a12226d70b2a2fe6bc5a1ce35c9ec
+
+27ace641fe07  Replace the npm wrapper with the native binary using `execve` (#57513)
+https://github.com/openai/codex/commit/27ace641fe071106a036c298d76d7372ec1088cb
+
+cf2c04b325e1  Ship `codex-exec-server` in CLI and app-server packages (#57590)
+https://github.com/openai/codex/commit/cf2c04b325e1929732727e7776243226fbbe19bc
+
+7ac608162392  Stop shipping `codex-exec-server` in release artifacts (#57628)
+https://github.com/openai/codex/commit/7ac6081623928adead75caa2882e307444edad82
+
+22aec5f2b01a  Extend GitHub release read retries and add jitter (#57796)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/22aec5f2b01a6d4d9e43f8ffad40cfaf41583494
+
+2f47f9779282  Update CI setup to use `meta/install-dotslash` (#57825)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/2f47f9779282e6b273ad14bd29bec4561627083e
+
+b91f2515f571  Ship the standalone executor in release packages (#57837)
+https://github.com/openai/codex/commit/b91f2515f5719446dad5402036ac59f43a4c407a
+
+a29c7b97e883  Fix argument comment lint tests after rust-clippy branch rename (#58013)
+https://github.com/openai/codex/commit/a29c7b97e88367044ae84c28c85451ec3e72af9f
+
+02ca1e0d990e  Ignore RUSTSEC-2026-0418 for the Windows-only libz-sys dependency (#58110)
+  Flags: includes build/dependencies
+  Only Cargo dependency-audit exception/policy configuration changed.
+https://github.com/openai/codex/commit/02ca1e0d990e496366bda7c30e2981cf296783ce
+
+2f1e4f99e0a6  Require Bazel release artifacts and publish DotSlash manifests (#58196)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/2f1e4f99e0a631510fbdf1989b00858fb1b3de5f
+
+67f0994b532b  Tighten Bazel CI snapshot handling and OTLP test cleanup (#58459)
+  Bazel CI snapshot-update setting and CI runner plus dedicated OTLP loopback test cleanup only.
+https://github.com/openai/codex/commit/67f0994b532b8740f14b5b738af7b7b2a915b1d6
+
+231c8abd2f4f  Make Bazel checks advisory and pause Bazel release artifacts (#58717)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/231c8abd2f4f7e3e14aa3e54bcf8136435e6f2f3
+
+4b4a5cf25aa5  Use local Bazel for voice release builds (#58727)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/4b4a5cf25aa5b064c866218b405c848745fd280f
+
+cb1bc0ae4ed9  Remove Bazel outputs from DotSlash release configs (#58757)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/cb1bc0ae4ed996c67a6e118bf79a7435f0d3f0d2
+
+479c6be7e318  Enable the segment heap on Windows CI runners (#58978)
+  All changed paths are GitHub CI/release actions, workflows, or release tooling/configuration.
+https://github.com/openai/codex/commit/479c6be7e3187314ee8d2972e481dfa6840850a8
+
+8960c363c61e  Preserve installer stderr when releasing the install lock (#59227)
+https://github.com/openai/codex/commit/8960c363c61e33b7b3d3ec34a608160f2a81a907
+
+e15c5fc2b942  Upgrade argument comment lint to Dylint 6.3.0 (#59505)
+https://github.com/openai/codex/commit/e15c5fc2b9429a13370747aec1e49d6d0cb5e2c8
+
+2be3dd3ff3af  Ignore the unmaintained pin-utils advisory in dependency audits (#59638)
+  Flags: includes build/dependencies
+  Only Cargo dependency-audit exception/policy configuration changed.
+https://github.com/openai/codex/commit/2be3dd3ff3afe74205ed341e1eec2ed8f298ee48
+
+BUILD AND DEPENDENCY CHANGES (23)
+
+3076caafdf67  Move V8's ICU Bazel rules into the workspace (#54710)
+  Flags: includes build/dependencies
+  Bazel V8/ICU build definitions and source patches only.
+https://github.com/openai/codex/commit/3076caafdf674e0237866a22b647cd9c6931891c
+
+61469096fe08  Update `rustls-webpki` and `webpki-roots` lockfile versions (#55616)
+  Flags: touches conflicted paths, includes build/dependencies
+  Updates rustls-webpki and webpki-roots versions/checksums in Cargo and Bazel lockfiles only.
+https://github.com/openai/codex/commit/61469096fe086ccdbe87c06f9efc4ee59a4b51fe
+
+6fb1c3903d42  Use hermetic dsymutil for macOS Bazel builds (#55693)
+  Changes macOS Bazel release dsymutil provisioning and build rule only.
+https://github.com/openai/codex/commit/6fb1c3903d42e3cc7da2c89e3a045fe0ce137af4
+
+85de07048c21  Isolate V8 source dependencies and their C++ runtime settings (#56261)
+  Flags: includes build/dependencies
+  V8 source dependency/Bazel C++ runtime graph and patches only.
+https://github.com/openai/codex/commit/85de07048c21c349f491e24b4eb4e5b674fd5a28
+
+e0fdd608e8d2  Bump `@modelcontextprotocol/sdk` to `1.32.0` (#56286)
+  Root pnpm MCP SDK resolution and lockfile only; no Rust source or Cargo dependency changed.
+https://github.com/openai/codex/commit/e0fdd608e8d255f8b4b2c8fa5eecc855efb89fb9
+
+ca9d103f39fd  Update `ctutils` from 0.4.2 to 0.4.5 (#56439)
+  Flags: touches conflicted paths, includes build/dependencies
+  Updates ctutils version/checksum in Cargo/Bazel lockfiles only.
+https://github.com/openai/codex/commit/ca9d103f39fde8a65f84b5e65eb9a30268cf70fb
+
+696fb1bcb310  Move the V8 Bazel build graph into Codex (#57164)
+  Flags: includes build/dependencies
+  Moves V8 Bazel engine rules/patches into repository; build definitions only.
+https://github.com/openai/codex/commit/696fb1bcb310e4893bdb9c84805970974dfe1328
+
+108cf2975a99  Enforce V8 artifact profiles at Bazel target boundaries (#57165)
+  Flags: includes build/dependencies
+  Bazel V8 artifact-profile enforcement, tooling, workflow, and V8 build graph only.
+https://github.com/openai/codex/commit/108cf2975a99d3a5df5006c29d9d105ee85364c7
+
+0818b918672d  Add native Windows MSVC V8 source archive builds (#57269)
+  Flags: mixed platform/shared, includes build/dependencies
+  Native Windows V8 compilation/build portability patches plus shared Bazel V8 build graph; no CLI runtime
+  Rust changed.
+https://github.com/openai/codex/commit/0818b918672db10145e93c95b9624e9512348748
+
+6eb357445fc9  Use the crates.io release of `i18n-config` (#57277)
+  Flags: touches conflicted paths, includes build/dependencies
+  Removes i18n-config git patch, selects crates.io release in dependency locks, and adjusts audit policy;
+  manifest/dependency only.
+https://github.com/openai/codex/commit/6eb357445fc9be39ec41044ee14351ea8e192c2d
+
+6f8bf683cee8  Disable optimization for the on-demand Bazel schema generator (#57723)
+  App-server-protocol Bazel schema-generator optimization setting only.
+https://github.com/openai/codex/commit/6f8bf683cee83ed4d580a2e106b587d8451db936
+
+6c839b369416  Separate test-only Rust sources from Bazel library and binary inputs (#57741)
+  Bazel crate source lists exclude dedicated test-only modules from normal library/binary inputs.
+https://github.com/openai/codex/commit/6c839b3694167f73a4f66bba098576fe4281b18f
+
+29e3c61b482b  Avoid recompiling Bazel integration tests for runtime fixture changes (#57742)
+  Flags: touches conflicted paths, folded crate adaptation
+  Bazel integration-test fixture compile_data tracking only.
+https://github.com/openai/codex/commit/29e3c61b482bf7f3f03c1fa8954fda68408a3780
+
+ab190cdfdf3f  Build V8 from source by default in Bazel (#57832)
+  Bazel V8 source-vs-prebuilt selection and release build targets only.
+https://github.com/openai/codex/commit/ab190cdfdf3f9796a27232b4e206c106462cbf3b
+
+c15d0ce323f2  Update `mio` from 1.2.0 to 1.2.4 (#58241)
+  Flags: touches conflicted paths, includes build/dependencies
+  Updates mio version/checksum in Cargo and Bazel lockfiles only.
+https://github.com/openai/codex/commit/c15d0ce323f2197da865871502dc6ea7ef5b8ddb
+
+a94ba8bdd03f  Reduce jemalloc arena count for Linux musl builds (#58399)
+  Flags: includes build/dependencies
+  Changes jemalloc native build configuration for Linux-musl; build flags can change allocator runtime
+  behavior.
+https://github.com/openai/codex/commit/a94ba8bdd03f8026db2d11d159a7bd93c54c712b
+
+9630fcfc1375  Clarify test failures and annotate a backend registration invariant (#59131)
+  Dedicated test assertion diagnostics plus production Clippy expect_used expectation/reason attribute only;
+  production expressions unchanged.
+https://github.com/openai/codex/commit/9630fcfc1375f868693227ae14b5bd7142d8f8af
+
+0ddee3e1d898  Use Bazel's zstd library for zstd-sys (#59219)
+  Flags: includes build/dependencies
+  Bazel zstd-sys linkage/module/patch integration only.
+https://github.com/openai/codex/commit/0ddee3e1d898f7823df97e9aaf08b420be51c804
+
+42b5b37638de  Suppress macOS warnings in the V8 libc++ Bazel build (#59232)
+  macOS V8 libc++ Bazel compiler-warning configuration only.
+https://github.com/openai/codex/commit/42b5b37638de7a25bfc95ce9502c048b18e30a4a
+
+943a21829d0b  Set seven-day garbage collection ages for Bazel caches (#59242)
+  Bazel local/disk/repository cache garbage-collection ages only.
+https://github.com/openai/codex/commit/943a21829d0bc3462a725f9fb3cb704c21b64b91
+
+f2b94ef8b521  Switch rusty_v8 to the openai-oss-forks repository (#59299)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/f2b94ef8b52196f127d162c6db71e390b9bb265c
+
+ede589336e9e  Prefer Launchpad for Linux zlib downloads in `rules_rs` (#59448)
+  Flags: includes build/dependencies
+  rules_rs Linux zlib archive download URL patch only.
+https://github.com/openai/codex/commit/ede589336e9ecc64cb05045c2961fb1277858f1d
+
+f8c4060b68e6  Bump the Python SDK build backend to `uv_build` 0.13 (#59512)
+  Python SDK uv_build backend and Python release build-tool locks only.
+https://github.com/openai/codex/commit/f8c4060b68e618da1ed8efe53f29e3cb4b345d6f
+
+SHARED RUNTIME OR MIXED CHANGES OUTSIDE DETECTED CUSTOM PATHS (103)
+
+770ed6dcea40  Allow plus signs in metric tags (#55227)
+https://github.com/openai/codex/commit/770ed6dcea40fedb83bb831f6d5e3760a933cc9a
+
+b1fd48c48e2c  Avoid cloning events in the app-server thread listener (#55283)
+https://github.com/openai/codex/commit/b1fd48c48e2cc227f4ea818a6030be9b86cde055
+
+f6e8ca3fc12e  Encapsulate Responses API proxy authentication (#55296)
+https://github.com/openai/codex/commit/f6e8ca3fc12ea26a0b45395ca880164de9d4db32
+
+54f99017f23a  Refresh rejected proxy credentials and back off failed renewals (#55299)
+https://github.com/openai/codex/commit/54f99017f23aefff4a1ed3912c47f789849f0257
+
+cc1a4ec76373  Stop the closest remote SHA search at zero distance (#55302)
+https://github.com/openai/codex/commit/cc1a4ec7637310af92313cf3ae0da729adddb23a
+
+f6e03d4eacf8  Route skill reads by alias source (#55303)
+https://github.com/openai/codex/commit/f6e03d4eacf8907fc7a5079cb7cf4bb51e759818
+
+57560e9d53f8  Enable GitHub Actions OIDC authentication in the Responses API proxy (#55320)
+https://github.com/openai/codex/commit/57560e9d53f89c7737c7b2069ba2eb8fddbf0687
+
+982695cdbcce  Consolidate cached and fetched Codex manual handling (#55342)
+https://github.com/openai/codex/commit/982695cdbcce52eb398b7cc8ba3fcec208ac00e3
+
+941b32bf57e5  Add Guardian retry metrics and preserve turn attribution (#55347)
+https://github.com/openai/codex/commit/941b32bf57e520f506cda9741de615f64f53fbe6
+
+aeec726de8c0  Reduce path storage in the file-search index (#55351)
+https://github.com/openai/codex/commit/aeec726de8c08c7a13ecaf7e4e46d592e25a8222
+
+ee8b4ea181dc  Import only the continuation of backgrounded Claude sessions (#55365)
+https://github.com/openai/codex/commit/ee8b4ea181dc5baa735c0cd9ec5009a85d2e46fb
+
+37594ab7cc6f  Handle response body failures in OpenAI docs downloads (#55379)
+https://github.com/openai/codex/commit/37594ab7cc6f9ee8f5e900878cd7211190c451f0
+
+e64530972398  Deduplicate native agent messages in Guardian review context (#55391)
+https://github.com/openai/codex/commit/e64530972398604464a6aa0d1ace7b9399e9e942
+
+1ccc0d64e80f  Clarify API key login and status messages (#55407)
+https://github.com/openai/codex/commit/1ccc0d64e80ff5a189d072257a0198ec63857b1d
+
+1a35bc4ccbc3  Render async question prompts as Markdown in the TUI (#55411)
+https://github.com/openai/codex/commit/1a35bc4ccbc38417bde1c3a0fc96624fca5b7dfe
+
+7a152fbcf9ec  Treat code-mode collaboration messages as plaintext (#55633)
+https://github.com/openai/codex/commit/7a152fbcf9ecd32d9fb4b45edf80127ee4c8499e
+
+305db3808cf8  Make pending injections interrupt agent waits and sleep (#55644)
+https://github.com/openai/codex/commit/305db3808cf860ced585808ee4a191bb018a3b18
+
+98f92bd0b557  Fix in-process app-server shutdown with full queues (#55645)
+https://github.com/openai/codex/commit/98f92bd0b5574bb9debed669cd48443ee5167434
+
+75c78768d2c0  Reclaim aged legacy marketplace staging directories (#55690)
+https://github.com/openai/codex/commit/75c78768d2c04da11326adb2354ff32083fe60e8
+
+6b13dffc5e4c  Reuse Codex account grants for enterprise MCP authentication (#55698)
+https://github.com/openai/codex/commit/6b13dffc5e4c334fe87f823b214ed15a4bf37a11
+
+b48277327d42  Centralize cloud skill cache state under the catalog lock (#55705)
+https://github.com/openai/codex/commit/b48277327d427b92ace30c1ee9d4817f8fa836b7
+
+3f31c0a040ca  Resolve MCP backend identity from runtime events in rollout traces (#55710)
+https://github.com/openai/codex/commit/3f31c0a040ca58b86cea70a8d40ad79d481e45d2
+
+d571eaf1f61d  Preserve code cell response metadata in rollout traces (#55725)
+https://github.com/openai/codex/commit/d571eaf1f61d0d93a797506335a99a9950ffe37b
+
+a6839a481223  Skip conversation scoring superseded by newer scores and history (#55913)
+https://github.com/openai/codex/commit/a6839a481223fb5faab539a9eb2b7174ae29e560
+
+d685e61e1f63  Separate retained instruction collection from budget policy (#55954)
+https://github.com/openai/codex/commit/d685e61e1f63b0222cc51017b175d20c14ecd02d
+
+8d06d62e15eb  Allow consumers to select message-board tools (#55973)
+https://github.com/openai/codex/commit/8d06d62e15ebbe1ad42324232b6e8a7e2e432793
+
+6f34d3d40816  Allow thread sampling after failed or interrupted turns (#56020)
+https://github.com/openai/codex/commit/6f34d3d40816dac9d7a6ca94c3e3974b3f40c532
+
+d6a5c9d17e82  Group Bedrock API key entry with other AWS sign-in methods (#56023)
+https://github.com/openai/codex/commit/d6a5c9d17e8240a5dbd83cae1a3df23ed5aafcea
+
+e8bb1b664170  Limit decoded HTTP/3 response headers in the TCP tunnel (#56024)
+https://github.com/openai/codex/commit/e8bb1b664170a123af4b844a47e6c6e992b52fe2
+
+943c70d8d203  Support client Responses API metadata in `thread/sample` (#56031)
+https://github.com/openai/codex/commit/943c70d8d203c61404744939eb64a1261acd5d97
+
+b4ad33d1a3c1  Cache decrypted Codex auth and managed secrets (#56081)
+https://github.com/openai/codex/commit/b4ad33d1a3c10c9652dd57f7afd7a949f8f26895
+
+c2d5ea52e1b7  Keep TUI preferences editable when execution settings are invalid (#56091)
+https://github.com/openai/codex/commit/c2d5ea52e1b7ab11ee2d71dc44ea1ef00f9c8eb3
+
+a96fa4f22070  Allow callers to set the thread source for sampling (#56364)
+https://github.com/openai/codex/commit/a96fa4f220700544a1202ec7ae411e432715151f
+
+e52045f98922  Move Guardian tool description preparation into context composition (#56493)
+https://github.com/openai/codex/commit/e52045f98922e9a7e54247644cfa222a38c2bba5
+
+2839ed763bd3  Add paginated channel subscription queries to the local message board (#56495)
+https://github.com/openai/codex/commit/2839ed763bd3f404398e1f0c95bf4e2d172213c0
+
+1c0c45bfc372  Defer synchronous Guardian tool-call truncation to preparation (#56505)
+https://github.com/openai/codex/commit/1c0c45bfc372fb7d7d581508fdef5eef8235eab7
+
+bca6f238cb93  Preserve tracing context throughout tool dispatch (#56514)
+https://github.com/openai/codex/commit/bca6f238cb9340cf02b990cbd7c0692674d7b3e8
+
+0efc474605ac  Defer sync Guardian tool-output truncation to transcript preparation (#56533)
+https://github.com/openai/codex/commit/0efc474605ac6983c96223be46c40880cc823996
+
+5deceaa92732  Apply sync Guardian message limits during transcript preparation (#56555)
+https://github.com/openai/codex/commit/5deceaa92732d1e4a400b93854e369e33f7e4bee
+
+cfc11bfab31c  Preserve failed `write_stdin` calls in rollout trace replay (#57193)
+https://github.com/openai/codex/commit/cfc11bfab31c6885ec8213ece435fc3347eda7a4
+
+b6a4378862f8  Classify rollout tool calls by their runtime handler (#57194)
+https://github.com/openai/codex/commit/b6a4378862f89683a8a19cbfd253f6f4f972c40a
+
+36021e1ad500  Truncate rollout JSON summaries at UTF-8 character boundaries (#57199)
+https://github.com/openai/codex/commit/36021e1ad500d328471aae26573d1fa0c872b335
+
+536d1f5b682f  Preserve the tool dispatch span across runtime futures (#57202)
+https://github.com/openai/codex/commit/536d1f5b682f4d187f1c2929007b0947fe743b21
+
+20f5dde71411  Log app-server WebSocket compression statistics (#57220)
+https://github.com/openai/codex/commit/20f5dde71411ceab586d5898ba52cf68d56f9a02
+
+abf4bb91ec49  Expand keyboard navigation and selection in the transcript (#57221)
+https://github.com/openai/codex/commit/abf4bb91ec49fbf443ccec0069f9cab5dd1462d8
+
+285fc743050f  Integrate Find with transcript selection mode (#57222)
+https://github.com/openai/codex/commit/285fc743050f739eff7c71f34d8dc9e0dd5c0bb2
+
+0b021a5fc981  Simplify code-mode cell completion delivery (#57229)
+https://github.com/openai/codex/commit/0b021a5fc981448a2555bd378518e85e3aae3016
+
+b88173048752  Honor configured message limits for encrypted guardian transcripts (#57241)
+https://github.com/openai/codex/commit/b88173048752cd971fd75a722afaeaad52c40e59
+
+12b2b58e6310  Release the rollout maintenance lock when its guard is dropped (#57247)
+https://github.com/openai/codex/commit/12b2b58e6310e4f5d4041d62d2266ecc3f538d7d
+
+369b2eaa624d  Defer REPL evidence rendering to synchronous context preparation (#57274)
+https://github.com/openai/codex/commit/369b2eaa624dad97d4c0d0628a6921f9f1088953
+
+3e9264fb1860  Defer synchronous Guardian evidence limits to preparation (#57295)
+https://github.com/openai/codex/commit/3e9264fb1860110e5a8d65a2b0bae0e273e14568
+
+e977cb394d12  Preserve tool output versions and history order in rollout traces (#57311)
+https://github.com/openai/codex/commit/e977cb394d12aacdb4b24a70ddee5b0069062759
+
+1f281290e3e5  Centralize Guardian root context preparation (#57312)
+https://github.com/openai/codex/commit/1f281290e3e565c9d3287f1a226dbb00a4c01272
+
+f69b8d203d04  Report when NFS database migration finds no databases (#57357)
+https://github.com/openai/codex/commit/f69b8d203d0499ff27899d2f30586f8c747b91ae
+
+adfcac1a427a  Serialize session index mutations across processes (#57358)
+https://github.com/openai/codex/commit/adfcac1a427ac70f6a1eabb85f836eb85341f995
+
+ff2346f33f85  Bound waits for the thread writer coordination lock (#57360)
+https://github.com/openai/codex/commit/ff2346f33f851bd4e90c8e42ae60abcc7e7f293b
+
+d0f33fab36b9  Render integral limits and parenthesized matrices in TUI math (#57393)
+https://github.com/openai/codex/commit/d0f33fab36b9f324e68c40b5865abc0223daf3bc
+
+5c6ef3d1a676  Centralize Guardian root context preparation (#57425)
+https://github.com/openai/codex/commit/5c6ef3d1a6769a3ea78080792bd67a2c42affdcc
+
+3b600d056650  Move guardian prompt composition into the reviewer crate (#57488)
+https://github.com/openai/codex/commit/3b600d056650850c1d2cfca7a86c4079cc538e7a
+
+b07a3473813f  Render escaped percent signs in TUI math (#57501)
+https://github.com/openai/codex/commit/b07a3473813f101aeac446a012930aefe57e38f9
+
+73bdd06fed88  Extract Guardian planned-action assembly into the reviewer crate (#57509)
+https://github.com/openai/codex/commit/73bdd06fed88a035aa269fd9c62453d9fbb99fcc
+
+4c54667b408e  Add profile and provider status line items (#57516)
+https://github.com/openai/codex/commit/4c54667b408ea7c5d262f1a4171ca414a8f5be88
+
+6574bcdba89a  Defer synchronous Guardian heartbeat compression to preparation (#57519)
+https://github.com/openai/codex/commit/6574bcdba89a630257c659418e241a3d7a242f6b
+
+19d730175f68  Add isolated reviews to the guardian reviewer pool (#57522)
+https://github.com/openai/codex/commit/19d730175f68d56aba23eae6c765b4e133299069
+
+33d306d457a4  Keep submitted prompts shaded when terminal colors are unavailable (#57554)
+https://github.com/openai/codex/commit/33d306d457a4632b22bebf214e0c25d91f90f6e8
+
+55503b23d4cf  Limit concurrent image availability checks to eight (#57835)
+https://github.com/openai/codex/commit/55503b23d4cfcef7ad2dd0acf409143832ec01d2
+
+92e802fb6136  Wire bounded output collection into the code mode runtime (#57850)
+https://github.com/openai/codex/commit/92e802fb613674a50b82942c4fb11a768c5f5451
+
+94d919e31e64  Extend the provider OAuth sign-in timeout to ten minutes (#57859)
+https://github.com/openai/codex/commit/94d919e31e64fdcd63b37682711389fe9c5fe92b
+
+e75e4af22938  Reuse the cached runtime keymap for default configuration (#57876)
+https://github.com/openai/codex/commit/e75e4af22938c8715b2a1e0d3fc142836ab4d962
+
+a3697361dfc0  Add trace-safe diagnostics for Noise relay request progress (#58025)
+https://github.com/openai/codex/commit/a3697361dfc0bc438b65ae8a9aa0e598ecd45251
+
+6b3b3349f3f5  Share the Guardian context delivery token limit (#58071)
+https://github.com/openai/codex/commit/6b3b3349f3f559d65b101998a65cad44e5b2ee7b
+
+b75d1e89665d  Use a dedicated binary for Bazel schema generation (#58083)
+https://github.com/openai/codex/commit/b75d1e89665d256bf2c674b9590776f440c9bae7
+
+3062f7aa4a8c  Add validated elastic section budget configuration for Guardian (#58123)
+https://github.com/openai/codex/commit/3062f7aa4a8c293f4d3ab44c055a779ae5059b98
+
+7d764a236e1d  Prefer documented replacements for deprecation-driven model migrations (#58134)
+https://github.com/openai/codex/commit/7d764a236e1dab9dcd9711ae8d68b8b44e4d3a08
+
+e9854c0aa52d  Validate trace completion records and payload UTF-8 during replay (#58172)
+https://github.com/openai/codex/commit/e9854c0aa52d494fa4f4c3683741461e2640011b
+
+85d042c71aef  Extract pre-tool-use hook handling into a helper (#58357)
+https://github.com/openai/codex/commit/85d042c71aef6b04e8f2acb24dc3da08e74bc95d
+
+a4b4082b5f14  Apply PreToolUse hooks before direct Guardian review policy checks (#58368)
+https://github.com/openai/codex/commit/a4b4082b5f14a8a037386d823ddb96a85fd25975
+
+4c8f6971cb12  Add whole-entry elastic allocation for Guardian context (#58388)
+https://github.com/openai/codex/commit/4c8f6971cb12b6ce859c0551d0172fd1ad53efe3
+
+8801b9a8a6c6  Simplify recorded exec command review (#58418)
+https://github.com/openai/codex/commit/8801b9a8a6c606508736d4e01dedabe52833d637
+
+0ffae14a4316  Add interactive controls and refresh inline visualization styles (#58436)
+https://github.com/openai/codex/commit/0ffae14a4316d67eae25a0539e72345d0ece7118
+
+22fbf8de8ec1  Preserve Apps usage instructions in model catalog messages (#58441)
+https://github.com/openai/codex/commit/22fbf8de8ec18144c770dc94bf1efbebc08688b3
+
+2f452e74b2df  Cap Guardian context entries before elastic allocation (#58444)
+https://github.com/openai/codex/commit/2f452e74b2dfd7e927f90d8b1d573beae521b9c8
+
+f7f1f0196c71  Sort agent center tasks by recency within status groups (#58714)
+https://github.com/openai/codex/commit/f7f1f0196c710238eb586b02110247a030644a6e
+
+54201ea65a35  Add naming and navigation helpers for TUI backend sessions (#58722)
+https://github.com/openai/codex/commit/54201ea65a3501d09a87c776376a0c16aa39db70
+
+ba0d0e1f74ee  Handle steers accepted during the final transcript flush (#58877)
+https://github.com/openai/codex/commit/ba0d0e1f74ee0f41c27ef24b37ed5fc030b487e7
+
+517960e0ed7e  Package the message board MCP connection as a plugin (#58908)
+https://github.com/openai/codex/commit/517960e0ed7e98a7d0e4070610d5383e7a82027a
+
+0712633d37d3  Release message-board state before HTTP shutdown returns (#58933)
+https://github.com/openai/codex/commit/0712633d37d305eff38501afe6239db42f0517e2
+
+a54329e23522  Defer Guardian context trimming in elastic preparation (#58935)
+https://github.com/openai/codex/commit/a54329e23522b787fbbe65a973e12348e53f7c72
+
+1a604d58da34  Refine additional-context byte histogram buckets (#58939)
+https://github.com/openai/codex/commit/1a604d58da344c84528fecd5b5154105f597d70b
+
+00df7f65abb7  Preserve Guardian sender context for cloud deliveries with orbit IDs (#58946)
+https://github.com/openai/codex/commit/00df7f65abb7b953cb2498281d451d3e06a34e64
+
+ba0dfd389790  Prefer indexed rollout paths when resolving ancestors (#58960)
+https://github.com/openai/codex/commit/ba0dfd38979033f514a28d9514215bad46957a18
+
+adca20357620  Preserve steering when returning to a long-running turn (#58998)
+https://github.com/openai/codex/commit/adca20357620101686ebf633577d1d7e989e75b3
+
+857415f7f202  Preserve Guardian review framing under elastic context limits (#59003)
+https://github.com/openai/codex/commit/857415f7f202eb806cbe1308bfb196218b1d8d83
+
+2816088b6806  Add optional total token limits to elastic section configuration (#59011)
+https://github.com/openai/codex/commit/2816088b68069dd5ce1f71a653cd956eb367c28e
+
+cb2b5857c249  Preserve Guardian denials when reconsideration times out (#59118)
+https://github.com/openai/codex/commit/cb2b5857c249c88075a973faad53b6693248a6cc
+
+ac558e2a3264  Resolve saved Daybreak preferences against advertised model programs (#59192)
+https://github.com/openai/codex/commit/ac558e2a3264e1025fd8025fdd71d03dfbe8c86e
+
+79dcb11c9016  Track automatic review overhead in critical-path durations (#59251)
+https://github.com/openai/codex/commit/79dcb11c9016a71340064dc12cec210363948516
+
+b59f2e27a08b  Preserve prompt contrast when terminal colors are unavailable (#59257)
+https://github.com/openai/codex/commit/b59f2e27a08b278c937bcd6cdc7fe9c763cb47bd
+
+b260ee5e8333  Preserve project agent opt-ins across enabled legacy feature flags (#59496)
+https://github.com/openai/codex/commit/b260ee5e8333faefd74d8be78d722cd6a4d4b33d
+
+47172f064fc0  Validate UI trees at decode time and simplify display elements (#59518)
+https://github.com/openai/codex/commit/47172f064fc0a9249f08701dfa9caff4f892fd80
+
+a5ed46ca3746  Populate the local secrets cache after successful saves (#59520)
+https://github.com/openai/codex/commit/a5ed46ca37462abf53faf3fd875e2c427d8507e2
+
+b2a47c5cddd5  Forward cloud message item lifecycle notifications (#59524)
+https://github.com/openai/codex/commit/b2a47c5cddd5fb953504fac305bfba9b509d69e2
+
+d786ff91fad8  Extract channel notification formatting into `PostPreview` (#59688)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d786ff91fad8e7ddab8653ee07bc6313a6fcb03d
+
+SHARED RUNTIME OR MIXED CHANGES OVERLAPPING TRUEOS PATCHES (620)
+
+527c5deb74e5  Close arg0 lock files before removing temporary directories (#54739)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/527c5deb74e5cc390f8838ac361e340cb23c2234
+
+82d958597f67  Gate the file-copy extension behind `multi_env_copy_file` (#54741)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/82d958597f672b0f05c8f1fe3a43a9b93dc28ba5
+
+5009a99dfc07  Render slash command prefixes as composer prompt markers (#54742)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/5009a99dfc07830ddf7464c26f310a2b8532b55d
+
+e16b631d08cd  Reduce memory overhead in tool JSON schemas (#54754)
+https://github.com/openai/codex/commit/e16b631d08cdf82773831f9bbfb793da687d5299
+
+df8990e2614c  Upgrade `zip` to 9.0.0 and update plugin archive extraction (#54761)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/df8990e2614c8834ae9dc0327eb4834c821e34cc
+
+d13db678cb53  Stop applying macOS background priority to managed daemons (#54763)
+  Flags: touches conflicted paths, mixed platform/shared
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/d13db678cb5390f77d7fa6ba762f85b787fedcec
+
+3b8f43a06bb3  Defer unknown TUI config fields to the shared strict-config policy (#54766)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/3b8f43a06bb3105e81406b35ff69f94977d18ae4
+
+ce0323f2f2d3  Support typed content in contextual prompt fragments (#54776)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/ce0323f2f2d3b25e82806cd555237da3db4e1897
+
+8d9f6466ff02  Add negotiated zstd compression to app-server WebSockets (#54930)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/8d9f6466ff0294785d56f55b1fe363d132fe4133
+
+1cc7dc8f2acc  Share additional tool declarations across response item clones (#54945)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/1cc7dc8f2acc63ce6c1cb72271e6b90a76136c2b
+
+ffd3429d7549  Preserve model catalog caches across header credential rotation (#54946)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/ffd3429d754991183433b4d41b67551e5656ba27
+
+7b44ac166143  Gate app-server WebSocket compression behind a feature flag (#54949)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/7b44ac1661433ae3a6f375fde873fa7123c935fe
+
+8c076942cb70  Allow agent messages to wake idle root sessions behind a feature flag (#54961)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/8c076942cb70fba8e5c4732c23f1faabc4aed484
+
+70b3bb6d8814  Add observation-only model request lifecycle hooks (#55144)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/70b3bb6d8814ab3f2045238b4ae14c43da99783b
+
+99f617bf7428  Bucket admitted Guardian request metrics by input size (#55226)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/99f617bf74284e10f621247fe490f2469565c0cc
+
+9dc3a1ce7ea5  Record Guardian sampling retries, attempts, and delivery outcomes (#55234)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/9dc3a1ce7ea53bb818b8dd69416d6dde70d0b680
+
+eb354a928b34  Add Guardian review routing and cached score metrics (#55237)
+https://github.com/openai/codex/commit/eb354a928b347856055b29fb55ecd740addf8f77
+
+47db41930433  Batch thread history materialization into SQLite (#55244)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/47db41930433487eb1419b3d5887bce7bd53fbe5
+
+5fe32c00015a  Preserve rollout access metadata across compression and restoration (#55252)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/5fe32c00015a84e6b704f6f37460bc925cd93ec0
+
+9032fc76839e  Unload idle ephemeral composer prediction threads without delay (#55255)
+https://github.com/openai/codex/commit/9032fc76839e23a0e9defa71920089187fad1b51
+
+c0ce901923c8  Share dynamic tool specifications across turn snapshots (#55261)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c0ce901923c81843d100659fe4cfa5cb0cb1068e
+
+71ab2ea77bc7  Stop memory dual-write when v2 is selected (#55262)
+https://github.com/openai/codex/commit/71ab2ea77bc7fca41bb641e8a131bcba7b304a21
+
+cc44ffb3e200  Start dormant MCP servers for hook calls (#55263)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/cc44ffb3e2008e25dd216d59fa7871a0b9434346
+
+1b89beea82ae  Avoid cloning the full catalog for model metadata lookups (#55265)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/1b89beea82ae60e0dbeacb38f1ad2eae9dfed377
+
+d28be12577cf  Honor per-thread unload delays in app-server (#55270)
+https://github.com/openai/codex/commit/d28be12577cf5e267c97d3018a490d76da4d28e7
+
+cca40e57a468  Track MCP enterprise auth cancellation across config reloads (#55287)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/cca40e57a468353bfa69a56bef93389475ed0faa
+
+4e7b9e285ba4  Recheck EMA request authority at HTTP boundaries (#55288)
+https://github.com/openai/codex/commit/4e7b9e285ba4ac6ce18ca452cf9e88d3d75ec857
+
+7c073196a167  Keep only the latest adjacent reasoning effort update in requests (#55293)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/7c073196a1673a0b248b2e5edfb7548d2c2290ac
+
+a91b0bf1bff4  Add GitHub Actions OIDC token acquisition to the responses API proxy (#55297)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/a91b0bf1bff472d5638e42fc0fedfffbb3569813
+
+8cac68328a9d  Add renewable federated auth primitives to the Responses API proxy (#55298)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/8cac68328a9d74679c19923f2aa784915ef0e20b
+
+1277bcfddc69  Add one-shot app-server startup configuration discovery (#55300)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/1277bcfddc69800c5e3538dccf3f26bedbd80290
+
+f7a135ec6173  Reconcile V2 executor plugins with cloud catalogs (#55301)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/f7a135ec6173d19c881b7b7b0ef75f2e1e6d1985
+
+e4568a3538c9  Reject TUI events from a different backend (#55304)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/e4568a3538c9cab6627d64ff8cdfc7d98b79b7db
+
+a309f9206aac  Integrate discovery V2 with step-scoped skill catalogs (#55322)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/a309f9206aacc2feffde83ab7d8c50527fddcae3
+
+8dd6099e265f  Remove thread title generation spinners from the TUI (#55324)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/8dd6099e265f14b80cb1b3fcf10c29a12bb6b23d
+
+d70c2c2cdf02  Add configured thread environment inheritance for subagents (#55327)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d70c2c2cdf0226b4b5d393d30c6785850d0ce85b
+
+03478b4b9217  Expose skill installations and stabilize package aliases (#55330)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/03478b4b9217a6ff66eb343a5242b644ea0ce61c
+
+fbb2f9dbec30  Use step environment snapshots for subagent inheritance (#55331)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/fbb2f9dbec300d59699e52a47ecd9fa49f28b948
+
+1569abc5dcff  Enable enterprise-managed authorization for MCP connections (#55334)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/1569abc5dcff34a161a37c0697617b5025e1a851
+
+8f8e7a6e095d  Add experimental `thread/sample` requests to the app server (#55339)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/8f8e7a6e095d36b9375b5202e05fc9d1bdb95584
+
+49df716ba92c  Remove the long-thread accuracy warning after compaction (#55355)
+https://github.com/openai/codex/commit/49df716ba92cf49a44140241b366d914c27cfc80
+
+9b865ab31e2c  Prepare skill catalogs before building step tools (#55357)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/9b865ab31e2c225cb82d99d1e62d7a6f670729ca
+
+18d09e1eda68  Add a shared cleanup lock guard for local log directories (#55358)
+https://github.com/openai/codex/commit/18d09e1eda6811effcb4acc110795eec7e970135
+
+d9a36f6ec704  Support catalog templates for approved command prefixes (#55366)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d9a36f6ec7044b6f1e5d2ce7fd364660dc26efee
+
+c953dacb42d2  Enable incremental tools by default for Responses Lite (#55368)
+https://github.com/openai/codex/commit/c953dacb42d2773d0ca9cc25a01129bba2ca36a8
+
+0d337e5fe788  Fix recall of command-line initial prompts in the TUI (#55372)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/0d337e5fe78860b25053bb2eb37c3876e566c428
+
+e389b2444c75  Add configured thread environment inheritance for subagents (#55375)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/e389b2444c75cbc92d40b2135ca5db300d076979
+
+c6e29b4fcb1f  Migrate the Windows MXC sandbox to `mxc-sdk` (#55378)
+  Flags: touches conflicted paths, mixed platform/shared, includes build/dependencies
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/c6e29b4fcb1fa1ac127f5fa9346fe3c7022ff091
+
+1e4ba692b841  Preserve thread metadata before rollout files are materialized (#55380)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/1e4ba692b841edc8e51295a631f07d83d9f69b0d
+
+63ba55817a13  Manage TUI backend sessions independently (#55381)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/63ba55817a13e2b2cb546a4f1794e50054a60d56
+
+b8f880bc38b8  Reject replaceable symlinks in pre-sandbox executable lookup (#55384)
+https://github.com/openai/codex/commit/b8f880bc38b885bcca81cdfb50dae0ed18d7c3b4
+
+fea1d7f7d163  Add support for Academic Researchers plans (#55387)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/fea1d7f7d163521a868c344527da79ba0efc146d
+
+36e5861fd9cf  Mark `transcript_v2` as removed (#55388)
+https://github.com/openai/codex/commit/36e5861fd9cfa795b1144d3b37113847db11916b
+
+61fa059d49f3  Use thread connections for enterprise MCP status listings (#55394)
+https://github.com/openai/codex/commit/61fa059d49f3386836e18fb337e71d48da8e6642
+
+affa861ddf35  Roll back interrupted Guardian reviews to preserve evidence (#55395)
+https://github.com/openai/codex/commit/affa861ddf3525f4c7e0b6635eb7f26f95731c9e
+
+e05028e7b0fd  Prefetch sibling rollout paths when reading history pages (#55396)
+https://github.com/openai/codex/commit/e05028e7b0fdd6a483a720920594b65f0b85a872
+
+896604a12d0c  Record OAuth provenance and login identity for account tokens (#55397)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/896604a12d0c7edea37b59ed340dd4e282172fa5
+
+c3bb20602d77  Add wire types for runtime agent registration (#55398)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/c3bb20602d77b0c8e62f84e9956e8086f439dfeb
+
+431185b78b3d  Defer environment disconnect notifications until recovery fails (#55401)
+https://github.com/openai/codex/commit/431185b78b3d283cc58b3434988b80e653a0d9bf
+
+79a19cbb3008  Add ephemeral runtime registration and signed assertions (#55402)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/79a19cbb3008afe2882ccc2c5d93f02cde9a0823
+
+c937a6eb7ea1  Trace harness-side Noise handshake failures (#55406)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c937a6eb7ea1ea6459da0c971e46c42621273255
+
+a3c643bf8da2  Retry TUI startup after a server shutdown refusal (#55409)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/a3c643bf8da200a4b7b22b901f03e55108e59563
+
+7827cd886db8  Track credential sources separately from auth owners (#55410)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/7827cd886db8d129e06bc843185d3d2b0d5cef52
+
+091008729d55  Share runtime authentication across requests and credential refreshes (#55413)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/091008729d5572712ac08964a9602eb71cf31428
+
+a4c9194247c6  Add cancellation for experimental thread samples (#55441)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/a4c9194247c6a1e79aa3e72cc6cd77238f2ed354
+
+8196bcdc189a  Check daemon feature overrides and prompt for mismatch recovery (#55442)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/8196bcdc189ad2c189d631b321fa54b8e09b9bb0
+
+014489466a17  Add optional MCP disablement for prediction forks and samples (#55463)
+https://github.com/openai/codex/commit/014489466a1739c2c563cdfe57880c2c7c8680e3
+
+e18a20d6eb6f  Add correlated diagnostics for Noise relay handshakes (#55498)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/e18a20d6eb6f5ede32a69fb56e3fe276d5e9d914
+
+464add49587a  Separate Guardian conversation preparation from execution (#55533)
+https://github.com/openai/codex/commit/464add49587a7cb6032d5ab04faa8a1585947853
+
+4be9cfdf30bc  Improve diagnostics for compressed rollout read failures (#55545)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/4be9cfdf30bcb1526099aaee4512b31c89df7500
+
+b2aa07db8ac8  Add scoped leases for persisted account OAuth grants (#55546)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/b2aa07db8ac892a865de888dd08726680fcf873c
+
+e1b9c9457cec  Preserve parent history by default in full agent forks (#55548)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/e1b9c9457ceca75a99b034a5df39ac48c3998d15
+
+e8aa7c1678ca  Avoid panics after background compaction fails before a checkpoint (#55581)
+https://github.com/openai/codex/commit/e8aa7c1678caa9a368243d72bf0e9b7859d97f15
+
+ab6095dde004  Allow callers to control prompt cache keys independently of session IDs (#55587)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/ab6095dde0040bb8cdf8592acb89c344e5f27a56
+
+60d78332fc6a  Measure Guardian approval blocking time per turn (#55591)
+https://github.com/openai/codex/commit/60d78332fc6adbf7f4fd000ede9eabe8d52f4e86
+
+fa71afc8a701  Rank `$` mentions by recent selection frequency (#55596)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/fa71afc8a701a88cc8c92b94240f7a23e31b3568
+
+78d4c7c7fae2  Extract shared TUI user prompt helpers from IDE context (#55597)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/78d4c7c7fae278d2b0a904316c274681c62461a8
+
+f29d55ff0697  Propagate authentication header failures before sending requests (#55607)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/f29d55ff0697a88226e8a9811b3c007e5f719cba
+
+aa081afb1b04  Refactor Guardian v2 Decisions snapshot comparison (#55623)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/aa081afb1b044ee66c738b8808c07f13dfcff373
+
+48b6a9d8e0b5  Reserve a sibling rollout candidate slot for the first ancestor (#55627)
+https://github.com/openai/codex/commit/48b6a9d8e0b5e0d809a60eac1cb48486d6ba5107
+
+e776b27eb042  Add frozen cloud skill snapshots to the app server (#55631)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/e776b27eb0422c3d10fba676c632ff08ffb4469b
+
+a13ab7e4ed66  Enable Decisions comparisons for Guardian V2 conversation mode (#55635)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/a13ab7e4ed6639a77f61df3939cbec4516208fd1
+
+cb00a6756945  Add runtime assertion authentication modes and an auth provider (#55636)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/cb00a67569450aea2fdb1b1f31fc042fc0b5416f
+
+c6e4438a5d5b  Guard auth persistence and reloads against concurrent login changes (#55646)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c6e4438a5d5befe6c8e59b01b6534eb8f0792230
+
+801bd4d773ab  Search compressed rollouts concurrently (#55652)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/801bd4d773ab374959344c36640ddbdec270ddb7
+
+87f3c3284e16  Track code-mode cell lifecycle and result buffering time (#55653)
+https://github.com/openai/codex/commit/87f3c3284e1669b90ad9f4925039e9e3bc769b61
+
+66d0de9983e8  Add lifecycle hooks for inter-agent messages (#55657)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/66d0de9983e82b266e89ee29523324c9d08a5472
+
+2f5e242d9f86  Omit reasoning and compaction from Decisions snapshot comparisons (#55666)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/2f5e242d9f869b0553bf37e007b85b2cbd9b31ef
+
+c465563aa962  Enable app routing for remote curated Agent Plugins (#55667)
+https://github.com/openai/codex/commit/c465563aa9626d99420062135b187d299f904f81
+
+ef1604d8f5f0  Upgrade the Rust toolchain to 1.99.1 (#55677)
+  Flags: touches conflicted paths, folded crate adaptation, includes build/dependencies
+https://github.com/openai/codex/commit/ef1604d8f5f01114ede3b3484901d5826378db0e
+
+2623f206bd40  Recheck account login ownership for enterprise MCP (#55680)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/2623f206bd40e0a9a9b16a49b4da415585c0e45f
+
+7389eebf45df  Fix TUI permission selection and session state handling (#55682)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/7389eebf45df47895b386334bc1c5b9809eb9605
+
+36512a34ffe7  Add account credential support to EMA token exchange helpers (#55685)
+https://github.com/openai/codex/commit/36512a34ffe71a48bd9aab66fc81c3b909ef2dfc
+
+69727ae17029  Clean up failed and abandoned marketplace staging directories (#55689)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/69727ae170297c1057108ea170e6f0cf41ba993f
+
+ec8edd576cb4  Refine enterprise MCP auth errors and request authority checks (#55691)
+https://github.com/openai/codex/commit/ec8edd576cb4f938e44d3e837ae4e369b44083d5
+
+d4e03acb6147  Tag tool registration metrics with effective incremental tools mode (#55692)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d4e03acb6147dc83f5e013fd91f729da72712a03
+
+feadd9441e67  Preserve enterprise MCP authorization across runtime refreshes (#55696)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/feadd9441e67f2d8970ffc390212c32f3dfbba43
+
+35757adb728b  Enable MCP OAuth refresh coordination by default (#55701)
+https://github.com/openai/codex/commit/35757adb728b268a1e75eabeb3e4cf9a6def5c18
+
+db58a987b8a0  Allow unified exec to fall back when credential masking is unavailable (#55719)
+https://github.com/openai/codex/commit/db58a987b8a0b94b81ab321f0e0192757758df67
+
+57d4fac64adb  Avoid redundant clones when sending app-server notifications (#55723)
+https://github.com/openai/codex/commit/57d4fac64adbcaed0523ca6bf8d58c4ef6875157
+
+2744e8686c3d  Share prepared MCP tool definitions across sessions (#55724)
+https://github.com/openai/codex/commit/2744e8686c3defaa96f7aff6c51a9df961c51224
+
+c7234c1174b2  Box session metadata and compaction payloads in `RolloutItem` (#55733)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c7234c1174b27d9c55199fba0d546dc27d1b0415
+
+af91f6ef2cd6  Add a critical-path utility for exclusive duration attribution (#55804)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/af91f6ef2cd66ead278ebe7d5751973eef430aee
+
+2213359bd33f  Measure Guardian review latency once with a monotonic clock (#55846)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/2213359bd33f9ffc818e3aeb534faf47544293bc
+
+21b1f5f5344d  Bound retained turn analytics and clean up closed threads (#55847)
+https://github.com/openai/codex/commit/21b1f5f5344db8adb6eb1be6a2e61f6085fdc8f8
+
+6bae551093d2  Bound managed app-server and updater stderr logging (#55856)
+  Flags: touches conflicted paths, mixed platform/shared, includes build/dependencies
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/6bae551093d24ad6539a7daba2d9a13b80b28d15
+
+c419fd01a70d  Fix enterprise MCP credential selection and reauthentication (#55859)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c419fd01a70dd1d05356da443ac44328bda2e6f4
+
+430a16799d90  Preserve thread model settings across resume and revert (#55923)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/430a16799d90e296fb27b1e94f206023902b7e56
+
+a3b685331fc7  Add local diagnostic ZIP exports to the app server (#55940)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/a3b685331fc700bec554b2fe2a929a65f4fe1548
+
+9b39316997fd  Bound remote installed-plugin inventory pagination (#55946)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/9b39316997fd8bcecdb2007722f52ef858f0dbd8
+
+9e12b148918b  Refresh cloud plugin and skill catalogs after mid-turn auth changes (#55957)
+https://github.com/openai/codex/commit/9e12b148918b6189b90ccd33be68f7811adfe81f
+
+067249a28329  Preserve provider model catalogs when refreshes fail (#55958)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/067249a28329feec4a097f55413894acb4a6378a
+
+57232f111c50  Add managed Desktop workspace storage requirements (#55965)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/57232f111c50e59d748d010048c9e10832ed79d7
+
+3fd08b540570  Back off failed cloud skill and plugin catalog refreshes (#55968)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/3fd08b540570a5dd9c61d98560a0231f7b43891f
+
+02c6a2d3f1a0  Drain WebSocket responses on mailbox preemption (#55969)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/02c6a2d3f1a0b906f53770ad45ef61327509d551
+
+a47d1338c1be  Extract shared message-board code into `codex-message-board` (#55970)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/a47d1338c1be494948e9694a91561f66921acb17
+
+e41e8821749c  Add storage namespaces for local message boards (#55971)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/e41e8821749ca6904b00161c31f097628d3756a9
+
+3c4c04b224b5  Add an experimental command to migrate NFS databases to DELETE mode (#55975)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/3c4c04b224b55ce0eefca7fb8503b6f128d32b7d
+
+17a0e6f63fad  Route SQLite logs to an explicitly configured `log_dir` (#55978)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/17a0e6f63fad13f577ef87b36b4ea37fc06385e9
+
+bd5a836567bf  Refresh remote exec-server credentials after unauthorized responses (#55987)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/bd5a836567bf4182f327f08ac4af626525705806
+
+07cc649c658b  Avoid double-counting retained reasoning in token usage (#55991)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/07cc649c658be7018b6913299f12f843b24679f8
+
+d51e9c935fab  Preserve per-execution trace context in code-mode stdio callbacks (#55993)
+https://github.com/openai/codex/commit/d51e9c935fab31e13f7b576a026ae56fb18603bf
+
+f496b09bd141  Retry proxy CONNECT challenges with Windows authentication (#56000)
+  Flags: folded crate adaptation, mixed platform/shared
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/f496b09bd141af0a6ec1a7ebf3e5fc557ac795dc
+
+6203846fb3ef  Support confidential OAuth clients for enterprise-managed MCP auth (#56001)
+https://github.com/openai/codex/commit/6203846fb3ef040f62eed9b35bc6629c8e88980a
+
+82ef0672e343  Scope MITM credential substitution to trusted origins and placeholders (#56003)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/82ef0672e34391ffe1bd61e1185ed6e9d664a64e
+
+082900149cc7  Add a critical-path timing recorder for direct tool calls (#56008)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/082900149cc7c0985e15a1d1ce0330a9e81e53b1
+
+deede7201da2  Keep rollout trace terminal sessions distinct when process IDs are reused (#56011)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/deede7201da27a178c39befa6b4959bb7d451645
+
+233119375db9  Keep slash command prefixes in editable composer text (#56021)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/233119375db96d7b71acc5b17138c41114385167
+
+38da85f49e0a  Preserve config overrides across CLI subcommand boundaries (#56022)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/38da85f49e0ab8247d1840f7437ce06fd12d7856
+
+8440e76ae6d4  Enable the Bedrock setup wizard by default (#56033)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/8440e76ae6d4875a6f01398e09bd27734da741e7
+
+09ec2451bf9a  Add request-scoped OAuth credentials and session lifecycle APIs (#56036)
+  Flags: touches conflicted paths, folded crate adaptation, includes build/dependencies
+https://github.com/openai/codex/commit/09ec2451bf9a6750a19f334e9bd0fd9ebe6494b5
+
+45179176e52a  Add a channel-backed cloud app-server client (#56037)
+https://github.com/openai/codex/commit/45179176e52ab890a3cf5ce47e8ab585e7295f7e
+
+0769c6aeeb1a  Enable executor cleanup hooks with V2 capability discovery (#56044)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/0769c6aeeb1a81cec715e496d2486ece6fcef21b
+
+2a77e82f0921  Support configured credential providers in remote execution (#56049)
+https://github.com/openai/codex/commit/2a77e82f09212c9e1bbf02656afca5d8172c5f9e
+
+342ed69a174c  Require managed configuration from the configured server (#56055)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/342ed69a174c206c1de52a59491b131e0753cfa5
+
+47a1f6bb77ba  Honor server approval reviewer defaults on fresh TUI startup (#56090)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/47a1f6bb77baa8ba237757196a62cadf97dc854b
+
+86e17e98c7f9  Prepare TUI startup to accept multiple backend sessions (#56097)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/86e17e98c7f901277aeeb4649cf1b01462b082f2
+
+07316174c6f6  Forward Guardian reviewer events to parent raw-event subscribers (#56124)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/07316174c6f62deb20278c53add2dbd9dcf6da70
+
+c260087efe8c  Avoid blocking EMA auth status checks on account refresh (#56127)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c260087efe8cc6dcc0526e7018ae9e0e3fc134e3
+
+2dbe6bfa4419  Cancel MCP tool requests when response futures are dropped (#56132)
+https://github.com/openai/codex/commit/2dbe6bfa44195e0c63b9a2ee59f46482bfd64fae
+
+b337fe06b7d8  Defer agent mail after empty final answers (#56133)
+https://github.com/openai/codex/commit/b337fe06b7d8d6e5b42295e04c5e92c2b9c46567
+
+67fb9da4b644  Preserve safe enterprise MCP authentication error details (#56153)
+https://github.com/openai/codex/commit/67fb9da4b6442c16c4032b1e074f9b1c80a43bbc
+
+94350a910143  Add managed network review domains before allow rules (#56154)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/94350a910143c406013683ae634708320f93f1f6
+
+2f3fb111be71  Enable reasoning effort overrides by default (#56163)
+https://github.com/openai/codex/commit/2f3fb111be71d277c80bd5b96d9019748b921f5a
+
+9a8a85bc5393  Add AWS SigV4 signing to network proxy MITM hooks (#56182)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/9a8a85bc539325f2819dd0717f88b6ba6286495e
+
+a390571745da  Default fresh memory profiles to v2 (#56211)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/a390571745da105cfdc85443dd1d38bf78e5ea6e
+
+ffda54f5b8d5  Reuse current model context across paginated resume config loading (#56224)
+https://github.com/openai/codex/commit/ffda54f5b8d5595eb0963594de32e206f98cc77f
+
+8c7affbe1b8a  Emit prompt telemetry only after hooks accept input (#56234)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/8c7affbe1b8a912e92dbfd75b8d0cceb9ca34507
+
+40db507eeca2  Avoid redundant settings checkpoints when resuming threads (#56250)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/40db507eeca2ff778c040c325449eb72e90c0590
+
+61a991990fa4  Reject backslashes in HTTP(S) marketplace URL userinfo (#56263)
+https://github.com/openai/codex/commit/61a991990fa4fd0c511ccaaab3875371796be956
+
+3fd148a20c18  Add a built-in Google Cloud Vertex AI provider (#56265)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/3fd148a20c18cfc72beb7dedfa52951b1f9c4cb1
+
+cb2581dae8de  Preserve MCP disable reasons across runtime overlays (#56266)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/cb2581dae8de14ca5282332ec329c335bf04195f
+
+ca87ef86e101  Wait for cloud config refresh cancellation in loader lifetime tests (#56274)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/ca87ef86e101c4e0b18847116fadcff078abaeaa
+
+129220bf057d  Support bounded request bodies in AWS SigV4 signing (#56277)
+  Flags: includes build/dependencies
+https://github.com/openai/codex/commit/129220bf057daf978e097d5395295d0a2f2f07c8
+
+d124fe9de1c1  Add negotiated network policy metadata support for MCP calls (#56278)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/d124fe9de1c1253d5ddc0a013d33fb32b0ff46e6
+
+35e21028080c  Group consecutive transcript prompts into one background block (#56280)
+https://github.com/openai/codex/commit/35e21028080ccbda9de04d2239b0a0b2336d868f
+
+2326a3f74b4b  Scope model catalogs and caches by thread originator (#56284)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/2326a3f74b4b7dd79de063ef20685b6ccad7da12
+
+5a1c247dd5fd  Decouple managed configuration loading from ChatGPT authentication (#56295)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/5a1c247dd5fd682c22a34af93df697dd06300a32
+
+e4deed398182  Mark built-in dummy credentials and strengthen collision checks (#56297)
+https://github.com/openai/codex/commit/e4deed398182c5275c52bcb77c6733680e2715f5
+
+7a5860da3507  Add hook configuration to environment attachments (#56302)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/7a5860da3507ce49213178c204a2bbac130e72f1
+
+75a4146411d2  Add support for environment-scoped managed hooks (#56304)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/75a4146411d22e4c487ba86f026201594cdbaa85
+
+334527705c4a  Separate directory and repository scopes in the TUI (#56308)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/334527705c4a2d077efce577925247d87f10d2b1
+
+878070b5a662  Support model-specific writable-root permission wording (#56309)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/878070b5a6623d52c34151b79ce618a5485f9cea
+
+5b792948f941  Track accepted conversation history in rollout traces (#56312)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/5b792948f9414288b9196ae0559f218439affe20
+
+e103bbc06f2f  Apply model catalog overrides to history, notes, and context tools (#56313)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/e103bbc06f2f516afe47eb9b1d8d172128912023
+
+f3a90545aed3  Add managed configuration loaders for custom config servers (#56314)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/f3a90545aed3188ee1e5c119ec89a742de399cdc
+
+8531184b49bc  Make agent-message wakes respect interrupts and Plan mode (#56330)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/8531184b49bcb160175a84e140b659a83a426df7
+
+e5ea2ed50b3a  Match rollout trace image content across request snapshots (#56342)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/e5ea2ed50b3a28092b13a4dd64463748b060b7af
+
+4610b573e59b  Run environment hooks on their owning executors (#56343)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/4610b573e59b211bf9430cf6ffb97cfb84623090
+
+30587d78850a  Add experimental attached thread forks (#56351)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/30587d78850abf2bfc484ffb0ab0f71497cc9c05
+
+d6817454d768  Make the Guardian review timeout configurable (#56371)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d6817454d76885e9d0e118bbf82e507aed6f715a
+
+e6ebdfe00b52  Support memory v2 in external-agent memory imports (#56414)
+https://github.com/openai/codex/commit/e6ebdfe00b520e21ed50ac0362656f32dd64d2fc
+
+60adfa8513f7  Treat model-not-found provider errors as terminal failures (#56445)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/60adfa8513f77c27826f0c5b770e7a7d4eca538e
+
+f71c6afc3003  Add Guardian V3 feature configuration (#56459)
+https://github.com/openai/codex/commit/f71c6afc30031011fe0b4d757b981fd0301b2536
+
+bca6cff1e140  Add Guardian v3 local board helpers (#56460)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/bca6cff1e140c1791975f0f6c47cb3add4f31710
+
+b719a7fb7fe0  Add silent append support to message boards (#56461)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/b719a7fb7fe0c43a505f30a933b63d13e2a13e80
+
+90894a780d59  Prevent memory imports from racing with consolidation (#56462)
+https://github.com/openai/codex/commit/90894a780d59b30f0c72d35fa08c964233697de7
+
+b559e6a39884  Add experimental thread memory summary reads (#56465)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/b559e6a3988489b636e1e79672eff330bf0679dc
+
+7d592f6dd998  Move Guardian approval reason caps into context composition (#56477)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/7d592f6dd9988e349e3164feaa21d0fc14bbac8a
+
+de06fd0be4f4  Allow installed plugin metadata to skip display enrichment (#56483)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/de06fd0be4f465bc28c3111bdadaabda5dfdebcd
+
+2f1cc5979020  Add channel upserts to message boards (#56494)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/2f1cc5979020a1a2b08a752b1ede68d981e63009
+
+810501d60d24  Add trace instrumentation for turn startup and response streaming (#56515)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/810501d60d242b6195a9b92b01f37f5e95f5c97d
+
+398500106707  Respect server approval policy defaults during TUI startup (#56516)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/398500106707f0a3217c7cf83edc2bf226cc342f
+
+b82d542aefbb  Add turn, tool, and skill attribution to traces (#56524)
+https://github.com/openai/codex/commit/b82d542aefbbcc1f46e508cdeaa4b454877d180f
+
+adca78ddae79  Remove the 1 MiB response limit for explicit model catalogs (#56525)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/adca78ddae79568279d0731dfdebef1df16f3cde
+
+ea819e1f4d07  Record skill and plugin catalog sizes on publication (#56530)
+https://github.com/openai/codex/commit/ea819e1f4d0759777106e5a6fb9984752b20f972
+
+7c568b331b9e  Extract the head-tail buffer into a utility crate (#56535)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/7c568b331b9e0810ae7164f4bd680cec5f69f2fc
+
+f970f4be6783  Track resume picker pagination and selection metadata per backend (#56543)
+https://github.com/openai/codex/commit/f970f4be6783428af0d39527102917a5305c71d7
+
+0d7f3ea03b9e  Initialize SQLite databases with DELETE journaling on NFS (#56552)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/0d7f3ea03b9ef73a42136fb071eb16266966ea49
+
+c483edf1775f  Include environment hooks in thread hook listings (#56553)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c483edf1775f1fcc360190d0709fbabfc6a55cdd
+
+15fbcac045c2  Enable masked AWS credentials for local proxy signing (#56554)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/15fbcac045c29f77783bb176c20f54102f97fe32
+
+4b1cf9a4c9be  Use conversations for all Guardian v2 async classification (#56556)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/4b1cf9a4c9be0f5c2871ce1837fb50b4ad08ad3a
+
+2d86506823c0  Exercise retained sampling in Guardian transport tests (#56557)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/2d86506823c0709d161ff9cd58d15657f829e11e
+
+7848e3393c1c  Remove Guardian snapshot-specific context helpers (#56559)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/7848e3393c1cd19a575b386525017e33d950d84b
+
+970111f6cb62  Allow configuring GCP project and location in provider settings (#56560)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/970111f6cb62cc02fe36a82ea7d71b37a2889c97
+
+2d3de3783460  Surface automatic marketplace update failures as startup warnings (#57166)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/2d3de3783460a57f1e089b383f8d5d4870a41779
+
+c21153bd920a  Track CUA tool call starts and deduplicate lifecycle events (#57167)
+https://github.com/openai/codex/commit/c21153bd920a514809e58d9bd10326267ab2ca36
+
+6e319d2ca707  Clarify config loader APIs and share interactive login setup (#57169)
+  Flags: touches conflicted paths
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/6e319d2ca7071c1b5d06d7f9cf82c26c25417913
+
+cf29971d93a6  Integrate runtime authentication into model requests (#57171)
+  Flags: touches conflicted paths, folded crate adaptation, includes build/dependencies
+https://github.com/openai/codex/commit/cf29971d93a6761906b9e8789f915902b5879e00
+
+a797dd7c6f9b  Expose lifecycle timestamps on app-server thread items (#57172)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/a797dd7c6f9b201818a18d23921eb3d1ef3c1314
+
+619531225b29  Add scoped request-body secret substitution to MITM hooks (#57174)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/619531225b29dcf6437ec6571537f9da9da002bc
+
+ec513795a6a7  Integrate config-server policies with startup and authentication (#57175)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/ec513795a6a727b32f906a2aa27f7fc92a996b6f
+
+83a9600acbc9  Defer Guardian Node REPL output truncation until prompt preparation (#57176)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/83a9600acbc902ab8b212ab2e5166d7d55a2519d
+
+3d1001e86522  Route FedRAMP API keys to government endpoints by default (#57178)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/3d1001e8652212529810500facf31f63c1527d24
+
+b8f6d25ce7d1  Consolidate async header authentication in `apply_auth_headers` (#57179)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/b8f6d25ce7d19d579811cbb47873f19071780ea9
+
+457441bca9af  Add constraint-aware standalone network proxy configuration (#57180)
+https://github.com/openai/codex/commit/457441bca9af64315df39caea360676c2e9fd5d1
+
+8ebd272491eb  Add optional names to untrusted additional context (#57181)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/8ebd272491ebe7626dfe4ae18f584c423b7b33ee
+
+090bea7b7119  Centralize unified exec output rendering (#57185)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/090bea7b7119988be75831a791edb2f6c5d23abd
+
+77eb019ad039  Allow advisory rollout budgets with optional limit enforcement (#57187)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/77eb019ad039d21e5a346e77568739993a7f94cd
+
+be7cd6fd9e44  Add a credential file override for GCP provider authentication (#57188)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/be7cd6fd9e44ab46205a30259fd613a9bd88bc38
+
+245691b2dc66  Read unified exec output directly from stdout and stderr (#57191)
+https://github.com/openai/codex/commit/245691b2dc661ef5f6af8720d4556ae473d638ac
+
+6654f7a7ab28  Gate capability discovery V2 on executor version (#57192)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/6654f7a7ab28b5163fc2c5f459bd90e4fa35f631
+
+7d1492ffabc9  Isolate MCP inputs and timeouts for callers sharing a connection (#57196)
+https://github.com/openai/codex/commit/7d1492ffabc9a8d734d729aa5d184823f143de8b
+
+60e4d10ad973  Clarify skill toggle summaries in the TUI (#57197)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/60e4d10ad973dc1b5ec859dbae0e56ae2d5ec2fd
+
+fe15bd38def0  Report the local command working directory in PreToolUse hooks (#57198)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/fe15bd38def0fddabf9b54ab0ccc86e47af4b77c
+
+f371f9701fb0  Capture direct-tool critical paths behind a feature flag (#57201)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/f371f9701fb0937d790db2c930ef5f7268498a0d
+
+beb34ce8d097  Preserve command cwd in permission and post-tool hooks (#57203)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/beb34ce8d09779e1e4ed69069fce1c989a6c332e
+
+85f29b453a0c  Register the `untrusted_as_tool_output` feature flag (#57204)
+https://github.com/openai/codex/commit/85f29b453a0ca77f718f09428e5f79e33d498836
+
+7c997fe2de60  Attribute approval waits to tool critical-path timing (#57207)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/7c997fe2de60e6e4ac95cfc19edf6a5d430f09d6
+
+57b4c6046367  Propagate installer download failures in standalone Unix updates (#57208)
+https://github.com/openai/codex/commit/57b4c60463675209efefdb0fbe91c62e5dc5a819
+
+33b16a9306db  Report turn critical-path timing in analytics (#57209)
+https://github.com/openai/codex/commit/33b16a9306dbf8c99fc44addd3ed9ce8883a7590
+
+0bc73bbeb18d  Add opt-in protocol discovery for local stdio MCP servers (#57210)
+  Flags: touches conflicted paths, mixed platform/shared
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/0bc73bbeb18ddadf69c2e4c0da4322949de73dc6
+
+5e3496e0ad6a  Share eligible local stdio MCP connections across chats (#57211)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/5e3496e0ad6a85d7f57cbe3b6d576db3b317766c
+
+dd5521406a80  Enable zstd compression for code-mode gRPC responses (#57212)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/dd5521406a801212f7742432bcacb06e91823b01
+
+9756b4937926  Coordinate resume picker sources independently (#57215)
+https://github.com/openai/codex/commit/9756b4937926e1202a4dcaafe8b0f7ba4e7dbb80
+
+13b1318f2e59  Support negotiated WebSocket compression in the remote app-server client (#57218)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/13b1318f2e59452604d07a2e23dc9d821187722f
+
+9f622c2abb67  Wire keyboard selection into transcript overlays (#57223)
+https://github.com/openai/codex/commit/9f622c2abb676fb5d6764eb92034f5282c7934e9
+
+964aeda6273f  Fix transcript selection input routing and preserve composer drafts (#57224)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/964aeda6273f67f633a2f0f198158471ef095547
+
+480ab2d0061e  Add managed enforcement of DELETE journaling on NFS (#57225)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/480ab2d0061e004bc594a9f3f1ac07994e853522
+
+ca8b7a0737fd  Allow NFS database migration with shared file permissions (#57226)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/ca8b7a0737fde86940548a3d1d76b46ce382c6f8
+
+3047741b63ab  Preserve acknowledged permissions when resuming and forking threads (#57227)
+https://github.com/openai/codex/commit/3047741b63abd7543ed78f0f8e0f703b0125ceea
+
+7948c0753170  Give remote control pairing a 35-second deadline (#57228)
+  Flags: includes build/dependencies
+https://github.com/openai/codex/commit/7948c0753170216308ae346d27d9cee25c561c2b
+
+4fc522f5e0d3  Add optional thread resumption to `codex queue` (#57232)
+https://github.com/openai/codex/commit/4fc522f5e0d3187af8047c4d666d67da3a27ef9b
+
+eee977b504b5  Stop dotenv loading on persistent I/O errors (#57233)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/eee977b504b5258f7d15f26e9aba29f5cfd54669
+
+f427056ff67a  Tag exec_command telemetry with the configured shell snapshot mode (#57235)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f427056ff67af16421ba5e8f1fc7b1f4aba05757
+
+333d7bde0fb3  Bound memory baseline files and recover incomplete snapshots (#57240)
+https://github.com/openai/codex/commit/333d7bde0fb3f7299e758dd75a7d4405e8b541ed
+
+db7516f41bec  Reduce the default thread unload delay to one minute (#57242)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/db7516f41bec71d26ddefc6af29e68cac9ba580c
+
+8f71a8657ec9  Make login token-refresh tests wait for auth publication (#57248)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/8f71a8657ec99683df4d1aea4806229398ef87ca
+
+3ad642e520f7  Allow disabling plugin discovery prefetch at app-server startup (#57249)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/3ad642e520f76ccec0cbb5964ce605629751ebff
+
+f358635d8e93  Show native dollar thread usage for ENT26 plans (#57251)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f358635d8e9341c46def8a89372fc03f6bffec56
+
+987b8dfc0fa3  Allow slow daemon startup while detecting early process exits (#57253)
+https://github.com/openai/codex/commit/987b8dfc0fa33acd45a67944a20fdea361d52eb0
+
+766f5473f2e3  Keep parent history out of attached thread views (#57256)
+https://github.com/openai/codex/commit/766f5473f2e37d6043c46c93040276c5edf31554
+
+eb3572f9d7ed  Avoid unnecessary connector directory work for tool suggestions (#57257)
+https://github.com/openai/codex/commit/eb3572f9d7ed2ed6892c86fdca037f7c6d1e9d49
+
+a8bca62978f9  Reduce remote plugin catalog cache probing overhead (#57258)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/a8bca62978f9fe1f44f261a77eaa6374a6860a2c
+
+81cbc26ee3c1  Render Markdown in TUI async question choices (#57259)
+https://github.com/openai/codex/commit/81cbc26ee3c1beb903879bbaad1e3809aca18c4a
+
+51849772f086  Centralize permission request preparation and approval actions (#57260)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/51849772f08626cf31bcdf295a0248c8282d2d60
+
+bd7216188134  Separate `apply_patch` request preparation from execution (#57261)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/bd72161881346b71fba5804c39a0b51625340e73
+
+3cacafa0b7c6  Add incremental skill catalogs behind `skill_catalog_deltas` (#57262)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/3cacafa0b7c668b5378f83a1b0988da77ee8e7a9
+
+698599a411d6  Support model-catalog wording for permission path warnings (#57263)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/698599a411d668837c6c2f0d0a5d869e93072d9c
+
+c93a54e164f4  Show effective processing tiers in TUI status surfaces (#57265)
+https://github.com/openai/codex/commit/c93a54e164f49b76431b3c2cb2a0166acde9dbca
+
+654b2ec1f58b  Keep cloud conversation settings server-owned in the TUI (#57267)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/654b2ec1f58b34af304404463549ab49c140a671
+
+fcb3ba75584f  Record reasons for embedded TUI starts (#57268)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/fcb3ba75584f2d26abdbad2248f4172020f70051
+
+51e3f94b2b09  Load cloud config for sandbox and remote exec-server commands (#57270)
+https://github.com/openai/codex/commit/51e3f94b2b0961bc8a006f5eee4b9a0fbc3bd369
+
+7077b1edb995  Enable text selection and mouse scrolling in the warning viewer (#57271)
+https://github.com/openai/codex/commit/7077b1edb995e15fd86cff86f842dc9b1aa81b8b
+
+e963cab11a86  Add code-mode output truncation protocol contracts (#57272)
+https://github.com/openai/codex/commit/e963cab11a8663b2d7e1746ea11d0b556cb5eee1
+
+bae11269ebf7  Reject unsupported options for `codex queue` (#57273)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/bae11269ebf784f5071ca32a9f75312e81b0864b
+
+166aed98544d  Preserve image generation failure metadata for premium usage limits (#57275)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/166aed98544d2aa7500642604199ea5bbca3aa0f
+
+d416d8a0ffc1  Support window prefixes for extension world-state sections (#57276)
+https://github.com/openai/codex/commit/d416d8a0ffc146f0ef92140351709f7c57ee4914
+
+716b4ec6dffc  Refactor agent spawning, startup, and communication helpers (#57278)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/716b4ec6dffc7b23b1c598400bccb622551bf787
+
+6d8f311b00e8  Render untrusted additional context as named tool outputs (#57279)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/6d8f311b00e823052622eac2b463919ad86a666d
+
+f2df3e3b5635  Preserve full MCP results in rollout traces (#57280)
+https://github.com/openai/codex/commit/f2df3e3b56351c87e893e223f3a408b0ed5e6ee8
+
+812d9a3e9a84  Enable agents navigation for remote App Server sessions (#57281)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/812d9a3e9a84ec83e9f6ddd01ffefb177463f26d
+
+efab30992b28  Promote rounded token counts to the next compact unit (#57282)
+https://github.com/openai/codex/commit/efab30992b28bb8fc5064dbac9c12090b8818e98
+
+a3eabbbbf946  Express TUI mouse capture as an explicit policy (#57284)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/a3eabbbbf94637f20b24e42d87a7f4536ef86f84
+
+f9c4c3c9a9de  Let the terminal handle links in expanded questions (#57285)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f9c4c3c9a9de1e3cc7e5249a8e1bc9e2e52a8442
+
+136d891a9481  Support `network_proxy` in managed requirements (#57286)
+  Flags: touches conflicted paths
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/136d891a948177a16c289c5968c40587d463726d
+
+b46a3801e414  Preserve parent tool declarations in prediction forks (#57287)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/b46a3801e41414cc5a73040d2ecb282dfbc527ba
+
+16effdfc8cf1  Add a plugin process host with bounded IPC and lifecycle management (#57290)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/16effdfc8cf1a4635fb7daa72f0c6e24bcb980c5
+
+a014908c50c3  Represent user message presentation with an enum (#57291)
+https://github.com/openai/codex/commit/a014908c50c39cb2d2244e568c7e12aab7021c9e
+
+b52a272cff73  Render async questions and replies with Markdown in the TUI (#57292)
+https://github.com/openai/codex/commit/b52a272cff73ee81ead57f7417144c2161d75f35
+
+126a0ee92ed2  Add GPT-6.1 Terra to model catalogs (#57293)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/126a0ee92ed2c5e73cd8a8f7e37563e8527552d7
+
+62f7f3418faf  Extract plugin manager errors and box realtime handoff routing (#57294)
+https://github.com/openai/codex/commit/62f7f3418faffad238b74c5890ae075082deefb9
+
+fa4c0607d41d  Surface refresh-token rejection errors during workspace routing (#57304)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/fa4c0607d41d4e8c2bce1e536b0f7fcd32a06966
+
+9526f8d0d076  Default gateway OAuth delivery to Authorization bearer tokens (#57313)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/9526f8d0d076f950ccc108d03c53b2df22289b2d
+
+95cafae96c51  Format all Rust sources and clean up repository checks (#57314)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/95cafae96c517628ce9dd1ed0ddb976b33bba221
+
+b01148de5957  Keep failed subagents from marking tasks as needing attention (#57315)
+https://github.com/openai/codex/commit/b01148de595719a05092dcbd5e0a252bb4349378
+
+ce7adb6a31f2  Add opt-in concise hints for explicitly selected plugins (#57317)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/ce7adb6a31f2909a48afa538c2cdb7a6254a0e4b
+
+c587d6e54cb1  Add model catalog fields for granular approval templates (#57325)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c587d6e54cb1e4013bf0cf9ea769edde48a23a1e
+
+b7f7e7f7e85a  Separate TUI session resume preparation from activation (#57342)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/b7f7e7f7e85a1c63e520f27cac42b836f242d9f7
+
+118aae2a5f48  Explain safety policy blocks with turn-scoped recourse in the TUI (#57363)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/118aae2a5f4865dd247b6cec2cd5d9c197892778
+
+6c0db39b940a  Offer safer rewrites after safety blocks in the TUI (#57365)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/6c0db39b940a136b1e77145c8c7f01f3acfa80db
+
+155dde7ff60b  Show the selected ChatGPT workspace in `/status` (#57366)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/155dde7ff60b178ec4ba7154b2e48c6071eb5001
+
+2cab11ca40aa  Pin the Rust toolchain to 1.95.0 (#57373)
+  Flags: touches conflicted paths, folded crate adaptation, includes build/dependencies
+https://github.com/openai/codex/commit/2cab11ca40aad193382348a7bda46da2fc47596a
+
+d30fe145fc4f  Drain pending terminal reports before returning to the shell (#57391)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d30fe145fc4f0f55e115bb92723dc35ddc23c18f
+
+6fe77fc12346  Add experimental GCP account setup to the app server (#57394)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/6fe77fc12346591b8037a8704640e40196b19044
+
+124e4e5bfad4  Make thread item timestamps optional in TypeScript exports (#57420)
+https://github.com/openai/codex/commit/124e4e5bfad4c84162d28d06a02ba28b2cd23c4a
+
+ed1b92fa4585  Add opt-in synchronous Guardian review for native tool calls (#57433)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/ed1b92fa4585a381a6a319931b987cd48cc3739d
+
+aeb6b22c8bda  Extract unified exec command preparation into a reusable module (#57435)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/aeb6b22c8bda5f4d4b6ab80ebd3ccdb3f47fb3ab
+
+5557e0885379  Carry prepared commands through unified execution (#57438)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/5557e0885379af99b800b73b847a2a7a352403e9
+
+e1dd7ed1bac2  Preserve Guardian request metadata with custom OpenAI base URLs (#57439)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/e1dd7ed1bac231398e39cc54e0980a84f4311367
+
+a5ef02e56147  Add Guardian native multi-agent history feature flag (#57441)
+https://github.com/openai/codex/commit/a5ef02e56147c4c3da493655fd5e2c64db13210f
+
+eec8bde1e9a5  Preserve native multi-agent calls in Guardian review history (#57448)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/eec8bde1e9a5fe0e6cbefa88ff587ad1a478c08a
+
+824b7666fb14  Route state-changing multi-agent calls through Guardian review (#57451)
+https://github.com/openai/codex/commit/824b7666fb149033ad07fe0f5f3e261943295a27
+
+6a6e2fb1f0e9  Distinguish policy-restricted capacity failures from server overloads (#57452)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/6a6e2fb1f0e9122464a75929c58356cb7af9e0cc
+
+90de7b92b66b  Centralize Guardian classification of multi-agent tool calls (#57455)
+https://github.com/openai/codex/commit/90de7b92b66b858e7ff79bf2a50d9a14ba2bd3ff
+
+50983c7a9324  Move Guardian token usage calculation into the reviewer crate (#57458)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/50983c7a9324f402f631cd9abfcd91d11baed5a2
+
+2ebf42f269d8  Always put Code Mode tool descriptions before namespace descriptions (#57462)
+https://github.com/openai/codex/commit/2ebf42f269d8d267e2d55a699c741fbb00402e22
+
+e344f4b6fc2a  Move Guardian session helpers into the reviewer crate (#57476)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/e344f4b6fc2ae01acc9ec0e3e0d797ffe0c00b85
+
+75667b341af2  Move Guardian approval request types into the reviewer crate (#57478)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/75667b341af201f6e20a228437ebfe82b828b53c
+
+dddc3c0a7952  Skip unrelated indexed rollouts during selected thread migration (#57483)
+https://github.com/openai/codex/commit/dddc3c0a79528c4de8d9a20d51dd3bd89b02a3e4
+
+6b56106ed9a3  Move Guardian action JSON formatting into the reviewer crate (#57493)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/6b56106ed9a31230e7708dce8dad9819cca00e45
+
+603a7baff0f6  Centralize synchronous Guardian context preparation (#57494)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/603a7baff0f6f37ee9a8a9375a272eaab03d3ece
+
+2edc8dcb0c55  Add an option to omit descriptions from skill catalogs (#57500)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/2edc8dcb0c55dd66c866948437b5725241169615
+
+f40f3dfeb905  Preserve local image attachments when restoring killed text (#57502)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f40f3dfeb9059add2dff5974787fb1c3e632eb98
+
+c8e73bf71981  Use the native clipboard for WSL SSH sessions with X11 forwarding (#57504)
+  Flags: touches conflicted paths, mixed platform/shared
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/c8e73bf7198152ecc1158b148105d054add7a525
+
+479f7046ebbb  Move Guardian request mappings into the reviewer crate (#57506)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/479f7046ebbb5039c587b72a33af4e3776eac281
+
+a43fffca74f9  Resolve Guardian command path conventions inside `ReviewAction` (#57507)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/a43fffca74f99ed88d842b236a20fc9b5d42ec85
+
+2d1984b9f7a7  Add a bounded V8 runtime for UI plugin processes (#57508)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/2d1984b9f7a75f9ce40ce414f732288f370fb108
+
+5a361b559676  Explicitly unlock daemon PID reservation probes on Unix (#57512)
+https://github.com/openai/codex/commit/5a361b5596762acd1bb0a143187a0ed28adb24d3
+
+d257beb16a02  Add experimental ChatGPT workspace switching to app-server (#57514)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d257beb16a02e8bc218619d8bbc5105064cb252c
+
+4d3ed3f3b47d  Release empty PID probe locks explicitly on Unix (#57533)
+https://github.com/openai/codex/commit/4d3ed3f3b47d39f8fe0b60df74a20f528b6fc618
+
+e3149ddb11e2  Preserve host-assigned user input IDs in Responses messages (#57538)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/e3149ddb11e24edea64999030f218447336667ed
+
+aa854dabf54e  Add model-gated literature search to standalone web search (#57542)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/aa854dabf54e1dd6c2bda80653944b4f2c0672d7
+
+0d6838318fae  Expose and persist image generation IDs (#57552)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/0d6838318fae7f3aa374da6f1fd789af2de1a10f
+
+f088e0c4ffdf  Allow replacing dynamic tools between model steps (#57553)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f088e0c4ffdfab3a7d4480c14855a9db00450384
+
+d93071fae87f  Avoid retaining unneeded output items in HTTP response streams (#57563)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d93071fae87f73ba1d251ebb3808773f18f0b77a
+
+fab1a5754558  Preserve rich composer content in Vim registers (#57564)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/fab1a5754558ec90f27efa9b3bc4a1159802bc03
+
+f00c70f5d0e1  Allow catalog URL overrides for the built-in OpenAI provider (#57567)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f00c70f5d0e1715bbbcba99b0cc6e629bf83a4f1
+
+02bc25c89fa0  Configure memory consolidation service tiers independently (#57568)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/02bc25c89fa08013356cc1bb4c4307d531fe57cc
+
+6562117a81a9  Preserve process output and control replies under backpressure (#57569)
+https://github.com/openai/codex/commit/6562117a81a9457c9d67a4d15b884bf80e7805f7
+
+d03a6e1a6a54  Support Apps tool catalogs without shared snapshots (#57572)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d03a6e1a6a54dfdbf2fe05763ae54f528e63f70e
+
+83747ccc7142  Add filesystem-free classification of intercepted patch commands (#57573)
+https://github.com/openai/codex/commit/83747ccc71420e5442bd970ac39160fac90de362
+
+e343a12d5cb6  Refactor HTTP client construction and request execution (#57575)
+  Flags: folded crate adaptation
+https://github.com/openai/codex/commit/e343a12d5cb69ad3fc988fa2feed83b1a9610cbe
+
+133c11db436b  Allow model catalogs to customize approval instruction headings (#57581)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/133c11db436b89fe93ddfed56e00a46319abc864
+
+5078420b01eb  Preserve output boundaries through token truncation (#57584)
+https://github.com/openai/codex/commit/5078420b01eb8a4d2bc62e887d00068123fd52ec
+
+cb66dbecf21a  Replace unavailable image references in model requests (#57585)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/cb66dbecf21a057177d1c117dc21badcb2d7150d
+
+37f199dab1d8  Add host-reserved V2 child creation APIs (#57586)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/37f199dab1d80dc25d899fa83557de892610bc4b
+
+a9ea49e78b89  Add a standalone `codex-exec-server` executable (#57589)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/a9ea49e78b89bf0d566cc4b3e6819a7ac5d34263
+
+b538d2b340ae  Preserve WebSocket probe evidence and redact diagnostic details (#57597)
+  Flags: touches conflicted paths, folded crate adaptation, includes build/dependencies
+https://github.com/openai/codex/commit/b538d2b340aee571fa1a81989cafb41f9d35b013
+
+28cade4f5a7a  Cache empty remote skill discovery with filesystem watches (#57598)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/28cade4f5a7a41fe628791128ccff444a0996b5c
+
+e8e6a922c000  Support catalog headings for saved command-prefix notices (#57599)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/e8e6a922c0008bc08bacc69dd2ce9b6c3c12944c
+
+939f5decb264  Add `codex doctor --network-only` for focused network diagnostics (#57606)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/939f5decb26456169c42bec12aac88dcdedc4b9a
+
+9cce57513419  Share runtime authentication with model providers and catalogs (#57607)
+  Flags: touches conflicted paths, folded crate adaptation, includes build/dependencies
+https://github.com/openai/codex/commit/9cce575134198f863fd4ef1bc4335b039f4e8e45
+
+c0e88f3c0421  Disable terminal status sequences on older VTE backends (#57612)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c0e88f3c04219aaa032aaf4b20a8c3284cc81449
+
+68b67f0ff4f8  Preserve rollout tracing across sub-agent reloads (#57615)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/68b67f0ff4f8d53d2c582e059b2c3b589f21ac93
+
+04e365c698b9  Release sampling prompts after stream setup (#57618)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/04e365c698b94651b6ea7e3b3af5c1dd697bd30c
+
+4aa14ea37330  Show Bedrock setup for explicitly configured OpenAI providers (#57626)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/4aa14ea373302831b9b0b998dc6596d0e087b182
+
+6ba3a8468023  Restore spawned descendants when unarchiving a thread (#57635)
+https://github.com/openai/codex/commit/6ba3a84680236c621b93e0b8dc140687a37f41fc
+
+424916ee9420  Add OpenTelemetry requirement types to the app-server protocol (#57638)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/424916ee94204587dc4412539442a91b01727fe9
+
+d63fe536ee2b  Generate Rust bindings that match Bazel-built V8 archives (#57644)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/d63fe536ee2bf4ea7d18d81e0e1be17543bf5b5b
+
+727283cea5ba  Support managed OpenTelemetry configuration requirements (#57649)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/727283cea5ba30e8cf8bbac6b68a03a4d91cf1b7
+
+bea47c06dfac  Redact OTEL exporter headers in app-server config responses (#57654)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/bea47c06dfac12ecce362090418e12a6faeedbf9
+
+0736b2642226  Fix trace exporter activation after account switches (#57657)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/0736b26422266631c8df55c465fafc6a7fbf7dd3
+
+154e8736a512  Support managed OpenTelemetry metadata and PEM client identities (#57658)
+  Flags: touches conflicted paths, includes build/dependencies
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/154e8736a51224e12b2d990753622a2cd8118f54
+
+26ad281fd1ca  Remove detached delivery from `review/start` (#57667)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/26ad281fd1ca712e4f0c7920a6273cf18c961b8a
+
+d09a5cd8cfbb  Move Guardian review state into the reviewer extension (#57697)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/d09a5cd8cfbbdaeb956c1de5ac1a9d733ef475bd
+
+13b0217567d3  Move Guardian context policy and prompts into the reviewer extension (#57698)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/13b0217567d310bd1c295f12539422a2bc224480
+
+e6de6a2423f9  Move Guardian review evidence into the reviewer extension (#57702)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/e6de6a2423f9a723c098db3d17ea6c71e93bfcf2
+
+e742db9f7ba9  Preserve parent routing affinity for Guardian reviews (#57710)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/e742db9f7ba98e63e502b310857d49d047888518
+
+5d5e5c507def  Move `ReviewAction` into the Guardian reviewer crate (#57720)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/5d5e5c507def46c4e53b30441cf8198c8663c9d2
+
+ce2d47bdc4dd  Move Guardian MCP elicitation helpers into the reviewer crate (#57743)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/ce2d47bdc4dd2513d5b3567090593b07b0fdfa0a
+
+fc916a22b57e  Expose Guardian assessments in response streams (#57757)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/fc916a22b57e9d7b17988f044a54794d2222ae2c
+
+7c11b8074dbd  Include terminal launch commands in Guardian stdin reviews (#57758)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/7c11b8074dbdbab2a3afedf30df7c55f0c6907d8
+
+5c0e42161ee2  Respect model catalog origins when selecting Guardian reviewers (#57770)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/5c0e42161ee26af222eb3e9853f9c898706b375b
+
+1cc3cf8060c5  Skip non-regular files when detecting pasted image paths (#57774)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/1cc3cf8060c5f1dbd4e3a4d75e1a77b523e0c1ad
+
+5fdb50af9518  Restrict code-mode host replacement to session admission (#57782)
+https://github.com/openai/codex/commit/5fdb50af9518cf39c134e3df0bdfec2be8f09b42
+
+575cc5351eff  Fix app-server thread listener startup and shutdown races (#57787)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/575cc5351efff4380396c0d76f0e93886e4c1806
+
+7f4d53e928d1  Release app-server thread runtimes after shutdown (#57788)
+https://github.com/openai/codex/commit/7f4d53e928d16ccbb47c00f0fdc39f6f16782437
+
+84bef6ea8c74  Refresh the model catalog once when Guardian's default reviewer is missing (#57789)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/84bef6ea8c747f01216df126bbb40fbc12a8adb1
+
+c6fce1caceaa  Centralize synchronous Guardian prompt preparation (#57790)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c6fce1caceaae6c4b2896e5c5ae456b5be3bf501
+
+c92700d29937  Backfill exec completion items through paginated history (#57800)
+https://github.com/openai/codex/commit/c92700d2993707ee16eb63b35a1cdd7fcc563f69
+
+ef186f812ae4  Detach realtime sideband observers without ending the session (#57817)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/ef186f812ae447283776a2968fe1f8083e0d8ce7
+
+f37aa4b1c202  Reduce unnecessary work in configuration processing (#57818)
+https://github.com/openai/codex/commit/f37aa4b1c202236f16099cbed191355f9165303b
+
+7f60546e85ef  Load up to eight plugins concurrently (#57819)
+https://github.com/openai/codex/commit/7f60546e85efb3146cb4eb4d27deeb43ff43025e
+
+78a3185ecba7  Improve TUI reconnect recovery and offline exit handling (#57820)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/78a3185ecba7ca3422f14589aeac97059649f60f
+
+e6c5a8379955  Include directly attached threads in diagnostic uploads (#57824)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/e6c5a837995581da973a3e6e9cbb7fcd2d99f4ce
+
+3da7de59b641  Add isolated Guardian assessments for prepared actions (#57834)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/3da7de59b6411caa96b56856ac87370518ac1653
+
+d359945843db  Declare the image generation result type in code mode (#57836)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d359945843dbb73b89204b1f793f7737ba39f821
+
+c62e9df39f3b  Preserve reasoning token accounting across resume and fork (#57839)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c62e9df39f3bc2e1eae124a79075e9bc5555fe1a
+
+7ce5fa7bdc1e  Validate thread providers before resume and input (#57840)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/7ce5fa7bdc1e816cc1306f93dba7dc7bede3a3de
+
+d373d649673c  Add optional process metrics sampling for code-mode hosts (#57841)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d373d649673ca8a5bca71f54be0ae47dbd79b466
+
+6d97d6ecb479  Add bounded Code Mode output collection and rendering (#57848)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/6d97d6ecb4795fe8ae1e1051425a0b812871592d
+
+f5f1d598566c  Load TUI plugin mentions from installed plugins (#57855)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f5f1d598566c97f504bf31260287980d29339992
+
+f91edce53b09  Add Google Cloud Vertex AI setup to TUI onboarding (#57857)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f91edce53b09d71b9ac38aaf05134c9a657a8be8
+
+bd2e9bf0f4c1  Skip resource template discovery for hosted Apps (#57861)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/bd2e9bf0f4c13688f34c3c03629216f287445a8d
+
+f9c10053fb3d  Keep resume picker pagination moving across backends (#57862)
+https://github.com/openai/codex/commit/f9c10053fb3d9b960e78cfeae1f3ffa21e0dc00a
+
+f276b82185f0  Allow upstream interruption when canceling Responses Lite turns (#57864)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/f276b82185f021e7b8d532a3851413bc79a67594
+
+4e2dfd223069  Retry transient environment startup failures on the next turn (#57866)
+https://github.com/openai/codex/commit/4e2dfd22306985f846115758bbf7f9a59351bb29
+
+edd1ae37ec82  Enable server-side output truncation for Code Mode sessions (#57870)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/edd1ae37ec82650e8d7a97a7e84db39fd5722441
+
+6c776cfc8c3b  Preserve status-line hyperlinks through footer layout and animations (#57883)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/6c776cfc8c3b2aa4e429813c52c0e044ff01104b
+
+797bab474649  Add an experimental UI tree renderer for the status line (#57970)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/797bab474649e6df315f4dc3fec4d1486029fdde
+
+2e764743a651  Apply session plugin overrides during MCP config refresh (#57974)
+https://github.com/openai/codex/commit/2e764743a651907fa3c4a4ad76c796cac4572bb8
+
+8fdf64729557  Add per-chat leases for shared MCP connections (#57978)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/8fdf6472955749a731fd9e4b8ffc218e8e80c51d
+
+3535c22b43e5  Add direct Guardian review of recorded exec calls (#58028)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/3535c22b43e5d7a67322f6e85b267ef65577c227
+
+588a277b301c  Add an option to disable successful SSE delta logs (#58034)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/588a277b301c3994455885d7f771d7d9db5d82b8
+
+058e99a3aa5f  Preserve native tool-call evidence through Guardian review (#58040)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/058e99a3aa5f325c3d2b2b3ad1872bfca5a86be8
+
+9cc14e79882f  Add managed command checkpoints requiring fresh human approval (#58045)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/9cc14e79882ff8885cd5d33b4adadae014045aef
+
+9def09afa71e  Use serving assessments for adaptive Guardian review (#58075)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/9def09afa71e1443a1028866ac22dc82aedea00e
+
+2681f8cba283  Update default models for memory extraction and consolidation (#58091)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/2681f8cba2831ef72bca2c0672b2e49d5f690745
+
+6174d05a6a17  Add experimental Guardian review for injected thread commands (#58119)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/6174d05a6a17255dda97be686072eee00c4a1bc9
+
+53d3d7f64efb  Centralize provider request preparation auth checks (#58121)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/53d3d7f64efbf25166e9de4e9e49d81ea6c1dcf7
+
+b05c1a457e45  Add an incremental exec tools feature flag (#58122)
+https://github.com/openai/codex/commit/b05c1a457e45b46c6ae4f8d0358a4d91e8ba1289
+
+09db085f9456  Support negotiated server-side truncation in Code Mode clients (#58125)
+https://github.com/openai/codex/commit/09db085f9456c608a7960fdd4c5c55a34c6a84ea
+
+468b71f7a64c  Honor the tooltip preference for TUI startup help (#58127)
+https://github.com/openai/codex/commit/468b71f7a64c0dcafe8d44f3cafd18f75932b8a3
+
+875a1a78f067  Persist subagent relationships before creating child storage (#58129)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/875a1a78f06731a8ecd20dd45378f61bd9c7701d
+
+03b7e22f9448  Support pasted search text in the skills toggle view (#58130)
+https://github.com/openai/codex/commit/03b7e22f9448469f0834ca05a12a1a92ddc52f3a
+
+f32b6cfd2bda  Route standalone web search through the thread's workspace context (#58140)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/f32b6cfd2bda4fc1c16c6d93dcc38f854828b8be
+
+2ca71f168352  Record additional context counts, sizes, and truncation metrics (#58144)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/2ca71f1683524176427aaa5fdfbf0358d541fd15
+
+184c9c555ec7  Return standalone web search failures to the model (#58147)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/184c9c555ec7b30bacde5a5bdfa92ff156315aa3
+
+7f1c09979c79  Expose system proxy support as an experimental setting (#58157)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/7f1c09979c79579c43b953762effe22eabc20e06
+
+fa4ebe87af38  Add a feature flag for code-mode host output truncation (#58159)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/fa4ebe87af384bfbd4588c78502b76d550c0532f
+
+4bc746c94fce  Include tool names and annotation hints in MCP approval metadata (#58161)
+https://github.com/openai/codex/commit/4bc746c94fce95ec7ca5f1a91a786156d240c8a2
+
+f5fbe7accd7b  Keep remote plugin bundle URLs out of diagnostics (#58165)
+https://github.com/openai/codex/commit/f5fbe7accd7baff73d18f45c1a451be25ae791f3
+
+297f5e33a5f9  Make rollout recording failures and completion explicit (#58166)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/297f5e33a5f917863a7b83f262c9ef1431bc0267
+
+dfcb5b59942a  Support managed network requirements under `permissions.network` (#58182)
+  Flags: touches conflicted paths
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/dfcb5b59942a0c1139162a74b6d3a80fa4ca66e5
+
+94d89c74d680  Use turn-scoped permissions for standalone web search (#58189)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/94d89c74d680df96b98c2554e0e9c5152db98ef3
+
+708e3e2c7014  Allow providers to opt into Cyber access programs (#58190)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/708e3e2c70142c75682a375669ca60754f76976d
+
+98f79517ab23  Preserve remote read compatibility with older executors (#58195)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/98f79517ab2392879c581626ec0588851b03d183
+
+b91cedc080ff  Centralize TOML config deserialization (#58198)
+https://github.com/openai/codex/commit/b91cedc080ffbf636cd5985a592730c7c4ab8d65
+
+55c099a142eb  Keep chats accessible across model provider changes (#58202)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/55c099a142eb302188fee00ab9e9062f2db1c359
+
+cc2f80d5157c  Add file-backed storage for gateway OAuth credentials (#58219)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/cc2f80d5157ccf7540589de764318315c4443948
+
+c9750d7f5005  Preserve realtime V3 transcripts in conversation history (#58221)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/c9750d7f50052b29f53def02b5cf2160ae49a3d9
+
+c2e4631a34cf  Preserve unrelated side conversations when archiving or deleting threads (#58237)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c2e4631a34cfcc89828e71952a7a0ffeb36858ac
+
+7689f21b79f8  Enable the agent command center for embedded sessions (#58238)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/7689f21b79f8faf318bab98f1cd98dd5f5aa59ad
+
+bf877af4180a  Enable the agent command center in embedded mode (#58239)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/bf877af4180a40412794c64dad2ab49332c3def1
+
+536ae056ee10  Enable TUI task tools for embedded app-server sessions (#58240)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/536ae056ee102efe77af629413198c59fc80d433
+
+582a8812e023  Reload remote executor credentials safely across token rotation (#58251)
+  Flags: touches conflicted paths, mixed platform/shared, includes build/dependencies
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/582a8812e023b08cbf10b4603ac41644b8d99261
+
+d5cbb90b721e  Reuse `LocalImageAttachment` throughout the TUI composer (#58260)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d5cbb90b721ea73427f296868a444cfda7608882
+
+8b5ce2fd61ca  Add local image thumbnails to the TUI composer (#58261)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/8b5ce2fd61ca5b1096c93c00f651edc8493ffeea
+
+025f6d715d8e  Show unread results in the TUI command center (#58263)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/025f6d715d8e54581611506c3a2722dfd8be1382
+
+d7b77a5e7437  Show unread sessions and acknowledge viewed transcripts in the picker (#58264)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d7b77a5e74370f7af4d52ca2dc6e51cb8126660a
+
+5e769a1cdae3  Preserve transcript history when clearing the terminal with Ctrl+L (#58266)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/5e769a1cdae3fd93efd5e7b9df71e39efb2223ab
+
+788b9d7bf6e3  Recognize Rex terminals and enable Kitty graphics for pets (#58270)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/788b9d7bf6e37f735647b7f84b556c2a807df4d8
+
+eab2603712f9  Reuse connected backends in the in-app resume picker (#58280)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/eab2603712f90ec08ac44207a04eed158be293a3
+
+f752c97f7d0b  Allow inline patch review during approval prompts (#58281)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f752c97f7d0be0cbef5cece327f52a16ad6fb1c6
+
+f2ac9983552d  Treat auth reload failures as transient during token refresh (#58324)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f2ac9983552d187aa1c9a53c4707cf3b2c4afde6
+
+a9e474c8fc78  Add an MCP adapter for message-board tools (#58341)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/a9e474c8fc7874cdb13b03ef8ffec0bead7c4fbd
+
+13ab0b254e7b  Preserve fallback token refreshes when the keyring is unreadable (#58343)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/13ab0b254e7b9ed0ab473d38d978fa100bf417ae
+
+4969675f0120  Resolve network approval prompts when their requests end (#58350)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/4969675f0120bbd1052998b2669094496bdc97e0
+
+80f469ce8aea  Serialize manual network approval prompts per endpoint (#58351)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/80f469ce8aeadcdb0b79b1a1daf6b88d92ff8799
+
+9630b2e0193e  Allow Apps catalog discovery before the initial tool inventory completes (#58352)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/9630b2e0193e596b2505316f794e74ee1143e069
+
+9b8c2bb50b4b  Fix remote executor authentication timeout recovery (#58355)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/9b8c2bb50b4baee873ef1baa41a7136cc3e2c04a
+
+dc40446064cc  Preserve model metadata origin through runtime resolution (#58361)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/dc40446064cc0896851a5f2ef69f10f62d2206a1
+
+483d98a441ee  Scope agent MCP metadata to a host-selected plugin registration (#58378)
+https://github.com/openai/codex/commit/483d98a441ee21e05fa81b07048040c6b1f1f234
+
+1f0290c60737  Broadcast thread section changes to connected clients (#58380)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/1f0290c6073762085ed50a10aab0ff8337e3b4c0
+
+b0f977c3a9c2  Fix unsettled refresh detection after workspace switching (#58381)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/b0f977c3a9c2e68e46e58e589e98f5297d2c8c10
+
+cbe16d525c2d  Expose parent context for host-managed child startup (#58390)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/cbe16d525c2d7362fc3d4726143288e932905daa
+
+5be57bedd04d  Add scoped host metadata hooks for MCP tool requests (#58395)
+https://github.com/openai/codex/commit/5be57bedd04d717cdde3a768ea7b71e97733736b
+
+e7b8d3a36db7  Run package updates outside the project on non-Windows platforms (#58403)
+  Flags: touches conflicted paths
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/e7b8d3a36db7ca5c05428b95a0099dd2f6d37eb7
+
+7a030b97699b  Fix context token estimates for responses without usable usage (#58404)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/7a030b97699b9fc7f997dd322a3926c03faaeb6c
+
+8cb81f649021  Add an option to suppress incremental model change announcements (#58405)
+https://github.com/openai/codex/commit/8cb81f649021b86f12c4410e4c3f50addabd474e
+
+615be37b2b09  Add host-inherited thread instructions and execution policies (#58406)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/615be37b2b0901b6d6810c37f02c1c7e96c99a15
+
+0e31c29e2512  Enable deferred tool world state by default (#58410)
+https://github.com/openai/codex/commit/0e31c29e2512dfe3d2a3fcec83160626772deca5
+
+6df44f08dd55  Expose non-consuming input activity waits to hosts (#58411)
+https://github.com/openai/codex/commit/6df44f08dd556ec2f2554561d53bc75f6f1f4313
+
+275a9a89b6a2  Keep exposed leading bangs literal in the chat composer (#58412)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/275a9a89b6a2689b5b5a8b3b4aa5dc3c02e7d64a
+
+22b336515659  Group alternative sign-in methods in a submenu (#58427)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/22b336515659dc1c228d04ae9230f61cf2689013
+
+b9858217d89c  Support app settings in plugin configuration (#58428)
+https://github.com/openai/codex/commit/b9858217d89c29e5624592970b1231306993859a
+
+2546265e3ee7  Add audio file references with explicit runtime rejection (#58430)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/2546265e3ee71b02b13fa10b3058282211f7ce50
+
+5a7353f0401b  Treat audio validation failures as non-retryable input errors (#58434)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/5a7353f0401b970c44cf7d428ef23d74f3c366d5
+
+a795f961be68  Make viewed image paths clickable in the TUI (#58446)
+https://github.com/openai/codex/commit/a795f961be68383738e56ac396742b3e8451696a
+
+26cc28631406  Add elastic budgeting for Guardian context preparation (#58454)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/26cc28631406375d55d2915c5730d42a016847b3
+
+7656a23b8d40  Preserve incomplete response output in failed inference traces (#58456)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/7656a23b8d404447f6eb0b4b947f45e5e139e49e
+
+1da2aefe001b  Enable cross-backend session switching in the TUI (#58457)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/1da2aefe001b333340fe8b012b18b072c49cc743
+
+456ae93b6326  Extract fresh session adoption from TUI session startup (#58713)
+https://github.com/openai/codex/commit/456ae93b6326306f9efd34b2d6b6321d3caa5e07
+
+5e07d1f69497  Support OSC 52 clipboard forwarding through GNU screen (#58716)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/5e07d1f694972c0caa62c2e7d4108fa47695d2c7
+
+8c811e8d9383  Support rendering TUI conversations within an inset area (#58718)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/8c811e8d93839103b5185d1f6324ebd2671adff1
+
+e02a32cd51ab  Wire native voice dependencies into full Rust CI (#58719)
+  Flags: folded crate adaptation, includes build/dependencies
+https://github.com/openai/codex/commit/e02a32cd51ab40b503e2e6eac42b47585851134d
+
+181b4a853d39  Prioritize pending approvals in the subagent picker (#58720)
+https://github.com/openai/codex/commit/181b4a853d396f009a3a02b9c36eb393e6acbe75
+
+fe16bc0a97d9  Release superseded assistant text from live paginated history (#58751)
+https://github.com/openai/codex/commit/fe16bc0a97d9ffe548b3afddb96ca6ae261f0d81
+
+b8c51024314a  Distinguish update handoffs in TUI startup telemetry (#58766)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/b8c51024314a0a1357ca9d0be5d364fc1dba6307
+
+a09812981de7  Validate `/fork` before consuming the composer draft (#58767)
+https://github.com/openai/codex/commit/a09812981de703f18f38015cd5d500ab373f616c
+
+05c08d765523  Accept agent follow-ups through native turn input delivery (#58829)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/05c08d76552371400d273d4539c2a116d6340755
+
+3026a8e54e0f  Add model provider discovery to the app server (#58845)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/3026a8e54e0f48c4d8074cd700f35b0697abc329
+
+053e5b1ca914  Add model provider configuration writes to the app-server (#58876)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/053e5b1ca914981275db97b1262a391d16e42556
+
+020e0f77080f  Preserve timestamp ties when paginating threads (#58886)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/020e0f77080f96a705227096ac943ad0c39184d4
+
+1e8b536dc7f8  Add a feature-gated account check for CLI thread resume (#58890)
+https://github.com/openai/codex/commit/1e8b536dc7f834540ef76bf935b45b2f2b4eeedd
+
+aef7d276a451  Support model catalog overrides for plugin guidance (#58894)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/aef7d276a4518ad9cb2805a8ddc634eef6f3e7dc
+
+84dfc209d269  Add native patch support to direct Guardian review (#58899)
+https://github.com/openai/codex/commit/84dfc209d2697876dc7693611473e91616b3223d
+
+f04090521d21  Support permission requests in direct Guardian review (#58903)
+https://github.com/openai/codex/commit/f04090521d218eda89e35bae752ea71a5a0c3cf6
+
+18c6dbe52b3b  Add a standalone HTTP MCP server for the agent message board (#58904)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/18c6dbe52b3b7cef89c13d52efa535ce39bbe27b
+
+6c4fa86838df  Add an in-memory launcher for the message-board MCP server (#58909)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/6c4fa86838df53578f454388b44ba1d248d57370
+
+8806313db4c8  Scope local history discovery to the current ChatGPT account (#58918)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/8806313db4c82c89efcae3e6ac682bed6f4d6a66
+
+8a17396d137e  Fix live stream reflow at the allocated conversation width (#58927)
+https://github.com/openai/codex/commit/8a17396d137e07bdc0795bc50577dd90d734548e
+
+451787127c0e  Support direct Guardian review of patches invoked through exec_command (#58931)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/451787127c0e70247034c33e358536ffd2b89cf8
+
+62bf900680d0  Skip attribution for direct MCP tool calls (#58938)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/62bf900680d00382073c1878cf57bb62bdde63ff
+
+a5c409243744  Retire the daemon_auto_start feature flag (#58940)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/a5c409243744c3b99776259eea2f3a13d6af4447
+
+4515bc6df0c0  Fix model selection after provider setup (#58945)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/4515bc6df0c06654dfce43f03de98e5b494a3ce7
+
+0a2dda4b5e74  Recover WebSocket transport after transient HTTP fallback (#58950)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/0a2dda4b5e748a2ba135c87f6f6de19f05498dd4
+
+f381b64c11d1  Support caller-owned sideband channels for realtime attachments (#58953)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/f381b64c11d13849265a427e9ae562513adb36bc
+
+ac9372e521e1  Add a thread-store builder with host cleanup support (#58954)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/ac9372e521e12d986f8e218ef09719a4adfcb772
+
+43ad1cbf3016  Delete Guardian evidence boards when permanently deleting threads (#58955)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/43ad1cbf3016e9944b3b5d0b0e127ce7148c9d7c
+
+2fa67f03f332  Allow volatile World State sections to refresh after compaction (#58956)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/2fa67f03f332a57b1bb34a8e14d55d14165fdcd3
+
+af6e8d42ebb8  Cache marketplace name mismatches during automatic upgrades (#58957)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/af6e8d42ebb85b6c9c092386b206ef5ca36e689f
+
+b7ca29d25b91  Recover inherited history from alternate rollout copies (#58959)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/b7ca29d25b918fffaa62185594bc1970fc037226
+
+9ede2e87ce4d  Preserve Guardian budget policy through review recovery (#58962)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/9ede2e87ce4df11e90f77ea96c6baa3253e56bad
+
+d893b144758f  Add host-owned turn admission to the agent runtime (#58963)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d893b144758fe87053f54d5d5eb60d2ee542ff34
+
+4477dcddf856  Stabilize and enable client tool output retention by default (#58964)
+https://github.com/openai/codex/commit/4477dcddf8567bac6ddd3f6d94e1b03946e44f00
+
+6ff7f31cac7d  Avoid unnecessary rendering during TUI history loading and insertion (#58969)
+https://github.com/openai/codex/commit/6ff7f31cac7d3a98b15d95fbf0e38ebd2b15b004
+
+8a1d42537d95  Keep automatic thread title saves off the TUI event loop (#58970)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/8a1d42537d959392960a3c483a3c626c1490f095
+
+7accd27956b5  Fix Escape handling in memory reset confirmation (#58971)
+https://github.com/openai/codex/commit/7accd27956b5827662bf395a9a1da1717672790b
+
+9c23d93d5b6f  Add opt-in MCP discovery for in-memory agent message boards (#58973)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/9c23d93d5b6f946ca7138d44c3b2bc0a7461c051
+
+636cdcb7ec9f  Bind final-message output before running sandboxed tools (#58974)
+  Flags: touches conflicted paths, includes build/dependencies
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/636cdcb7ec9fd5530c001dfaa9194d3aa03acd54
+
+c725e472e594  Add usage accounting for host-owned agent runtimes (#58975)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c725e472e594fbdbb9d31af16f81396229efded1
+
+66e3b5a02c17  Record turn critical path metrics and trace fields (#58980)
+https://github.com/openai/codex/commit/66e3b5a02c17acafb470f0929f0b729259ba394c
+
+6c984676b0eb  Extend and bound exec-server session recovery (#58983)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/6c984676b0eb01eb3ba50e691b6290110848373f
+
+40cf168567aa  Allow hosts to restrict a thread's root-only capabilities (#58984)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/40cf168567aa3cb3e0cf6eadef82e6eca2cd16c1
+
+9da07658e28a  Move agent message-board backend construction into the extension (#58986)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/9da07658e28a8bd4b31063abec183f302a279882
+
+ac21e5879025  Respect delivery boundaries for injected agent messages (#58988)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/ac21e5879025b7f8f2e3f6c060db207348a270e2
+
+446044992149  Keep HTTP fallback active for the rest of the session (#58989)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/44604499214999fd863013ab85947a6cb9283391
+
+23bc6e5f2a5a  Preserve modified Ctrl+C keys in active TUI views (#58990)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/23bc6e5f2a5af241e82f0ef18bd7418acb41837e
+
+db227aed42df  Add opt-in side conversation panes to the TUI (#58992)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/db227aed42df3c9d842986860993714de8e6e4d5
+
+dd2df0aa9d7a  Deliver environment hook decisions while output reads are queued (#58996)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/dd2df0aa9d7ae3667236d6f9feeea03c8e544d7a
+
+52b45262754b  Allow hosted child threads to inherit a root session ID (#59000)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/52b45262754bbe8712c9d385e7a5705b406fdec9
+
+26f73fba8ffd  Add host cycling and saved defaults for new TUI conversations (#59007)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/26f73fba8ffd4aeedf6d4734c423982d2fce734a
+
+d92aae550180  Centralize filesystem permission resolution for sandbox enforcement (#59009)
+  Flags: touches conflicted paths
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/d92aae550180544fa2b7f656173c837271de6df3
+
+9e77fb4ad5ff  Make SQLite schema migrations safe for concurrent startup (#59015)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/9e77fb4ad5ff4975f25c4d1d121aece3c40c5176
+
+c60cda34a3ba  Make observed thread metadata writes atomic and retryable (#59016)
+https://github.com/openai/codex/commit/c60cda34a3ba6975f698d63da9e8ca8a1616f0c9
+
+dec38fc9bb83  Add WebSocket connection metrics with reauthentication labels (#59018)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/dec38fc9bb8304f3e34d00d7cee77f5c0488584f
+
+0585dcb5dbb2  Preserve sandbox context in prepared MCP calls (#59020)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/0585dcb5dbb276a78909fa8fd0b36310f16973f9
+
+036e160181cf  Allow concurrent readers of the installation ID (#59021)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/036e160181cf27a3e7f31eea7409bc5f266434e7
+
+80a8710546cf  Remove strict third-party tool deferral in Code Mode Only (#59025)
+https://github.com/openai/codex/commit/80a8710546cfab76aa13503645fccc3af1e5ec35
+
+f58acd6ede31  Use prepared MCP owner permissions in Guardian reviews (#59028)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/f58acd6ede312266a7a0eaa63fd8dadacb4de239
+
+b26f68267266  Add web search provider metadata and configuration (#59033)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/b26f6826726685c9f848b55f9e7498f593e46f84
+
+3c074bb44a31  Add model Search discovery to MCP bindings (#59034)
+https://github.com/openai/codex/commit/3c074bb44a31f474cc60ccbd7a7230414992465b
+
+e839b828fb4a  Resolve model-selected search providers with policy-aware fallback (#59036)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/e839b828fb4a2374b6b9ea9b0530f5a02ced0b95
+
+16ddd538bdf2  Expose assistant content token counts in completion notifications (#59041)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/16ddd538bdf227783d8a4c30170edb89624e95a8
+
+7e8143a89703  Tie executor attachments to environment selection lifetimes (#59043)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/7e8143a8970394e38830ff7b30143da539bd0a18
+
+fbf5f0d3a716  Decode live transcript updates in the cloud client (#59047)
+https://github.com/openai/codex/commit/fbf5f0d3a716d08c254d3e4941d5b12eaff5afe7
+
+3f958ac2fec7  Run Bazel CI locally without BuildBuddy credentials (#59055)
+  Flags: includes build/dependencies
+https://github.com/openai/codex/commit/3f958ac2fec721c0ded7509d7f764359d72f72d9
+
+c5122161fe35  Tailor MCP doctor remediation to detected problems (#59057)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c5122161fe353bc24d91b1dd19cc9725a995864b
+
+dbaead0106de  Classify daemon auto-start failures in TUI telemetry (#59058)
+  Flags: touches conflicted paths, mixed platform/shared
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/dbaead0106de82bd129a4f6f503d173ad5109f68
+
+7ee5efad4a30  Add typed item lifecycle events to the cloud client (#59066)
+https://github.com/openai/codex/commit/7ee5efad4a30c9e05362bf3c87bf9f4670f25813
+
+9e23a4708a76  Enable Bedrock onboarding through the local daemon (#59068)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/9e23a4708a769e7a4ad0b0ffef933950277e05fe
+
+29eed280828d  Enforce strict third-party tool deferral in Code Mode Only (#59071)
+https://github.com/openai/codex/commit/29eed280828d498fead76c3c5dedd9642836b571
+
+f9e7b19df8aa  Add optional animated GIF output to image generation (#59073)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/f9e7b19df8aa75490fc1d90f98d3d95ad716d08e
+
+bc4116e4cd1e  Add paginated history reads to the cloud client (#59075)
+https://github.com/openai/codex/commit/bc4116e4cd1ec39e4add8e82490253cacf6fe1ee
+
+a80514348682  Add opt-in reconsideration of Guardian denials (#59107)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/a8051434868233a8ba2d916440c20e92900d41a7
+
+33ffb6f905b9  Normalize saved chat settings after model catalog refreshes (#59111)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/33ffb6f905b9ddd9254ebe9b48ac16ce95e91050
+
+62d650d5278a  Preserve worker permissions across sibling-triggered reloads (#59115)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/62d650d5278ad1cf000e5050ca5bec6a26068b9a
+
+86b2eca69144  Allow dangerous-command review when sandbox approvals are disabled (#59120)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/86b2eca691445e69d0d88c539ea3d41b515e181a
+
+eb15d3a0f57a  Add a shortcut to hide the focused side conversation pane (#59130)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/eb15d3a0f57a0d7b8c5267885bf2c41ce7ca75c3
+
+3b5483307d70  Parse Guardian review responses once (#59136)
+https://github.com/openai/codex/commit/3b5483307d70da48ece3da8cefcaae9a19888651
+
+f05aa41da6d0  Route message-board notifications through agent mailboxes (#59139)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f05aa41da6d063cd820dbad207d1cfabae594ff2
+
+4a971492e765  Expose thread APIs for message board access (#59154)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/4a971492e765ef6f98012578a2de73098efdb8a2
+
+bfdbf01bfaea  Move agent message board host integration to app-server (#59162)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/bfdbf01bfaeaa6ab23b10e2bd64ed031fd1e5619
+
+f7167ac895c8  Move agent message board cleanup into the app server (#59167)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/f7167ac895c869c60ae00a2d7f518a9977cd1205
+
+079e17a42234  Wire shared runtime authentication through threads and API clients (#59177)
+  Flags: touches conflicted paths, folded crate adaptation, includes build/dependencies
+https://github.com/openai/codex/commit/079e17a422347e49d02501304f79fade7e569362
+
+781d89b91e24  Add cloud client message submission and turn interruption (#59201)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/781d89b91e2487c3653208b9c13287e1a09f6f04
+
+6b2a2757de69  Add shortcuts to focus the main composer and side conversation (#59208)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/6b2a2757de696c2506ee460c49c66a8e2bed65e0
+
+86cfa90536ad  Revalidate Guardian denials when parent authorization changes (#59225)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/86cfa90536ad2414ead6fce819335f2511b7576d
+
+0ed9d6fa4bc1  Handle `budget_reached` as a terminal session budget error (#59228)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/0ed9d6fa4bc10607fed02295d788f45005d5b20d
+
+5667598c8d8d  Use resolved filesystem permissions in Windows sandbox policies (#59233)
+  Flags: touches conflicted paths, mixed platform/shared
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/5667598c8d8d57ae5dd2cbaeed1db2ceb2462c8d
+
+f1b0721c8800  Enable uploaded audio with durable rejection recovery (#59234)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/f1b0721c88002066201e7d977c449fbf14f1e499
+
+3780a5f7503a  Budget retained file audio during remote compaction (#59237)
+https://github.com/openai/codex/commit/3780a5f7503a0fca253c9e1444060b1bdef817c0
+
+6f53fbfb5b7f  Register the Guardian additional-context feature flag (#59238)
+https://github.com/openai/codex/commit/6f53fbfb5b7f8686626f4f4b7149b1ba51176f61
+
+a47a51892818  Honor Guardian's additional-context setting for tool outputs (#59239)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/a47a5189281806e669053434975a399b05c5e275
+
+d5830f6fc64e  Expand per-turn critical path capture and split inference timing (#59245)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d5830f6fc64ee594ed63a97d9ac968bba87033fa
+
+61506432d60f  Expand Windows deny-read globs without invoking ripgrep (#59250)
+  Flags: touches conflicted paths, mixed platform/shared, includes build/dependencies
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/61506432d60f83485fb7440633e1d3d194f1bf71
+
+f2e0bf2d627b  Clarify TUI reconnect status for HTTP 429 stream errors (#59253)
+https://github.com/openai/codex/commit/f2e0bf2d627b998795d81fd27a698de9ed36201c
+
+1176913a6fa2  Add stdin bearer authentication for exec-server registration (#59254)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/1176913a6fa248864d454e637301c6e3557941dd
+
+8f32b721518e  Bind reusable backend clients to runtime authentication (#59255)
+  Flags: touches conflicted paths, folded crate adaptation, includes build/dependencies
+https://github.com/openai/codex/commit/8f32b721518ed23248d81ecf653317182acb3951
+
+d582332d03d8  Add OSC 777 notifications and improve approval notification text (#59256)
+https://github.com/openai/codex/commit/d582332d03d80dc16091c58282dec206aea2991a
+
+444359fa2d71  Refactor sandbox request preparation by backend (#59258)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/444359fa2d71b9313c902c6bd6fd598ed6d8f799
+
+db14d7508d02  Report auto-review overhead in turn critical-path analytics (#59260)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/db14d7508d021c9226587008d002b3d7adfb6a0c
+
+1685f2d62132  Use measured durations to budget uploaded audio (#59268)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/1685f2d62132b04fb385bdb70678f3967900e83d
+
+c141c3132319  Preserve requested approval reviewers across policy overrides (#59272)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/c141c3132319ed667011eae00ec6ec7ca24a9321
+
+f39e45e4a68d  Support API workload identity authentication (#59275)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f39e45e4a68db24c649a9b6b12d2e922cba616d1
+
+afefd0ba95c5  Enforce current filesystem permissions when reading repository skills (#59278)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/afefd0ba95c56817d78dfc0de817f442cab340a7
+
+526f6099f623  Preserve filesystem authority when loading skills (#59279)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/526f6099f623d88fbedfd360fc05970aff28f579
+
+0b21a5b52643  Respect filesystem permissions when discovering repository skills (#59280)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/0b21a5b5264301bdb2e083c68c5ebd1d5cea0af9
+
+0a944f8ce2b4  Enable unified image budgeting by default (#59282)
+https://github.com/openai/codex/commit/0a944f8ce2b46f27890d5aa1c2b44917211b1fb8
+
+db3c44414c2c  Add directional conversation focus shortcuts in workspace mode (#59287)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/db3c44414c2cd4ae33adaf4fa33382cb3dde6bd5
+
+007f668c34cc  Respect turn filesystem permissions during executor skill discovery (#59291)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/007f668c34cca4b9c36ca7ddc08066897f2bbabc
+
+75aba6768a32  Add outcome metrics for skill reads and installation listings (#59295)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/75aba6768a32622f145f97c6ce6c46fd92f4271a
+
+d84c872464ac  Route response item IDs through a shared generator (#59312)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/d84c872464aca4821dc5cb548a651651aefd84fa
+
+3a2788e6fc89  Restore background terminals from the displayed thread's live state (#59319)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/3a2788e6fc897fc4dd40185225167af9a9f13754
+
+19438adcb6d1  Introduce a dedicated context window ID type (#59328)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/19438adcb6d1ba5248cc725a97ed591ba1783b94
+
+93b4e5b4c647  Stop TUI voice calls when the OS session locks (#59330)
+  Flags: touches conflicted paths, mixed platform/shared, includes build/dependencies
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/93b4e5b4c6474cdbf12614c4ac3acbd006fbee89
+
+3e743d15787b  Add cloud thread activation with resolved settings (#59343)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/3e743d15787bd9091f674f0fbc27010f0cbcec62
+
+010520de766c  Add managed thread prewarming to the cloud client (#59351)
+https://github.com/openai/codex/commit/010520de766c4f23f45a540b4c4d5c6c67fbf7ff
+
+71a4c070369f  Share context window ID allocation through the agent runtime (#59354)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/71a4c070369fb761e51fd71009107f398d9f0f81
+
+021fccb04650  Stabilize cross-platform tests and directory-change fork permissions (#59369)
+  Flags: touches conflicted paths, mixed platform/shared
+  Shared or unproven runtime changes touch fork-modified paths or crates folded by TRUEOS; adaptation review
+  required.
+https://github.com/openai/codex/commit/021fccb046508938c4754982efccfb51d6e8356e
+
+fc79b7f53a8b  Honor section limits in elastic Guardian context budgeting (#59401)
+https://github.com/openai/codex/commit/fc79b7f53a8b6bd5e0775529719bb85f7990b26d
+
+48524f337a84  Preserve pending agent messages across compaction (#59404)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/48524f337a84b570f0c2453ca43ec9a1a29375c0
+
+4d62359072ef  Add opt-in elastic budgeting for synchronous Guardian reviews (#59444)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/4d62359072ef293673a79a64721d3ffdf9d2e009
+
+49f2fc2c1e48  Warn when project instructions exceed the configured byte budget (#59445)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/49f2fc2c1e4824b0a8eb0a15d3d7daeadc6c1523
+
+65c83ea5a268  Restore the daemon auto-start feature flag (#59447)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/65c83ea5a2680824bf1ee7734a387f9189f3c80a
+
+031829da6aee  Carry per-input extension data to user message completion callbacks (#59455)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/031829da6aee2c419364243a7e163e102aa33338
+
+ba057e43758c  Drain queued side-conversation events before switching focus (#59458)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/ba057e43758cb19beead2af9df19d10756cc4100
+
+9ff072db8ae4  Allow prepared forks to use source revalidation (#59468)
+https://github.com/openai/codex/commit/9ff072db8ae43d413c8d205ebf22b54b83c72cef
+
+4f6acbf02dac  Preserve transcript interaction when switching panes with arrow keys (#59472)
+https://github.com/openai/codex/commit/4f6acbf02dac15297db5e3da232d55679664b412
+
+4437ff312b03  Extract agent message board hosting into a dedicated crate (#59473)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/4437ff312b0355858565dcb7fb11993f925f7ec8
+
+75424f87ca2b  Refactor MCP tool argument parsing and approval preparation (#59474)
+https://github.com/openai/codex/commit/75424f87ca2b1c482e0509a5b1ceb7459587f396
+
+b9099a145b30  Honor project agent opt-ins over lower-priority legacy opt-outs (#59476)
+https://github.com/openai/codex/commit/b9099a145b305a470e9a2f7d6d35b6a4b0f58d57
+
+bd7cfa3f69a8  Record saved multi-agent opt-outs in session telemetry (#59478)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/bd7cfa3f69a899598a2c5103ee8aa7d1d1bcc212
+
+c9296fa1a926  Deprecate the `multi_agent` feature flag (#59479)
+https://github.com/openai/codex/commit/c9296fa1a92688a430fedccc33a30a05696ffbd0
+
+41cbd5b9b2d5  Add per-turn prompt cache TTL options (#59480)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/41cbd5b9b2d5369ba35957328504093ed324333c
+
+d78f68f8d101  Allow per-turn overrides for direct-only tool namespaces (#59481)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d78f68f8d1016b2ffba14a91ccd33ef7fa527971
+
+9fcaeb733522  Use MCP owner permissions for Guardian reviews and score reuse (#59489)
+https://github.com/openai/codex/commit/9fcaeb733522adf09b4e1c594bc90f344374a926
+
+08bbbbdff3e4  Preserve external auth through transient provider failures (#59491)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/08bbbbdff3e477da0516cc2452483b977a8541e2
+
+5112ce6edeb9  Add a native cloud backend to the app-server client (#59493)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/5112ce6edeb95f2296a5ffec47dbab4764e65853
+
+dc1cc0a0e8b7  Add debug timing for thread item pagination (#59497)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/dc1cc0a0e8b726d5e5fda1ad25398b741adc53c4
+
+e115d5f90d56  Keep threads on their saved model provider when defaults change (#59503)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/e115d5f90d56d32785b9b01d4c376d7abf94ea7d
+
+ad5e6e57a1e0  Bind memory consolidation permissions to the memory root (#59507)
+https://github.com/openai/codex/commit/ad5e6e57a1e0a45120c87c3eaa62c77dd53097fd
+
+aa1399cbcd1a  Forward caller metadata on MCP resource reads (#59509)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/aa1399cbcd1a7f5e87714a9ce0d7b2c04af2a0e2
+
+4b94e6cf260e  Use server model defaults for fresh TUI sessions on every connection (#59510)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/4b94e6cf260edfecac0c21844e12736a06c3e601
+
+763faa6ee4b6  Add paginated cloud thread discovery to the cloud client (#59514)
+https://github.com/openai/codex/commit/763faa6ee4b67d4234a6d71afa9d4e98ed9f91f0
+
+08511817f31e  Simplify pending interactive request tracking in the TUI (#59517)
+https://github.com/openai/codex/commit/08511817f31e335df9ed79fab1b2124feafa9ce5
+
+e8e3197e84c6  Make side conversation panes resizable and interactive (#59527)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/e8e3197e84c650eea674321da2a434ee8851da28
+
+9a7213ca37c6  Resolve workspace permissions at the sandbox launch boundary (#59530)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/9a7213ca37c6aa19127100027f041599d2d28eb9
+
+f3074e35c079  Render host-owned V2 subagent rosters in environment context (#59531)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f3074e35c079bd8a5e89b0301b5e735d0e618235
+
+de6e72addd67  Add opt-in Unicode canonical matching to exec policy rules (#59535)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/de6e72addd67d35e6bf83b7acac406116bf598a6
+
+b386e2d9e3d1  Add a token-efficient model-facing ID generator (#59540)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/b386e2d9e3d18969f8b48c8401416ded6bcbf3f2
+
+f1b942164824  Add model provider browsing to the TUI configuration panel (#59541)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f1b942164824353df84302293507874ea44e912c
+
+5c0b1ac71f2f  Extend runtime auth to account, plugin, and file requests (#59564)
+  Flags: touches conflicted paths, folded crate adaptation, includes build/dependencies
+https://github.com/openai/codex/commit/5c0b1ac71f2f04016abdfcf43bee7e0c96867f0e
+
+529d965d80a3  Add ChatGPT token stdin authentication to exec-server (#59569)
+  Flags: touches conflicted paths, folded crate adaptation
+https://github.com/openai/codex/commit/529d965d80a36f7b5d9d9ab218d88daf41106748
+
+388aee4b2622  Use runtime authentication across backend request paths (#59572)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/388aee4b26226778701a7fa749354c44f74b4394
+
+f732dce4470e  Enable pane-local image previews in tmux (#59579)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/f732dce4470e2e06952426c6878e286ad427ec7b
+
+695961ee88a2  Enable pets in fullscreen tmux panes with Kitty passthrough (#59580)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/695961ee88a2c84c0919814a4345b94a2d10f3ca
+
+56032e9732aa  Increase shared code-mode host capacity safely (#59590)
+https://github.com/openai/codex/commit/56032e9732aa9776b7f54075ed9333921596cde9
+
+ed8eac40832e  Add keyboard controls for TUI pane resizing and zoom (#59595)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/ed8eac40832e6a79f30eaeb3c521912f231d43eb
+
+edd0d898204e  Add a root-only option for background compaction (#59598)
+https://github.com/openai/codex/commit/edd0d898204eba8397181deae8e4a238d1f7df27
+
+e7f32cf1928a  Add experimental command output deferral to thread item listings (#59601)
+https://github.com/openai/codex/commit/e7f32cf1928a35a9232a633a51c2a03b5a7e2c72
+
+d4902cedbf50  Expose retained command sessions in incremental world state (#59633)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/d4902cedbf508411f6f8bf049cc5919b4edc24f6
+
+86ac09165972  Preserve turn configuration in Guardian scoring and approvals (#59642)
+https://github.com/openai/codex/commit/86ac0916597244a2e67a197822a5483924660ff1
+
+1e9e8bdb0085  Resample Guardian denials with the original request (#59659)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/1e9e8bdb008549fc558ef886791c185c6d3c0814
+
+5141f97cec21  Add original-history evidence snapshots for Guardian V3 (#59669)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/5141f97cec21450bd57f4740c5eeab4a81168600
+
+ac03f42e1a0a  Capture Guardian evidence incrementally with explicit acknowledgements (#59670)
+https://github.com/openai/codex/commit/ac03f42e1a0aac41dd7a918b5a204c8476d0389d
+
+481cb038c25d  Add evidence housekeeping for Guardian v3 (#59671)
+  Flags: touches conflicted paths, includes build/dependencies
+https://github.com/openai/codex/commit/481cb038c25d1c2dabcdfffcbdb6d9cb1ab73f8e
+
+49f0c6022596  Remove the legacy sandbox policy summary helper (#59677)
+  Flags: touches conflicted paths
+https://github.com/openai/codex/commit/49f0c6022596c361fe676a5c4738fb2be34e3a93
+

@@ -1370,20 +1370,16 @@ async fn fetch_http_body_hyper(
                         Err(error) => return Err(HttpFetchError::Https(error)),
                     }
                 }
-                ByteFetchMethod::Get => crate::r::net::https::get_bytes_shared(
-                    https_url.as_str(),
-                    timeout_ms,
-                    max_bytes,
-                )
-                .await
-                .map_err(|err| {
-                    crate::log_warn!(target: "net";
-                        "html_shack: https fetch failed url={} err={}\n",
-                        https_url,
-                        err
-                    );
-                    HttpFetchError::Https(err)
-                })?,
+                ByteFetchMethod::Get => {
+                    let response = crate::r::net::https::get_bytes_response_shared(
+                        https_url.as_str(), timeout_ms, max_bytes,
+                    ).await.map_err(|err| {
+                        crate::log_warn!(target: "net";
+                            "html_shack: https fetch failed url={} err={}\n", https_url, err);
+                        HttpFetchError::Https(err)
+                    })?;
+                    return Ok((response.final_url, response.body));
+                }
                 ByteFetchMethod::Post { .. } => return Err(HttpFetchError::UnsupportedScheme),
             };
             return Ok((https_url, bytes));

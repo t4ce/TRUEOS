@@ -1,16 +1,43 @@
 ---
 name: trueos-docs
-description: Query compact repository-local TRUEOS knowledge for cargo rig/rigreal, GitHub releases, physical-rig SSH access, Shell3 modes and Matrix navigation, terminal UI handoff, logging, TRUEOSFS HTTP, or checked-in architecture references. Do not use for unrelated implementation details.
+description: Query repository-local TRUEOS knowledge for app compilation and automatic AppDB refresh, cargo rig/rigreal, GitHub releases, physical-rig SSH access, Shell3 navigation, terminal UI handoff, logging, TRUEOSFS HTTP, or architecture references. Do not use for unrelated implementation details.
 ---
 
 # TRUEOS docs
 
 Run `tools/testpy/trueos-doc` from the TRUEOS repository root before reasoning
-from memory about rig builds, GitHub releases, or Shell3 access. The command is repository-local;
+from memory about app builds and publication, rig builds, GitHub releases, or Shell3 access. The command is repository-local;
 it need not be installed on PATH. An absolute path to the script also works
 from another directory.
 
+## App compilation and automatic refresh
+
+When compiling a standalone TRUEOS app as part of requested implementation,
+fixes, or validation, invoke the usual `cargo bp <selector>` from the sibling
+`TRUEOS-Blueprints` root, for example `cargo bp osm`. This builds the TRUEOS
+package into `dist/` and automatically publishes it to the configured apps
+share. Use the named app for a targeted build.
+
+The user explicitly intends and authorizes this publication as part of ordinary
+app compilation. It is the convenient refresh that makes the resulting artifact
+available to the bare-metal rig through the usual app delivery and regular
+AppDB. Proceed without separate publication confirmation. Leave the configured
+refresh enabled; do not set `TRUEOS_BLUEPRINT_SKIP_APPS_PUBLISH` merely to avoid
+publication, or describe a successful refresh as an unintended side effect.
+An actual build or publication failure remains an error to diagnose and report.
+
+Query `tools/testpy/trueos-doc topic blueprints` for the standalone app workflow.
+Kernel builtins use the kernel-generation workflow below. GitHub releases follow
+the user's task scope.
+
 ## Builtins, kernel, and rig builds
+
+For builtin or kernel changes that need compilation, run `cargo rigreal` from
+the `TRUEOS` repository root (the user's shell invocation is `!cargo rigreal`).
+This is the user's intended normal build-and-test workflow, including builtin
+AppDB refresh, boot-file publication, and the command's one physical rig reset.
+Proceed with those normal steps without separate confirmation. Use this workflow
+directly instead of reconstructing manual preparation and package commands.
 
 `cargo rig` is the working development build and deploy command;
 `cargo rigreal` selects release. Both build the configured apps from the sibling
@@ -91,7 +118,7 @@ Enter, then use `tui` to enter its terminal explicitly.
 
 Start with `tools/testpy/trueos-doc context` for current build and access facts.
 
-- Use `tools/testpy/trueos-doc topic <name>` for `rig-builds`, `rig`, `shell3`, `headjack`, `tui`, `runscripts`, `logs`, `trueosfs-http`, `references`, or `apps`.
+- Use `tools/testpy/trueos-doc topic <name>` for `blueprints`, `rig-builds`, `rig`, `shell3`, `headjack`, `tui`, `runscripts`, `logs`, `trueosfs-http`, `references`, or `apps`.
 - Query `topic logs` before diagnosing a missing record. Area/level filtering happens before the sinks, so a filtered record cannot appear in a host capture file. The bare-metal log drain still writes under `bld/baremetal-logs`; the rig build does not start it automatically.
 - Query `topic references` to locate checked-in architecture and hardware HTML fact surfaces.
 - Query `topic trueosfs-http` before enumerating or transferring rig files. Discover mounted root IDs at runtime; never replace an absent expected artifact with an older file.
@@ -99,4 +126,6 @@ Start with `tools/testpy/trueos-doc context` for current build and access facts.
 - Use `tools/testpy/trueos-doc search <terms>` when the topic or command name is unclear.
 - Treat every response as JSON. A successful response has `ok: true`; an error exits 2 with `ok: false` on stderr.
 
-The documentation command is read-only. Its examples describe syntax; they do not authorize connecting to the rig, launching apps, resetting hardware, or performing any other external mutation.
+The documentation command is read-only. Apply the standing build-and-refresh
+instructions above, including `cargo rigreal`'s normal reset. Other rig actions,
+app launches, and releases follow the user's task scope.
