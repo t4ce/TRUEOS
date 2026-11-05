@@ -22,11 +22,11 @@ use super::*;
 #[derive(Clone,Copy,Debug,PartialEq)] struct GpgpuRgba8Surface { gpu:u64, bytes:usize, pitch_bytes:u32 }
 #[derive(Clone,Copy)] struct Allocation(GpgpuRgba8Surface);
 impl Allocation { fn surface(&self)->GpgpuRgba8Surface { self.0 } }
-struct Rect { x:i32, y:i32, width:u32, height:u32 }
+#[derive(Clone,Copy)] struct GpgpuRect { x:i32, y:i32, width:u32, height:u32 }
 struct EditLifeState {
     cells:[Allocation;2], read:usize, glyphs:Allocation, previous:Allocation, font:Allocation,
     canonical:Allocation, geometry_uniforms:Vec<u32>, width:u32, height:u32,
-    viewport:Rect, grid_width:u32, grid_height:u32, columns:u32, rows:u32,
+    viewport:GpgpuRect, grid_width:u32, grid_height:u32, columns:u32, rows:u32,
     cell_width:u32, cell_height:u32,
 }
 struct Artifact { bin_sha256:[u8;32] }
@@ -44,7 +44,7 @@ fn dma_flush(_: *const u8, _:usize) {}
 fn direct_rcs_write_interface_descriptor_at(_:DirectRcsState,idd:usize,binding:usize,
     entry:u32,count:u32,cross:u32)->bool {
     assert_eq!(idd,EDIT_LIFE_IDD); assert_eq!(binding,EDIT_LIFE_BINDING);
-    assert_eq!(count,8); assert_eq!(cross,4); true
+    assert_eq!(count,8); assert_eq!(cross,6); true
 }
 fn direct_rcs_write_buffer_surface_state(_:DirectRcsState,offset:usize,gpu:u64,bytes:usize)->bool {
     BINDINGS.lock().unwrap().push((offset,gpu,bytes)); true
@@ -80,13 +80,14 @@ pub(super) fn run() {
         // 600 canonical texels require 2432-byte rows with 64-byte alignment.
         canonical:allocation(0x150000,2432*220,2432),
         geometry_uniforms:(0..32).map(|index|1000+index).collect(),
-        width:1700,height:800,viewport:Rect{x:11,y:32,width:1689,height:748},
+        width:1700,height:800,viewport:GpgpuRect{x:11,y:32,width:1689,height:748},
         grid_width:600,grid_height:220,columns:100,rows:20,cell_width:17,cell_height:38,
     };
     let source=GpgpuRgba8Surface{gpu:0x160000,bytes:8192*800,pitch_bytes:8192};
     let dst=GpgpuRgba8Surface{gpu:0x170000,bytes:8192*800,pitch_bytes:8192};
     let upload=UploadedKernelArtifact{bin_sha256:[3;32],gpu:EDIT_LIFE_RGBA8_GPU,bytes:1};
-    for mode in 0..5 {
+    let rect=GpgpuRect{x:3,y:7,width:99,height:24};
+    for mode in 0..6 {
         for probe in [false,true] {
             let mut batch_storage=vec![0xfdfdfdfdfdfdfdfdu64;512];
             let mut result_storage=vec![0xfefefefefefefefeu64;512];
@@ -95,7 +96,7 @@ pub(super) fn run() {
             let state=DirectRcsState{batch_virt:batch.as_mut_ptr(),result_virt:result.as_mut_ptr(),
                 gpu_va:GpuVa{batch:0x08900000,result:0x08840000}};
             BINDINGS.lock().unwrap().clear();
-            assert!(encode_edit_life_batch(state,upload,&life,dst,source,mode,true,600,9,7,probe));
+            assert!(encode_edit_life_batch(state,upload,&life,dst,source,mode,true,rect,600,9,7,probe));
             let input=if mode==2 {life.canonical.surface()} else {life.font.surface()};
             let output=if mode==4 {life.canonical.surface()} else {dst};
             let expected=[life.cells[1].surface(),life.cells[0].surface(),life.glyphs.surface(),
@@ -107,11 +108,18 @@ pub(super) fn run() {
             }
             assert_eq!(bindings[7],(EDIT_LIFE_SURFACES+7*64,
                 state.gpu_va.batch+EDIT_LIFE_UNIFORMS as u64,128));
-            let payload=words(&batch,EDIT_LIFE_PAYLOAD,32);
+            let payload=words(&batch,EDIT_LIFE_PAYLOAD,48);
             assert_eq!(payload[1],9,"global row offset must survive each bounded walker");
             for (index,(_,gpu,_)) in bindings.iter().enumerate() {
                 assert_eq!(u64::from(payload[12+index*2])|(u64::from(payload[13+index*2])<<32),*gpu);
             }
+            assert_eq!(&payload[28..48],&[1700,800,11,32,1689,748,17,38,
+                2432,600,220,mode,3,7,99,24,8192,8192,0,0]);
+            let local_ids=&batch[EDIT_LIFE_PAYLOAD+192..EDIT_LIFE_PAYLOAD+288];
+            for lane in 0..16 {
+                assert_eq!(u16::from_le_bytes(local_ids[lane*2..lane*2+2].try_into().unwrap()),lane as u16);
+            }
+            assert!(local_ids[32..].iter().all(|&byte|byte==0));
             let params=words(&batch,EDIT_LIFE_UNIFORMS,32);
             assert_eq!(&params[..16],&[mode,1,1700,800,11,32,1689,748,600,220,100,20,
                 source.pitch_bytes,output.pitch_bytes,17,38]);
@@ -123,7 +131,7 @@ pub(super) fn run() {
             assert!(result[EDIT_LIFE_RESULT_USED_BYTES..].iter().all(|&byte|byte==0xfe));
         }
     }
-    println!("native EditLife encoder passed: all 5 modes, actual bindings, padded canonical pitch, payload, bounded footprint");
+    println!("native EditLife encoder passed: all 6 modes, actual bindings, direct geometry, padded canonical pitch, payload, bounded footprint");
 }
 }
 fn dma_flush(_: *const u8, _:usize) {}

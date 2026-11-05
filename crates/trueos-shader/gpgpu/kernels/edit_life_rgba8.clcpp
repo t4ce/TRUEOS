@@ -5,7 +5,7 @@
 // Cells are uint2: x = alive(bit0), trail(bits8..15), born(bit16);
 // y = straight RGB bytes. Black remains alive independently of its color.
 // Params, all uints:
-//   0 mode (0 canonical seed/emit, 1 step, 2 display copy, 3 baseline, 4 resolve)
+//   0 mode (0 canonical seed/emit, 1 step, 2 expand, 3 baseline, 4 resolve, 5 chrome)
 //   1 reset, 2 page width, 3 page height, 4 viewport left, 5 viewport top,
 //   6 viewport width, 7 viewport height, 8 grid width, 9 grid height,
 //  10 terminal columns, 11 terminal rows, 12 source RGBA8 pitch,
@@ -17,6 +17,8 @@
 // opaque selection/caret backgrounds and bit1 adds an underline. Shared 6x11
 // hex masks are an immutable uint4 table uploaded once. Previous input stores
 // only compact uint2(index, flags) pairs, not page pixels.
+// The five by-value display vectors carry page, viewport/cell, canonical image,
+// chrome rectangle and physical pitches. Expansion/chrome never read params.
 // For mode 0 set reset on first input/scroll, otherwise submit only on an
 // emission revision. Mode 3 follows EVERY successful input upload, including
 // whitespace-only input. Every mode is a separate, ordered GPU walker.
@@ -42,14 +44,6 @@ static inline float3 rgb_float(uint packed) {
 static inline uint glyph_coverage(__global const uint4 *font, uint2 glyph, uint native_x, uint native_y) {
     return trueos_edit_hex_coverage(font, glyph.x, native_x, native_y)
         | (((glyph.y & 2u) != 0u && native_y == 10u) ? 255u : 0u);
-}
-
-// n <= 4096*2160 and d <= 256 imply n*(d-1) < 2^32. In this
-// domain mul_hi(n, ceil(2^32/d)) is exact, including division boundaries.
-// Physical cell size is constant for the page; never run integer division
-// again for each glyph tap and each output pixel.
-static inline uint fast_cell_div(uint n, uint d, uint reciprocal) {
-    return d == 1u ? n : mul_hi(n, reciprocal);
 }
 
 static inline uint glyph_ink(__global const uint4 *glyphs, __global const uint4 *font,
@@ -85,10 +79,48 @@ __kernel void edit_life_rgba8(
     __global const uint4 *font,
     __global const uint *foreground,
     __global uint *output,
-    __global const uint *params)
+    __global const uint *params,
+    uint4 display_page,
+    uint4 display_viewport,
+    uint4 display_image,
+    uint4 display_rect,
+    uint4 display_pitch)
 {
     uint x = get_global_id(0), y = get_global_id(1);
-    uint mode = params[0], gw = params[8], gh = params[9];
+    uint mode = display_image.w, gw = display_image.y, gh = display_image.z;
+    if (mode == 2u) {
+        // One lane owns one canonical texel and its complete, disjoint screen
+        // rectangle. No physical-pixel workgroups or global geometry loads.
+        if (x >= gw || y >= gh) return;
+        uint column = x / 6u, row = y / 11u;
+        uint native_x = x - column * 6u, native_y = y - row * 11u;
+        uint left = column * display_viewport.z + (native_x * display_viewport.z + 5u) / 6u;
+        uint right = column * display_viewport.z + ((native_x + 1u) * display_viewport.z + 5u) / 6u;
+        uint top = row * display_viewport.w + (native_y * display_viewport.w + 10u) / 11u;
+        uint bottom = row * display_viewport.w + ((native_y + 1u) * display_viewport.w + 10u) / 11u;
+        if (left >= display_viewport.x || top >= display_viewport.y) return;
+        right = right < display_viewport.x ? right : display_viewport.x;
+        bottom = bottom < display_viewport.y ? bottom : display_viewport.y;
+        __global const uint *canonical = (__global const uint *)font;
+        uint pixel = canonical[y * (display_image.x >> 2) + x];
+        for (uint py = top; py < bottom; ++py) {
+            uint destination = (display_page.w + py) * (display_pitch.y >> 2) + display_page.z;
+            for (uint px = left; px < right; ++px) output[destination + px] = pixel;
+        }
+        return;
+    }
+    if (mode == 5u) {
+        // Only the four strips outside the viewport, two pixels per lane.
+        // Source chrome keeps the exact opaque-alpha behavior of the old copy.
+        uint base_x = x * 2u;
+        if (base_x >= display_rect.z || y >= display_rect.w) return;
+        uint py = display_rect.y + y;
+        uint source = py * (display_pitch.x >> 2) + display_rect.x + base_x;
+        uint destination = py * (display_pitch.y >> 2) + display_rect.x + base_x;
+        output[destination] = foreground[source] | 0xff000000u;
+        if (base_x + 1u < display_rect.z) output[destination + 1u] = foreground[source + 1u] | 0xff000000u;
+        return;
+    }
     if (mode == 0u || mode == 1u) {
         if (x >= gw || y >= gh) return;
         uint at = y * gw + x;
@@ -144,24 +176,6 @@ __kernel void edit_life_rgba8(
         if (x >= params[10] || y >= params[11]) return;
         uint4 glyph = glyphs[y * params[10] + x];
         previous_glyphs[y * params[10] + x] = (uint2)(glyph.x, glyph.w);
-        return;
-    }
-    if (mode == 2u) {
-        // Display expansion only. All font lookup, Life shading and composition
-        // have already happened exactly once on the canonical 6x11 grid.
-        if (x >= params[2] || y >= params[3]) return;
-        uint destination = y * (params[13] >> 2) + x;
-        if (x < params[4] || y < params[5] || x - params[4] >= params[6] || y - params[5] >= params[7]) {
-            output[destination] = foreground[y * (params[12] >> 2) + x] | 0xff000000u;
-            return;
-        }
-        uint px = x - params[4], py = y - params[5];
-        uint column = fast_cell_div(px, params[14], params[16]);
-        uint row = fast_cell_div(py, params[15], params[17]);
-        uint native_x = fast_cell_div((px - column * params[14]) * 6u, params[14], params[16]);
-        uint native_y = fast_cell_div((py - row * params[15]) * 11u, params[15], params[17]);
-        __global const uint *canonical = (__global const uint *)font;
-        output[destination] = canonical[(row * 11u + native_y) * (params[18] >> 2) + column * 6u + native_x];
         return;
     }
     if (mode != 4u || x >= gw || y >= gh) return;

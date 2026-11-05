@@ -5,11 +5,11 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "6da8e0cd10e8ee9dc6c6881c6aa94727d7bf90f91a1b01aeb8c3b2dcfb781a8d",
-      "size_bytes": 77288,
+      "sha256": "5e637cb126174dfb43b571713a174a96b997b908084ab76b7f13ecba5017187a",
+      "size_bytes": 77040,
       "type": "relocatable",
-      "ze_info_section_offset": 70656,
-      "ze_info_section_size": 5732
+      "ze_info_section_offset": 68896,
+      "ze_info_section_size": 7244
     },
     "kernels": [
       {
@@ -47,7 +47,7 @@
             "bti": 7
           }
         ],
-        "cross_thread_data_bytes": 128,
+        "cross_thread_data_bytes": 192,
         "execution_env": {
           "eu_thread_count": 7,
           "grf_count": 128,
@@ -203,7 +203,7 @@
           },
           {
             "access": "readonly",
-            "address_mode": "stateless",
+            "address_mode": "stateful",
             "address_space": "global",
             "arg_index": 7,
             "kind": "by_pointer",
@@ -215,16 +215,54 @@
                 "address_space": "global",
                 "offset_bytes": 0,
                 "size_bytes": 0
-              },
-              {
-                "access": "readonly",
-                "address_mode": "stateless",
-                "address_space": "global",
-                "offset_bytes": 104,
-                "size_bytes": 8
               }
             ],
             "size_bytes": 8
+          },
+          {
+            "access": "none",
+            "address_mode": "none",
+            "address_space": "private",
+            "arg_index": 8,
+            "kind": "by_value",
+            "offset_bytes": 112,
+            "size_bytes": 16
+          },
+          {
+            "access": "none",
+            "address_mode": "none",
+            "address_space": "private",
+            "arg_index": 9,
+            "kind": "by_value",
+            "offset_bytes": 128,
+            "size_bytes": 16
+          },
+          {
+            "access": "none",
+            "address_mode": "none",
+            "address_space": "private",
+            "arg_index": 10,
+            "kind": "by_value",
+            "offset_bytes": 144,
+            "size_bytes": 16
+          },
+          {
+            "access": "none",
+            "address_mode": "none",
+            "address_space": "private",
+            "arg_index": 11,
+            "kind": "by_value",
+            "offset_bytes": 160,
+            "size_bytes": 16
+          },
+          {
+            "access": "none",
+            "address_mode": "none",
+            "address_space": "private",
+            "arg_index": 12,
+            "kind": "by_value",
+            "offset_bytes": 176,
+            "size_bytes": 16
           }
         ],
         "per_thread_data_bytes": 96,
@@ -302,17 +340,57 @@
             "name": "params",
             "type_name": "uint*;8",
             "type_qualifiers": "const"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__private",
+            "index": 8,
+            "name": "display_page",
+            "type_name": "uint4;16",
+            "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__private",
+            "index": 9,
+            "name": "display_viewport",
+            "type_name": "uint4;16",
+            "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__private",
+            "index": 10,
+            "name": "display_image",
+            "type_name": "uint4;16",
+            "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__private",
+            "index": 11,
+            "name": "display_rect",
+            "type_name": "uint4;16",
+            "type_qualifiers": "NONE"
+          },
+          {
+            "access_qualifier": "NONE",
+            "address_qualifier": "__private",
+            "index": 12,
+            "name": "display_pitch",
+            "type_name": "uint4;16",
+            "type_qualifiers": "NONE"
           }
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 17048,
+          "entry_size": 17136,
           "section_alignment": 0,
           "section_name": ".text.edit_life_rgba8",
           "section_offset": 64,
-          "section_size": 17216,
-          "sha256": "db08d22705c407ddc375464395e27dd8d3b166352707b5bdb4c6b43d021baed5",
-          "symbol_size": 17048,
+          "section_size": 17280,
+          "sha256": "b3987a6488b25e4bcf65d58b1c48ecf7bc70405cfe33cb8971c9088ff33a8fe6",
+          "symbol_size": 17136,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -328,10 +406,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 17352,
-      "embedded_section_size": 53208,
-      "sha256": "6f4ea1956d702f776a14e16919dac818a8c16f7433c14a95381ba273f591fb6d",
-      "size_bytes": 53208
+      "embedded_section_offset": 17416,
+      "embedded_section_size": 51380,
+      "sha256": "816c484184b6d23e8c708c55f6c3e769303cf90ad2dd30ff60c45716134c94ce",
+      "size_bytes": 51380
     }
   },
   "provenance": {
@@ -538,8 +616,8 @@
       },
       {
         "path": "TRUEOS/crates/trueos-shader/gpgpu/kernels/edit_life_rgba8.clcpp",
-        "sha256": "ab005a17d5c969747589cf28012d90e02986fb43ffde0b111a411b44a30bcdc7",
-        "size_bytes": 9734
+        "sha256": "1dd1dcdcfcd8fa479c808429f8e7c285ab9e86077041af45bc6d70ff4c6449be",
+        "size_bytes": 10585
       }
     ],
     "language": "C++ for OpenCL",

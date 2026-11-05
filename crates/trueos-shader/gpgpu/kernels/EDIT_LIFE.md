@@ -9,9 +9,9 @@ the reference for outputs without a compatible native backend. A native
 initialization failure on supported hardware stops the effect rather than
 silently selecting the CPU implementation.
 
-The source has one SIMD16 entry point and five modes: direct bitmap seed/additive
+The source has one SIMD16 entry point and six modes: direct bitmap seed/additive
 input (0), Conway generation (1), display expansion (2), input comparison-baseline
-copy (3), and canonical text/background resolution (4).
+copy (3), canonical text/background resolution (4), and opaque chrome copy (5).
 The comment at the top of the source specifies every buffer and uniform.
 Life cells occupy two u32 words, separating binary occupancy from RGB, trail
 strength and birth. Animation stays at ten generations per second, with fixed
@@ -51,13 +51,17 @@ the glyph composition, color, trail and neighboring-cell glow once per canonical
 pixel. Its RGBA image stays cached until input, viewport or Life state changes.
 Several generations require only one final resolution pass.
 
-The physical display pass performs only integer coordinate mapping, one canonical
-RGBA load and one output store inside the editor. For each axis it uses
-`(pixel/cell_size)*native_size + (pixel%cell_size)*native_size/cell_size`, where
-`native_size` is 6 or 11. This preserves each glyph's exact nearest-neighbor
-expansion even when the final physical cell is clipped; globally scaling the
-whole grid would drift relative to the font. Physical cells must be at least
-6x11. Canonical RGBA accesses use the allocated pitch, including row padding.
+The display pass launches one lane per canonical texel, loads its RGBA once,
+and broadcasts it to its complete screen rectangle. On each axis native pixel
+`k` owns `[ceil(k*cell_size/native_size), ceil((k+1)*cell_size/native_size))`
+within its character cell, where `native_size` is 6 or 11. This is the exact
+inverse of the CPU's floor-based nearest-neighbor lookup, including clipped
+final cells. There are no physical-pixel workgroups inside the editor, global
+geometry-buffer reads, font lookups or lighting calculations in this pass.
+Five by-value vectors carry the display geometry in the thread payload.
+Four disjoint chrome strips are copied separately, two pixels per lane, forcing
+alpha 255. Physical cells must be at least 6x11. Canonical RGBA accesses use the
+allocated pitch, including row padding.
 Invisible pixels in a clipped final cell are zeroed during seeding and every
 generation, so hidden glyph bits cannot influence the visible world.
 
@@ -130,7 +134,10 @@ no PTE writes; changed mappings are preflighted, published and invalidated
 before use. Borrowed source/destination imports are removed after retirement.
 Each ordered pass is split into independently retired row chunks, bounded by
 64K launched lanes for seed/generation/comparison/resolution and 128K for
-display expansion. Bounds include padded SIMD16 lanes. The generated descriptor
+display expansion. Expansion chunks also bound the actual expanded pixel writes
+to 128K, using the exact physical span of their canonical rows. Chrome copy is
+bounded to 64K lanes and at most two writes per lane. Bounds include padded
+SIMD16 lanes. The generated descriptor
 disables thread preemption, so a single whole-page walker would bypass this
 scheduling boundary. Every chunk requires both its completion marker and the
 saved context HEAD reaching the published TAIL before batch/payload reuse.
@@ -145,8 +152,8 @@ read bytes, alongside existing native submission timings.
 
 Runtime `edit-life: capture`, `edit-life: enabled`, and `edit-life timing` logs
 separate compact text capture, initial allocation/upload, page-table setup, seeding,
-baseline copying, generation, canonical resolution (`resolve_ms`) and physical
-expansion (`upscale_ms`). These timings use the `ui4/edit-life` log
+baseline copying, generation, canonical resolution (`resolve_ms`), physical
+expansion (`upscale_ms`) and chrome (`chrome_ms`). These timings use the `ui4/edit-life` log
 target so they remain visible with the Blueprint/HV diagnostic profile.
 
 Native initialization, input, render or frame-publication failure latches the
@@ -318,38 +325,66 @@ before treating the aggregated GPU phases as a complete measurement. These
 markers distinguish shader execution from submission overhead on the next boot.
 They do not weaken timeout, quarantine or resource ownership rules.
 
-The production reciprocal helper passes 1,164,664 divisor/boundary/random cases.
+The historical reciprocal helper passed 1,164,664 divisor/boundary/random cases.
 In that revision the native geometry builder matched the original wide arithmetic,
 and all 134 full-shader strict snapshots matched deployed revision
 `17270fef458e72deaf06bf23cb1b0cf28de3dea8` byte for byte, including complete
 4096x2160 composition, input/reset/generation state, text and alpha. The optional
 reference snapshot was `/tmp/trueos-edit-fast/deployed.clcpp`. That comparison
-predates the intentional canonical-grid change; the current five-mode fixture
+predates the intentional canonical-grid change; the current six-mode fixture
 validates the new geometry and pure-copy behavior instead.
 
 ## Canonical bitmap pipeline
 
 The current source removes full-resolution font lookup and lighting altogether.
-Its 32-word parameter block contains only geometry, exact division reciprocals,
-canonical image pitch and clipped visible extents; the seed-axis table is gone.
-The encoder touches 3,200 batch bytes and 256 result bytes per chunk. World,
+Its 32-word parameter block contains canonical input geometry, image pitch and
+clipped visible extents; the seed-axis table is gone. Display expansion and
+chrome instead take their geometry directly from the cross-thread payload.
+The encoder touches 3,264 batch bytes and 256 result bytes per chunk. World,
 font, baseline and canonical-image mappings remain retained, with the same
 borrowed-frame retirement and quarantine rules described above.
 
 Mode 4 binds the retained canonical image as its output; mode 2 reads that
 image through the font binding, which it no longer needs for glyph lookup.
-The same eight explicit pointer arguments are retained. The generated contract
-contains three implicit payload arguments; compiler metadata, rather than an
+The same eight explicit pointer arguments are retained, followed by five
+16-byte by-value vectors (page, viewport/cell, canonical image/mode, chrome
+rectangle, and physical pitches). Cross-thread data is 192 bytes; local IDs
+remain 96 bytes. The generated contract contains three implicit payload
+arguments; compiler metadata, rather than an
 assumed count, defines their exact offsets. Each pass fully retires before its
 buffers are consumed or rebound by the next pass.
 
-The current executable hash is
+The first canonical executable hash was
 `6da8e0cd10e8ee9dc6c6881c6aa94727d7bf90f91a1b01aeb8c3b2dcfb781a8d`.
+The expanded-texel executable is
+`5e637cb126174dfb43b571713a174a96b997b908084ab76b7f13ecba5017187a`.
 Two clean bake roots produce identical artifacts and `ocloc validate` accepts
-the executable. It uses SIMD16, 128 GRFs, no scratch and no SLM. The native entry
-is 17,048 bytes. These checks establish the artifact and dispatch contract;
+the executable. It uses SIMD16, 128 GRFs, no scratch and no SLM. Its native entry
+size is recorded in the generated contract. These checks establish the dispatch contract;
 they do not establish physical GPU performance. Compare `resolve_ms`,
-`upscale_ms` and the corresponding mode-4/mode-2 GPU probes after deployment.
+`upscale_ms`, `chrome_ms` and the mode-4/mode-2/mode-5 GPU probes after deployment.
+Sampled probes include the actual admitted `launched_workitems` for each mode.
+
+The first canonical boot confirmed a display-expansion bottleneck: at 1700x800
+after F12, `upscale_ms` was 212–255 ms while `resolve_ms` was 5–26 ms. Sampled
+mode-2 walker time alone was 212,515–229,912 microseconds, versus about 12 ms
+of queue time. Before F12, the same copy walker took about 1.6 seconds. The
+canonical shading reduction therefore did not remove the dominant cost.
+
+Matched post-F12 generation samples have median 290 ms total, versus 266 ms
+for the earlier relaxed-math build: about 9% slower. The display pass fell
+from 245 to 227 ms, but the extra resolve pass and larger-world stepping erased
+the gain. Startup fell from about 2180 to 1834 ms; a single page-update sample
+also improved, so these results do not establish a uniform regression across
+all actions. Parsed evidence is in `/tmp/trueos-edit-canonical-regression.json`.
+
+IGA showed ten global geometry-buffer reads in the old copy branch and a
+synchronized global fence before every hardware thread's EOT. The 1700x800
+copy launched 85,600 SIMD16 hardware threads. Expanding canonical texels and
+copying only chrome strips reduces those threads and fences, without changing
+the output pixels or synchronization proof. The fence's precise latency is
+not isolated by the existing measurements; this is a measured bottleneck with
+a structural correction, not a demonstrated runtime speedup yet.
 
 Target runtime speedup remains unmeasured for this candidate. The inherited VFE
 configuration is unchanged: Intel's own Gen12LP preamble also uses one large
@@ -473,25 +508,32 @@ Rust, canonical source bits and the actual compiled C++ sampler, including
 noninteger physical cell sizes, underlining and all 66 mask bits. Paint tests
 exercise metadata-only font toggles and both-buffer invalidation.
 Native dispatch tests compile the production row partitioner and dispatch
-method across 360 padded dimensions/modes, checking coverage, retirement before
+method across 432 padded dimensions/modes, checking coverage, retirement before
 reuse and stopping after a failed chunk. Packet tests compile the actual shared
-prologue. Encoder tests execute the actual five-mode encoder against bounded
-storage, inspecting all eight bindings, padded canonical pitch, uniform payloads
-and the exact batch/result clear ranges. Import-retirement tests check exact physical ownership, missing and
+prologue. Expansion tests independently invert the physical nearest mapping for
+29 row-partition cases and check the exact write/lane bounds; 108 chrome/body
+partitions cover every physical pixel exactly once. Encoder tests execute the
+actual six-mode encoder against bounded storage, inspecting all eight bindings,
+the five direct vectors, padded canonical pitch, uniform/local-ID payloads and
+the exact batch/result clear ranges. Import-retirement tests check exact physical ownership, missing and
 partial imports, cache-policy role reuse, pending work and failure retention.
 Lane tests exercise priority, identity, nonoverlapping control storage,
 optional boot admission, exact quarantine and private-resource retirement.
 Registration tests exercise failure latching, source freshness, pause/resume,
 frame detachment and cleanup wakeups using the production lifecycle functions.
 The full-shader host math test compiles strict and fast variants with memory
-and undefined-behavior sanitizers. Its 245 snapshots cover all five modes, including padded
-launches, clipped cells and viewport edges. It also checks the display pass
-against a pure integer reference copy independently of canonical shading.
+and undefined-behavior sanitizers. Its 599 snapshots cover all six modes,
+including padded launches, clipped cells and viewport edges. It checks body
+expansion and chrome strips against the prior physical-pixel reference copy,
+and runs both display branches with all unused input pointers null.
+The interval test compiles the production expansion calculations and checks
+257,451 axis cases, 13,629,465 rectangles and 80,608,265 output pixels across
+all supported cell sizes, clipped edges and padded launches with ASan/UBSan.
 Integer state, glyph baseline,
 alpha, opaque ink and chrome must remain exact; it reports measured background
 RGB differences. This host sensitivity check does not reproduce IGC's native
 instruction semantics or measure Intel GPU performance.
-The canonical fixture compares 101,099,600 RGBA bytes between strict and fast
+The canonical fixture compares 113,104,724 RGBA bytes between strict and fast
 host math; the current run has zero differing RGB bytes and exact alpha.
 
 An optional standalone reference timing command is

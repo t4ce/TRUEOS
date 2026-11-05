@@ -2,7 +2,7 @@
 """Compare the complete production Conway shader under strict and fast host math.
 
 OpenCL address spaces, vector constructors and builtins are adapted to host
-C++; shader arithmetic and all five kernel branches remain unchanged. The
+C++; shader arithmetic and all six kernel branches remain unchanged. The
 executables run with address/undefined-behavior sanitizers and padded launches.
 This checks host floating-point sensitivity, not native Intel GPU performance
 or exact equivalence to IGC's -cl-fast-relaxed-math implementation.
@@ -120,29 +120,40 @@ static void scenario(uint width, uint height, uint left, uint top, uint vp_width
     }
     const auto immutable_source = source, immutable_font = font;
     uint sequence = 0;
-    auto run = [&](uint mode, uint reset) {
+    auto run = [&](uint mode, uint reset, uint4 rect = uint4{0, 0, 0, 0}) {
         p[0] = mode; p[1] = reset;
         const auto before_read = read, before_write = write, before_previous = previous;
         const auto before_output = output, before_canonical = canonical, before_glyphs = glyphs;
         const std::vector<uint> before_params(p, p + 32);
-        const uint domain_width = mode == 3 ? columns : mode == 2 ? width : grid_width;
-        const uint domain_height = mode == 3 ? rows : mode == 2 ? height : grid_height;
+        const uint domain_width = mode == 3 ? columns : mode == 5 ? (rect[2] + 1) / 2 : grid_width;
+        const uint domain_height = mode == 3 ? rows : mode == 5 ? rect[3] : grid_height;
+        const uint4 display_page = {width, height, left, top};
+        const uint4 display_viewport = {vp_width, vp_height, cell_width, cell_height};
+        const uint4 display_image = {canonical_pitch * 4, grid_width, grid_height, mode};
+        const uint4 display_pitch = {source_pitch * 4, output_pitch * 4, 0, 0};
+        const bool display = mode == 2 || mode == 5;
         // Hardware launches SIMD16-rounded X; extra Y invocations exercise
         // every branch's guard without trusting exact dispatch dimensions.
         for (global_y = 0; global_y < domain_height + 3; ++global_y) {
             for (global_x = 0; global_x < ((domain_width + 15) / 16) * 16; ++global_x) {
-                edit_life_rgba8(reinterpret_cast<const uint2*>(read.data()),
-                    reinterpret_cast<uint2*>(write.data()), reinterpret_cast<const uint4*>(glyphs.data()),
-                    reinterpret_cast<uint2*>(previous.data()),
-                    reinterpret_cast<const uint4*>(mode == 2 ? canonical.data() : font.data()),
-                    source.data(), mode == 4 ? canonical.data() : output.data(), p);
+                // The display branches must depend only on their by-value
+                // geometry and image/chrome inputs. Null unused resources
+                // make an accidental glyph/world/global-param read fail.
+                edit_life_rgba8(display ? nullptr : reinterpret_cast<const uint2*>(read.data()),
+                    display ? nullptr : reinterpret_cast<uint2*>(write.data()),
+                    display ? nullptr : reinterpret_cast<const uint4*>(glyphs.data()),
+                    display ? nullptr : reinterpret_cast<uint2*>(previous.data()),
+                    reinterpret_cast<const uint4*>(mode == 2 ? canonical.data() : mode == 5 ? nullptr : font.data()),
+                    mode == 2 ? nullptr : source.data(), mode == 4 ? canonical.data() : output.data(),
+                    display ? nullptr : p,
+                    display_page, display_viewport, display_image, rect, display_pitch);
             }
         }
         assert(read == before_read && glyphs == before_glyphs && source == immutable_source && font == immutable_font);
         assert(std::equal(p, p + 32, before_params.begin()));
         if (mode != 0 && mode != 1) assert(write == before_write);
         if (mode != 3) assert(previous == before_previous);
-        if (mode != 2) assert(output == before_output);
+        if (mode != 2 && mode != 5) assert(output == before_output);
         if (mode != 4) assert(canonical == before_canonical);
         if (mode == 0 || mode == 1) {
             for (uint y = 0; y < grid_height; ++y) for (uint x = 0; x < grid_width; ++x) {
@@ -189,7 +200,7 @@ static void scenario(uint width, uint height, uint left, uint top, uint vp_width
                 uint pixel = output[y * output_pitch + x];
                 if (x >= width) assert(pixel == 0xa5b6c7d8u);
                 else if (x < left || y < top || x - left >= vp_width || y - top >= vp_height)
-                    assert(pixel == (source[y * source_pitch + x] | 0xff000000u));
+                    assert(pixel == before_output[y * output_pitch + x]);
                 else {
                     uint px = x - left, py = y - top;
                     uint gx = px / cell_width * 6 + px % cell_width * 6 / cell_width;
@@ -203,34 +214,71 @@ static void scenario(uint width, uint height, uint left, uint top, uint vp_width
                 assert(2559 * grid_width / vp_width != 903); // Global scaling would visibly drift.
             }
         }
+        if (mode == 5) {
+            for (uint y = 0; y < height; ++y) for (uint x = 0; x < output_pitch; ++x) {
+                const bool inside = x >= rect[0] && y >= rect[1]
+                    && x - rect[0] < rect[2] && y - rect[1] < rect[3];
+                assert(output[y * output_pitch + x] == (inside
+                    ? source[y * source_pitch + x] | 0xff000000u : before_output[y * output_pitch + x]));
+            }
+        }
         uint header[] = {width, height, mode, sequence++};
         assert(std::fwrite(header, sizeof(uint), 4, stdout) == 4);
         words(write); words(previous);
         words(mode == 4 ? canonical : std::vector<uint>{});
-        words(mode == 2 ? output : std::vector<uint>{});
+        std::vector<uint> display_result;
+        if (mode == 2) display_result = output;
+        if (mode == 5) for (uint y = rect[1]; y < rect[1] + rect[3]; ++y)
+            for (uint x = rect[0]; x < rect[0] + rect[2]; ++x)
+                display_result.push_back(output[y * output_pitch + x]);
+        words(display_result);
         if (mode == 0 || mode == 1) read.swap(write);
     };
+    auto present = [&] {
+        // Poison every presentation, so unchanged previous chrome or viewport
+        // pixels cannot hide an omitted strip or incomplete expansion.
+        std::fill(output.begin(), output.end(), 0xa5b6c7d8u);
+        run(2, 0);
+        const uint4 strips[] = {{0, 0, width, top}, {0, top + vp_height, width, height - top - vp_height},
+            {0, top, left, vp_height}, {left + vp_width, top, width - left - vp_width, vp_height}};
+        for (uint4 strip : strips) if (strip[2] && strip[3]) run(5, 0, strip);
+        for (uint y = 0; y < height; ++y) for (uint x = 0; x < output_pitch; ++x) {
+            uint expected = 0xa5b6c7d8u;
+            if (x < width) {
+                expected = source[y * source_pitch + x] | 0xff000000u;
+                if (x >= left && y >= top && x - left < vp_width && y - top < vp_height) {
+                    const uint px = x - left, py = y - top;
+                    const uint gx = px / cell_width * 6 + px % cell_width * 6 / cell_width;
+                    const uint gy = py / cell_height * 11 + py % cell_height * 11 / cell_height;
+                    expected = canonical[gy * canonical_pitch + gx];
+                }
+            }
+            assert(output[y * output_pitch + x] == expected); // Exact previous physical-domain copy.
+        }
+    };
     // Varied initial world exercises lighting even on tiny glyph inputs.
-    run(4, 0); run(2, 0);
+    run(4, 0); present();
     if (composite_only) return;
-    run(0, 1); run(3, 0); run(4, 0); run(2, 0);
-    for (uint generation = 0; generation < 3; ++generation) { run(1, 0); run(4, 0); run(2, 0); }
+    run(0, 1); run(3, 0); run(4, 0); present();
+    for (uint generation = 0; generation < 3; ++generation) { run(1, 0); run(4, 0); present(); }
     for (uint i = 0; i < columns * rows; i += 3) {
         glyphs[i * 4] = glyph_ids[(i + 5) % glyph_ids.size()];
         glyphs[i * 4 + 3] ^= 2u;
     }
-    run(0, 0); run(3, 0); run(4, 0); run(2, 0);
+    run(0, 0); run(3, 0); run(4, 0); present();
     // Whitespace-only changes advance the baseline without emitting; the
     // unchanged input then emits nothing, and reset clears the visible world.
     for (uint i = 0; i < columns * rows; ++i) { glyphs[i * 4] = space; glyphs[i * 4 + 3] = 0; }
-    run(3, 0); run(0, 0); run(4, 0); run(2, 0); run(0, 1); run(3, 0); run(4, 0); run(2, 0);
+    run(3, 0); run(0, 0); run(4, 0); present(); run(0, 1); run(3, 0); run(4, 0); present();
 }
 int main() {
     const std::vector<uint> font = {@FONT_WORDS@};
     const std::vector<uint> glyphs = {@GLYPH_IDS@};
     const uint space = @SPACE@;
     scenario(1, 1, 0, 0, 1, 1, 6, 11, font, space, glyphs);
+    scenario(15, 27, 1, 1, 13, 25, 6, 11, font, space, glyphs);
     scenario(19, 29, 2, 3, 15, 23, 7, 13, font, space, glyphs);
+    scenario(517, 515, 1, 1, 513, 513, 256, 256, font, space, glyphs);
     scenario(97, 63, 5, 7, 89, 51, 17, 31, font, space, glyphs);
     scenario(131, 69, 1, 2, 129, 65, 17, 31, font, space, glyphs);
     scenario(257, 143, 12, 11, 241, 127, 12, 22, font, space, glyphs);
@@ -339,7 +387,7 @@ def main() -> None:
                     changed += delta != 0
                     above_one += delta > 1
                     assert delta <= VISUAL_RGB_TOLERANCE, (header, index // 4, index % 4, left, right)
-        print(f"{version}: strict vs -ffast-math; {len(strict)} five-mode snapshots, "
+        print(f"{version}: strict vs -ffast-math; {len(strict)} six-mode snapshots, "
               f"{compared} output bytes, changed_rgb_bytes={changed}, max_rgb_delta={largest}, "
               f"rgb_deltas_above_one={above_one}; "
               "integer state/glyphs/alpha exact; opaque ink exact; pure nearest copy exact; "

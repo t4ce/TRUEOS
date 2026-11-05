@@ -52,7 +52,8 @@ def main() -> None:
         "direct_rcs_push", "direct_rcs_push_pipe_control_full", "direct_rcs_push_pipe_control"))
     arithmetic = "\n".join(function(native, name) for name in (
         "edit_life_reciprocal", "edit_life_canonical_geometry", "edit_life_geometry_uniforms",
-        "edit_life_prepare_ppgtt", "edit_life_phase_us"))
+        "edit_life_prepare_ppgtt", "edit_life_phase_us", "edit_life_expansion_boundary",
+        "edit_life_expansion_rows", "edit_life_chrome_rects"))
     timing = "#[derive(Default)]\n" + block(native, "struct EditLifePassTiming")
     native_constants = constant_closure(native, dispatch + rows + arithmetic
         + "EDIT_LIFE_MAX_PAGE_PIXELS EDIT_LIFE_BATCH_USED_BYTES EDIT_LIFE_RESULT_USED_BYTES")
@@ -79,8 +80,8 @@ def main() -> None:
     assert "source.pitch_bytes, output.pitch_bytes" in encoder
     assert re.search(r"\.add\(18\),\s*life\.canonical\.surface\(\)\.pitch_bytes", encoder)
     render = function(native, "render")
-    assert render.index("if ok && !self.canonical_valid") < render.index("ok = run(self, 2, false)")
-    assert "ok = run(self, 4, false)" in render
+    assert render.index("if ok && !self.canonical_valid") < render.index("ok = run(self, 2, false, body)")
+    assert "ok = run(self, 4, false, body)" in render
     assert "if ok { self.canonical_valid = true; }" in render
     assert "self.canonical_valid = false" in function(native, "upload")
     assert "self.canonical_valid = false" in function(native, "set_viewport")
@@ -96,7 +97,7 @@ mod native {
 use super::*;
 #[derive(Clone, Copy)] struct DirectRcsState { ppgtt_phys: u64 }
 const STATE: DirectRcsState = DirectRcsState { ppgtt_phys: 0x1000 };
-#[derive(Clone, Copy)] struct GpgpuRect { width: u32, height: u32 }
+#[derive(Clone, Copy, Default)] struct GpgpuRect { x:i32, y:i32, width: u32, height: u32 }
 impl GpgpuRect { fn is_empty(self)->bool { self.width==0 || self.height==0 } }
 static EDIT_LIFE_PPGTT_ROOT: AtomicU64 = AtomicU64::new(0);
 static EDIT_LIFE_PPGTT_ATTEMPTED: AtomicBool = AtomicBool::new(false);
@@ -128,12 +129,13 @@ impl DirectRcsSubmissionState {
     fn can_poll(&self) -> bool { matches!(self, Self::Submitted) }
 }
 const UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS: u64 = 1_000;
-struct EditLifeState { grid_width: u32, grid_height: u32, width: u32, height: u32, columns: u32, rows: u32 }
+struct EditLifeState { grid_width: u32, grid_height: u32, width: u32, height: u32,
+    columns: u32, rows: u32, viewport:GpgpuRect, cell_height:u32 }
 #[derive(Default)] struct Trace { chunks: Vec<(u32, u32, u32)>, inflight: bool, polls: usize, fail_poll: usize, quarantines: usize, submit_stamp: u64 }
 static TRACE: Mutex<Trace> = Mutex::new(Trace { chunks: Vec::new(), inflight: false, polls: 0, fail_poll: 0, quarantines: 0, submit_stamp: 0 });
 fn encode_edit_life_batch(state: DirectRcsState, upload: UploadedKernelArtifact, life: &EditLifeState,
     dst: GpgpuRgba8Surface, source: GpgpuRgba8Surface, mode: u32, reset: bool,
-    width: u32, first_row: u32, rows: u32, probe: bool) -> bool {
+    rect:GpgpuRect, width: u32, first_row: u32, rows: u32, probe: bool) -> bool {
     let mut trace = TRACE.lock().unwrap();
     assert!(!trace.inflight, "batch cannot be rewritten before the preceding chunk retires");
     trace.chunks.push((width, first_row, rows));
@@ -172,13 +174,16 @@ fn quarantine_direct_rcs_lane(lane: DirectRcsLane, reason: &'static str) {
 }
 pub(super) fn run() {
     let mut cases = 0;
-    for mode in 0..5 {
+    for mode in 0..6 {
         for width in [1u32, 15, 16, 17, 79, 511, 512, 513, 1919, 1920, 3840, 4096] {
             for height in [1u32, 2, 31, 512, 1080, 2160] {
                 *TRACE.lock().unwrap() = Trace::default();
-                let life = EditLifeState { grid_width: width, grid_height: height, width, height, columns: width, rows: height };
+                let viewport=GpgpuRect{x:0,y:0,width,height};
+                let rect=GpgpuRect{x:0,y:0,width:width*2-1,height};
+                let life = EditLifeState { grid_width: width, grid_height: height, width, height,
+                    columns: width, rows: height, viewport,cell_height:11 };
                 let mut timing = EditLifePassTiming::default();
-                let result = life.dispatch(Dev, STATE, UploadedKernelArtifact, GpgpuRgba8Surface, GpgpuRgba8Surface, mode, true, Some(&mut timing));
+                let result = life.dispatch(Dev, STATE, UploadedKernelArtifact, GpgpuRgba8Surface, GpgpuRgba8Surface, mode, true, rect, Some(&mut timing));
                 assert!(result.submitted);
                 assert_eq!(result.observed, EDIT_LIFE_POST_MARKER);
                 let trace = TRACE.lock().unwrap();
@@ -193,6 +198,7 @@ pub(super) fn run() {
                 assert_eq!(timing.release_us,timing.walker_us);
                 assert_eq!(timing.marker_us,timing.walker_us);
                 assert_eq!(timing.save_us,timing.walker_us);
+                assert_eq!(timing.launched_workitems,u64::from(width).div_ceil(16)*16*u64::from(height));
                 let maximum = match mode { 0 => EDIT_LIFE_SEED_MAX_LANES, 2 => EDIT_LIFE_COMPOSITE_MAX_LANES, _ => EDIT_LIFE_STEP_MAX_LANES };
                 let mut next_row = 0;
                 for &(chunk_width, first_row, rows) in &trace.chunks {
@@ -201,6 +207,10 @@ pub(super) fn run() {
                     assert!(rows > 0);
                     assert!(u64::from(width).div_ceil(16) * 16 * u64::from(rows) <= maximum,
                         "bound counts padded hardware lanes, not just visible pixels");
+                    if mode==5 {
+                        assert!(u64::from(rect.width)*u64::from(rows)<=EDIT_LIFE_COMPOSITE_MAX_LANES,
+                            "two chrome pixels per lane must still fit the physical write budget");
+                    }
                     next_row += rows;
                 }
                 assert_eq!(next_row, height);
@@ -210,11 +220,12 @@ pub(super) fn run() {
     }
     assert_eq!(edit_life_dispatch_rows(0, 0, 1, 0), None);
     assert_eq!(edit_life_dispatch_rows(0, 1, 1, 1), None);
-    assert_eq!(edit_life_dispatch_rows(5, 1, 1, 0), None);
+    assert_eq!(edit_life_dispatch_rows(6, 1, 1, 0), None);
     assert_eq!(edit_life_dispatch_rows(0, 65_537, 1, 0), None);
     *TRACE.lock().unwrap() = Trace { fail_poll: 2, ..Trace::default() };
-    let life = EditLifeState { grid_width: 512, grid_height: 512, width: 1, height: 1, columns: 1, rows: 1 };
-    let failed = life.dispatch(Dev, STATE, UploadedKernelArtifact, GpgpuRgba8Surface, GpgpuRgba8Surface, 0, true, None);
+    let life = EditLifeState { grid_width: 512, grid_height: 512, width: 1, height: 1,
+        columns: 1, rows: 1,viewport:GpgpuRect{x:0,y:0,width:1,height:1},cell_height:11 };
+    let failed = life.dispatch(Dev, STATE, UploadedKernelArtifact, GpgpuRgba8Surface, GpgpuRgba8Surface, 0, true, GpgpuRect::default(), None);
     assert!(failed.submitted);
     assert_eq!(failed.observed, 0);
     let trace = TRACE.lock().unwrap();
@@ -234,7 +245,7 @@ pub(super) fn run() {
     assert!(!edit_life_prepare_ppgtt(STATE));
     assert!(!edit_life_prepare_ppgtt(STATE));
     assert_eq!(INITIALIZATIONS.load(Ordering::Relaxed),1,"failed initialization must not repair itself");
-    assert_eq!(EDIT_LIFE_BATCH_USED_BYTES,3200);
+    assert_eq!(EDIT_LIFE_BATCH_USED_BYTES,3264);
     assert_eq!(EDIT_LIFE_RESULT_USED_BYTES,256);
     assert_eq!(edit_life_reciprocal(0),None);
     assert_eq!(edit_life_reciprocal(257),None);
@@ -251,10 +262,10 @@ pub(super) fn run() {
         }
     }
     for (width,height) in [(1u32,1u32),(17,31),(1023,511),(1920,1080),(4096,2160)] {
-        let (columns,rows,gw,gh)=edit_life_canonical_geometry(GpgpuRect{width,height},17,31).unwrap();
+        let (columns,rows,gw,gh)=edit_life_canonical_geometry(GpgpuRect{x:0,y:0,width,height},17,31).unwrap();
         assert_eq!(columns,width.div_ceil(17)); assert_eq!(rows,height.div_ceil(31));
         assert_eq!(gw,columns*6); assert_eq!(gh,rows*11);
-        let table=edit_life_geometry_uniforms(GpgpuRect{width,height},gw,gh,17,31).unwrap();
+        let table=edit_life_geometry_uniforms(GpgpuRect{x:0,y:0,width,height},gw,gh,17,31).unwrap();
         assert_eq!(table.len(),32);
         assert_eq!(table[16],edit_life_reciprocal(17).unwrap());
         assert_eq!(table[17],edit_life_reciprocal(31).unwrap());
@@ -267,7 +278,7 @@ pub(super) fn run() {
     // can address, including clipped cells and noninteger upscales.
     for cell in 6..=256u32 {
         for extent in 1..=513u32 {
-            let viewport=GpgpuRect{width:extent,height:1};
+            let viewport=GpgpuRect{x:0,y:0,width:extent,height:1};
             let (_,_,gw,gh)=edit_life_canonical_geometry(viewport,cell,11).unwrap();
             let p=edit_life_geometry_uniforms(viewport,gw,gh,cell,11).unwrap();
             let last=extent-1;
@@ -276,20 +287,87 @@ pub(super) fn run() {
     }
     for cell in 11..=256u32 {
         for extent in 1..=513u32 {
-            let viewport=GpgpuRect{width:1,height:extent};
+            let viewport=GpgpuRect{x:0,y:0,width:1,height:extent};
             let (_,_,gw,gh)=edit_life_canonical_geometry(viewport,6,cell).unwrap();
             let p=edit_life_geometry_uniforms(viewport,gw,gh,6,cell).unwrap();
             let last=extent-1;
             assert_eq!(p[20],(last/cell)*11+((last%cell)*11/cell)+1);
         }
     }
-    assert!(edit_life_canonical_geometry(GpgpuRect{width:4096,height:2160},1,1).is_none());
-    assert!(edit_life_canonical_geometry(GpgpuRect{width:1,height:1},0,11).is_none());
-    assert!(edit_life_canonical_geometry(GpgpuRect{width:1,height:1},5,11).is_none());
-    assert!(edit_life_canonical_geometry(GpgpuRect{width:1,height:1},6,10).is_none());
-    assert!(edit_life_canonical_geometry(GpgpuRect{width:1,height:1},6,257).is_none());
-    assert!(edit_life_geometry_uniforms(GpgpuRect{width:1920,height:1080},512,512,17,31).is_none(),
+    assert!(edit_life_canonical_geometry(GpgpuRect{x:0,y:0,width:4096,height:2160},1,1).is_none());
+    assert!(edit_life_canonical_geometry(GpgpuRect{x:0,y:0,width:1,height:1},0,11).is_none());
+    assert!(edit_life_canonical_geometry(GpgpuRect{x:0,y:0,width:1,height:1},5,11).is_none());
+    assert!(edit_life_canonical_geometry(GpgpuRect{x:0,y:0,width:1,height:1},6,10).is_none());
+    assert!(edit_life_canonical_geometry(GpgpuRect{x:0,y:0,width:1,height:1},6,257).is_none());
+    assert!(edit_life_geometry_uniforms(GpgpuRect{x:0,y:0,width:1920,height:1080},512,512,17,31).is_none(),
         "canonical dimensions must never be independently capped or resampled");
+    // Independently derive every inverse boundary from the physical copy's
+    // forward mapping, then validate the actual bounded expansion row walker.
+    let mut expansion_cases=0;
+    for (width,height) in [(1u32,1u32),(17,31),(511,257),(1700,800),(4096,2160)] {
+        for (cw,ch) in [(6u32,11u32),(17,17),(17,31),(17,32),(255,255),(256,256)] {
+            let viewport=GpgpuRect{x:0,y:0,width,height};
+            let Some((_,_,gw,gh))=edit_life_canonical_geometry(viewport,cw,ch) else {continue;};
+            let mut expected=vec![0u32;gh as usize+1];
+            let mut physical=0;
+            for row in 0..=gh {
+                while physical<height && (physical/ch)*11+((physical%ch)*11/ch)<row {physical+=1;}
+                expected[row as usize]=physical;
+                assert_eq!(edit_life_expansion_boundary(row,ch,height),physical,
+                    "inverse boundary differs from actual nearest expansion row={row} ch={ch}");
+            }
+            let mut first=0;
+            let mut physical_end=0;
+            while first<gh {
+                let rows=edit_life_expansion_rows(viewport,ch,gw,gh,first).unwrap();
+                assert!(rows>0 && first+rows<=gh);
+                assert_eq!(expected[first as usize],physical_end,"no physical rows may be lost or repeated");
+                physical_end=expected[(first+rows) as usize];
+                let writes=u64::from(physical_end-expected[first as usize])*u64::from(width);
+                let lanes=u64::from(gw).div_ceil(16)*16*u64::from(rows);
+                assert!(writes<=EDIT_LIFE_COMPOSITE_MAX_LANES && lanes<=EDIT_LIFE_COMPOSITE_MAX_LANES);
+                if first+rows<gh {
+                    let next_writes=u64::from(expected[(first+rows+1) as usize]-expected[first as usize])*u64::from(width);
+                    let next_lanes=u64::from(gw).div_ceil(16)*16*u64::from(rows+1);
+                    assert!(next_writes>EDIT_LIFE_COMPOSITE_MAX_LANES || next_lanes>EDIT_LIFE_COMPOSITE_MAX_LANES,
+                        "chunk should be maximal within both independent budgets");
+                }
+                first+=rows;
+            }
+            assert_eq!(physical_end,height);
+            expansion_cases+=1;
+        }
+    }
+    // Body and four chrome rectangles must form a complete disjoint page,
+    // including empty borders, corner viewports, and one-pixel chrome tails.
+    let mut chrome_cases=0;
+    for (width,height) in [(1u32,1u32),(17,31),(64,48)] {
+        for x in [0,width/2,width-1] {
+            for y in [0,height/2,height-1] {
+                for vw in [1,width-x] {
+                    for vh in [1,height-y] {
+                        let viewport=GpgpuRect{x:x as i32,y:y as i32,width:vw,height:vh};
+                        let mut coverage=vec![0u8;(width*height) as usize];
+                        let body=std::iter::once(viewport);
+                        for rect in body.chain(edit_life_chrome_rects(width,height,viewport)) {
+                            assert!(rect.x>=0 && rect.y>=0);
+                            assert!(rect.x as u32+rect.width<=width && rect.y as u32+rect.height<=height);
+                            for py in rect.y as u32..rect.y as u32+rect.height {
+                                for px in rect.x as u32..rect.x as u32+rect.width {
+                                    coverage[(py*width+px) as usize]+=1;
+                                }
+                            }
+                        }
+                        assert!(coverage.iter().all(|&count|count==1),"chrome/body has an overlap or uncovered pixel");
+                        chrome_cases+=1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(edit_life_expansion_rows(GpgpuRect{x:0,y:0,width:131072,height:24},256,6,11,0).is_none(),
+        "a single expanding row beyond the write budget must never be admitted");
+    println!("native EditLife expansion passed: {expansion_cases} exact inverse row partitions, {chrome_cases} complete chrome/body partitions");
     println!("native EditLife dispatch passed: {cases} padded partitions, exact lane/retirement/timestamp phases, retained PPGTT, footprint and geometry uniforms");
 }
 }
