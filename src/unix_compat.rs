@@ -110,6 +110,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "gettimeofday"
             | "ioctl"
             | "isatty"
+            | "ldexp"
             | "linkat"
             | "listen"
             | "localtime_r"
@@ -228,6 +229,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
     }
     match name {
         "abs" => Some(crate::std_abi_shim::abs as *const () as usize),
+        "ldexp" => Some(crate::std_abi_shim::ldexp as *const () as usize),
         "iswspace" => Some(crate::blueprint_shims::ctype::iswspace as *const () as usize),
         "iswalpha" => Some(crate::blueprint_shims::ctype::iswalpha as *const () as usize),
         "iswdigit" => Some(crate::blueprint_shims::ctype::iswdigit as *const () as usize),

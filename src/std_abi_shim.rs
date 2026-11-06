@@ -3199,6 +3199,11 @@ pub unsafe extern "C" fn abs(value: c_int) -> c_int {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn ldexp(value: c_double, exponent: c_int) -> c_double {
+    libm::ldexp(value, exponent)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn log(value: c_double) -> c_double {
     libm::log(value)
 }
