@@ -27,7 +27,7 @@ pub(crate) fn warm_fixture_atlas() -> &'static OwnedAlphaAtlas {
             }
         }
         OwnedAlphaAtlas { em_height_px, line_width_px: 2.75,
-            glyph_width, glyph_height, gutter_px, pixels }
+            glyph_width, glyph_height, gutter_px, source: AlphaAtlasSource::Native, pixels }
     })
 }
 

@@ -1,12 +1,12 @@
-//! Shell3's shared native-line/quad font authority. One R8 production pass is
-//! retained for service life; styled RGBA cells are warmed once and copied by
+//! Shell3's shared CPU bitmap font authority. Canonical R8 cells are expanded
+//! once and retained for service life; styled RGBA cells are warmed and copied by
 //! either the CPU or legacy BLT. Shell3 owns layout, clipping and sink choice.
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::signal::Signal;
 use trueos_time::{Duration, Timer};
 
-use super::microfont_mask_service::{OwnedAlphaAtlas, build_shell3_alpha_atlas};
+use super::microfont_mask_service::{OwnedAlphaAtlas, build_bitmap_alpha_atlas};
 use crate::intel::{GucBcs0RgbaCopy, GucBcs0RgbaSurface, gpgpu::GpgpuOwnedRgba8Surface};
 
 #[path = "shell3_hex_font.rs"]
@@ -52,12 +52,12 @@ struct Font {
     hex: HexAtlas,
     cache: spin::Mutex<CellCache>,
 }
-/// Only Edit's enabled shader viewport selects Hex; layout remains shared.
+/// Edit's shader viewport selects Hex explicitly; layout remains shared.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) enum FontFace { Raster, Hex }
 
-/// The bitmap side path is expanded at the same physical cell size while the
-/// line/quad font warms. It needs no runtime compiler or native raster pass.
+/// The shader's bitmap cells use the same physical size and canonical source
+/// as the default font. Neither needs a runtime compiler or GPU raster pass.
 struct HexAtlas {
     width: u32,
     height: u32,
@@ -116,7 +116,7 @@ struct CellCache {
 }
 
 /// Call before acquiring a writable frame/cache lease. Concurrent shells share
-/// the same initialization; no executor is blocked while the native pass runs.
+/// the same initialization; bitmap expansion runs on a blocking service lane.
 pub(crate) async fn prepare() -> Result<(), &'static str> {
     loop {
         if FONT.get().is_some() { return Ok(()); }
@@ -150,16 +150,17 @@ fn prepare_once() -> Result<(), &'static str> {
     if FONT.get().is_some() { return Ok(()); }
     let (width, height) = cell_extent(DEFAULT_UI4_FONT_SCALE)
         .ok_or("shell3-font-physical-size-unavailable")?;
-    let alpha = build_shell3_alpha_atlas(height)?;
+    // Kernel text uses the canonical bitmap authority on every display. A lost
+    // RCS or quarantined atlas must never hold CPU text behind another submit.
+    let alpha = build_bitmap_alpha_atlas(height)?;
     alpha.glyph('?').ok_or("shell3-font-missing-question-mark")?;
     let hex = HexAtlas::new(width, height)?;
     let glyphs = alpha.glyphs().count();
-    let line_width_px = alpha.line_width_px;
     let hex_bytes = hex.coverage.len();
     FONT.call_once(|| Font { alpha, hex, cache: spin::Mutex::new(CellCache::default()) });
     crate::log_important!(target: "microfont-mask";
-        "shell3-font: ready format=r8 em_mm=7.5 em_height_px={} width_px={} glyphs={} successful_productions=1 retained=service-lifetime layout=physical-cells missing_glyph=red-question-mark\n",
-        height, line_width_px, glyphs);
+        "shell3-font: ready source=canonical-bitmap producer=cpu gpu_submissions=0 format=r8 em_mm=7.5 em_height_px={} glyphs={} successful_productions=1 retained=service-lifetime layout=physical-cells missing_glyph=red-question-mark\n",
+        height, glyphs);
     crate::log_important!(target: "microfont-mask";
         "shell3-font: hex-ready format=r8 cell={}x{} glyphs={} bytes={} source=canonical-bitmap retained=service-lifetime runtime_hex_feature=off layout=physical-cells\n",
         width, height, hex::GLYPH_COUNT, hex_bytes);
@@ -396,8 +397,8 @@ fn grid_glyph_blocking(scale: u32, ch: char) -> Result<Vec<u8>, &'static str> {
     Ok(result)
 }
 
-/// Boot warmup uses the same serialization as lazy Shell3 preparation. Home
-/// publication happens before the full alphabet is submitted by that path.
+/// Publish text before warming the independent private home asset. Neither
+/// production uses GPU execution; a home error cannot withdraw ready text.
 #[cfg(not(test))]
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn microfont_warm_task() {
@@ -406,12 +407,22 @@ pub(crate) async fn microfont_warm_task() {
             Ok(()) => {
                 super::microfont_log_service::font_ready();
                 crate::ui4::microfont_ready();
-                return;
+                break;
             }
             Err(reason) => {
                 crate::log_warn!(target: "microfont-mask";
                     "microfont: warm deferred reason={}\n", reason);
                 trueos_time::Timer::after(trueos_time::Duration::from_millis(100)).await;
+            }
+        }
+    }
+    loop {
+        match super::microfont_mask_service::warm_start_glyph() {
+            Ok(()) => return,
+            Err(reason) => {
+                crate::log_warn!(target: "microfont-mask";
+                    "microfont: home warm deferred reason={}\n", reason);
+                Timer::after(Duration::from_millis(100)).await;
             }
         }
     }

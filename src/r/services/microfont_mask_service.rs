@@ -771,18 +771,18 @@ pub(crate) async fn wait_for_start_glyph() -> &'static OwnedGlyphMask {
     }
 }
 
-// Called under the atlas service lock, before any regular atlas production.
+// Independent CPU production: text and the home button must not wait for RCS.
 pub(crate) fn warm_start_glyph() -> Result<(), &'static str> {
     if START_GLYPH.get().is_some() { return Ok(()); }
     let _warm = START_GLYPH_WARM.try_lock().ok_or("microfont-start-glyph-busy")?;
     if START_GLYPH.get().is_some() { return Ok(()); }
     let height = home_button_em_height()
         .ok_or("microfont-start-glyph-physical-size-unavailable")?;
-    let glyph = build_home_button_mask(height)?;
+    let glyph = super::microfont_home_cpu::build(height)?;
     let glyph = START_GLYPH.call_once(|| glyph);
     START_GLYPH_READY.notify_all();
     crate::log_important!(target: "microfont-mask";
-        "microfont-start-glyph: ready glyph=homebutton source=private-line-asset fallback=none em_mm={} em_height_px={} extent={}x{} format=r8 bytes={} productions=1 retained=service-lifetime\n",
+        "microfont-start-glyph: ready glyph=homebutton source=private-line-asset producer=cpu gpu_submissions=0 em_mm={} em_height_px={} extent={}x{} format=r8 bytes={} productions=1 retained=service-lifetime\n",
         START_GLYPH_EM_MM, glyph.em_height_px, glyph.width, glyph.height, glyph.pixels.len());
     Ok(())
 }
@@ -828,25 +828,38 @@ pub(crate) fn build_home_button_mask(em_height_px: u32) -> Result<OwnedGlyphMask
 
 /// Immutable service-owned R8 tiles, shared by Shell3 and the UI text sinks.
 /// Glyph rows are tightly packed, including the safe cap overhang gutter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AlphaAtlasSource {
+    Native,
+    Bitmap,
+}
+
 pub(crate) struct OwnedAlphaAtlas {
     pub(crate) em_height_px: u32,
     pub(crate) line_width_px: f32,
     pub(crate) glyph_width: u32,
     pub(crate) glyph_height: u32,
     pub(crate) gutter_px: u32,
+    source: AlphaAtlasSource,
     pixels: Vec<u8>,
 }
 impl OwnedAlphaAtlas {
     pub(crate) fn glyph(&self, ch: char) -> Option<&[u8]> {
-        // Unminted raster slots stay blank for the demo, but are absent to
-        // font consumers so they can apply their missing-glyph policy.
-        if ch != ' ' && microfont::raster_line::glyph_strips(ch).is_none()
-            && microfont::raster_quad::glyph_quads(ch).is_none()
-            && !('\u{2500}'..='\u{259f}').contains(&ch)
-            && !('\u{2800}'..='\u{28ff}').contains(&ch) {
-            return None;
-        }
-        let slot = glyph_slot(ch)?;
+        let slot = match self.source {
+            AlphaAtlasSource::Native => {
+                // Unminted raster slots stay absent so consumers can apply
+                // their missing-glyph policy independently of bitmap coverage.
+                if ch != ' ' && microfont::raster_line::glyph_strips(ch).is_none()
+                    && microfont::raster_quad::glyph_quads(ch).is_none()
+                    && !('\u{2500}'..='\u{259f}').contains(&ch)
+                    && !('\u{2800}'..='\u{28ff}').contains(&ch) {
+                    return None;
+                }
+                glyph_slot(ch)?
+            }
+            AlphaAtlasSource::Bitmap => super::shell3_font_service::hex::CODEPOINTS
+                .binary_search(&(ch as u32)).ok()?,
+        };
         let bytes = self.glyph_width as usize * self.glyph_height as usize;
         self.pixels.get(slot * bytes..(slot + 1) * bytes)
     }
@@ -887,19 +900,72 @@ impl OwnedAlphaAtlas {
                 .filter(|&ch| is_extra_line(ch)))
             .chain(microfont::raster_quad::GLYPH_CHARACTERS.iter().copied()
                 .filter(|&ch| is_extra_quad(ch)))
+            .filter(|_| self.source == AlphaAtlasSource::Native)
+            .chain(super::shell3_font_service::hex::CODEPOINTS.iter().copied()
+                .filter(|_| self.source == AlphaAtlasSource::Bitmap)
+                .filter_map(char::from_u32))
             .filter_map(|ch| self.glyph(ch).map(|pixels| (ch, pixels)))
     }
 }
 
 static ALPHA_ATLAS: spin::Once<OwnedAlphaAtlas> = spin::Once::new();
+static CPU_ALPHA_ATLAS: spin::Once<OwnedAlphaAtlas> = spin::Once::new();
 
 pub(crate) fn ready_atlas() -> Option<&'static OwnedAlphaAtlas> {
-    ALPHA_ATLAS.get()
+    ALPHA_ATLAS.get().or_else(|| CPU_ALPHA_ATLAS.get())
+}
+
+/// Expand the canonical bitmap cells once, without a GPU allocation, home-glyph
+/// warmup or native submission. The published CPU tiles never replace native
+/// resources and remain available even when their separate atlas is quarantined.
+pub(crate) fn build_bitmap_alpha_atlas(em_height_px: u32) -> Result<&'static OwnedAlphaAtlas, &'static str> {
+    use super::shell3_font_service::hex;
+
+    if !(11..=253).contains(&em_height_px) {
+        return Err("microfont-bitmap-atlas-size");
+    }
+    if let Some(atlas) = CPU_ALPHA_ATLAS.get() {
+        return if atlas.em_height_px == em_height_px { Ok(atlas) }
+            else { Err("microfont-bitmap-atlas-already-sized") };
+    }
+    let glyph_width = (em_height_px * 6 + 5) / 11;
+    let glyph_bytes = (glyph_width as usize).checked_mul(em_height_px as usize)
+        .ok_or("microfont-bitmap-atlas-size")?;
+    let bytes = glyph_bytes.checked_mul(hex::GLYPH_COUNT)
+        .ok_or("microfont-bitmap-atlas-size")?;
+    let mut pixels = Vec::new();
+    pixels.try_reserve_exact(bytes).map_err(|_| "microfont-bitmap-atlas-allocation")?;
+    for glyph in 0..hex::GLYPH_COUNT as u32 {
+        for y in 0..em_height_px {
+            let source_y = y * 11 / em_height_px;
+            for x in 0..glyph_width {
+                pixels.push(hex::native_coverage(glyph, x * 6 / glyph_width, source_y));
+            }
+        }
+    }
+    let atlas = CPU_ALPHA_ATLAS.call_once(|| OwnedAlphaAtlas {
+        em_height_px,
+        line_width_px: em_height_px as f32 / 11.0,
+        glyph_width,
+        glyph_height: em_height_px,
+        gutter_px: 0,
+        source: AlphaAtlasSource::Bitmap,
+        pixels,
+    });
+    // Another cold caller may have published a different physical size while
+    // this caller expanded its tiles. Never report that mismatched size ready.
+    if atlas.em_height_px != em_height_px {
+        return Err("microfont-bitmap-atlas-already-sized");
+    }
+    crate::log_important!(target: "microfont-mask";
+        "microfont-atlas: bitmap em_height_px={} glyph_size={}x{} glyph_slots={} format=r8 retained_cpu_mask_bytes={} source=canonical-bitmap gpu_submissions=0 retained=service-lifetime\n",
+        em_height_px, glyph_width, em_height_px, hex::GLYPH_COUNT, bytes);
+    Ok(atlas)
 }
 
 /// One native line/quad production and R8 readback for every text consumer.
 pub(crate) fn build_shell3_alpha_atlas(em_height_px: u32) -> Result<&'static OwnedAlphaAtlas, &'static str> {
-    if let Some(atlas) = ready_atlas() {
+    if let Some(atlas) = ALPHA_ATLAS.get() {
         return if atlas.em_height_px == em_height_px { Ok(atlas) }
             else { Err("microfont-atlas-already-sized") };
     }
@@ -909,7 +975,7 @@ pub(crate) fn build_shell3_alpha_atlas(em_height_px: u32) -> Result<&'static Own
         ..AtlasConfig::default()
     };
     with_warmed_atlas(config, |atlas| {
-        if let Some(ready) = ready_atlas() { return Ok(ready); }
+        if let Some(ready) = ALPHA_ATLAS.get() { return Ok(ready); }
         let surface = atlas.surface();
         let source = crate::phys::phys_to_virt(surface.phys as usize) as *mut u8;
         if !crate::intel::dma_flush_strided_row_spans(&[
@@ -942,6 +1008,7 @@ pub(crate) fn build_shell3_alpha_atlas(em_height_px: u32) -> Result<&'static Own
             glyph_width,
             glyph_height,
             gutter_px: config.gutter(),
+            source: AlphaAtlasSource::Native,
             pixels,
         }))
     })

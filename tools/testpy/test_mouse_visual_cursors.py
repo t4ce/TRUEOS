@@ -54,11 +54,15 @@ def main() -> None:
     constants_end = atlas_source.index("#[derive(Clone, Copy, Debug, PartialEq)]")
     font = "use alloc::vec::Vec;\n" + atlas_source[constants_start:constants_end]
     font += "\n".join(item(atlas_path, name)
-                      for name in ("glyph_slot", "OwnedAlphaAtlas", "ready_atlas"))
+                      for name in ("glyph_slot", "AlphaAtlasSource", "OwnedAlphaAtlas", "ready_atlas"))
     font += block(atlas_source, "impl OwnedAlphaAtlas {") + "\n"
     atlas_static = re.search(r"^static ALPHA_ATLAS:.*?;$", atlas_source, re.MULTILINE)
     assert atlas_static
     font += atlas_static.group() + "\n"
+    cpu_static = re.search(r"^static CPU_ALPHA_ATLAS:.*?;$", atlas_source, re.MULTILINE)
+    assert cpu_static
+    font += cpu_static.group() + "\n"
+    font = font.replace("super::shell3_font_service::hex::", "crate::hex::")
     font += (FIXTURES / "atlas_fixture.rs").read_text()
 
     slot_path = "src/ui4/slot4_service.rs"
@@ -107,7 +111,9 @@ microfont = { path = ''' + json.dumps(str(ROOT / "vendor/microfont")) + ''', def
         (work / "src/hid_injection.rs").write_text(hid)
         (work / "src/damage.rs").write_bytes((ROOT / "src/ui4/damage.rs").read_bytes())
         (work / "src/button_outline_geometry.rs").write_bytes((ROOT / "src/ui4/button_outline_geometry.rs").read_bytes())
-        (work / "src/lib.rs").write_text((FIXTURES / "harness.rs").read_text() + '\n#[path="button_outline_geometry.rs"] mod button_outline_geometry;\n')
+        (work / "src/lib.rs").write_text((FIXTURES / "harness.rs").read_text()
+            + '\n#[path="button_outline_geometry.rs"] mod button_outline_geometry;\n'
+            + '#[path=' + json.dumps(str(ROOT / "src/r/services/shell3_hex_font.rs")) + '] mod hex;\n')
         build = subprocess.run([
             "cargo", "+" + channel.group(1), "test", "--offline", "--locked",
             "--target", HOST, "--no-run", "--message-format=json",

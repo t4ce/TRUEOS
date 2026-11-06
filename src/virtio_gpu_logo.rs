@@ -20,8 +20,8 @@ fn queue_start_glyph_warmup() {
     if START_GLYPH_WARM.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire).is_err() {
         return;
     }
-    // Glyph production waits for offscreen retirement. It must run on a
-    // blocking worker, never on the display task that services that request.
+    // Keep one-time CPU production off the display task. The private home
+    // asset no longer depends on offscreen GPU requests or their retirement.
     let job = alloc::boxed::Box::new(|| {
         match crate::r::services::microfont_mask_service::warm_start_glyph() {
             Ok(()) => START_GLYPH_WARM.store(2, Ordering::Release),

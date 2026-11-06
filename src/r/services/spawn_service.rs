@@ -299,8 +299,7 @@ fn spawn_microfont_warm(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn microfont_warm_gate() -> bool {
-    crate::virtio_gpu_logo::output_dimensions().is_some()
-        || (crate::intel::guc_submission_ready() && crate::intel::render::warm_state().is_some())
+    crate::ui4::output_dimensions().is_some()
 }
 
 #[cfg(feature = "trueos_ttstt")]
@@ -971,7 +970,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled_gated(
         "microfont-warm",
-        crate::r::readiness::UI4_COMPOSITOR_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         microfont_warm_gate,
         &MICROFONT_WARM_STARTED,
         spawn_microfont_warm,
