@@ -1,0 +1,931 @@
+{
+  "schema": "trueos-live-update-downtime/v1",
+  "date": "2026-11-06",
+  "timezone": "Europe/Berlin",
+  "result": "PASS",
+  "claim": "One physical-rig LAN RAM live update recovered Websys HTML and CSS within an observed 19.53-second conservative availability-gap upper bound, including the manual-command restart path.",
+  "trial_count": 1,
+  "rig": {
+    "host": "192.168.178.94",
+    "ssh_port": 22,
+    "expected_aps": 19
+  },
+  "workload": {
+    "app": "websys.bp",
+    "runtime": "VT-x Blueprint running Axum HTTP services",
+    "http_port": 54321,
+    "paths": [
+      "/",
+      "/ui/style.css"
+    ],
+    "other_services_ports": [
+      10,
+      11011
+    ],
+    "websys_autostart": false
+  },
+  "measurement": {
+    "interpretation": "Observed availability-gap upper bound, assuming a single contiguous outage: last pre-failure successful request start to first recovered complete response end. Includes polling, request latency, manual restart and service startup. No time is subtracted. Not exact kernel-swap downtime.",
+    "bounds_seconds": {
+      "html": 19.529663717,
+      "css": 19.529577625,
+      "both_resources": 19.529771945,
+      "ssh_tcp_acceptance_only": 3.755098997
+    },
+    "all_delays_included": true,
+    "subtracted_seconds": 0,
+    "shell_ready_to_restart_command_seconds": 6.9264e-05,
+    "restart_command_to_complete_html_response_seconds": 0.442483054,
+    "post_recovery_consecutive_successes_per_resource": 61,
+    "config": {
+      "episode_order": "Contiguous failures in request-start order; recovery is the earliest complete successful response among the following successful requests.",
+      "http_interpretation": "HTTP 200 plus complete body and optional expected text",
+      "interval_seconds": 0.25,
+      "probes": [
+        {
+          "expected_text": "File roots",
+          "host": "192.168.178.94",
+          "kind": "http",
+          "name": "workload_http",
+          "path": "/",
+          "port": 54321
+        },
+        {
+          "host": "192.168.178.94",
+          "kind": "tcp",
+          "name": "ssh_tcp",
+          "port": 22
+        },
+        {
+          "host": "192.168.178.94",
+          "kind": "http",
+          "name": "asset_http_1",
+          "path": "/ui/style.css",
+          "port": 54321
+        }
+      ],
+      "request_timeout_seconds": 0.2,
+      "requested_duration_seconds": 300.0,
+      "ssh_tcp_interpretation": "TCP acceptance only; does not prove shell readiness"
+    },
+    "started_utc": "2026-11-06T21:45:36.819948+00:00",
+    "finished_utc": "2026-11-06T21:46:22.552830+00:00",
+    "probes": {
+      "asset_http_1": {
+        "all_success_durations": {
+          "count": 106,
+          "maximum_ms": 30.043601,
+          "mean_ms": 9.055236396226414,
+          "median_ms": 8.906624,
+          "minimum_ms": 5.508348
+        },
+        "baseline_success_durations": {
+          "count": 45,
+          "maximum_ms": 12.079176,
+          "mean_ms": 8.644137577777778,
+          "median_ms": 8.682072,
+          "minimum_ms": 5.508348
+        },
+        "episodes": [
+          {
+            "availability_gap_upper_bound_seconds": 19.529577625,
+            "failed_observations": 77,
+            "first_failure": {
+              "duration_ms": 200.914051,
+              "end_monotonic_ns": 225626200186109,
+              "end_utc": "2026-11-06T21:45:48.272532+00:00",
+              "ok": false,
+              "sequence": 45,
+              "start_monotonic_ns": 225625999272058,
+              "start_utc": "2026-11-06T21:45:48.071618+00:00"
+            },
+            "first_recovered_success": {
+              "duration_ms": 30.043601,
+              "end_monotonic_ns": 225645278163186,
+              "end_utc": "2026-11-06T21:46:07.350512+00:00",
+              "ok": true,
+              "sequence": 122,
+              "start_monotonic_ns": 225645248119585,
+              "start_utc": "2026-11-06T21:46:07.320467+00:00"
+            },
+            "last_failure": {
+              "duration_ms": 4.013313,
+              "end_monotonic_ns": 225645002757719,
+              "end_utc": "2026-11-06T21:46:07.075104+00:00",
+              "ok": false,
+              "sequence": 121,
+              "start_monotonic_ns": 225644998744406,
+              "start_utc": "2026-11-06T21:46:07.071090+00:00"
+            },
+            "last_pre_failure_success": {
+              "duration_ms": 10.369957,
+              "end_monotonic_ns": 225625758955518,
+              "end_utc": "2026-11-06T21:45:47.831302+00:00",
+              "ok": true,
+              "sequence": 44,
+              "start_monotonic_ns": 225625748585561,
+              "start_utc": "2026-11-06T21:45:47.820934+00:00"
+            },
+            "status": "recovered"
+          }
+        ],
+        "failure_durations": {
+          "count": 77,
+          "maximum_ms": 201.42546,
+          "mean_ms": 80.13792746753246,
+          "median_ms": 4.013313,
+          "minimum_ms": 1.687516
+        },
+        "failures": 77,
+        "first_observation": {
+          "duration_ms": 7.432811,
+          "end_monotonic_ns": 225614755385930,
+          "end_utc": "2026-11-06T21:45:36.827732+00:00",
+          "ok": true,
+          "sequence": 0,
+          "start_monotonic_ns": 225614747953119,
+          "start_utc": "2026-11-06T21:45:36.820299+00:00"
+        },
+        "last_observation": {
+          "duration_ms": 8.723352,
+          "end_monotonic_ns": 225660257807074,
+          "end_utc": "2026-11-06T21:46:22.330155+00:00",
+          "ok": true,
+          "sequence": 182,
+          "start_monotonic_ns": 225660249083722,
+          "start_utc": "2026-11-06T21:46:22.321430+00:00"
+        },
+        "maximum_start_lateness_ms": 2.4455729871988297,
+        "maximum_start_to_start_seconds": 0.251844845,
+        "missed_scheduled_slots": 0,
+        "observations": 183,
+        "response_fingerprints": [
+          {
+            "bytes": 13385,
+            "content_type": "text/css; charset=utf-8",
+            "observations": 106,
+            "sha256": "182d143e0d277f7e8a11cba9abd033bf4f40bb9d3d40c71119aab6a90495a5e4"
+          }
+        ],
+        "successes": 106
+      },
+      "ssh_tcp": {
+        "all_success_durations": {
+          "count": 169,
+          "maximum_ms": 7.965342,
+          "mean_ms": 3.4660002130177516,
+          "median_ms": 3.440649,
+          "minimum_ms": 1.425495
+        },
+        "baseline_success_durations": {
+          "count": 102,
+          "maximum_ms": 7.965342,
+          "mean_ms": 3.473218176470588,
+          "median_ms": 3.4395854999999997,
+          "minimum_ms": 1.425495
+        },
+        "episodes": [
+          {
+            "availability_gap_upper_bound_seconds": 3.755098997,
+            "failed_observations": 14,
+            "first_failure": {
+              "duration_ms": 200.618342,
+              "end_monotonic_ns": 225640449145243,
+              "end_utc": "2026-11-06T21:46:02.521492+00:00",
+              "ok": false,
+              "sequence": 102,
+              "start_monotonic_ns": 225640248526901,
+              "start_utc": "2026-11-06T21:46:02.320873+00:00"
+            },
+            "first_recovered_success": {
+              "duration_ms": 4.664876,
+              "end_monotonic_ns": 225643753291133,
+              "end_utc": "2026-11-06T21:46:05.825637+00:00",
+              "ok": true,
+              "sequence": 116,
+              "start_monotonic_ns": 225643748626257,
+              "start_utc": "2026-11-06T21:46:05.820972+00:00"
+            },
+            "last_failure": {
+              "duration_ms": 200.516699,
+              "end_monotonic_ns": 225643699295921,
+              "end_utc": "2026-11-06T21:46:05.771642+00:00",
+              "ok": false,
+              "sequence": 115,
+              "start_monotonic_ns": 225643498779222,
+              "start_utc": "2026-11-06T21:46:05.571126+00:00"
+            },
+            "last_pre_failure_success": {
+              "duration_ms": 4.508607,
+              "end_monotonic_ns": 225640002700743,
+              "end_utc": "2026-11-06T21:46:02.075047+00:00",
+              "ok": true,
+              "sequence": 101,
+              "start_monotonic_ns": 225639998192136,
+              "start_utc": "2026-11-06T21:46:02.070542+00:00"
+            },
+            "status": "recovered"
+          }
+        ],
+        "failure_durations": {
+          "count": 14,
+          "maximum_ms": 200.666792,
+          "mean_ms": 200.60023992857143,
+          "median_ms": 200.62361850000002,
+          "minimum_ms": 200.43879
+        },
+        "failures": 14,
+        "first_observation": {
+          "duration_ms": 2.903697,
+          "end_monotonic_ns": 225614750817784,
+          "end_utc": "2026-11-06T21:45:36.823164+00:00",
+          "ok": true,
+          "sequence": 0,
+          "start_monotonic_ns": 225614747914087,
+          "start_utc": "2026-11-06T21:45:36.820261+00:00"
+        },
+        "last_observation": {
+          "duration_ms": 2.974616,
+          "end_monotonic_ns": 225660251896162,
+          "end_utc": "2026-11-06T21:46:22.324242+00:00",
+          "ok": true,
+          "sequence": 182,
+          "start_monotonic_ns": 225660248921546,
+          "start_utc": "2026-11-06T21:46:22.321271+00:00"
+        },
+        "maximum_start_lateness_ms": 2.5128599954769015,
+        "maximum_start_to_start_seconds": 0.251939503,
+        "missed_scheduled_slots": 0,
+        "observations": 183,
+        "response_fingerprints": [],
+        "successes": 169
+      },
+      "workload_http": {
+        "all_success_durations": {
+          "count": 106,
+          "maximum_ms": 30.090722,
+          "mean_ms": 9.162413886792454,
+          "median_ms": 8.973703,
+          "minimum_ms": 4.900977
+        },
+        "baseline_success_durations": {
+          "count": 45,
+          "maximum_ms": 13.971848,
+          "mean_ms": 8.989084022222222,
+          "median_ms": 8.946395,
+          "minimum_ms": 6.043207
+        },
+        "episodes": [
+          {
+            "availability_gap_upper_bound_seconds": 19.529663717,
+            "failed_observations": 77,
+            "first_failure": {
+              "duration_ms": 200.863643,
+              "end_monotonic_ns": 225626200100469,
+              "end_utc": "2026-11-06T21:45:48.272448+00:00",
+              "ok": false,
+              "sequence": 45,
+              "start_monotonic_ns": 225625999236826,
+              "start_utc": "2026-11-06T21:45:48.071583+00:00"
+            },
+            "first_recovered_success": {
+              "duration_ms": 30.090722,
+              "end_monotonic_ns": 225645278357506,
+              "end_utc": "2026-11-06T21:46:07.350704+00:00",
+              "ok": true,
+              "sequence": 122,
+              "start_monotonic_ns": 225645248266784,
+              "start_utc": "2026-11-06T21:46:07.320613+00:00"
+            },
+            "last_failure": {
+              "duration_ms": 2.51511,
+              "end_monotonic_ns": 225645001120318,
+              "end_utc": "2026-11-06T21:46:07.073467+00:00",
+              "ok": false,
+              "sequence": 121,
+              "start_monotonic_ns": 225644998605208,
+              "start_utc": "2026-11-06T21:46:07.070953+00:00"
+            },
+            "last_pre_failure_success": {
+              "duration_ms": 8.836052,
+              "end_monotonic_ns": 225625757529841,
+              "end_utc": "2026-11-06T21:45:47.829876+00:00",
+              "ok": true,
+              "sequence": 44,
+              "start_monotonic_ns": 225625748693789,
+              "start_utc": "2026-11-06T21:45:47.821040+00:00"
+            },
+            "status": "recovered"
+          }
+        ],
+        "failure_durations": {
+          "count": 77,
+          "maximum_ms": 201.459446,
+          "mean_ms": 80.17344453246753,
+          "median_ms": 4.117876,
+          "minimum_ms": 1.69729
+        },
+        "failures": 77,
+        "first_observation": {
+          "duration_ms": 7.54427,
+          "end_monotonic_ns": 225614755298608,
+          "end_utc": "2026-11-06T21:45:36.827646+00:00",
+          "ok": true,
+          "sequence": 0,
+          "start_monotonic_ns": 225614747754338,
+          "start_utc": "2026-11-06T21:45:36.820101+00:00"
+        },
+        "last_observation": {
+          "duration_ms": 10.983958,
+          "end_monotonic_ns": 225660260103018,
+          "end_utc": "2026-11-06T21:46:22.332450+00:00",
+          "ok": true,
+          "sequence": 182,
+          "start_monotonic_ns": 225660249119060,
+          "start_utc": "2026-11-06T21:46:22.321465+00:00"
+        },
+        "maximum_start_lateness_ms": 2.58056097663939,
+        "maximum_start_to_start_seconds": 0.251539202,
+        "missed_scheduled_slots": 0,
+        "observations": 183,
+        "response_fingerprints": [
+          {
+            "bytes": 4852,
+            "content_type": "text/html; charset=utf-8",
+            "observations": 106,
+            "sha256": "73882b4ac51dcfc0c13f320a3bcddf129aa8d462464db2f1c034d1d76945cbec"
+          }
+        ],
+        "successes": 106
+      }
+    }
+  },
+  "handoff": {
+    "verified": true,
+    "generation": 1,
+    "mode": "fullforget-warm",
+    "candidate_runtime_hash": "0x04EBCE81C07A4D55",
+    "markers": [
+      {
+        "mono_ns": 225625962749166,
+        "utc": "2026-11-06T21:45:48.035098+00:00",
+        "line": "[global] [important] update live: step=06/20 validating and staging candidate in RAM; disk image remains unchanged"
+      },
+      {
+        "mono_ns": 225625962816739,
+        "utc": "2026-11-06T21:45:48.035163+00:00",
+        "line": "[global] [important] update live: step=08/20 parking active VMX apps in RAM; discard only at commit"
+      },
+      {
+        "mono_ns": 225626013045115,
+        "utc": "2026-11-06T21:45:48.085391+00:00",
+        "line": "[global] [important] update live: step=09/20 VM plan ready restore-count=0 legacy-checkpoint=0"
+      },
+      {
+        "mono_ns": 225626013055091,
+        "utc": "2026-11-06T21:45:48.085401+00:00",
+        "line": "[global] [important] update live: step=11/20 irreversible rendezvous next; TCP must disconnect; COM1 continues with steps 12-17"
+      },
+      {
+        "mono_ns": 225626013060852,
+        "utc": "2026-11-06T21:45:48.085407+00:00",
+        "line": "[global] [important] update live: step=12/20 transition-map-installed verified=1 APs-signaled=0 runtime=BSP+network drain-window-ms=1000"
+      },
+      {
+        "mono_ns": 225630831049437,
+        "utc": "2026-11-06T21:45:52.903399+00:00",
+        "line": "[global] [important] update live: step=12r/20 AP-preflight-all-complete count=19 final-rendezvous-next strategy=cooperative-safe-point+sequential-arrival"
+      },
+      {
+        "mono_ns": 225638103093282,
+        "utc": "2026-11-06T21:46:00.175445+00:00",
+        "line": "[global] [important] update live: step=15b/20 PCI-early-quiesce-ok functions=17 display-deferred=1 network-deferred=2 bridges-preserved=5 runtime=BSP+display+network drain-window-ms=1000"
+      },
+      {
+        "mono_ns": 225639055300361,
+        "utc": "2026-11-06T21:46:01.127649+00:00",
+        "line": "[global] [important] update live: step=15c/20 PCI-observable-quiesce-next role=display bdf=00:02.0 id=8086:4680 class=03:00 display-or-TCP-cutoff-after-drain=1"
+      },
+      {
+        "mono_ns": 225639055348951,
+        "utc": "2026-11-06T21:46:01.127695+00:00",
+        "line": "[global] [important] update live: step=15c/20 PCI-observable-quiesce-next role=network bdf=02:00.0 id=10ec:8125 class=02:00 display-or-TCP-cutoff-after-drain=1"
+      },
+      {
+        "mono_ns": 225639055356837,
+        "utc": "2026-11-06T21:46:01.127703+00:00",
+        "line": "[global] [important] update live: step=15c/20 PCI-observable-quiesce-next role=network bdf=03:00.0 id=10ec:8168 class=02:00 display-or-TCP-cutoff-after-drain=1"
+      },
+      {
+        "mono_ns": 225656455911124,
+        "utc": "2026-11-06T21:46:18.528262+00:00",
+        "line": "[global] [important] live-update: step=18/20 candidate-kmain-entered generation=1 candidate_hash=0x04EBCE81C07A4D55 arena=0x0000000240200000+0xBC00000 expected_aps=19 mode=fullforget-warm"
+      },
+      {
+        "mono_ns": 225656557879369,
+        "utc": "2026-11-06T21:46:18.630230+00:00",
+        "line": "[global] [important] live-update: step=19/20 parked-APs-released count=19 generation=1"
+      },
+      {
+        "mono_ns": 225656557976559,
+        "utc": "2026-11-06T21:46:18.630323+00:00",
+        "line": "[global] [important] live-update: step=20/20 bp-autostart-uplift-delegated generation=1"
+      }
+    ],
+    "timestamp_interpretation": "Kernel evidence timestamps are host log-arrival times after ring replay, not transition execution times. They are not used to calculate downtime."
+  },
+  "restart": {
+    "command": "§§websys + Enter",
+    "transport": "OpenSSH PTY",
+    "automation": "Host PTY replay of the manual command; no OS autostart entry changed. Command sent immediately after fresh Shell3 AppDB frame.",
+    "driver_events": [
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225624727616395,
+        "utc": "2026-11-06T21:45:46.799968+00:00",
+        "label": "update-os"
+      },
+      {
+        "event": "shell_ready",
+        "mono_ns": 225624845289166,
+        "utc": "2026-11-06T21:45:46.917642+00:00",
+        "label": "update-os"
+      },
+      {
+        "event": "os_confirm",
+        "mono_ns": 225625165527979,
+        "utc": "2026-11-06T21:45:47.237876+00:00",
+        "screen": " and replace the running kernel.\r\n    No disk installation will be performed.\r\n    Any non-replicatable app still running at commit is discarded.\r\n    Currently affected:\r\n      vm1 · websys.bp\r\n\r\n  › Return\r\n    Discard apps and proceed"
+      },
+      {
+        "event": "update_confirm_sent",
+        "mono_ns": 225625165915013,
+        "utc": "2026-11-06T21:45:47.238262+00:00"
+      },
+      {
+        "event": "update_accepted",
+        "mono_ns": 225625278326997,
+        "utc": "2026-11-06T21:45:47.350676+00:00"
+      },
+      {
+        "event": "old_ssh_disconnected",
+        "mono_ns": 225634001729284,
+        "utc": "2026-11-06T21:45:56.074078+00:00"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225634001897823,
+        "utc": "2026-11-06T21:45:56.074246+00:00",
+        "label": "reconnect-1"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225634110826637,
+        "utc": "2026-11-06T21:45:56.183177+00:00",
+        "attempt": 1,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225634251974177,
+        "utc": "2026-11-06T21:45:56.324324+00:00",
+        "label": "reconnect-2"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225634361194595,
+        "utc": "2026-11-06T21:45:56.433544+00:00",
+        "attempt": 2,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225634502033071,
+        "utc": "2026-11-06T21:45:56.574384+00:00",
+        "label": "reconnect-3"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225634611869602,
+        "utc": "2026-11-06T21:45:56.684220+00:00",
+        "attempt": 3,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225634752132523,
+        "utc": "2026-11-06T21:45:56.824484+00:00",
+        "label": "reconnect-4"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225634862191582,
+        "utc": "2026-11-06T21:45:56.934542+00:00",
+        "attempt": 4,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225635002200867,
+        "utc": "2026-11-06T21:45:57.074551+00:00",
+        "label": "reconnect-5"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225635110641498,
+        "utc": "2026-11-06T21:45:57.182991+00:00",
+        "attempt": 5,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225635252286906,
+        "utc": "2026-11-06T21:45:57.324638+00:00",
+        "label": "reconnect-6"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225635361346203,
+        "utc": "2026-11-06T21:45:57.433696+00:00",
+        "attempt": 6,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225635502425324,
+        "utc": "2026-11-06T21:45:57.574775+00:00",
+        "label": "reconnect-7"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225635610323671,
+        "utc": "2026-11-06T21:45:57.682673+00:00",
+        "attempt": 7,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225635752497435,
+        "utc": "2026-11-06T21:45:57.824847+00:00",
+        "label": "reconnect-8"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225635861526984,
+        "utc": "2026-11-06T21:45:57.933877+00:00",
+        "attempt": 8,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225636002637251,
+        "utc": "2026-11-06T21:45:58.074987+00:00",
+        "label": "reconnect-9"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225636110559720,
+        "utc": "2026-11-06T21:45:58.182910+00:00",
+        "attempt": 9,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225636252742920,
+        "utc": "2026-11-06T21:45:58.325096+00:00",
+        "label": "reconnect-10"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225636362281217,
+        "utc": "2026-11-06T21:45:58.434631+00:00",
+        "attempt": 10,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225636502848695,
+        "utc": "2026-11-06T21:45:58.575199+00:00",
+        "label": "reconnect-11"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225636611416791,
+        "utc": "2026-11-06T21:45:58.683766+00:00",
+        "attempt": 11,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225636752905624,
+        "utc": "2026-11-06T21:45:58.825254+00:00",
+        "label": "reconnect-12"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225636860496941,
+        "utc": "2026-11-06T21:45:58.932846+00:00",
+        "attempt": 12,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225637002968530,
+        "utc": "2026-11-06T21:45:59.075317+00:00",
+        "label": "reconnect-13"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225637110622527,
+        "utc": "2026-11-06T21:45:59.182972+00:00",
+        "attempt": 13,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225637253028549,
+        "utc": "2026-11-06T21:45:59.325378+00:00",
+        "label": "reconnect-14"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225637362637342,
+        "utc": "2026-11-06T21:45:59.434986+00:00",
+        "attempt": 14,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225637503087357,
+        "utc": "2026-11-06T21:45:59.575436+00:00",
+        "label": "reconnect-15"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225637610594194,
+        "utc": "2026-11-06T21:45:59.682944+00:00",
+        "attempt": 15,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225637753147320,
+        "utc": "2026-11-06T21:45:59.825495+00:00",
+        "label": "reconnect-16"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225637863075244,
+        "utc": "2026-11-06T21:45:59.935424+00:00",
+        "attempt": 16,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225638003243941,
+        "utc": "2026-11-06T21:46:00.075595+00:00",
+        "label": "reconnect-17"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225638112517514,
+        "utc": "2026-11-06T21:46:00.184867+00:00",
+        "attempt": 17,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225638253307478,
+        "utc": "2026-11-06T21:46:00.325658+00:00",
+        "label": "reconnect-18"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225638362726403,
+        "utc": "2026-11-06T21:46:00.435076+00:00",
+        "attempt": 18,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225638503494972,
+        "utc": "2026-11-06T21:46:00.575844+00:00",
+        "label": "reconnect-19"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225638610771609,
+        "utc": "2026-11-06T21:46:00.683122+00:00",
+        "attempt": 19,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225638753566206,
+        "utc": "2026-11-06T21:46:00.825916+00:00",
+        "label": "reconnect-20"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225638862144879,
+        "utc": "2026-11-06T21:46:00.934495+00:00",
+        "attempt": 20,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225639003635398,
+        "utc": "2026-11-06T21:46:01.075986+00:00",
+        "label": "reconnect-21"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225639112749931,
+        "utc": "2026-11-06T21:46:01.185101+00:00",
+        "attempt": 21,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225639253703306,
+        "utc": "2026-11-06T21:46:01.326052+00:00",
+        "label": "reconnect-22"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225639361980563,
+        "utc": "2026-11-06T21:46:01.434330+00:00",
+        "attempt": 22,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225639503761659,
+        "utc": "2026-11-06T21:46:01.576110+00:00",
+        "label": "reconnect-23"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225639611979151,
+        "utc": "2026-11-06T21:46:01.684329+00:00",
+        "attempt": 23,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225639753838905,
+        "utc": "2026-11-06T21:46:01.826188+00:00",
+        "label": "reconnect-24"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225639860782491,
+        "utc": "2026-11-06T21:46:01.933134+00:00",
+        "attempt": 24,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225640003903684,
+        "utc": "2026-11-06T21:46:02.076253+00:00",
+        "label": "reconnect-25"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225640112193627,
+        "utc": "2026-11-06T21:46:02.184543+00:00",
+        "attempt": 25,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225640254069237,
+        "utc": "2026-11-06T21:46:02.326419+00:00",
+        "label": "reconnect-26"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225641360837907,
+        "utc": "2026-11-06T21:46:03.433189+00:00",
+        "attempt": 26,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225641361009427,
+        "utc": "2026-11-06T21:46:03.433356+00:00",
+        "label": "reconnect-27"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225642468587168,
+        "utc": "2026-11-06T21:46:04.540937+00:00",
+        "attempt": 27,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225642468758433,
+        "utc": "2026-11-06T21:46:04.541105+00:00",
+        "label": "reconnect-28"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225643576081932,
+        "utc": "2026-11-06T21:46:05.648432+00:00",
+        "attempt": 28,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225643576261345,
+        "utc": "2026-11-06T21:46:05.648608+00:00",
+        "label": "reconnect-29"
+      },
+      {
+        "event": "ssh_retry",
+        "mono_ns": 225644683027678,
+        "utc": "2026-11-06T21:46:06.755377+00:00",
+        "attempt": 29,
+        "error": "EOF"
+      },
+      {
+        "event": "ssh_attempt",
+        "mono_ns": 225644683149601,
+        "utc": "2026-11-06T21:46:06.755496+00:00",
+        "label": "reconnect-30"
+      },
+      {
+        "event": "shell_ready",
+        "mono_ns": 225644835805188,
+        "utc": "2026-11-06T21:46:06.908154+00:00",
+        "label": "reconnect-30"
+      },
+      {
+        "event": "websys_launch_sent",
+        "mono_ns": 225644835874452,
+        "utc": "2026-11-06T21:46:06.908221+00:00",
+        "attempt": 30
+      },
+      {
+        "event": "websys_serving",
+        "mono_ns": 225645271047618,
+        "utc": "2026-11-06T21:46:07.343397+00:00",
+        "attempt": 30
+      }
+    ],
+    "retry_policy": "Nominal 250ms between SSH attempts; an in-flight SSH ConnectTimeout=1s can extend attempt spacing. All retry and authentication time remains in the HTTP upper bound."
+  },
+  "artifact": {
+    "date_timezone": "Europe/Berlin",
+    "host": "192.168.178.94",
+    "host_checkout_head": "9b7a16d1774ced2c5ab1e43f1f55bdacb0be6241",
+    "candidate_provenance": "Selected completed kernel publication after normal build/reset; measured same image before/after",
+    "deployed_generation_path": "/home/t4ce/Repositories/TRUEOS/tgt/rig-images/release.BKj4r0",
+    "deployed_files_sha256": {
+      "TRUEOS.elf": "ec1853ee94af32fbd4aca9d15b7914757db5431c0df08aef502a78b4aa073bc5",
+      "EFI/BOOT/BOOTX64.EFI": "1c96c9f2a688d90e45fa09730f18437595b742c526f08688205340a6c4e1202c",
+      "EFI/BOOT/tgl_guc_70.bin": "2f1f57a1b23d186f2592318d1e07a1365968932841ccb3e7177c516ba006e2f6"
+    },
+    "source_worktree_status": "M abi/portal-cabi-v2.sha256\n M crates/trueos-v/src/bp_abi.rs\n M crates/trueos-v/src/env.rs\n M src/hv/blueprint/blueprint.rs\n M src/hv/vmcall.rs\n M src/r/io/fs_cabi.rs\n M src/r/mod.rs\n M src/std_abi_shim.rs\n M tools/testpy/apply_trueos_rust_std_thread_backend.py\n?? src/r/native_tls.rs\n?? tools/live-update-downtime.py\n?? tools/rust-std/trueos_futex.rs\n?? tools/rust-std/trueos_sync_tests.rs\n?? tools/rust-std/trueos_tls_guard.rs\n?? tools/rust-std/trueos_tls_key.rs\n?? tools/rust-std/trueos_tls_tests.rs\n?? tools/testpy/test_live_update_downtime.py\n?? tools/testpy/test_native_std_sync.py\n?? tools/testpy/test_native_std_tls.py\n?? tools/testpy/test_native_terminal_transport.py\n?? tools/testpy/test_platform_wait_timeout.py",
+    "archive_path": "/home/t4ce/Repositories/TRUEOS/tgt/rig-images/release.BKj4r0/TrueOS.tar.lz4",
+    "archive_sha256": "2fc92c5e9eeab12e1de468b6b95b3f76ad2caf8dc41d8f4aedc0105aeaf38c1c",
+    "candidate_elf_path": "/home/t4ce/Repositories/TRUEOS/tgt/rig-images/release.BKj4r0/TRUEOS.elf",
+    "candidate_elf_sha256": "ec1853ee94af32fbd4aca9d15b7914757db5431c0df08aef502a78b4aa073bc5",
+    "archive_bytes": 23895778,
+    "update_source": "http://192.168.178.111:8080/TrueOS.tar.lz4",
+    "launch_command": "§§websys",
+    "autostart_for_websys": false,
+    "restart_policy": "Fresh SSH PTY after old SSH disconnects; immediately send §§websys + Enter",
+    "interval_seconds": 0.25,
+    "request_timeout_seconds": 0.2
+  },
+  "limitations": [
+    "Single trial, not a percentile, guarantee, or proof of zero downtime.",
+    "Same published kernel image before and after; validates RAM replacement/service recovery rather than cross-version compatibility.",
+    "Fresh HTTP connections; does not demonstrate continuity of in-flight requests or existing TCP connections.",
+    "HTTP downtime includes VM parking and AP/PCI preparation while kernel networking can remain reachable.",
+    "TCP port 22 acceptance does not prove SSH authentication or Shell3 readiness, and is not the exact kernel swap duration.",
+    "Bounds assume one contiguous outage between successful observations; a 200ms complete-request timeout defines an unavailable sample.",
+    "Host kernel log drain replays early boot records after reconnect; arrival timestamps cannot time the kernel handoff."
+  ],
+  "reproduction": {
+    "probe": "python3 tools/live-update-downtime.py --output /tmp/trueos-live-update-run --interval .25 --timeout .2 --duration 180 --expected-text \"File roots\" --asset-path /ui/style.css",
+    "steps": [
+      "Start the physical rig from a prepared release and ensure no other reset/build will overlap the trial.",
+      "Use ssh -tt -p 22 t4ce@192.168.178.94 with a real PTY; send §§websys and Enter. Verify HTTP 200 from the HTML and CSS routes.",
+      "Start the external probe and verify a clean baseline.",
+      "In a fresh Shell3 CMD session type os without Enter. At its home menu choose Live update from LAN (j j Enter), verify the LAN confirmation, then choose Discard apps and proceed (j Enter).",
+      "After old SSH disconnects, retry a fresh PTY session and immediately send §§websys and Enter when AppDB appears. Retain all restart delay.",
+      "Continue probing after HTTP recovery, stop the observer with SIGTERM/INT, and read summary.json. Verify new-kernel steps18,19,20 in the rig log."
+    ]
+  },
+  "evidence": {
+    "local_run_directory": "/home/t4ce/Repositories/TRUEOS/bld/live-update-downtime/run-20261106-224507",
+    "tracked_observations": "docs/live-update-downtime-2026-11-06.observations.jsonl.gz",
+    "uncompressed_jsonl_sha256": "918e24788e0c429bfe404f86d9a9c191e41cd72eaad59895330d4ce8d2c1f7c4",
+    "compressed_sha256": "05c48658a4af82302fa2ceea7d35d13140562834ffe19d4f38bc47d54b9506c0",
+    "observations": 549,
+    "tests": "python3 -m unittest tools/testpy/test_live_update_downtime.py (6 tests passed)"
+  }
+}

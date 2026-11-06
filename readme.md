@@ -73,7 +73,7 @@ Each bar counts building blocks already in the code, not benchmarks. Keypoints 8
 `███░░░░░░░` **30%** · **Achieved:** idle cores halt by default and wake on work or timers ([power/mod.rs](src/power/mod.rs), [runtime.rs](src/runtime.rs)), and HWP and RAPL code is in tree ([hwp.rs](src/power/hwp.rs), [rapl.rs](src/power/rapl.rs)). **Observed on the i5-14500T rig:** 32–33°C across ten desktop snapshots; energy readings are still pending. An explicit package-only RAPL sampler is now in source ([measurement notes](tools/aiupsell/power/README.md)). **Next:** validate it on the rig and publish watts and joules per completed job.
 
 ### § Instant kernel updates with 0 downtime
-`████░░░░░░` **40%** · **Achieved:** `update live` swaps the kernel in RAM through 20 logged steps, with AP parking, PCI DMA containment, and handoff validation ([os_update.rs](src/shell3/os_update.rs), [live_update.rs](src/live_update.rs)). **Next:** a measured downtime figure for the swap.
+`██████░░░░` **60%** · **Achieved:** RAM kernel replacement through 20 logged steps, with AP parking, PCI DMA containment, and handoff validation ([os_update.rs](src/shell3/os_update.rs), [live_update.rs](src/live_update.rs)). **Measured on the .94 hardware rig:** one LAN live update recovered Websys's Axum HTML and CSS within a **19.53 s observed downtime upper bound**, including SSH reconnect and the manual `§§websys` restart; 250 ms probes and warm-handoff steps 18–20 verified recovery ([measurement and evidence](docs/live-update-downtime-2026-11-06.json)). **Next:** measure recovery through the existing autostart path, then reduce the service pause toward zero downtime.
 
 ### § A code harness that effectively lets AI take over
 `██████░░░░` **60%** · **Achieved:** Codex CLI runs natively with Spirit tools, and its sign-in opens in Hull ([codex-hull-integration](docs/codex-hull-integration-2026-11-03.json)). **Next:** Codex plugins return once their catalog path is hardened against fragmented RAM ([codex-plugin-disable](docs/codex-plugin-disable-2026-11-03.json)).
@@ -248,7 +248,7 @@ Apps are userspace Blueprints. Builtins ship inside the kernel bundle; the rest 
 - Widen the admitted Intel list. Tiger Lake bring-up is in progress as an experiment.
 - Harden recovery and isolation for the experimental build.
 - Bring Codex plugins back once their catalog path is hardened.
-- Publish a measured downtime figure for `update live`.
+- Measure live-update service recovery through autostart and reduce the observed pause.
 - Grow Hull's web compatibility.
 - Ship Lumen as a userspace model Blueprint.
 - Build the robotics tooling and AI-reasoned drivers: the vision blocks.

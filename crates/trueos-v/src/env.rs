@@ -67,3 +67,20 @@ pub fn var<K: AsRef<str>>(key: K) -> Result<String, VarError> {
     bytes.truncate(got as usize);
     String::from_utf8(bytes).map_err(|_| VarError::NotUnicode)
 }
+
+/// Return the native launch filesystem scope as an absolute path.
+pub fn current_dir() -> Result<String, VarError> {
+    let len = unsafe { vcabi::trueos_cabi_env_current_dir(core::ptr::null_mut(), 0) };
+    if len < 0 {
+        return Err(VarError::NotPresent);
+    }
+    let mut bytes = vec![0u8; len as usize];
+    let got = unsafe {
+        vcabi::trueos_cabi_env_current_dir(bytes.as_mut_ptr(), bytes.len())
+    };
+    if got < 0 || got as usize > bytes.len() {
+        return Err(VarError::NotPresent);
+    }
+    bytes.truncate(got as usize);
+    String::from_utf8(bytes).map_err(|_| VarError::NotUnicode)
+}

@@ -17,6 +17,7 @@ pub mod media_cabi;
 pub(crate) mod matrix_cabi;
 pub(crate) mod microfont;
 pub mod net;
+pub(crate) mod native_tls;
 pub mod pat;
 pub mod path;
 pub mod platform;

@@ -1754,6 +1754,39 @@ pub unsafe extern "C" fn trueos_cabi_env_var(
     unsafe { copy_text(value.as_bytes(), out_ptr, out_cap) }
 }
 
+/// Current native filesystem scope, without a terminator. A null output or
+/// zero capacity queries the required length, as with the other environment
+/// accessors. This is the same launch scope exposed by the Unix getcwd adapter.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_env_current_dir(
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    let root = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        // Launch-context pointers belong to VMX root. Read the reserved native
+        // environment through its existing payload transport in a Hull.
+        let key = b"TRUEOS_APP_FS_ROOT";
+        let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        let len = unsafe {
+            trueos_cabi_env_var(key.as_ptr(), key.len(), bytes.as_mut_ptr(), bytes.len())
+        };
+        if len < 0 {
+            None
+        } else {
+            let Ok(len) = usize::try_from(len) else { return -1; };
+            let Some(bytes) = bytes.get(..len) else { return -1; };
+            let Ok(root) = core::str::from_utf8(bytes) else { return -1; };
+            Some(String::from(root))
+        }
+    } else {
+        super::env::current_app_fs_root()
+    };
+    let cwd = root
+        .map(|root| alloc::format!("/{}", root.trim_matches('/')))
+        .unwrap_or_else(|| String::from("/"));
+    unsafe { copy_text(cwd.as_bytes(), out_ptr, out_cap) }
+}
+
 static SHELL_ATTACHED_REJECTS: AtomicU32 = AtomicU32::new(0);
 
 const KONSOLE_FRAME_FLAG_TERMINAL_HANDOFF: u32 = 1 << 31;
@@ -2478,6 +2511,73 @@ pub extern "C" fn trueos_cabi_shell_attached_read_byte() -> i32 {
     } else {
         -1
     }
+}
+
+/// Nonblocking, batched input from the launch-attached terminal. Hull input
+/// crosses the VM boundary once per payload rather than once per byte.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_shell_attached_read_v1(
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if out_cap == 0 {
+        return 0;
+    }
+    if out_ptr.is_null() {
+        return -1;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let cap = out_cap.min(trueos_vm::vmcall::PAYLOAD_CAP);
+        let out = unsafe { core::slice::from_raw_parts_mut(out_ptr, cap) };
+        let (status, count) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_READ,
+            cap as u64,
+            0,
+            &[],
+            out,
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK && count <= cap as u64 {
+            count as isize
+        } else {
+            -3
+        };
+    }
+    let Some(vm) = crate::hv::current_guest_execution_context_vm_id() else {
+        return -2;
+    };
+    let out = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) };
+    crate::hv::blueprint_console_read(vm, out) as isize
+}
+
+/// Observe before probing input AND the terminal surface snapshot, then pass
+/// this generation to wait_after. Resize/reentry and input use the same native
+/// queue, so a producer between the probes and parking cannot be lost.
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_shell_attached_observe_v1() -> u32 {
+    crate::r::platform::trueos_tokio_platform_wait_observe(crate::wait::BLUEPRINT_IO_WAIT_KEY)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_shell_attached_wait_after_v1(observed: u32, timeout_ms: u64) -> i32 {
+    if crate::hv::current_guest_execution_context_vm_id().is_none() {
+        return -2;
+    }
+    i32::from(crate::r::platform::trueos_tokio_platform_wait_after(
+        crate::wait::BLUEPRINT_IO_WAIT_KEY,
+        observed,
+        timeout_ms,
+    ))
+}
+
+/// Wake the attached terminal's native generation queue, including an event
+/// stream that is parked without an input byte. The key remains VM scoped.
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_shell_attached_wake_v1() -> i32 {
+    if crate::hv::current_guest_execution_context_vm_id().is_none() {
+        return -2;
+    }
+    crate::r::platform::trueos_tokio_platform_wake_all(crate::wait::BLUEPRINT_IO_WAIT_KEY);
+    1
 }
 
 pub fn read_attached_console_bytes(out: &mut [u8]) -> usize {

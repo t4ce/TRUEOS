@@ -4,6 +4,7 @@
 TRUEOS remains a concurrent Rust target (`target_has_threads` must not be
 falsified). Rust std selects its stackful lifecycle backend and process/thread
 keyed TLS instead of the earlier unsupported lifecycle and WLS-slot TLS.
+Synchronization uses upstream atomic state machines over native wait/wake.
 """
 
 from __future__ import annotations
@@ -103,6 +104,61 @@ def strict_thread_initialization(source: str, path: Path) -> str:
     return source.replace("// TRUEOS carrier lanes may host", "// Legacy zkvm carrier lanes may host", 1)
 
 
+def native_sync(root: Path) -> dict[Path, str]:
+    """Keep upstream atomic algorithms; replace only their blocking transport."""
+    library = root / "library/std/src/sys"
+    reference_path = Path(__file__).resolve().parent.parent / "rust-std/trueos_futex.rs"
+    reference = reference_path.read_text(encoding="utf-8")
+    backend_path = library / "pal/unix/futex_trueos.rs"
+    if backend_path.exists() and backend_path.read_text(encoding="utf-8") != reference:
+        raise SystemExit(f"{backend_path}: unrecognized TRUEOS futex backend; refusing to overwrite local changes")
+    planned = {backend_path: reference}
+    pal_path = library / "pal/unix/mod.rs"
+    planned[pal_path] = replace_once(
+        pal_path.read_text(encoding="utf-8"), "pub mod futex;",
+        '#[cfg(not(target_os = "trueos"))]\npub mod futex;\n'
+        '#[cfg(target_os = "trueos")]\n#[path = "futex_trueos.rs"]\npub mod futex;', pal_path)
+    for name in ("mutex", "condvar", "thread_parking", "once", "rwlock"):
+        path = library / "sync" / name / "mod.rs"
+        planned[path] = replace_once(
+            path.read_text(encoding="utf-8"), '        target_os = "linux",\n',
+            '        target_os = "linux",\n        target_os = "trueos",\n', path)
+    return planned
+
+
+def static_tls_keys(root: Path, source: str) -> tuple[Path, str, str]:
+    """Use existing std Storage with native static-identity key access."""
+    path = root / "library/std/src/sys/thread_local/key/trueos.rs"
+    reference_path = Path(__file__).resolve().parent.parent / "rust-std/trueos_tls_key.rs"
+    reference = reference_path.read_text(encoding="utf-8")
+    if path.exists() and path.read_text(encoding="utf-8") != reference:
+        raise SystemExit(f"{path}: unrecognized TRUEOS TLS backend; refusing to overwrite local changes")
+    anchor = 'pub(crate) mod key {\n    cfg_select! {\n'
+    selector = anchor + '''        target_os = "trueos" => {
+            mod trueos;
+            pub(super) use trueos::{Key, LazyKey, get, set};
+        }
+'''
+    source = replace_once(source, anchor, selector, path.parent.parent / "mod.rs")
+    return path, reference, source
+
+
+def native_tls_guard(root: Path, source: str) -> tuple[Path, str, str]:
+    path = root / "library/std/src/sys/thread_local/guard/trueos.rs"
+    reference_path = Path(__file__).resolve().parent.parent / "rust-std/trueos_tls_guard.rs"
+    reference = reference_path.read_text(encoding="utf-8")
+    if path.exists() and path.read_text(encoding="utf-8") != reference:
+        raise SystemExit(f"{path}: unrecognized TRUEOS TLS guard; refusing to overwrite local changes")
+    anchor = 'pub(crate) mod guard {\n    cfg_select! {\n'
+    selector = anchor + '''        target_os = "trueos" => {
+            mod trueos;
+            pub(crate) use trueos::enable;
+        }
+'''
+    source = replace_once(source, anchor, selector, path.parent.parent / "mod.rs")
+    return path, reference, source
+
+
 def installation(root: Path) -> dict[Path, str]:
     """Preflight every input before changing any file in the selected sysroot."""
     thread_dir = root / "library/std/src/sys/thread"
@@ -143,10 +199,13 @@ def installation(root: Path) -> dict[Path, str]:
     unix = replace_once(unix, "    pub use super::thread::JoinHandleExt;", '    #[cfg(not(target_os = "trueos"))]\n    pub use super::thread::JoinHandleExt;', unix_path)
     tls_path = root / "library/std/src/sys/thread_local/mod.rs"
     tls = keyed_tls_selector(tls_path.read_text(encoding="utf-8"), tls_path)
+    tls_key_path, tls_key, tls = static_tls_keys(root, tls)
+    tls_guard_path, tls_guard, tls = native_tls_guard(root, tls)
     current_path = root / "library/std/src/thread/current.rs"
     current = strict_thread_initialization(current_path.read_text(encoding="utf-8"), current_path)
     return {backend_path: reference, selector_path: selector, unix_path: unix,
-            tls_path: tls, current_path: current}
+            tls_path: tls, tls_key_path: tls_key, tls_guard_path: tls_guard,
+            current_path: current, **native_sync(root)}
 
 
 def install(root: Path, check: bool = False) -> None:
@@ -170,7 +229,8 @@ def install(root: Path, check: bool = False) -> None:
             temporary.unlink(missing_ok=True)
 
     print(f"trueos-rust-std-thread: backend={root / 'library/std/src/sys/thread/trueos.rs'}")
-    print("trueos-rust-std-thread: lifecycle=stackful sleep=true yield=true tls=keyed")
+    print("trueos-rust-std-thread: lifecycle=stackful sleep=true yield=true tls=static-native")
+    print("trueos-rust-std-thread: sync=atomic-native-wait")
 
 
 def main() -> None:

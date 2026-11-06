@@ -726,7 +726,11 @@ pub fn guest_platform_wait_after(key: u64, observed: u32, timeout_ms: u64) -> bo
     };
     let packed = (u64::from(observed) << 32) | u64::from(timeout);
     let (status, notified) = guest_call(OP_BP_PLATFORM_WAIT_AFTER, key, packed);
-    status == STATUS_OK && notified != 0
+    // The wire format can shorten a finite wait to about 49 days. Its expiry
+    // is only a spurious wake relative to the requested deadline, not a known
+    // timeout. Callers recheck their atomic predicate or monotonic deadline.
+    let shortened = timeout_ms != u64::MAX && timeout_ms > u64::from(u32::MAX - 1);
+    status == STATUS_OK && (notified != 0 || shortened)
 }
 
 pub fn guest_cpu_count() -> Option<usize> {

@@ -519,6 +519,7 @@ enum SocketFd {
 /// VM's pages can be mapped into its otherwise-private Hull RW image.
 #[repr(C, align(4096))]
 struct ProcessSharedState {
+    native_tls: crate::r::native_tls::State,
     environment: Mutex<process_environment::Environment>,
     errno: [AtomicI32; crate::percpu::CPU_SLOT_LIMIT],
     pthread_keys: Mutex<FixedKeyMap<usize, PthreadKeyState, PTHREAD_KEY_CAPACITY>>,
@@ -539,6 +540,7 @@ struct ProcessSharedState {
 impl ProcessSharedState {
     const fn new() -> Self {
         Self {
+            native_tls: crate::r::native_tls::State::new(),
             environment: Mutex::new(process_environment::Environment::new()),
             errno: [const { AtomicI32::new(0) }; crate::percpu::CPU_SLOT_LIMIT],
             pthread_keys: Mutex::new(FixedKeyMap::new()),
@@ -655,6 +657,10 @@ fn process_state() -> &'static ProcessSharedState {
         .unwrap_or(&HOST_PROCESS_STATE)
 }
 
+pub(crate) fn native_tls_state() -> &'static crate::r::native_tls::State {
+    &process_state().native_tls
+}
+
 pub(crate) fn blueprint_process_state_span(vm_id: u8) -> Option<(u64, usize)> {
     let Some(state) = blueprint_process_state(vm_id) else {
         crate::log_important!(target: "hv";
@@ -692,6 +698,7 @@ pub(crate) fn reset_blueprint_process_state(vm_id: u8) {
         return;
     };
     let state = unsafe { &*slot };
+    state.native_tls.reset();
     for errno in &state.errno {
         errno.store(0, Ordering::Release);
     }
@@ -1196,34 +1203,7 @@ fn pthread_key(ptr: *mut c_void) -> Option<usize> {
 }
 
 fn pthread_current_id() -> usize {
-    if let Some(thread_id) = crate::r::threads::current_id() {
-        return match crate::r::threads::current_vm_id() {
-            Some(vm_id) => 0x4_0000_0000usize
-                .saturating_add((vm_id as usize) << 32)
-                .saturating_add(thread_id),
-            None => 0x5_0000_0000usize.saturating_add(thread_id),
-        };
-    }
-    if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
-        return 0x2_0000usize.saturating_add(vm_id as usize);
-    }
-
-    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
-        if let Some(thread_id) = crate::wls::current_blueprint_thread_id() {
-            return 0x4_0000_0000usize
-                .saturating_add((vm_id as usize) << 32)
-                .saturating_add(thread_id as usize);
-        }
-        let worker_id = crate::wls::current_worker_id().unwrap_or(0);
-        return 0x3_0000usize
-            .saturating_add((vm_id as usize).saturating_mul(crate::wls::WORKER_SLOT_COUNT))
-            .saturating_add(worker_id);
-    }
-
-    if let Some(worker_id) = crate::wls::current_worker_id() {
-        return 0x1_0000usize.saturating_add(worker_id);
-    }
-    crate::percpu::current_slot_via_cpuid().saturating_add(1)
+    crate::r::native_tls::current_identity()
 }
 
 fn pthread_tls_slot(key: usize) -> PthreadTlsSlot {
@@ -1643,7 +1623,7 @@ fn pthread_cond_wait_key(
     if relock == 0 { result } else { relock }
 }
 
-fn pthread_run_tls_destructors(owner: usize) {
+fn run_execution_tls_destructors(owner: usize) {
     for _ in 0..PTHREAD_DESTRUCTOR_ITERATIONS {
         let keys = PTHREAD_KEYS.lock().values().copied().collect::<Vec<_>>();
         let mut ran_destructor = false;
@@ -1665,6 +1645,7 @@ fn pthread_run_tls_destructors(owner: usize) {
                 ran_destructor = true;
             }
         }
+        ran_destructor |= native_tls_state().run_destructor_round(owner);
         if !ran_destructor {
             break;
         }
@@ -1678,6 +1659,9 @@ fn pthread_run_tls_destructors(owner: usize) {
     for slot in slots {
         values.remove(slot);
     }
+    drop(values);
+    native_tls_state().run_cleanup(owner);
+    native_tls_state().retire_owner(owner);
 }
 
 #[cfg(test)]
@@ -1751,7 +1735,7 @@ mod pthread_thread_semantics_tests {
     fn tls_destructor_may_reinstall_after_its_value_is_cleared() {
         let _serial = SERIAL.lock();
         prepare_tls(3);
-        pthread_run_tls_destructors(OWNER);
+        run_execution_tls_destructors(OWNER);
         assert_eq!(DTOR_RUNS.load(Ordering::Relaxed), 3);
         assert_eq!(PTHREAD_TLS_VALUES.lock().values().count(), 0);
     }
@@ -1776,7 +1760,7 @@ mod pthread_thread_semantics_tests {
                 )
                 .is_ok()
         );
-        pthread_run_tls_destructors(OWNER);
+        run_execution_tls_destructors(OWNER);
         assert_eq!(DTOR_RUNS.load(Ordering::Relaxed), PTHREAD_DESTRUCTOR_ITERATIONS);
         assert_eq!(PTHREAD_TLS_VALUES.lock().values().count(), 1);
         assert_eq!(PTHREAD_TLS_VALUES.lock().get(other).unwrap().value, 17);
@@ -2798,6 +2782,13 @@ pub unsafe extern "C" fn sys_alloc_aligned(size: usize, align: usize) -> *mut u8
     } else {
         unsafe { crate::allocators::alloc_raw(layout) }
     }
+}
+
+/// Release a Rust layout allocation directly through the address-owned heap.
+/// Unlike free(), this has no C allocation registry to consult or update.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sys_dealloc(ptr: *mut u8) {
+    unsafe { crate::allocators::dealloc_raw(ptr) }
 }
 
 #[unsafe(no_mangle)]
@@ -7613,7 +7604,7 @@ pub unsafe extern "C" fn trueos_cabi_thread_spawn(
     let arg = arg as usize;
     let job = Box::new(move || {
         let result = (unsafe { entry(arg as *mut c_void) }) as usize;
-        pthread_run_tls_destructors(pthread_current_id());
+        run_execution_tls_destructors(crate::r::native_tls::current_identity());
         let _ = completion.complete(result);
         crate::r::platform::trueos_tokio_platform_wake_all(pthread_join_wait_key(thread_id));
     });

@@ -1240,6 +1240,7 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
     }
     match name {
         "sys_alloc_aligned" => Some(crate::std_abi_shim::sys_alloc_aligned as *const () as usize),
+        "sys_dealloc" => Some(crate::std_abi_shim::sys_dealloc as *const () as usize),
         "sys_rand" => Some(crate::std_abi_shim::sys_rand as *const () as usize),
         "sys_write" => Some(crate::std_abi_shim::sys_write as *const () as usize),
         "sys_read" => Some(crate::std_abi_shim::sys_read as *const () as usize),
@@ -1319,6 +1320,15 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         }
         "trueos_tokio_platform_wait_observe" => {
             Some(crate::r::platform::trueos_tokio_platform_wait_observe as *const () as usize)
+        }
+        "trueos_platform_thread_local_get" => {
+            Some(crate::r::native_tls::trueos_platform_thread_local_get as *const () as usize)
+        }
+        "trueos_platform_thread_local_set" => {
+            Some(crate::r::native_tls::trueos_platform_thread_local_set as *const () as usize)
+        }
+        "trueos_platform_thread_local_register_cleanup" => {
+            Some(crate::r::native_tls::trueos_platform_thread_local_register_cleanup as *const () as usize)
         }
         "trueos_tokio_platform_wait_after" => {
             Some(crate::r::platform::trueos_tokio_platform_wait_after as *const () as usize)
