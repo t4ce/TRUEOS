@@ -24,8 +24,22 @@ const OWNER: WindowOwner = WindowOwner::SHELL3_SERVICE;
 const BACKGROUND: [u8; 4] = super::update::MATRIX_BACKGROUND;
 const FOREGROUND: RgbaColor = RgbaColor::White;
 
-/// The page font follows the Shader preference, including while animation is
-/// paused. Overlay rectangles retain the ordinary terminal face.
+/// The bitmap editor effect is confined to the laptop's CPU font fallback.
+/// Native font outputs keep their line/quad face even when a guest requests
+/// the Hex-based effect.
+fn bitmap_edit_settings(
+    settings: Option<&trueos_terminal::edit_life::EditLife>,
+) -> Option<&trueos_terminal::edit_life::EditLife> {
+    if !crate::r::services::shell3_font_service::cpu_bitmap_fallback_enabled() {
+        return None;
+    }
+    settings.filter(|settings| {
+        settings.enabled && settings.viewport.width != 0 && settings.viewport.height != 0
+    })
+}
+
+/// Within the bitmap fallback, the page font follows the Shader preference,
+/// including while paused. Overlay rectangles retain the terminal face.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct HexRegion {
     viewport: trueos_terminal::edit_life::CellRect,
@@ -34,9 +48,7 @@ struct HexRegion {
 
 impl HexRegion {
     fn from_settings(settings: Option<&trueos_terminal::edit_life::EditLife>) -> Option<Self> {
-        let settings = settings.filter(|settings| {
-            settings.enabled && settings.viewport.width != 0 && settings.viewport.height != 0
-        })?;
+        let settings = bitmap_edit_settings(settings)?;
         Some(Self { viewport: settings.viewport, exclusions: settings.exclusions.clone() })
     }
 

@@ -265,18 +265,28 @@ fn paint_text(surface: Surface, text: &[u8], scale: usize, top: usize) {
     let visible_width = width.min(surface.width as usize - left);
     let visible_height = height.min((surface.height as usize).saturating_sub(top));
     if visible_width == 0 || visible_height == 0 { return; }
+    let bitmap = super::shell3_font_service::cpu_bitmap_fallback_enabled();
+    let atlas = if bitmap { None } else {
+        let Some(atlas) = super::microfont_mask_service::ready_atlas() else { return; };
+        Some(atlas)
+    };
     for (column, &byte) in text.iter().enumerate() {
         let column_left = column * cell_width;
         if column_left >= visible_width { break; }
         let ch = microfont::glyph_character(byte).unwrap_or(' ');
-        // This retained diagnostic plane must be readable before the font
-        // service, AP worker or GPU renderer starts. The canonical bit masks
-        // are static data; no allocation, atlas warmup or GPU call is needed.
-        let (glyph, _) = super::shell3_font_service::hex::resolve(ch, [0, 0, 0, 255]);
+        // Only the adopted laptop uses bitmap diagnostics before font warmup.
+        // Native rigs retain the shared native raster atlas for every glyph.
+        let glyph = if bitmap {
+            super::shell3_font_service::hex::resolve(ch, [0, 0, 0, 255]).0
+        } else { 0 };
         for y in 0..visible_height {
             for x in 0..cell_width.min(visible_width - column_left) {
-                let alpha = u32::from(super::shell3_font_service::hex::sample(
-                    glyph, x as u32, y as u32, sample_width, sample_height, false));
+                let alpha = u32::from(if let Some(atlas) = atlas {
+                    atlas.coverage(ch, x as u32, y as u32, sample_width, sample_height)
+                } else {
+                    super::shell3_font_service::hex::sample(
+                        glyph, x as u32, y as u32, sample_width, sample_height, false)
+                });
                 let color = 0xff00_0000 | ((255 - alpha) * 0x010101);
                 let offset = (top + y) * surface.pitch_bytes as usize
                     + (left + column_left + x) * 4;

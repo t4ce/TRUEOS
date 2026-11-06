@@ -655,6 +655,12 @@ pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
     self::display::active_scanout_dimensions()
 }
 
+/// The CPU bitmap mitigation belongs only to the adopted 9A49 rev01 laptop
+/// panel. Native desktop fonts must never change identity after a GPU error.
+pub(crate) fn laptop_cpu_font_fallback_enabled() -> bool {
+    self::tgl_native_panel::ui4_handoff_active()
+}
+
 pub(crate) fn complete_scanout_pipeline_slot() -> Option<usize> {
     // Temporary Spirit startup reseal for the native-panel-only test. Do not
     // confuse its latched primary surface with a complete UI4/cursor lease.

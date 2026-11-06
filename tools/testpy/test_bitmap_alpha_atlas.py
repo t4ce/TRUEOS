@@ -34,6 +34,8 @@ def harness() -> str:
         assert declaration, name
         production += declaration.group() + "\n"
     production = production.replace("super::shell3_font_service::hex", "crate::hex")
+    production = production.replace("super::shell3_font_service::cpu_bitmap_fallback_enabled",
+                                    "crate::cpu_bitmap_fallback_enabled")
     return r'''
 extern crate alloc;
 #[macro_export] macro_rules! log_important { ($($tokens:tt)*) => {}; }
@@ -61,6 +63,11 @@ mod microfont {
 }
 static NATIVE_ATTEMPTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+static CPU_BITMAP_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
+fn cpu_bitmap_fallback_enabled() -> bool {
+    CPU_BITMAP_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
 #[derive(Clone, Copy, Default)] struct AtlasConfig { glyph_height_px: Option<u32>, line_width_px: f32 }
 impl AtlasConfig {
     fn cell_extent(&self) -> (u32, u32) { (8, self.glyph_height_px.unwrap() + 2) }
@@ -175,6 +182,30 @@ mod intel {
         assert!(atlas.glyph('ỹ').is_none()); // bitmap coverage cannot create native slots
         assert!(atlas.glyphs().all(|(character, _)| character != 'ỹ'));
     }
+    #[test] fn desktop_rejects_bitmap_initialization_before_publication() {
+        CPU_BITMAP_ENABLED.store(false, std::sync::atomic::Ordering::Relaxed);
+        for height in [0, 11, 31, u32::MAX] {
+            assert_eq!(build_bitmap_alpha_atlas(height).err(), Some("microfont-bitmap-atlas-disabled"));
+            assert!(CPU_ALPHA_ATLAS.get().is_none());
+            assert!(ready_atlas().is_none());
+        }
+        let native = ALPHA_ATLAS.call_once(native_fixture);
+        assert!(core::ptr::eq(ready_atlas().unwrap(), native));
+        assert!(core::ptr::eq(build_shell3_alpha_atlas(11).unwrap(), native));
+        assert_eq!(NATIVE_ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+    #[test] fn desktop_hides_preexisting_bitmap_and_keeps_native_priority() {
+        let bitmap = build_bitmap_alpha_atlas(11).unwrap();
+        assert!(core::ptr::eq(ready_atlas().unwrap(), bitmap));
+        CPU_BITMAP_ENABLED.store(false, std::sync::atomic::Ordering::Relaxed);
+        assert!(ready_atlas().is_none());
+        assert_eq!(build_bitmap_alpha_atlas(11).err(), Some("microfont-bitmap-atlas-disabled"));
+        let native = ALPHA_ATLAS.call_once(native_fixture);
+        assert!(core::ptr::eq(ready_atlas().unwrap(), native));
+        CPU_BITMAP_ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(core::ptr::eq(ready_atlas().unwrap(), native));
+        assert_eq!(NATIVE_ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
     #[test] fn text_copy_uses_shared_bitmap_tiles_and_clips() {
         let atlas = build_bitmap_alpha_atlas(11).unwrap();
         let mut destination = [19; 8 * 12];
@@ -201,7 +232,7 @@ def main() -> None:
         listing = subprocess.check_output([str(binary), "--list"], text=True)
         names = [line.removesuffix(": test") for line in listing.splitlines()
                  if line.startswith("atlas_tests::") and line.endswith(": test")]
-        assert len(names) == 6
+        assert len(names) == 8
         for name in names:
             subprocess.run([str(binary), name, "--exact"], check=True)
 

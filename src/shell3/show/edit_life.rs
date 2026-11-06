@@ -21,9 +21,9 @@ pub(super) fn present(
     settings: Option<&EditLife>,
     source_changed: bool,
 ) {
-    let Some(settings) = settings.filter(|settings| {
-        settings.enabled && settings.viewport.width != 0 && settings.viewport.height != 0
-    }) else {
+    // Apply the same policy as the ordinary cell painter before capture or
+    // registration: native font outputs must never submit a Hex effect frame.
+    let Some(settings) = super::bitmap_edit_settings(settings) else {
         if surface.edit_life.take().is_some() {
             crate::ui4::edit_life::remove(surface.window);
             surface.edit_life_page = None;

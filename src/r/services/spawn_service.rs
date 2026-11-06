@@ -299,7 +299,13 @@ fn spawn_microfont_warm(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn microfont_warm_gate() -> bool {
-    crate::ui4::output_dimensions().is_some()
+    if super::shell3_font_service::cpu_bitmap_fallback_enabled() {
+        crate::ui4::output_dimensions().is_some()
+    } else {
+        crate::r::readiness::is_set(crate::r::readiness::UI4_COMPOSITOR_READY)
+            && (crate::virtio_gpu_logo::output_dimensions().is_some()
+                || (crate::intel::guc_submission_ready() && crate::intel::render::warm_state().is_some()))
+    }
 }
 
 #[cfg(feature = "trueos_ttstt")]

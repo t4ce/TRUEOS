@@ -63,6 +63,9 @@ def main() -> None:
     assert cpu_static
     font += cpu_static.group() + "\n"
     font = font.replace("super::shell3_font_service::hex::", "crate::hex::")
+    font = font.replace("super::shell3_font_service::cpu_bitmap_fallback_enabled",
+                        "cpu_bitmap_fallback_enabled")
+    font += "fn cpu_bitmap_fallback_enabled() -> bool { false }\n"
     font += (FIXTURES / "atlas_fixture.rs").read_text()
 
     slot_path = "src/ui4/slot4_service.rs"

@@ -771,19 +771,24 @@ pub(crate) async fn wait_for_start_glyph() -> &'static OwnedGlyphMask {
     }
 }
 
-// Independent CPU production: text and the home button must not wait for RCS.
+// Keep native production on supported GPUs; only the experimental laptop path
+// uses an independent CPU mask while its render engine is being brought up.
 pub(crate) fn warm_start_glyph() -> Result<(), &'static str> {
     if START_GLYPH.get().is_some() { return Ok(()); }
     let _warm = START_GLYPH_WARM.try_lock().ok_or("microfont-start-glyph-busy")?;
     if START_GLYPH.get().is_some() { return Ok(()); }
     let height = home_button_em_height()
         .ok_or("microfont-start-glyph-physical-size-unavailable")?;
-    let glyph = super::microfont_home_cpu::build(height)?;
+    let (glyph, producer) = if super::shell3_font_service::cpu_bitmap_fallback_enabled() {
+        (super::microfont_home_cpu::build(height)?, "cpu")
+    } else {
+        (build_home_button_mask(height)?, "native-gpu")
+    };
     let glyph = START_GLYPH.call_once(|| glyph);
     START_GLYPH_READY.notify_all();
     crate::log_important!(target: "microfont-mask";
-        "microfont-start-glyph: ready glyph=homebutton source=private-line-asset producer=cpu gpu_submissions=0 em_mm={} em_height_px={} extent={}x{} format=r8 bytes={} productions=1 retained=service-lifetime\n",
-        START_GLYPH_EM_MM, glyph.em_height_px, glyph.width, glyph.height, glyph.pixels.len());
+        "microfont-start-glyph: ready glyph=homebutton source=private-line-asset producer={} em_mm={} em_height_px={} extent={}x{} format=r8 bytes={} productions=1 retained=service-lifetime\n",
+        producer, START_GLYPH_EM_MM, glyph.em_height_px, glyph.width, glyph.height, glyph.pixels.len());
     Ok(())
 }
 
@@ -912,15 +917,24 @@ static ALPHA_ATLAS: spin::Once<OwnedAlphaAtlas> = spin::Once::new();
 static CPU_ALPHA_ATLAS: spin::Once<OwnedAlphaAtlas> = spin::Once::new();
 
 pub(crate) fn ready_atlas() -> Option<&'static OwnedAlphaAtlas> {
-    ALPHA_ATLAS.get().or_else(|| CPU_ALPHA_ATLAS.get())
+    ALPHA_ATLAS.get().or_else(|| {
+        if super::shell3_font_service::cpu_bitmap_fallback_enabled() {
+            CPU_ALPHA_ATLAS.get()
+        } else {
+            None
+        }
+    })
 }
 
 /// Expand the canonical bitmap cells once, without a GPU allocation, home-glyph
-/// warmup or native submission. The published CPU tiles never replace native
-/// resources and remain available even when their separate atlas is quarantined.
+/// warmup or native submission, only for the experimental laptop. These CPU
+/// tiles never replace native resources and survive native atlas quarantine.
 pub(crate) fn build_bitmap_alpha_atlas(em_height_px: u32) -> Result<&'static OwnedAlphaAtlas, &'static str> {
     use super::shell3_font_service::hex;
 
+    if !super::shell3_font_service::cpu_bitmap_fallback_enabled() {
+        return Err("microfont-bitmap-atlas-disabled");
+    }
     if !(11..=253).contains(&em_height_px) {
         return Err("microfont-bitmap-atlas-size");
     }

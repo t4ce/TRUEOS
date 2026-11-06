@@ -1,12 +1,12 @@
-//! Shell3's shared CPU bitmap font authority. Canonical R8 cells are expanded
-//! once and retained for service life; styled RGBA cells are warmed and copied by
+//! Shell3's shared native raster font authority. Only the adopted laptop panel
+//! uses CPU bitmap mitigation; styled RGBA cells are warmed once and copied by
 //! either the CPU or legacy BLT. Shell3 owns layout, clipping and sink choice.
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::signal::Signal;
 use trueos_time::{Duration, Timer};
 
-use super::microfont_mask_service::{OwnedAlphaAtlas, build_bitmap_alpha_atlas};
+use super::microfont_mask_service::{OwnedAlphaAtlas, build_bitmap_alpha_atlas, build_shell3_alpha_atlas};
 use crate::intel::{GucBcs0RgbaCopy, GucBcs0RgbaSurface, gpgpu::GpgpuOwnedRgba8Surface};
 
 #[path = "shell3_hex_font.rs"]
@@ -49,15 +49,23 @@ type Reply = Signal<crate::wait::EmbassySpinRawMutex, Result<(), &'static str>>;
 
 struct Font {
     alpha: &'static OwnedAlphaAtlas,
-    hex: HexAtlas,
+    hex: Option<HexAtlas>,
     cache: spin::Mutex<CellCache>,
 }
 /// Edit's shader viewport selects Hex explicitly; layout remains shared.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) enum FontFace { Raster, Hex }
 
-/// The shader's bitmap cells use the same physical size and canonical source
-/// as the default font. Neither needs a runtime compiler or GPU raster pass.
+/// Explicit hardware scope, independent of GPU execution success or failure.
+pub(crate) fn cpu_bitmap_fallback_enabled() -> bool {
+    crate::intel::laptop_cpu_font_fallback_enabled()
+}
+
+fn effective_face(face: FontFace) -> FontFace {
+    if cpu_bitmap_fallback_enabled() { face } else { FontFace::Raster }
+}
+
+/// Laptop-only shader bitmap cells; native rigs never allocate this atlas.
 struct HexAtlas {
     width: u32,
     height: u32,
@@ -116,7 +124,7 @@ struct CellCache {
 }
 
 /// Call before acquiring a writable frame/cache lease. Concurrent shells share
-/// the same initialization; bitmap expansion runs on a blocking service lane.
+/// the same initialization; font production runs on a blocking service lane.
 pub(crate) async fn prepare() -> Result<(), &'static str> {
     loop {
         if FONT.get().is_some() { return Ok(()); }
@@ -150,20 +158,23 @@ fn prepare_once() -> Result<(), &'static str> {
     if FONT.get().is_some() { return Ok(()); }
     let (width, height) = cell_extent(DEFAULT_UI4_FONT_SCALE)
         .ok_or("shell3-font-physical-size-unavailable")?;
-    // Kernel text uses the canonical bitmap authority on every display. A lost
-    // RCS or quarantined atlas must never hold CPU text behind another submit.
-    let alpha = build_bitmap_alpha_atlas(height)?;
+    let bitmap = cpu_bitmap_fallback_enabled();
+    let alpha = if bitmap { build_bitmap_alpha_atlas(height)? }
+        else { build_shell3_alpha_atlas(height)? };
     alpha.glyph('?').ok_or("shell3-font-missing-question-mark")?;
-    let hex = HexAtlas::new(width, height)?;
+    let hex = if bitmap { Some(HexAtlas::new(width, height)?) } else { None };
     let glyphs = alpha.glyphs().count();
-    let hex_bytes = hex.coverage.len();
+    let hex_bytes = hex.as_ref().map_or(0, |atlas| atlas.coverage.len());
     FONT.call_once(|| Font { alpha, hex, cache: spin::Mutex::new(CellCache::default()) });
     crate::log_important!(target: "microfont-mask";
-        "shell3-font: ready source=canonical-bitmap producer=cpu gpu_submissions=0 format=r8 em_mm=7.5 em_height_px={} glyphs={} successful_productions=1 retained=service-lifetime layout=physical-cells missing_glyph=red-question-mark\n",
-        height, glyphs);
-    crate::log_important!(target: "microfont-mask";
-        "shell3-font: hex-ready format=r8 cell={}x{} glyphs={} bytes={} source=canonical-bitmap retained=service-lifetime runtime_hex_feature=off layout=physical-cells\n",
-        width, height, hex::GLYPH_COUNT, hex_bytes);
+        "shell3-font: ready source={} producer={} format=r8 em_mm=7.5 em_height_px={} glyphs={} successful_productions=1 retained=service-lifetime layout=physical-cells missing_glyph=red-question-mark\n",
+        if bitmap { "canonical-bitmap" } else { "native-line-quad" },
+        if bitmap { "cpu-laptop-only" } else { "native-gpu" }, height, glyphs);
+    if bitmap {
+        crate::log_important!(target: "microfont-mask";
+            "shell3-font: hex-ready scope=laptop-only format=r8 cell={}x{} glyphs={} bytes={} source=canonical-bitmap retained=service-lifetime runtime_hex_feature=off layout=physical-cells\n",
+            width, height, hex::GLYPH_COUNT, hex_bytes);
+    }
     Ok(())
 }
 
@@ -189,6 +200,7 @@ pub(crate) fn glyph_with_face(
     background: [u8; 4],
     underline: bool,
 ) -> Result<GucBcs0RgbaCopy, &'static str> {
+    let face = effective_face(face);
     let font = FONT.get().ok_or("shell3-font-not-ready")?;
     if cell_width == 0 || cell_height == 0 || cell_width > 256 || cell_height > 256 {
         return Err("shell3-font-cell-size");
@@ -296,6 +308,7 @@ enum CellMask<'a> { Raster(&'a [u8]), Hex(u32), TabLabel(hex::tab_label_cell::Ta
 
 fn resolved_face(font: &Font, face: FontFace, character: char, foreground: [u8; 4])
     -> Result<(CellMask<'_>, [u8; 4]), &'static str> {
+    let face = effective_face(face);
     if face == FontFace::Raster {
         if let Some(label) = hex::tab_label_cell::TabLabelCell::from_character(character) {
             return Ok((CellMask::TabLabel(label), foreground));
@@ -315,7 +328,8 @@ fn sample_face(font: &Font, mask: CellMask<'_>, x: u32, y: u32,
     width: u32, height: u32, underline: bool) -> u8 {
     match mask {
         CellMask::Raster(mask) => sample_cell(font.alpha, mask, x, y, width, height, underline),
-        CellMask::Hex(glyph) => font.hex.sample(glyph, x, y, width, height, underline),
+        CellMask::Hex(glyph) => font.hex.as_ref().map_or(0,
+            |atlas| atlas.sample(glyph, x, y, width, height, underline)),
         CellMask::TabLabel(label) => {
             let Some((character, px, py, w, h)) = label.point(x, y, width, height) else { return 0; };
             font.alpha.glyph(character).map_or(0, |mask| sample_native(font.alpha, mask, px, py, w, h))
@@ -397,8 +411,8 @@ fn grid_glyph_blocking(scale: u32, ch: char) -> Result<Vec<u8>, &'static str> {
     Ok(result)
 }
 
-/// Publish text before warming the independent private home asset. Neither
-/// production uses GPU execution; a home error cannot withdraw ready text.
+/// Publish text and warm the independent private home asset. Native rigs keep
+/// GPU raster production; the adopted laptop alone uses the CPU mitigation.
 #[cfg(not(test))]
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn microfont_warm_task() {

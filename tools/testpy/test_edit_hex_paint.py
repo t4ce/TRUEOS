@@ -47,6 +47,7 @@ mod paint_tests {
             hex_region: None,
             frame_contents: [Some(vec![17, 19]), Some(vec![23, 29])],
             clear_buffers: [false; 2],
+            window: 1, frame: 2, edit_life: None, edit_life_page: None,
         }
     }
 
@@ -159,22 +160,110 @@ mod paint_tests {
         assert_eq!(cache[&raster], "raster coverage");
         assert_eq!(cache[&hex], "hex coverage");
     }
+
+    #[test]
+    fn native_output_keeps_raster_even_when_guest_requests_hex_shader() {
+        CPU_BITMAP_FALLBACK.with(|enabled| enabled.set(false));
+        let mut surface = surface();
+        let settings = settings();
+        surface.set_hex_region(Some(&settings));
+        assert_eq!(surface.font_face(3, 2), FontFace::Raster);
+        assert!(surface.hex_region.is_none());
+        assert_eq!(surface.clear_buffers, [false; 2]);
+
+        effect_present::present(&mut surface, &[], Some(&settings), true);
+        assert_eq!(effect_calls(), EffectCalls::default(),
+            "native output must not capture, register or touch the Hex effect backend");
+        assert!(surface.edit_life.is_none());
+        assert!(surface.edit_life_page.is_none());
+    }
+
+    #[test]
+    fn native_policy_clears_existing_hex_region_and_detaches_retained_effect() {
+        let mut surface = surface();
+        let settings = settings();
+        surface.set_hex_region(Some(&settings));
+        effect_present::present(&mut surface, &[], Some(&settings), true);
+        assert_eq!(effect_calls().captures, 1);
+        assert_eq!(effect_calls().publishes, 1);
+        assert!(surface.edit_life_page.is_some());
+        drawn(&mut surface);
+        EFFECT_CALLS.with(|calls| *calls.borrow_mut() = EffectCalls::default());
+
+        CPU_BITMAP_FALLBACK.with(|enabled| enabled.set(false));
+        surface.set_hex_region(Some(&settings));
+        invalidated(&surface);
+        assert_eq!(surface.font_face(3, 2), FontFace::Raster);
+        effect_present::present(&mut surface, &[], Some(&settings), true);
+        assert_eq!(effect_calls(), EffectCalls { removes: 1, ..EffectCalls::default() });
+        assert!(surface.edit_life.is_none());
+        assert!(surface.edit_life_page.is_none());
+    }
+
+    #[test]
+    fn laptop_bitmap_policy_preserves_requested_effect_publication() {
+        let mut surface = surface();
+        let settings = settings();
+        surface.set_hex_region(Some(&settings));
+        assert_eq!(surface.font_face(3, 2), FontFace::Hex);
+        effect_present::present(&mut surface, &[], Some(&settings), true);
+        assert_eq!(effect_calls(), EffectCalls {
+            captures: 1, publishes: 1, failure_checks: 1, ..EffectCalls::default()
+        });
+        assert_eq!(surface.edit_life, Some(settings));
+        assert!(surface.edit_life_page.is_some());
+    }
+}
+'''
+
+
+EFFECT_FIXTURE = r'''
+#[macro_export] macro_rules! log_warn { ($($tokens:tt)*) => {}; }
+#[derive(Clone, Copy)] struct RgbaColor;
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct EffectCalls { captures: usize, publishes: usize, removes: usize, pauses: usize, failure_checks: usize }
+std::thread_local! {
+    static CPU_BITMAP_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    static EFFECT_CALLS: std::cell::RefCell<EffectCalls> = Default::default();
+}
+fn effect_calls() -> EffectCalls { EFFECT_CALLS.with(|calls| calls.borrow().clone()) }
+mod ui4 { pub mod edit_life {
+    pub fn remove(_:u32) { crate::EFFECT_CALLS.with(|calls| calls.borrow_mut().removes += 1); }
+    pub fn is_failed(_:u32) -> bool {
+        crate::EFFECT_CALLS.with(|calls| calls.borrow_mut().failure_checks += 1); false
+    }
+    pub fn pause(_:u32, _:u32) { crate::EFFECT_CALLS.with(|calls| calls.borrow_mut().pauses += 1); }
+    pub fn publish_page(_:u32, _:u32, _:std::sync::Arc<()>) {
+        crate::EFFECT_CALLS.with(|calls| calls.borrow_mut().publishes += 1);
+    }
+}}
+mod effect_present {
+    use super::*;
+    use std::sync::Arc;
+    use edit_life::EditLife;
+    fn capture(_: &Ui4Surface, _: &[&[(char, Option<RgbaColor>)]], _: &EditLife) -> Result<(), &'static str> {
+        EFFECT_CALLS.with(|calls| calls.borrow_mut().captures += 1); Ok(())
+    }
+    @PRESENT@
 }
 '''
 
 
 def main() -> None:
     show = (ROOT / "src/shell3/show/show.rs").read_text()
+    effect = (ROOT / "src/shell3/show/edit_life.rs").read_text()
     font = (ROOT / "src/r/services/shell3_font_service.rs").read_text()
-    source = "extern crate alloc;\nextern crate self as trueos_terminal;\n"
+    source = "#![allow(unused_variables)]\nextern crate alloc;\nextern crate self as trueos_terminal;\n"
     source += "#[path=" + json.dumps(str(ROOT / "crates/trueos-terminal/src/edit_life.rs")) + "] pub mod edit_life;\n"
     source += item(font, "#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]\npub(crate) enum FontFace")
     source += item(font, "#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]\nstruct CellKey")
-    source += "mod r { pub mod services { pub mod shell3_font_service { pub(crate) use crate::FontFace; } } }\n"
+    source += "mod r { pub mod services { pub mod shell3_font_service { pub(crate) use crate::FontFace; pub(crate) fn cpu_bitmap_fallback_enabled() -> bool { crate::CPU_BITMAP_FALLBACK.with(|enabled| enabled.get()) } } } }\n"
+    source += item(show, "fn bitmap_edit_settings(")
     source += item(show, "#[derive(Clone, Debug, PartialEq, Eq)]\nstruct HexRegion")
     source += item(show, "impl HexRegion")
-    source += "struct Ui4Surface { hex_region: Option<HexRegion>, frame_contents: [Option<Vec<u8>>; 2], clear_buffers: [bool; 2] }\n"
+    source += "struct Ui4Surface { hex_region: Option<HexRegion>, frame_contents: [Option<Vec<u8>>; 2], clear_buffers: [bool; 2], window: u32, frame: u32, edit_life: Option<edit_life::EditLife>, edit_life_page: Option<std::sync::Arc<()>> }\n"
     source += item(show, "impl Ui4Surface")
+    source += EFFECT_FIXTURE.replace("@PRESENT@", item(effect, "pub(super) fn present("))
     source += TESTS
     with tempfile.TemporaryDirectory(prefix="trueos-edit-hex-paint-") as temporary:
         directory = Path(temporary)
