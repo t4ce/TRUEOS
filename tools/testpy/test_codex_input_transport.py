@@ -100,32 +100,36 @@ mod async_fs_adapter {
     #[test]
     fn production_async_fs_adapter_reserves_capacity_before_consuming_message() {
         const OWNER: u32 = 0x8000_0000;
-        const PATH: &str = "vFile:codex-input/new";
         crate::r::input_timing::NOW.store(10_000, Ordering::SeqCst);
         {
             let mut vms = crate::hv::VMS.lock().unwrap();
             vms[0].run = 10;
             vms[0].instance = Some([10; 16]);
         }
-        assert!(start_codex_input_read(OWNER, PATH) > 0);
-        let target = crate::codex_input_service::current_target().unwrap();
-        let text = "accepted whole text\n§ unchanged";
-        crate::codex_input_service::submit(&target, text).unwrap();
-        CAPACITY.store(0, Ordering::SeqCst);
-        assert_eq!(start_codex_input_read(OWNER, PATH), FS_ERR_NO_SPACE);
-        CAPACITY.store(64, Ordering::SeqCst);
-        let id = start_codex_input_read(OWNER, PATH);
-        assert!(id > 0);
-        {
-            let operations = lock_operations();
-            let OperationState::Read(bytes) = &operations.get(&(id as u32)).unwrap().state;
-            assert_eq!(bytes, text.as_bytes());
-        }
-        let id = start_codex_input_read(OWNER, PATH);
-        {
-            let operations = lock_operations();
-            let OperationState::Read(bytes) = &operations.get(&(id as u32)).unwrap().state;
-            assert!(bytes.is_empty());
+        for path in [
+            "vFile:codex-input/new",
+            "vFile:codex-input/v2/01234567-89ab-cdef-0123-456789abcdef/new",
+        ] {
+            assert!(start_codex_input_read(OWNER, path) > 0);
+            let target = crate::codex_input_service::current_target().unwrap();
+            let text = "accepted whole text\n§ unchanged";
+            crate::codex_input_service::submit(&target, text).unwrap();
+            CAPACITY.store(0, Ordering::SeqCst);
+            assert_eq!(start_codex_input_read(OWNER, path), FS_ERR_NO_SPACE);
+            CAPACITY.store(64, Ordering::SeqCst);
+            let id = start_codex_input_read(OWNER, path);
+            assert!(id > 0);
+            {
+                let operations = lock_operations();
+                let OperationState::Read(bytes) = &operations.get(&(id as u32)).unwrap().state;
+                assert_eq!(bytes, text.as_bytes());
+            }
+            let id = start_codex_input_read(OWNER, path);
+            {
+                let operations = lock_operations();
+                let OperationState::Read(bytes) = &operations.get(&(id as u32)).unwrap().state;
+                assert!(bytes.is_empty());
+            }
         }
         crate::codex_input_service::read_for_owner(OWNER, "vFile:codex-input/offline").unwrap();
         crate::r::input_timing::NOW.store(0, Ordering::SeqCst);
@@ -203,6 +207,59 @@ fn public_boundary_requires_unique_live_exact_app_and_current_receiver() {
     read_for_owner(OWNER, "vFile:codex-input/offline").unwrap();
     assert!(!is_target_live(&new_run));
     assert!(current_target().is_none());
+}
+
+#[test]
+fn qualified_public_boundary_binds_frames_and_queued_text_to_backend_and_thread() {
+    use codex_input_service::{SubmitError, current_target, is_target_live, read_for_owner, submit};
+    use r::cabi_codes::{FS_ERR_BAD_PARAM, FS_ERR_NOT_FOUND};
+    use std::sync::atomic::Ordering;
+    const OWNER: u32 = 0x8000_0000;
+    const BACKEND_A: &str = "01234567-89ab-cdef-0123-456789abcdef";
+    const BACKEND_B: &str = "76543210-abcd-ef01-2345-6789abcdef01";
+    r::input_timing::NOW.store(20_000, Ordering::SeqCst);
+    {
+        let mut vms = hv::VMS.lock().unwrap();
+        vms[0].run = 20;
+        vms[0].instance = Some([20; 16]);
+    }
+    for conversation in ["new", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"] {
+        let original = format!("vFile:codex-input/v2/{BACKEND_A}/{conversation}");
+        let other = format!("vFile:codex-input/v2/{BACKEND_B}/{conversation}");
+        let legacy = format!("vFile:codex-input/{conversation}");
+        assert_eq!(read_for_owner(0, &original), Err(FS_ERR_NOT_FOUND));
+        assert!(read_for_owner(OWNER, &original).unwrap().is_empty());
+        let stale_frame = current_target().unwrap();
+        assert!(read_for_owner(OWNER, &other).unwrap().is_empty());
+        assert!(!is_target_live(&stale_frame));
+        assert_eq!(submit(&stale_frame, "must not follow backend B"), Err(SubmitError::Unavailable));
+
+        read_for_owner(OWNER, &original).unwrap();
+        let frame = current_target().unwrap();
+        submit(&frame, "exact backend and conversation\n§ unchanged").unwrap();
+        assert!(read_for_owner(OWNER, &other).unwrap().is_empty());
+        assert!(current_target().is_none(), "pending A text prevents replacement by B");
+        assert!(read_for_owner(OWNER, &legacy).unwrap().is_empty());
+        assert_eq!(read_for_owner(OWNER, &original).unwrap(),
+                   "exact backend and conversation\n§ unchanged".as_bytes());
+        assert!(read_for_owner(OWNER, &original).unwrap().is_empty());
+
+        read_for_owner(OWNER, &legacy).unwrap();
+        let legacy_frame = current_target().unwrap();
+        submit(&legacy_frame, "legacy client remains supported").unwrap();
+        assert!(read_for_owner(OWNER, &original).unwrap().is_empty());
+        assert_eq!(read_for_owner(OWNER, &legacy).unwrap(), b"legacy client remains supported");
+    }
+    for path in [
+        format!("vFile:codex-input/v2/{BACKEND_A}/new/extra"),
+        format!("vFile:codex-input/v2/not-a-uuid/new"),
+        format!("vFile:codex-input/v3/{BACKEND_A}/new"),
+    ] {
+        assert_eq!(read_for_owner(OWNER, &path), Err(FS_ERR_BAD_PARAM));
+    }
+    read_for_owner(OWNER, "vFile:codex-input/offline").unwrap();
+    assert!(current_target().is_none());
+    r::input_timing::NOW.store(0, Ordering::SeqCst);
 }
 '''
 

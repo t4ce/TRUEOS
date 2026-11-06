@@ -19,6 +19,16 @@ const VM_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
 enum Scope {
     New,
     Thread([u8; 16]),
+    Qualified {
+        backend: [u8; 16],
+        conversation: Conversation,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Conversation {
+    New,
+    Thread([u8; 16]),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -251,10 +261,7 @@ pub(crate) fn submit(target: &Target, text: &str) -> Result<(), SubmitError> {
     })
 }
 
-fn parse_scope(value: &str) -> Option<Scope> {
-    if value == "new" {
-        return Some(Scope::New);
-    }
+fn parse_uuid(value: &str) -> Option<[u8; 16]> {
     let bytes = value.as_bytes();
     if bytes.len() != 36 {
         return None;
@@ -277,7 +284,31 @@ fn parse_scope(value: &str) -> Option<Scope> {
         uuid[nibble / 2] |= value << (4 * (1 - nibble % 2));
         nibble += 1;
     }
-    Some(Scope::Thread(uuid))
+    Some(uuid)
+}
+
+fn parse_conversation(value: &str) -> Option<Conversation> {
+    if value == "new" {
+        Some(Conversation::New)
+    } else {
+        parse_uuid(value).map(Conversation::Thread)
+    }
+}
+
+fn parse_scope(value: &str) -> Option<Scope> {
+    if let Some(value) = value.strip_prefix("v2/") {
+        let (backend, conversation) = value.split_once('/')?;
+        return Some(Scope::Qualified {
+            backend: parse_uuid(backend)?,
+            conversation: parse_conversation(conversation)?,
+        });
+    }
+    // Legacy clients retain their own namespace. They must never revive a
+    // qualified frame or consume text belonging to a qualified backend.
+    match parse_conversation(value)? {
+        Conversation::New => Some(Scope::New),
+        Conversation::Thread(thread) => Some(Scope::Thread(thread)),
+    }
 }
 
 /// Called only after async-FS has reserved a completed result operation. This
@@ -545,6 +576,143 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn qualified_backend_change_invalidates_frames_with_the_same_thread_uuid() {
+        let mut registry = Registry::new();
+        for conversation in [Conversation::New, Conversation::Thread([7; 16])] {
+            let original = Scope::Qualified {
+                backend: [1; 16],
+                conversation,
+            };
+            let other = Scope::Qualified {
+                backend: [2; 16],
+                conversation,
+            };
+            registry.poll(identity(1), original, 0).unwrap();
+            let frame = target(&registry, 0);
+            registry.poll(identity(1), other, 100).unwrap();
+            assert_ne!(target(&registry, 100), frame);
+            assert!(!registry.is_live(&frame, 100));
+            assert_eq!(
+                registry.submit(&frame, "old backend frame", 100),
+                Err(SubmitError::Unavailable)
+            );
+        }
+    }
+
+    #[test]
+    fn qualified_pending_text_waits_for_its_exact_backend_and_conversation() {
+        for conversation in [Conversation::New, Conversation::Thread([7; 16])] {
+            let mut registry = Registry::new();
+            let original = Scope::Qualified {
+                backend: [1; 16],
+                conversation,
+            };
+            let other = Scope::Qualified {
+                backend: [2; 16],
+                conversation,
+            };
+            registry.poll(identity(1), original, 0).unwrap();
+            let frame = target(&registry, 0);
+            registry.submit(&frame, "original only", 100).unwrap();
+            assert!(registry.poll(identity(1), other, 200).unwrap().is_empty());
+            let other_frame = target(&registry, 200);
+            assert_eq!(
+                registry.submit(&other_frame, "must not replace", 200),
+                Err(SubmitError::Busy)
+            );
+            registry.offline(identity(1));
+            assert!(registry.poll(identity(1), other, 300).unwrap().is_empty());
+            assert_eq!(
+                registry.poll(identity(1), original, 400).unwrap(),
+                b"original only"
+            );
+            assert!(
+                registry
+                    .poll(identity(1), original, 500)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn qualified_and_legacy_scopes_never_share_frames_or_pending_text() {
+        for (legacy, conversation) in [
+            (Scope::New, Conversation::New),
+            (Scope::Thread([7; 16]), Conversation::Thread([7; 16])),
+        ] {
+            let qualified = Scope::Qualified {
+                backend: [1; 16],
+                conversation,
+            };
+            for (original, other) in [(legacy, qualified), (qualified, legacy)] {
+                let mut registry = Registry::new();
+                registry.poll(identity(1), original, 0).unwrap();
+                let frame = target(&registry, 0);
+                registry.submit(&frame, "exact namespace", 100).unwrap();
+                assert!(registry.poll(identity(1), other, 200).unwrap().is_empty());
+                assert!(!registry.is_live(&frame, 200));
+                assert_eq!(
+                    registry.poll(identity(1), original, 300).unwrap(),
+                    b"exact namespace"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn qualified_heartbeat_and_expiry_keep_existing_generation_rules() {
+        let mut registry = Registry::new();
+        let scope = Scope::Qualified {
+            backend: [1; 16],
+            conversation: Conversation::Thread([7; 16]),
+        };
+        registry.poll(identity(1), scope, 0).unwrap();
+        let frame = target(&registry, 0);
+        registry.poll(identity(1), scope, 1_900).unwrap();
+        assert_eq!(target(&registry, 2_500), frame);
+        registry
+            .submit(&frame, "accepted before expiry", 2_500)
+            .unwrap();
+        assert_eq!(
+            registry.poll(identity(1), scope, 4_000).unwrap(),
+            b"accepted before expiry"
+        );
+        assert!(!registry.is_live(&frame, 4_000));
+        assert_ne!(target(&registry, 4_000), frame);
+    }
+
+    #[test]
+    fn qualified_scope_parser_requires_exact_bounded_components() {
+        let backend = "01234567-89ab-cdef-0123-456789abcdef";
+        let thread = "76543210-abcd-ef01-2345-6789abcdef01";
+        assert_eq!(
+            parse_scope(&alloc::format!("v2/{backend}/new")),
+            Some(Scope::Qualified {
+                backend: parse_uuid(backend).unwrap(),
+                conversation: Conversation::New,
+            })
+        );
+        assert_eq!(
+            parse_scope(&alloc::format!("v2/{backend}/{thread}")),
+            Some(Scope::Qualified {
+                backend: parse_uuid(backend).unwrap(),
+                conversation: Conversation::Thread(parse_uuid(thread).unwrap()),
+            })
+        );
+        for invalid in [
+            alloc::format!("v3/{backend}/{thread}"),
+            alloc::format!("v2//{thread}"),
+            alloc::format!("v2/{backend}/"),
+            alloc::format!("v2/{backend}/{thread}/extra"),
+            alloc::format!("v2/{backend}/offline"),
+            alloc::format!("v2/not-a-uuid/{thread}"),
+        ] {
+            assert_eq!(parse_scope(&invalid), None, "{invalid}");
+        }
     }
 
     #[test]
