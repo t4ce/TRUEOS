@@ -5,6 +5,8 @@ extern crate alloc;
 pub mod program_status;
 pub mod edit_life;
 mod font_scale;
+pub mod tab_label_cell;
+pub mod tab_labels;
 
 use alloc::{string::String, vec, vec::Vec};
 
@@ -118,6 +120,7 @@ struct SynchronizedScreen {
     cursor: Cursor,
     edit_life: Option<edit_life::EditLife>,
     font_scale: Option<u32>,
+    tab_labels: Vec<tab_labels::TabLabel>,
 }
 
 /// A compact, fixed-cell terminal screen for the UI4 shell frontend.
@@ -145,6 +148,7 @@ pub struct Terminal {
     osc_overflow: bool,
     edit_life: Option<edit_life::EditLife>,
     font_scale: Option<u32>,
+    tab_labels: Vec<tab_labels::TabLabel>,
     synchronized: Option<SynchronizedScreen>,
     utf8_buf: [u8; 4],
     utf8_len: usize,
@@ -182,6 +186,7 @@ impl Terminal {
             osc_overflow: false,
             edit_life: None,
             font_scale: None,
+            tab_labels: Vec::new(),
             synchronized: None,
             utf8_buf: [0; 4],
             utf8_len: 0,
@@ -210,6 +215,10 @@ impl Terminal {
             Some(screen) => screen.edit_life.as_ref(),
             None => self.edit_life.as_ref(),
         }
+    }
+
+    pub fn tab_labels(&self) -> &[tab_labels::TabLabel] {
+        self.synchronized.as_ref().map_or(&self.tab_labels, |screen| &screen.tab_labels)
     }
 
     /// This terminal's committed font request. Scale 2 is the normal size;
@@ -329,12 +338,14 @@ impl Terminal {
         self.reset_parser();
         self.edit_life = None;
         self.synchronized = None;
+        self.tab_labels.clear();
         self.dirty = true;
     }
 
     /// Clear the screen and all parser/cursor state without changing its size.
     pub fn reset(&mut self) {
         self.edit_life = None;
+        self.tab_labels.clear();
         self.font_scale = None;
         self.synchronized = None;
         self.cells.fill(Cell::blank());
@@ -506,6 +517,11 @@ impl Terminal {
     }
 
     fn finish_osc(&mut self) {
+        if !self.osc_overflow
+            && tab_labels::update(&self.osc_buf, &mut self.tab_labels, self.cols, self.rows)
+        {
+            self.dirty = true;
+        }
         if !self.osc_overflow
             && let Some(scale) = font_scale::parse(&self.osc_buf)
             && self.font_scale != Some(scale)
@@ -696,6 +712,7 @@ impl Terminal {
                 1006 => self.mouse_sgr_encoding = enabled,
                 1015 => self.mouse_urxvt_encoding = enabled,
                 47 | 1047 | 1049 if !enabled => {
+                    if !self.tab_labels.is_empty() { self.dirty = true; self.tab_labels.clear(); }
                     if self.edit_life.take().is_some() { self.dirty = true; }
                     if self.font_scale.take().is_some() { self.dirty = true; }
                     self.synchronized = None;
@@ -707,6 +724,7 @@ impl Terminal {
                             cursor: self.cursor(),
                             edit_life: self.edit_life.clone(),
                             font_scale: self.font_scale,
+                            tab_labels: self.tab_labels.clone(),
                         });
                     } else if !enabled {
                         self.synchronized = None;

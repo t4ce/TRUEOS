@@ -456,7 +456,9 @@ fn log_hub_device_info(hub: &crabusb::HubDeviceInfo) {
     );
 }
 
-#[trueos_executor::task]
+// Each controller retains its pump for its lifetime; a single task slot keeps
+// the second controller from reaching device discovery.
+#[trueos_executor::task(pool_size = MAX_CRABUSB_CONTROLLERS)]
 pub async fn usb_event_pump_task(index: usize, handler: crabusb::EventHandler) {
     let mut last_transfer_activity_count = None;
     loop {

@@ -392,6 +392,8 @@ fn hex_input(cells: &[[u32; 4]], columns: u32, cell_width: u32, cell_height: u32
     x: u32, y: u32) -> (u8, [u8; 3]) {
     let Some((cell, coverage)) = hex_record(cells, columns, cell_width, cell_height, x, y)
         else { return (0, [0; 3]); };
+    // Selection annotations are painted from the pristine frame, never seeds.
+    if (0x80000000..0x80001000).contains(&cell[0]) { return (0, [0; 3]); }
     let foreground = cell[1].to_le_bytes();
     (coverage, [foreground[0], foreground[1], foreground[2]])
 }
@@ -577,6 +579,20 @@ mod tests {
     fn hex_cell(character: char, foreground: [u8; 4], background: [u8; 4], flags: u32) -> [u32; 4] {
         let (glyph, foreground) = crate::r::services::shell3_font_service::hex::resolve(character, foreground);
         [glyph, u32::from_le_bytes(foreground), u32::from_le_bytes(background), flags]
+    }
+
+    #[test]
+    fn selection_tab_labels_never_seed_the_world() {
+        use crate::r::services::shell3_font_service::hex::tab_label_cell::TabLabelCell;
+        let cells: Vec<_> = (0..16).map(|column| {
+            let cell = TabLabelCell::new(4, 16, column).unwrap();
+            hex_cell(cell.character(), [255;4], [44,44,44,255], 1)
+        }).collect();
+        let mut world = Life::new(16*12, 22).unwrap();
+        assert!(world.snapshot_hex(&cells, 16, 12, 22, true, true));
+        assert!(world.cells.iter().all(|cell| !cell.alive));
+        world.step();
+        assert!(world.cells.iter().all(|cell| !cell.alive));
     }
 
     #[test]

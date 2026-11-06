@@ -1,0 +1,8 @@
+# Run Cargo from this directory so these host settings override the kernel's.
+# Stable Cargo also ignores the parent's nightly-only build-std settings.
+[build]
+target = "x86_64-unknown-linux-gnu"
+target-dir = "../../../tgt/rpxe2"
+
+[target.x86_64-unknown-linux-gnu]
+linker = "cc"

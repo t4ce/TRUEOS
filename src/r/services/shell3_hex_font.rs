@@ -4,8 +4,14 @@
 
 include!("shell3_hex_font.generated.rs");
 
+#[path = "../../../crates/trueos-terminal/src/tab_label_cell.rs"]
+pub(crate) mod tab_label_cell;
+
 /// Unsupported Unicode uses the same visible red replacement in both paths.
 pub(crate) fn resolve(character: char, foreground: [u8; 4]) -> (u32, [u8; 4]) {
+    if let Some(label) = tab_label_cell::TabLabelCell::from_character(character) {
+        return (label.glyph(), foreground);
+    }
     match CODEPOINTS.binary_search(&(character as u32)) {
         Ok(index) => (index as u32, foreground),
         Err(_) => (FALLBACK_GLYPH, [255, 0, 0, foreground[3]]),
@@ -14,6 +20,10 @@ pub(crate) fn resolve(character: char, foreground: [u8; 4]) -> (u32, [u8; 4]) {
 
 pub(crate) fn native_coverage(glyph_index: u32, x: u32, y: u32) -> u8 {
     if x >= 6 || y >= 11 { return 0; }
+    if let Some(label) = tab_label_cell::TabLabelCell::from_glyph(glyph_index) {
+        let Some((character, px, py, width, height)) = label.point(x, y, 6, 11) else { return 0; };
+        return native_coverage(resolve(character, [255; 4]).0, px * 6 / width, py * 11 / height);
+    }
     let words = MASKS.get(glyph_index as usize).unwrap_or(&MASKS[FALLBACK_GLYPH as usize]);
     let bit = 65 - y * 6 - x;
     (((words[(bit >> 5) as usize] >> (bit & 31)) & 1) * 255) as u8
@@ -23,6 +33,10 @@ pub(crate) fn native_coverage(glyph_index: u32, x: u32, y: u32) -> u8 {
 /// Cell extents remain those of the physical raster-font layout.
 pub(crate) fn sample(glyph_index: u32, x: u32, y: u32, width: u32, height: u32, underline: bool) -> u8 {
     if width == 0 || height == 0 || x >= width || y >= height { return 0; }
+    if let Some(label) = tab_label_cell::TabLabelCell::from_glyph(glyph_index) {
+        let Some((character, px, py, w, h)) = label.point(x, y, width, height) else { return 0; };
+        return sample(resolve(character, [255; 4]).0, px, py, w, h, false);
+    }
     let source_x = (u64::from(x) * 6 / u64::from(width)) as u32;
     let source_y = (u64::from(y) * 11 / u64::from(height)) as u32;
     if underline && source_y == 10 { 255 }
@@ -32,6 +46,26 @@ pub(crate) fn sample(glyph_index: u32, x: u32, y: u32, width: u32, height: u32, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tab_labels_keep_full_bitmap_detail_at_half_physical_size() {
+        for count in 1..=4 {
+            let columns = count * 4;
+            let text = ["tab", "2tab", "3tab", "4tab"][(count-1) as usize];
+            let left = (columns * 12 - text.len() as u32 * 6) / 2;
+            for x in 0..columns * 12 {
+                let cell = tab_label_cell::TabLabelCell::new(count, columns, x / 12).unwrap();
+                assert_eq!(resolve(cell.character(), [17;4]), (cell.glyph(), [17;4]));
+                for y in 0..22 {
+                    let expected = if x >= left && x < left + text.len() as u32 * 6 && (5..16).contains(&y) {
+                        let ch = text.as_bytes()[((x-left)/6) as usize] as char;
+                        native_coverage(resolve(ch, [255;4]).0, (x-left)%6, y-5)
+                    } else { 0 };
+                    assert_eq!(sample(cell.glyph(), x%12, y, 12, 22, false), expected);
+                }
+            }
+        }
+    }
 
     #[test]
     fn scaled_coverage_matches_every_canonical_bit_at_integer_and_physical_sizes() {

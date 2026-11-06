@@ -42,6 +42,8 @@ static inline float3 rgb_float(uint packed) {
 }
 
 static inline uint glyph_coverage(__global const uint4 *font, uint2 glyph, uint native_x, uint native_y) {
+    // Selection labels are paint annotations, never Life seed glyphs.
+    if (glyph.x >= 0x80000000u && glyph.x < 0x80001000u) return 0u;
     return trueos_edit_hex_coverage(font, glyph.x, native_x, native_y)
         | (((glyph.y & 2u) != 0u && native_y == 10u) ? 255u : 0u);
 }
@@ -103,9 +105,16 @@ __kernel void edit_life_rgba8(
         bottom = bottom < display_viewport.y ? bottom : display_viewport.y;
         __global const uint *canonical = (__global const uint *)font;
         uint pixel = canonical[y * (display_image.x >> 2) + x];
+        uint label = glyphs[row * ((display_viewport.x + display_viewport.z - 1u) / display_viewport.z) + column].x;
+        uint is_label = label >= 0x80000000u && label < 0x80001000u;
         for (uint py = top; py < bottom; ++py) {
             uint destination = (display_page.w + py) * (display_pitch.y >> 2) + display_page.z;
-            for (uint px = left; px < right; ++px) output[destination + px] = pixel;
+            for (uint px = left; px < right; ++px) {
+                // The pristine source already has the half-size annotation at
+                // physical resolution. Preserve that detail during expansion.
+                uint source = (display_page.w + py) * (display_pitch.x >> 2) + display_page.z + px;
+                output[destination + px] = is_label != 0u ? foreground[source] : pixel;
+            }
         }
         return;
     }

@@ -291,10 +291,15 @@ pub(crate) fn with_cell_coverage_with_face(
 }
 
 #[derive(Clone, Copy)]
-enum CellMask<'a> { Raster(&'a [u8]), Hex(u32) }
+enum CellMask<'a> { Raster(&'a [u8]), Hex(u32), TabLabel(hex::tab_label_cell::TabLabelCell) }
 
 fn resolved_face(font: &Font, face: FontFace, character: char, foreground: [u8; 4])
     -> Result<(CellMask<'_>, [u8; 4]), &'static str> {
+    if face == FontFace::Raster {
+        if let Some(label) = hex::tab_label_cell::TabLabelCell::from_character(character) {
+            return Ok((CellMask::TabLabel(label), foreground));
+        }
+    }
     match face {
         FontFace::Raster => resolved_glyph(font, character, foreground)
             .map(|(mask, foreground)| (CellMask::Raster(mask), foreground)),
@@ -310,6 +315,10 @@ fn sample_face(font: &Font, mask: CellMask<'_>, x: u32, y: u32,
     match mask {
         CellMask::Raster(mask) => sample_cell(font.alpha, mask, x, y, width, height, underline),
         CellMask::Hex(glyph) => font.hex.sample(glyph, x, y, width, height, underline),
+        CellMask::TabLabel(label) => {
+            let Some((character, px, py, w, h)) = label.point(x, y, width, height) else { return 0; };
+            font.alpha.glyph(character).map_or(0, |mask| sample_native(font.alpha, mask, px, py, w, h))
+        }
     }
 }
 

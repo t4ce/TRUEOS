@@ -137,14 +137,14 @@ static void scenario(uint width, uint height, uint left, uint top, uint vp_width
         for (global_y = 0; global_y < domain_height + 3; ++global_y) {
             for (global_x = 0; global_x < ((domain_width + 15) / 16) * 16; ++global_x) {
                 // The display branches must depend only on their by-value
-                // geometry and image/chrome inputs. Null unused resources
-                // make an accidental glyph/world/global-param read fail.
+                // geometry and image/chrome inputs. Selection annotations
+                // additionally borrow glyph identities and pristine pixels.
                 edit_life_rgba8(display ? nullptr : reinterpret_cast<const uint2*>(read.data()),
                     display ? nullptr : reinterpret_cast<uint2*>(write.data()),
-                    display ? nullptr : reinterpret_cast<const uint4*>(glyphs.data()),
+                    mode == 5 ? nullptr : reinterpret_cast<const uint4*>(glyphs.data()),
                     display ? nullptr : reinterpret_cast<uint2*>(previous.data()),
                     reinterpret_cast<const uint4*>(mode == 2 ? canonical.data() : mode == 5 ? nullptr : font.data()),
-                    mode == 2 ? nullptr : source.data(), mode == 4 ? canonical.data() : output.data(),
+                    source.data(), mode == 4 ? canonical.data() : output.data(),
                     display ? nullptr : p,
                     display_page, display_viewport, display_image, rect, display_pitch);
             }
@@ -205,7 +205,9 @@ static void scenario(uint width, uint height, uint left, uint top, uint vp_width
                     uint px = x - left, py = y - top;
                     uint gx = px / cell_width * 6 + px % cell_width * 6 / cell_width;
                     uint gy = py / cell_height * 11 + py % cell_height * 11 / cell_height;
-                    assert(pixel == canonical[gy * canonical_pitch + gx]); // Pure per-cell nearest copy.
+                    uint glyph = glyphs[((py / cell_height) * columns + px / cell_width) * 4];
+                    bool label = glyph >= 0x80000000u && glyph < 0x80001000u;
+                    assert(pixel == (label ? source[y * source_pitch + x] : canonical[gy * canonical_pitch + gx]));
                 }
             }
             if (vp_width == 2560 && cell_width == 17) {
@@ -251,6 +253,8 @@ static void scenario(uint width, uint height, uint left, uint top, uint vp_width
                     const uint gx = px / cell_width * 6 + px % cell_width * 6 / cell_width;
                     const uint gy = py / cell_height * 11 + py % cell_height * 11 / cell_height;
                     expected = canonical[gy * canonical_pitch + gx];
+                    uint glyph = glyphs[((py / cell_height) * columns + px / cell_width) * 4];
+                    if (glyph >= 0x80000000u && glyph < 0x80001000u) expected = source[y * source_pitch + x];
                 }
             }
             assert(output[y * output_pitch + x] == expected); // Exact previous physical-domain copy.
@@ -319,7 +323,7 @@ def fixture_source(shader_source: str | None = None) -> str:
         integer = integer[:match.start()] + match[1] + "{" + integer[match.end():position - 1] + "}" + integer[position:]
     shader = re.sub(r"__attribute__\(\(intel_reqd_sub_group_size\(16\)\)\)\s*", "", integer)
     font_words = [(mask >> (word * 32)) & 0xffffffff for _, mask in masks for word in range(4)]
-    glyphs = [ids[ord(character)] for character in "Ag █ĩ?─"] + [0xffffffff]
+    glyphs = [ids[ord(character)] for character in "Ag █ĩ?─"] + [0xffffffff, 0x80000060, 0x80000de7]
     driver = DRIVER.replace("@FONT_WORDS@", ",".join(str(word) + "u" for word in font_words))
     driver = driver.replace("@GLYPH_IDS@", ",".join(str(glyph) + "u" for glyph in glyphs))
     driver = driver.replace("@SPACE@", str(ids[ord(" ")]) + "u")

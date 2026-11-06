@@ -2,6 +2,7 @@ bld/
 tgt/
 Cargo.lock
 !tools/trueos-boot/Cargo.lock
+!tools/netboot/rpxe2/Cargo.lock
 !tools/testpy/thread_scheduler/Cargo.lock
 
 # Private local build inputs; generated credential payloads stay under tgt/.

@@ -5,10 +5,10 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "5e637cb126174dfb43b571713a174a96b997b908084ab76b7f13ecba5017187a",
-      "size_bytes": 77040,
+      "sha256": "d8141ac8f4b9c74ecce9735efa6a9c9075b4f74b5d0d37d4a18803e0f7489a4b",
+      "size_bytes": 79864,
       "type": "relocatable",
-      "ze_info_section_offset": 68896,
+      "ze_info_section_offset": 71720,
       "ze_info_section_size": 7244
     },
     "kernels": [
@@ -384,13 +384,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 17136,
+          "entry_size": 18080,
           "section_alignment": 0,
           "section_name": ".text.edit_life_rgba8",
           "section_offset": 64,
-          "section_size": 17280,
-          "sha256": "b3987a6488b25e4bcf65d58b1c48ecf7bc70405cfe33cb8971c9088ff33a8fe6",
-          "symbol_size": 17136,
+          "section_size": 18240,
+          "sha256": "2338f279223a21ae9c52a0dfe69d4330569a67527a13239bee4830eb458cfe43",
+          "symbol_size": 18080,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -406,10 +406,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 17416,
-      "embedded_section_size": 51380,
-      "sha256": "816c484184b6d23e8c708c55f6c3e769303cf90ad2dd30ff60c45716134c94ce",
-      "size_bytes": 51380
+      "embedded_section_offset": 18376,
+      "embedded_section_size": 53244,
+      "sha256": "905b710e315356224711319746b29ccbb604622522b4d6bf97df0c160b98ab8d",
+      "size_bytes": 53244
     }
   },
   "provenance": {
@@ -611,13 +611,13 @@
     "inputs": [
       {
         "path": "TRUEOS/crates/trueos-shader/gpgpu/kernels/edit_life_hex_font.generated.h",
-        "sha256": "51046c30f0e24e7fb91d995fc9deadc80573f1c7af4e90c328af3cff6a162ae3",
+        "sha256": "b6475d4829b6a67797c86951434d61b0f54cfe0c62bb2622751139f3b8e17047",
         "size_bytes": 2176
       },
       {
         "path": "TRUEOS/crates/trueos-shader/gpgpu/kernels/edit_life_rgba8.clcpp",
-        "sha256": "1dd1dcdcfcd8fa479c808429f8e7c285ab9e86077041af45bc6d70ff4c6449be",
-        "size_bytes": 10585
+        "sha256": "03eed178595351dba8056d1bdc0b0c187a9b520816cd84e8da626ec762673949",
+        "size_bytes": 11238
       }
     ],
     "language": "C++ for OpenCL",

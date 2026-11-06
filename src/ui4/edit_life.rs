@@ -304,7 +304,12 @@ impl Effect {
                         for x in 0..page.width {
                             let p = &mut row[x as usize * 4..][..4];
                             if page.viewport.contains(x, y) {
-                                p.copy_from_slice(&life.hex_pixel(x - page.viewport.x, y - page.viewport.y));
+                                let column = (x - page.viewport.x) / page.cell_width;
+                                let row = (y - page.viewport.y) / page.cell_height;
+                                let glyph = page.cells[(row * page.columns + column) as usize][0];
+                                if !(0x80000000..0x80001000).contains(&glyph) {
+                                    p.copy_from_slice(&life.hex_pixel(x - page.viewport.x, y - page.viewport.y));
+                                }
                             } else {
                                 p[3] = 255;
                             }

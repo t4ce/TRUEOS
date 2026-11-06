@@ -1186,7 +1186,7 @@ pub(super) fn snapshot_with_effect(frontend: u64, name: Option<&str>)
                 } else {
                     super::update::MATRIX_BACKGROUND
                 };
-                row.iter()
+                let mut rendered: RenderedLine = row.iter()
                     .enumerate()
                     .map(|(col, cell)| {
                         rendered_cell(
@@ -1195,7 +1195,19 @@ pub(super) fn snapshot_with_effect(frontend: u64, name: Option<&str>)
                             cursor.visible && cursor.row == row_index && cursor.col == col,
                         )
                     })
-                    .collect()
+                    .collect();
+                // Selection labels occupy paint pixels only. Retain ordinary
+                // spaces in the terminal, clipboard and document buffer.
+                for label in route.screen.tab_labels().iter().filter(|label| label.row == row_index) {
+                    for col in label.clip_left..label.clip_right.min(row.len()) {
+                        if row[col].glyph == ' ' {
+                            if let Some(cell) = label.cell(row_index, col) {
+                                rendered[col].0 = cell.character();
+                            }
+                        }
+                    }
+                }
+                rendered
             })
             .collect(),
         route.screen.edit_life().cloned(),
