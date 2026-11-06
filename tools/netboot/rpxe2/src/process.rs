@@ -1,14 +1,38 @@
 use anyhow::{Context, Result, bail};
 use nix::{
     errno::Errno,
-    sys::signal::{Signal, kill},
-    unistd::Pid,
+    sys::{
+        prctl::set_pdeathsig,
+        signal::{Signal, kill},
+    },
+    unistd::{Pid, getpid, getppid},
 };
 use std::{fs, path::Path, time::Duration};
 use tokio::{
-    process::Child,
+    process::{Child, Command},
     time::{Instant, sleep, timeout},
 };
+
+/// A stale dnsmasq must not outlive the watcher that publishes its boot files.
+/// The existing --no-daemon mode neither forks nor changes credentials, so the
+/// Linux parent-death setting survives exec and remains armed in dnsmasq.
+pub fn kill_with_parent(command: &mut Command) {
+    let parent = getpid();
+    // SAFETY: this runs between fork and exec, so use only syscall wrappers
+    // and allocation-free error construction. SIGKILL also covers a daemon
+    // that ignores graceful shutdown after its supervisor disappears.
+    unsafe {
+        command.pre_exec(move || {
+            set_pdeathsig(Signal::SIGKILL).map_err(std::io::Error::from)?;
+            // The parent may have died before prctl armed the signal. In that
+            // case do not exec an orphan that missed the death notification.
+            if getppid() != parent {
+                return Err(std::io::Error::from_raw_os_error(nix::libc::ECHILD));
+            }
+            Ok(())
+        });
+    }
+}
 
 pub async fn stop_existing() -> Result<()> {
     let executable = fs::canonicalize(std::env::current_exe()?)?;

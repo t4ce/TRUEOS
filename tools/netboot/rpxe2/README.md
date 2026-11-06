@@ -47,6 +47,11 @@ The ready file contains the server PID and is removed during normal shutdown
 or startup failure. Startup fails if dnsmasq does not announce readiness within
 10 seconds. Shutdown forwards the signal, waits up to 5 seconds for dnsmasq,
 and then kills/reaps it if necessary before removing the snapshots.
+Linux also arms a parent-death SIGKILL before starting dnsmasq, so an abrupt
+supervisor exit cannot leave TFTP serving a snapshot whose watcher has stopped.
+This relies on the existing `--no-daemon` mode preserving the child process and
+its credentials. SIGKILL cannot remove temporary snapshots or the ready file;
+normal shutdown still performs that cleanup.
 
 ## Served files
 
@@ -92,9 +97,11 @@ checks use copied binaries, fake `ip`/`dnsmasq` commands, and loopback addresses
 127.0.0.23/24 on TCP 8080. They check readiness, reloads, strict HTTP responses,
 scoped stopping, signal cleanup, and startup failures. They require no root
 privileges and open no DHCP/TFTP sockets.
+The abrupt-exit check kills the supervisor during startup and after readiness
+and verifies that its fake dnsmasq also exits without Rust cleanup running.
 
 Checked on 2026-11-06: release build, formatting, Clippy with warnings denied,
-all 7 Rust tests, all 6 smoke tests against the release binary, and the real
+all 7 Rust tests, all 7 smoke tests against the release binary, and the real
 `dnsmasq --test` with the generated configuration passed.
 
 These checks do not replace a subsequent UEFI boot check on the rig. No real

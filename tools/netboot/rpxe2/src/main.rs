@@ -153,7 +153,9 @@ async fn serve(options: Options) -> Result<()> {
         .await
         .with_context(|| format!("Cannot bind LAN live update on {ip}:8080"))?;
     let marker = format!("TFTP root is {}", snapshot.root().display());
-    let mut child = Command::new("dnsmasq")
+    let mut command = Command::new("dnsmasq");
+    process::kill_with_parent(&mut command);
+    let mut child = command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())

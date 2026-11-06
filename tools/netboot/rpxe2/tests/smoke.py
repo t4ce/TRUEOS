@@ -321,6 +321,31 @@ class Smoke(unittest.TestCase):
         self.assertFalse(Path((other / "tftp-root").read_text()).exists())
         self.assertFalse(other_ready.exists(), "ready file survived SIGINT")
 
+    def test_sigkill_supervisor_kills_dnsmasq_before_and_after_readiness(self):
+        for phase in ("starting", "ready"):
+            with self.subTest(phase=phase):
+                directory = self.root / phase
+                directory.mkdir()
+                ready = directory / "ready"
+                env = dict(self.env, RPXE_TEST_DIR=str(directory),
+                           RPXE_TEST_READY_DELAY="2" if phase == "starting" else "0.01")
+                proc = self.start(env=env, ready=ready)
+                wait_until(lambda: (directory / "dnsmasq-pid").exists()
+                           and (directory / "tftp-root").exists(),
+                           "fake dnsmasq to start")
+                if phase == "ready":
+                    self.await_ready(proc, ready=ready, directory=directory)
+                else:
+                    self.assertFalse(ready.exists(), "startup delay was bypassed")
+
+                served = Path((directory / "tftp-root").read_text())
+                # SIGKILL cannot run Rust destructors; this test owns the
+                # leftover temporary directory once the daemon has stopped.
+                self.addCleanup(shutil.rmtree, served, ignore_errors=True)
+                proc.kill()
+                self.assertEqual(proc.wait(timeout=3), -signal.SIGKILL)
+                self.assert_child_gone(directory)
+
     def test_dnsmasq_configuration_failure(self):
         proc = self.start(env=dict(self.env, RPXE_TEST_BAD_CONFIG="1"))
         self.assert_failure(proc)
