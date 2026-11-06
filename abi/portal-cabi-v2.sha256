@@ -42,4 +42,5 @@
 # Additive launch-scoped placement and continuation-scoped role/activity v1; all prior signatures verified unchanged.
 # Additive bounded subdocument fetch with host-applied Referer context; all previous signatures verified unchanged.
 # Additive non-consuming final GET URL metadata; all 369 previous signatures verified unchanged.
-b8748fc59bf97b8ca55d6b631aaa03a59062c9fb51375e23bb42a03032e10ed4
+# Intentional retirement of the QJS-only mouse stream; every surviving signature verified unchanged.
+5b25f399758543a887eb8ebd7e35c2c2e64f81bf408925708eb80baa83bab153

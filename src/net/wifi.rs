@@ -9,6 +9,8 @@ use spin::Mutex;
 
 #[path = "wifi_boot.rs"]
 mod boot;
+#[path = "wifi_diag.rs"]
+mod diag;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WifiSecurity {
@@ -255,7 +257,10 @@ fn connect_boot_profile(attempted: &mut bool, next_scan_ms: &mut u64) {
         *next_scan_ms = now_ms.saturating_add(5_000);
         #[cfg(not(test))]
         crate::r::services::microfont_log_service::wifi_retry_started();
-        match driver.recover() {
+        diag::action_started(diag::Action::Recover, now_ms);
+        let result = driver.recover();
+        diag::action_finished(diag::Action::Recover, result, trueos_time::Instant::now().as_millis());
+        match result {
             Ok(()) => {
                 *attempted = false;
                 *CONNECTION_STATE.lock() = driver.wifi_state();
@@ -278,7 +283,10 @@ fn connect_boot_profile(attempted: &mut bool, next_scan_ms: &mut u64) {
             *next_scan_ms = now_ms.saturating_add(5_000);
             #[cfg(not(test))]
             crate::r::services::microfont_log_service::wifi_retry_started();
-            match driver.scan() {
+            diag::action_started(diag::Action::Scan, now_ms);
+            let result = driver.scan();
+            diag::action_finished(diag::Action::Scan, result, trueos_time::Instant::now().as_millis());
+            match result {
                 Ok(()) => {
                     *CONNECTION_STATE.lock() = driver.wifi_state();
                     *LAST_OPERATION_ERROR.lock() = None;
@@ -298,7 +306,10 @@ fn connect_boot_profile(attempted: &mut bool, next_scan_ms: &mut u64) {
     #[cfg(not(test))]
     crate::r::services::microfont_log_service::wifi_retry_started();
     crate::log_warn!(target: "net"; "wifi-boot: state=connecting\n");
-    match driver.connect(ssid, password) {
+    diag::action_started(diag::Action::Connect, now_ms);
+    let result = driver.connect(ssid, password);
+    diag::action_finished(diag::Action::Connect, result, trueos_time::Instant::now().as_millis());
+    match result {
         Ok(()) => {
             *CONNECTION_STATE.lock() = driver.wifi_state();
             *LAST_OPERATION_ERROR.lock() = None;
@@ -330,6 +341,59 @@ static LAST_OPERATION_ERROR: Mutex<Option<&'static str>> = Mutex::new(None);
 
 pub fn last_operation_error() -> Option<&'static str> {
     shared_driver().and_then(|driver| driver.lock().last_error()).or(*LAST_OPERATION_ERROR.lock())
+}
+
+/// Retained software evidence remains readable while the radio owns a long
+/// reset/bootstrap operation. No driver lock, MMIO, log sink or disk is used.
+pub(crate) fn diagnostic_snapshot_text() -> String {
+    diag::snapshot_text(trueos_time::Instant::now().as_millis())
+}
+
+pub(crate) fn record_diagnostic_stage(stage: &'static str) {
+    diag::stage(stage, trueos_time::Instant::now().as_millis());
+}
+
+pub(crate) fn record_diagnostic_failure(stage: &'static str, reason: &'static str) {
+    diag::failure(stage, reason, trueos_time::Instant::now().as_millis());
+}
+
+pub(crate) fn record_diagnostic_ap_disconnect(subtype: u8, reason: u16) {
+    diag::ap_disconnect(subtype, reason, trueos_time::Instant::now().as_millis());
+}
+
+pub(crate) fn record_diagnostic_registers(
+    stage: &'static str,
+    csr_int: u32,
+    csr_reset: u32,
+    csr_gp: u32,
+    hw_if: u32,
+    rx_read: u16,
+    rx_write: u16,
+    tx_write: u16,
+) {
+    diag::registers(diag::Registers {
+        at_ms: trueos_time::Instant::now().as_millis(), stage,
+        csr_int, csr_reset, csr_gp, hw_if, rx_read, rx_write, tx_write,
+    });
+}
+
+/// Publish a failure and its readback with one timestamp and one lock. A clock
+/// tick between two separate records must not detach the original evidence.
+pub(crate) fn record_diagnostic_failure_registers(
+    stage: &'static str,
+    reason: &'static str,
+    csr_int: u32,
+    csr_reset: u32,
+    csr_gp: u32,
+    hw_if: u32,
+    rx_read: u16,
+    rx_write: u16,
+    tx_write: u16,
+) {
+    diag::failure_registers(diag::Registers {
+        at_ms: trueos_time::Instant::now().as_millis(), stage,
+        csr_int, csr_reset, csr_gp, hw_if, rx_read, rx_write, tx_write,
+    }, reason);
 }
 
 pub fn set_deferred_pci(bus: u8, device: u8, function: u8) {
@@ -454,6 +518,7 @@ pub fn poll() {
 
         // Update cached state
         let new_state = driver.wifi_state();
+        diag::observe(new_state, driver.status(), driver.last_error(), trueos_time::Instant::now().as_millis());
         let old_state = *CONNECTION_STATE.lock();
 
         if new_state != old_state {

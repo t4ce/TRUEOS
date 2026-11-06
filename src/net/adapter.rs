@@ -4155,6 +4155,10 @@ impl NetService {
                     );
                 }
                 Err(msg) => {
+                    // Distinguish a rejected bind from an unrelated send on
+                    // this owner's accepted sockets. The owner may safely
+                    // rearm only when it knows the listen request failed.
+                    let msg = if msg == "link down" { "tcp listen link down" } else { msg };
                     let _ = push_event(owner, NetEvent::Error { msg });
                 }
             },
@@ -4175,6 +4179,7 @@ impl NetService {
                         );
                     }
                     Err(msg) => {
+                        let msg = if msg == "link down" { "tcp listen link down" } else { msg };
                         let _ = push_event(owner, NetEvent::Error { msg });
                     }
                 }

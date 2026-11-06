@@ -111,6 +111,67 @@ fn listen_errors_are_reported_without_retry_loop_then_capacity_event_recovers() 
 }
 
 #[test]
+fn confirmed_link_down_retries_on_timer_without_socket_events_and_keeps_sessions() {
+    let mut server = HttpServer::new(80, 1024);
+    opened(&mut server, 1);
+    assert_listen(established(&mut server, 1));
+    assert!(matches!(server.on_event(api::Event::Error { msg: "tcp listen link down" }), HttpServerEvent::Error("tcp listen link down")));
+    assert!(matches!(server.poll_listener(100), HttpServerEvent::None));
+    assert!(matches!(server.poll_listener(1_099), HttpServerEvent::None));
+    assert_listen(server.poll_listener(1_100));
+    assert!(matches!(server.poll_listener(100_000), HttpServerEvent::None), "missing Opened acknowledgement cannot authorize another listen");
+    assert_eq!(server.sessions.len(), 1);
+    opened(&mut server, 2);
+    assert!(matches!(server.poll_listener(200_000), HttpServerEvent::None));
+    assert!(matches!(request(&mut server, 1, b"GET /survived HTTP/1.1\r\nHost: fixture\r\n\r\n"), HttpServerEvent::RequestReady { request, .. } if request.target() == "/survived"));
+}
+
+#[test]
+fn missing_listener_ack_and_unrelated_send_errors_never_duplicate_a_listener() {
+    let mut server = HttpServer::new(80, 1024);
+    for msg in ["link down", "tcp send fail", "bad handle"] {
+        let _ = server.on_event(api::Event::Error { msg });
+        assert!(server.listen_pending);
+    }
+    for now_ms in [0, 1_000, 60_000, u64::MAX] {
+        assert!(matches!(server.poll_listener(now_ms), HttpServerEvent::None));
+    }
+    opened(&mut server, 1);
+    assert_eq!(server.listener_handle, Some(api::NetHandle(1)));
+}
+
+#[test]
+fn rejected_listener_command_recovers_after_backoff_without_an_adapter_event() {
+    let mut server = HttpServer::new(80, 1024);
+    opened(&mut server, 1);
+    assert_listen(established(&mut server, 1));
+    server.listener_submit_rejected();
+    assert!(!server.listen_pending);
+    assert!(matches!(server.poll_listener(2_000), HttpServerEvent::None));
+    assert_listen(server.poll_listener(3_000));
+    server.listener_submit_rejected();
+    assert!(matches!(server.poll_listener(3_001), HttpServerEvent::None));
+    assert!(matches!(server.poll_listener(4_000), HttpServerEvent::None));
+    assert_listen(server.poll_listener(4_001));
+    opened(&mut server, 2);
+    assert_eq!(server.sessions.len(), 1);
+}
+
+#[test]
+fn listener_timer_respects_session_capacity_and_an_existing_listener() {
+    let mut server = HttpServer::with_session_limit(80, 1024, 1);
+    opened(&mut server, 1);
+    assert!(matches!(established(&mut server, 1), HttpServerEvent::None));
+    assert!(matches!(server.poll_listener(0), HttpServerEvent::None));
+    assert!(matches!(server.poll_listener(10_000), HttpServerEvent::None));
+    assert_listen(closed(&mut server, 1));
+    opened(&mut server, 2);
+    let _ = server.on_event(api::Event::Error { msg: "tcp listen link down" });
+    assert_eq!(server.listener_handle, Some(api::NetHandle(2)));
+    assert!(matches!(server.poll_listener(20_000), HttpServerEvent::None));
+}
+
+#[test]
 fn twenty_immediate_sequential_connections_keep_an_independent_listener() {
     let mut server = HttpServer::new(80, 1024);
     opened(&mut server, 1);

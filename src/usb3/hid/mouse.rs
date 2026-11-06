@@ -182,14 +182,6 @@ pub(crate) fn handle_decoded_report(
         wheel: legacy_wheel,
         has_wheel,
     }));
-    super::input::qjs_mouse_offer(super::input::MouseEvent {
-        slot_id: runtime.slot_id,
-        buttons,
-        dx: legacy_dx,
-        dy: legacy_dy,
-        wheel: legacy_wheel,
-        has_wheel,
-    });
     sync_runtime_cursor_snapshot(runtime);
     super::hut::upsert_mouse_state(
         runtime.controller_id as u32,

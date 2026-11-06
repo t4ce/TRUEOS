@@ -1735,7 +1735,6 @@ unsafe extern "C" {
         out_dropped: *mut u32,
     ) -> u32;
     pub fn trueos_cabi_mouse_poll(out: *mut TrueosMouseState) -> i32;
-    pub fn trueos_cabi_qjs_mouse_pop(out: *mut TrueosMouseState) -> i32;
 
     pub safe fn trueos_cabi_env_args_count() -> usize;
     pub fn trueos_cabi_env_arg(index: usize, out_ptr: *mut u8, out_cap: usize) -> isize;

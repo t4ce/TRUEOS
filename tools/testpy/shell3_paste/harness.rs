@@ -306,7 +306,7 @@ mod shell3 {
         fn url_paste_is_context_for_other_apps_and_stale_lifetimes() {
             let mut terminal = setup(true);
             terminal.shell.vmx = true;
-            terminal.shell.app_name = "qjs.bp".into();
+            terminal.shell.app_name = "sqlite.bp".into();
             terminal.input(&pasted(b"https://example.com/"));
             untouched(&terminal);
             context(Some("first"), "https://example.com/");

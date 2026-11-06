@@ -110,7 +110,7 @@ fn http_trueosfs_open_endpoint(dev_idx: usize) -> Option<HttpTrueosfsEndpoint> {
     let name = crate::net::device_name_at(dev_idx).unwrap_or("?");
     match ip {
         Some([a, b, c, d]) => crate::log!(
-            "http-trueosfs: listening on tcp {} owner={} dev={} {} ip={}.{}.{}.{} mode={}\n",
+            "http-trueosfs: listen requested on tcp {} owner={} dev={} {} ip={}.{}.{}.{} mode={}\n",
             ports::HTTP_TRUEOSFS_TCP_PORT,
             vnet.owner(),
             dev_idx,
@@ -122,7 +122,7 @@ fn http_trueosfs_open_endpoint(dev_idx: usize) -> Option<HttpTrueosfsEndpoint> {
             ip_mode
         ),
         None => crate::log!(
-            "http-trueosfs: listening on tcp {} owner={} dev={} {} ip=none\n",
+            "http-trueosfs: listen requested on tcp {} owner={} dev={} {} ip=none\n",
             ports::HTTP_TRUEOSFS_TCP_PORT,
             vnet.owner(),
             dev_idx,
@@ -300,6 +300,7 @@ fn http_stream_drain_events(
     server: &mut vhttp_srv::HttpServer,
     active: api::NetHandle,
 ) -> bool {
+    http_poll_listener(vnet, server);
     const MAX_DRAIN: usize = 64;
     for _ in 0..MAX_DRAIN {
         let Some(ev) = vnet.pop_event() else {
@@ -307,7 +308,7 @@ fn http_stream_drain_events(
         };
         if matches!(ev, api::Event::Closed { handle } if handle == active) {
             if let vhttp_srv::HttpServerEvent::Submit(cmd) = server.on_event(ev) {
-                let _ = vnet.submit(cmd);
+                http_submit_server_command(vnet, server, cmd);
             }
             crate::log!("http-trueosfs: stream cancelled handle={}\n", active.0);
             return false;
@@ -315,7 +316,7 @@ fn http_stream_drain_events(
         match server.on_event(ev) {
             vhttp_srv::HttpServerEvent::None => {}
             vhttp_srv::HttpServerEvent::Submit(cmd) => {
-                let _ = vnet.submit(cmd);
+                http_submit_server_command(vnet, server, cmd);
             }
             vhttp_srv::HttpServerEvent::Error(msg) => {
                 crate::log!("http-trueosfs: error {}\n", msg);
@@ -344,6 +345,25 @@ fn http_stream_drain_events(
         }
     }
     true
+}
+
+fn http_submit_server_command(vnet: &VNet, server: &mut vhttp_srv::HttpServer, cmd: api::Command) {
+    let listener = matches!(&cmd, api::Command::OpenTcpListen { .. });
+    if vnet.submit(cmd).is_err() && listener {
+        server.listener_submit_rejected();
+        crate::log_warn!(target: "net"; "http-trueosfs: listener queue rejected; retry delayed\n");
+    }
+}
+
+fn http_poll_listener(vnet: &VNet, server: &mut vhttp_srv::HttpServer) {
+    if let vhttp_srv::HttpServerEvent::Submit(cmd) = server.poll_listener(trueos_time::Instant::now().as_millis()) {
+        http_submit_server_command(vnet, server, cmd);
+    }
+}
+
+fn http_wifi_observe_body(method: &str, path: &str) -> Option<String> {
+    (method == "GET" && path == "/wifi/observe")
+        .then(crate::net::wifi::diagnostic_snapshot_text)
 }
 
 async fn http_submit_body_bytes(vnet: &VNet, handle: api::NetHandle, bytes: &[u8]) -> usize {
@@ -1030,6 +1050,7 @@ pub async fn http_trueosfs_task() {
             }
             endpoint_discovery_ticks = (endpoint_discovery_ticks + 1) % 100;
             for endpoint in endpoints.iter_mut() {
+                http_poll_listener(&endpoint.vnet, &mut endpoint.server);
                 while let Some(ev) = endpoint.vnet.pop_event() {
                     if !endpoint.listener_ready
                         && let api::Event::Opened {
@@ -1048,7 +1069,7 @@ pub async fn http_trueosfs_task() {
                     match endpoint.server.on_event(ev) {
                     vhttp_srv::HttpServerEvent::None => {}
                     vhttp_srv::HttpServerEvent::Submit(cmd) => {
-                        let _ = endpoint.vnet.submit(cmd);
+                        http_submit_server_command(&endpoint.vnet, &mut endpoint.server, cmd);
                     }
                     vhttp_srv::HttpServerEvent::Error(msg) => {
                         crate::log!("http-trueosfs: error {}\n", msg);
@@ -1097,12 +1118,14 @@ pub async fn http_trueosfs_task() {
                         let path_only = vhttp_srv::path_only(target.as_str());
                         // Diagnostics must not depend on filesystem mounts or
                         // even acquire the root registry while replay is busy.
-                        let roots = if matches!(path_only, "/usb/heal" | "/usb/heal/describe" | "/usb/heal/observe") {
+                        let roots = if matches!(path_only, "/usb/heal" | "/usb/heal/describe" | "/usb/heal/observe" | "/wifi/observe") {
                             Vec::new()
                         } else {
                             crate::r::fs::trueosfs::list_roots()
                         };
-                        let response: HttpResponsePlan = if method == "GET" && path_only == "/usb/heal/describe" {
+                        let response: HttpResponsePlan = if let Some(body) = http_wifi_observe_body(method.as_str(), path_only) {
+                            http_owned_plain_response("HTTP/1.1 200 OK\r\n", body)
+                        } else if method == "GET" && path_only == "/usb/heal/describe" {
                             http_json_response("HTTP/1.1 200 OK\r\n", crate::usb3::heal_protocol::api_description_json())
                         } else if method == "GET" && path_only == "/usb/heal/observe" {
                             http_json_response("HTTP/1.1 200 OK\r\n", crate::usb3::heal_protocol::latest_report_json())

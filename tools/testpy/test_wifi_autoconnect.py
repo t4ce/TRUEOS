@@ -15,7 +15,9 @@ end = wifi.index('\nstatic WIFI_ACTIVE:', start)
 policy = wifi[start:end]
 source = r'''
 #![allow(dead_code)]
+extern crate alloc;
 extern crate self as trueos_time;
+extern crate self as spin;
 use std::sync::{Arc,MutexGuard};
 pub struct Mutex<T>(std::sync::Mutex<T>);
 impl<T> Mutex<T> {
@@ -38,8 +40,9 @@ mod boot {
 }
 static CREDENTIALS:Mutex<Option<(&'static str,&'static str)>>=Mutex::new(None);
 #[derive(Clone,Copy)] struct PciDevice{vendor_id:u16,device_id:u16}
-#[derive(Clone,Copy,Debug,PartialEq,Eq)] enum DriverStatus{Loading,Running}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)] enum DriverStatus{Unloaded,Loading,Running}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)] enum WifiState{NoHardware,Disabled,Disconnected,Scanning,Connecting,Authenticating,Connected,Failed}
+#[path="DIAGNOSTICS"] mod diag;
 #[derive(Clone)] struct WifiNetwork{ssid:String}
 trait WifiDriver:Send {
     fn status(&self)->DriverStatus;
@@ -210,7 +213,7 @@ POLICY
         assert_eq!(state.lock().connects,1);assert_eq!(state.lock().scans,0);
     }
 }
-'''.replace('POLICY', policy)
+'''.replace('POLICY', policy).replace('DIAGNOSTICS', str(ROOT / 'src/net/wifi_diag.rs'))
 with tempfile.TemporaryDirectory(prefix='trueos-wifi-autoconnect-') as temporary:
     directory = Path(temporary)
     (directory / 'test.rs').write_text(source)

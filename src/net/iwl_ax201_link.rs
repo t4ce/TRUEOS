@@ -25,6 +25,36 @@ enum State {
     Disconnected,
 }
 
+impl State {
+    fn diagnostic_label(self) -> &'static str {
+        match self {
+            Self::Configure => "station-configure",
+            Self::Queue => "station-queue",
+            Self::Session => "station-session-wait",
+            Self::Authenticate => "station-authenticate",
+            Self::Associate => "station-associate",
+            Self::AssociatedConfig => "station-associated-config",
+            Self::Keys => "station-keys",
+            Self::Connected => "connected",
+            Self::Failed => "station-failed",
+            Self::Disconnected => "station-disconnected",
+        }
+    }
+}
+
+fn command_diagnostic_label(command: &Command) -> &'static str {
+    match (command.group, command.id) {
+        (1, 8) => "station-phy-context",
+        (5, 8) => "station-rx-chain",
+        (1, 0x28) => "station-mac-context",
+        (1, 0x2b) => "station-binding",
+        (1, 0x18) => "station-ap-config",
+        (1, 0x2c) => "station-quota",
+        (3, 5) => "station-session-protect",
+        _ => "station-command",
+    }
+}
+
 pub(crate) struct Connection {
     config: StationConfig,
     state: State,
@@ -49,6 +79,7 @@ pub(crate) struct Connection {
     tx_packets: u64,
     rx_packets: u64,
     created_ms: u64,
+    failure_diagnostic_stage: Option<&'static str>,
     eapol_rejected: u64,
     ccmp_rejected: u64,
 }
@@ -57,6 +88,25 @@ fn now() -> u64 {
 }
 
 impl Connection {
+    fn set_state(&mut self, state: State) {
+        self.state = state;
+        crate::net::wifi::record_diagnostic_stage(state.diagnostic_label());
+    }
+
+    fn diagnostic_label(&self) -> &'static str {
+        if let Some(stage) = self.failure_diagnostic_stage {
+            stage
+        } else if let Some((_, command)) = self.pending.as_ref() {
+            command_diagnostic_label(command)
+        } else if self.key_confirmation.is_some() {
+            "station-wpa2-m4-ack"
+        } else if self.queue_request.is_some() {
+            if self.queue.is_some() { "station-data-queue" } else { "station-management-queue" }
+        } else {
+            self.state.diagnostic_label()
+        }
+    }
+
     pub fn new(
         fw: &Firmware<'_>,
         config: StationConfig,
@@ -85,6 +135,7 @@ impl Connection {
             )?)
         };
         let commands = station::prepare(fw, &config)?.into();
+        crate::net::wifi::record_diagnostic_stage("station-configure");
         Ok(Self {
             config,
             state: State::Configure,
@@ -109,6 +160,7 @@ impl Connection {
             tx_packets: 0,
             rx_packets: 0,
             created_ms: now(),
+            failure_diagnostic_stage: None,
             eapol_rejected: 0,
             ccmp_rejected: 0,
         })
@@ -151,7 +203,7 @@ impl Connection {
                 now().saturating_sub(self.created_ms), self.tx_packets, self.rx_packets,
                 self.dropped, self.eapol_rejected, self.ccmp_rejected, self.signal_dbm);
         }
-        self.state = State::Failed;
+        self.set_state(State::Failed);
         self.last_error = Some(reason);
         self.rx.clear();
         self.early_eapol.clear();
@@ -163,7 +215,7 @@ impl Connection {
         // Close the controlled port immediately. DMA stays retained and queues
         // are not reused: removing a station while hardware still owns a TX
         // descriptor needs the firmware's newer queue-remove protocol.
-        self.state = State::Disconnected;
+        self.set_state(State::Disconnected);
         self.rx.clear();
         self.early_eapol.clear();
         self.handshake = None;
@@ -199,6 +251,7 @@ impl Connection {
         )
     }
     fn allocate_queue(&mut self, transport: &mut Transport, tid: u8) -> Result<(), &'static str> {
+        crate::net::wifi::record_diagnostic_stage(if tid == 16 { "station-management-queue" } else { "station-data-queue" });
         let body = transport.prepare_tx_queue(station::AP_STA_ID, tid)?;
         let (group, id, version) = transport.queue_allocation_command()?;
         let sequence = transport.send_command(group, id, version, &body)?;
@@ -213,7 +266,7 @@ impl Connection {
         let sequence = self.next_sequence();
         let frame = station::authentication(&self.config, sequence);
         self.transmit_raw(transport, &frame)?;
-        self.state = State::Authenticate;
+        self.set_state(State::Authenticate);
         self.deadline = now() + 3000;
         crate::log_warn!(target: "net"; "iwl-ax201: stage=authentication-sent channel={}\n", self.config.bss.channel);
         Ok(())
@@ -270,8 +323,10 @@ impl Connection {
         let sequence = self.send_eapol(transport, &action.reply)?;
         if self.pairwise.is_some() && self.state != State::Connected {
             self.key_confirmation = Some(sequence);
+            crate::net::wifi::record_diagnostic_stage("station-wpa2-m4-ack");
             crate::log_warn!(target: "net"; "iwl-ax201: stage=wpa2-m4-sent awaiting=radio-ack\n");
         } else if self.state != State::Connected {
+            crate::net::wifi::record_diagnostic_stage("station-wpa2-m3");
             crate::log_warn!(target: "net"; "iwl-ax201: stage=wpa2-m2-sent awaiting=authenticated-m3\n");
         }
         Ok(())
@@ -295,14 +350,14 @@ impl Connection {
                 let sequence = self.next_sequence();
                 let request = station::association(&self.config, sequence)?;
                 self.transmit_raw(transport, &request)?;
-                self.state = State::Associate;
+                self.set_state(State::Associate);
                 self.deadline = now() + 3000;
                 crate::log_warn!(target: "net"; "iwl-ax201: stage=association-sent\n");
             }
             (0x10, State::Associate) => {
                 let aid = station::association_id(frame, &self.config)?;
                 self.commands = station::associated(fw, &self.config, aid)?.into();
-                self.state = State::AssociatedConfig;
+                self.set_state(State::AssociatedConfig);
                 self.deadline = now() + 2000;
                 crate::log_warn!(target: "net"; "iwl-ax201: stage=associated aid={} port=closed\n", aid);
             }
@@ -311,6 +366,7 @@ impl Connection {
                     self.dropped += 1;
                     return Ok(());
                 };
+                crate::net::wifi::record_diagnostic_ap_disconnect(frame[0] & 0xfc, reason);
                 crate::log_warn!(target: "net"; "iwl-ax201: stage=ap-disconnect subtype=0x{:02x} reason_code={} state={:?}\n",
                     frame[0] & 0xfc, reason, self.state);
                 return Err("AX201 AP disconnected station");
@@ -413,6 +469,7 @@ impl Connection {
             return;
         }
         if let Err(reason) = self.notification_inner(transport, fw, notification) {
+            transport.record_diagnostic_failure(self.diagnostic_label(), reason);
             self.fail(reason);
         }
     }
@@ -459,7 +516,7 @@ impl Connection {
                 self.allocate_queue(transport, 0)?;
             } else {
                 self.data_queue = Some(queue);
-                self.state = State::Session;
+                self.set_state(State::Session);
             }
             self.deadline = now() + 2000;
         }
@@ -474,7 +531,7 @@ impl Connection {
                         return Err("AX201 WPA2 confirmation was not acknowledged");
                     }
                     self.key_confirmation = None;
-                    self.state = State::Connected;
+                    self.set_state(State::Connected);
                     crate::log_warn!(target: "net"; "iwl-ax201: stage=link-up security=wpa2-ccmp data=ethernet\n");
                 }
             }
@@ -496,6 +553,7 @@ impl Connection {
         }
         let result = self.poll_inner(transport);
         if let Err(reason) = result {
+            transport.record_diagnostic_failure(self.diagnostic_label(), reason);
             self.fail(reason);
         }
     }
@@ -504,12 +562,17 @@ impl Connection {
             && matches!(self.state, State::Configure | State::AssociatedConfig)
         {
             if let Some(command) = self.commands.pop_front() {
+                let command_stage = command_diagnostic_label(&command);
+                crate::net::wifi::record_diagnostic_stage(command_stage);
                 let sequence = transport.send_command(
                     command.group,
                     command.id,
                     command.version,
                     &command.payload,
-                )?;
+                ).map_err(|reason| {
+                    self.failure_diagnostic_stage = Some(command_stage);
+                    reason
+                })?;
                 crate::log_warn!(target: "net";
                     "iwl-ax201: stage=station-command cmd={:02x}:{:02x} version={} bytes={} seq=0x{:04x}\n",
                     command.group, command.id, command.version, command.payload.len(), sequence);
@@ -517,11 +580,11 @@ impl Connection {
                 self.deadline = now() + 2000;
             } else if self.state == State::Configure {
                 self.allocate_queue(transport, 16)?;
-                self.state = State::Queue;
+                self.set_state(State::Queue);
                 self.deadline = now() + 2000;
                 crate::log_warn!(target: "net"; "iwl-ax201: stage=station-context-ready\n");
             } else if self.handshake.is_some() {
-                self.state = State::Keys;
+                self.set_state(State::Keys);
                 self.deadline = now() + 10_000;
                 while let Some(packet) = self.early_eapol.pop_front() {
                     self.handle_eapol(transport, &packet)?;
@@ -530,7 +593,7 @@ impl Connection {
                     self.send_eapol(transport, &[2, 1, 0, 0])?; // IEEE 802.1X EAPOL-Start
                 }
             } else {
-                self.state = State::Connected;
+                self.set_state(State::Connected);
                 crate::log_warn!(target: "net"; "iwl-ax201: stage=link-up security=open data=ethernet\n");
             }
         }

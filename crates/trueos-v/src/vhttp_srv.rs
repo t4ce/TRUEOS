@@ -81,6 +81,7 @@ pub enum HttpServerEvent {
 pub struct HttpServer {
     listener_handle: Option<api::NetHandle>,
     listen_pending: bool,
+    listen_retry_at_ms: Option<u64>,
     sessions: BTreeMap<u32, HttpSession>,
     max_sessions: usize,
     max_request_bytes: usize,
@@ -98,6 +99,7 @@ impl HttpServer {
         Self {
             listener_handle: None,
             listen_pending: true,
+            listen_retry_at_ms: None,
             sessions: BTreeMap::new(),
             max_sessions: max_sessions.max(1),
             max_request_bytes,
@@ -108,9 +110,34 @@ impl HttpServer {
     fn rearm_listener(&mut self) -> HttpServerEvent {
         if self.listener_handle.is_none() && !self.listen_pending && self.sessions.len() < self.max_sessions {
             self.listen_pending = true;
+            self.listen_retry_at_ms = None;
             HttpServerEvent::Submit(api::Command::OpenTcpListen { port: self.listen_port })
         } else {
             HttpServerEvent::None
+        }
+    }
+
+    /// Retry a confirmed failed listen even when no further socket events
+    /// arrive. An accepted command with a missing acknowledgement keeps its
+    /// pending token: elapsed time alone must never duplicate a listener.
+    pub fn poll_listener(&mut self, now_ms: u64) -> HttpServerEvent {
+        if self.listener_handle.is_some() || self.listen_pending || self.sessions.len() >= self.max_sessions {
+            return HttpServerEvent::None;
+        }
+        let retry_at = *self.listen_retry_at_ms.get_or_insert_with(|| now_ms.saturating_add(1_000));
+        if now_ms < retry_at {
+            return HttpServerEvent::None;
+        }
+        self.rearm_listener()
+    }
+
+    /// The owner must call this only when its command queue rejected the
+    /// OpenTcpListen emitted by this server. No adapter acknowledgement can
+    /// follow a command that was never enqueued.
+    pub fn listener_submit_rejected(&mut self) {
+        if self.listener_handle.is_none() && self.listen_pending {
+            self.listen_pending = false;
+            self.listen_retry_at_ms = None;
         }
     }
 
@@ -122,6 +149,7 @@ impl HttpServer {
                         return HttpServerEvent::Submit(api::Command::Close { handle });
                     }
                     self.listen_pending = false;
+                    self.listen_retry_at_ms = None;
                     self.listener_handle = Some(handle);
                 }
                 HttpServerEvent::None
@@ -214,8 +242,13 @@ impl HttpServer {
                 if msg == "bad handle" {
                     HttpServerEvent::None
                 } else {
-                    if matches!(msg, "no sockets available" | "listen failed" | "link down") {
+                    // Generic link-down errors also come from sends on active
+                    // sessions. Only an identified listen failure releases an
+                    // outstanding listen token; a late Opened must stay unique.
+                    if self.listener_handle.is_none() && self.listen_pending
+                        && matches!(msg, "no sockets available" | "listen failed" | "tcp listen link down") {
                         self.listen_pending = false;
+                        self.listen_retry_at_ms = None;
                     }
                     HttpServerEvent::Error(msg)
                 }

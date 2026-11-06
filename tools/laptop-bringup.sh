@@ -38,15 +38,21 @@ destination = Path('bld/laptop-bringup') / datetime.now(timezone.utc).strftime('
 destination.mkdir(parents=True)
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 failed = False
-for name in ('describe', 'observe'):
-    url = f'http://{host}/usb/heal/{name}'
+for name, endpoint, is_json in (
+    ('describe', '/usb/heal/describe', True),
+    ('observe', '/usb/heal/observe', True),
+    ('wifi', '/wifi/observe', False),
+):
+    url = f'http://{host}{endpoint}'
     try:
         with opener.open(url, timeout=10) as response:
             body = response.read()
-            (destination / f'{name}.json').write_bytes(body)
+            output = destination / f'{name}.{"json" if is_json else "txt"}'
+            output.write_bytes(body)
             (destination / f'{name}.headers').write_text(str(response.headers))
-            json.loads(body)
-            print(f'{response.status} {url} -> {destination / (name + ".json")}')
+            if is_json:
+                json.loads(body)
+            print(f'{response.status} {url} -> {output}')
     except (OSError, ValueError) as error:
         (destination / f'{name}.error').write_text(str(error))
         print(f'{url}: {error}', file=sys.stderr)

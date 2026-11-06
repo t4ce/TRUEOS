@@ -218,9 +218,29 @@ pub(crate) struct Transport {
     data_queues: Vec<DataQueue>,
     last_tx_completion: Option<TxCompletion>,
     tx_completion_logs: u8,
+    diagnostic_stage: &'static str,
 }
 
 impl Transport {
+    fn diagnostic_stage(&mut self, stage: &'static str) {
+        self.diagnostic_stage = stage;
+        crate::net::wifi::record_diagnostic_stage(stage);
+    }
+
+    pub(crate) fn record_diagnostic_snapshot(&self, stage: &'static str) {
+        crate::net::wifi::record_diagnostic_registers(
+            stage, self.read(CSR_INT), self.read(CSR_RESET), self.read(CSR_GP), self.read(0),
+            self.rx_read as u16, self.rx_write as u16, u16::from(self.tx_write),
+        );
+    }
+
+    pub(crate) fn record_diagnostic_failure(&self, stage: &'static str, reason: &'static str) {
+        crate::net::wifi::record_diagnostic_failure_registers(
+            stage, reason, self.read(CSR_INT), self.read(CSR_RESET), self.read(CSR_GP), self.read(0),
+            self.rx_read as u16, self.rx_write as u16, u16::from(self.tx_write),
+        );
+    }
+
     /// `base` must remain an exclusively owned, uncached BAR0 mapping for life.
     pub(crate) fn new(
         base: usize,
@@ -297,6 +317,7 @@ impl Transport {
             data_queues: Vec::new(),
             last_tx_completion: None,
             tx_completion_logs: 0,
+            diagnostic_stage: "transport-constructed",
         })
     }
 
@@ -362,6 +383,7 @@ impl Transport {
         self.started = true;
         let result = self.start_inner(self.phy_config);
         if let Err(error) = result.as_ref() {
+            self.record_diagnostic_failure(self.diagnostic_stage, error);
             self.failed = true;
             self.write(CSR_INT_MASK, 0);
             crate::log_warn!(target: "net";
@@ -375,12 +397,23 @@ impl Transport {
     /// Reuse the base RX/command/firmware allocations; replacing a pinned
     /// transport after every error would leak them and leave live DMA behind.
     pub(crate) fn restart(&mut self) -> Result<Notification, &'static str> {
+        self.record_diagnostic_snapshot("recovery-before-reset");
         self.quiesce_and_reset()?;
+        self.diagnostic_stage("reset-reclaim");
         self.clear_after_reset();
         self.start()
     }
 
     fn quiesce_and_reset(&mut self) -> Result<(), &'static str> {
+        let result = self.quiesce_and_reset_inner();
+        if let Err(reason) = result.as_ref() {
+            self.record_diagnostic_failure(self.diagnostic_stage, reason);
+        }
+        result
+    }
+
+    fn quiesce_and_reset_inner(&mut self) -> Result<(), &'static str> {
+        self.diagnostic_stage("reset-master-stop");
         self.failed = true;
         if self.read(CSR_RESET) == u32::MAX {
             return Err("AX201 reset MMIO unavailable");
@@ -399,14 +432,17 @@ impl Transport {
         if command == u16::MAX {
             return Err("AX201 reset PCI unavailable");
         }
+        self.diagnostic_stage("reset-pci-dma-disable");
         crate::pci::config_write_u16(bus, slot, function, 4, command & !4);
         let disabled = crate::pci::config_read_u16(bus, slot, function, 4);
         if disabled == u16::MAX || disabled & 4 != 0 {
             return Err("AX201 reset PCI DMA disable failed");
         }
         if !stopped {
+            self.diagnostic_stage("reset-master-stop");
             return Err("AX201 DMA master stop timeout");
         }
+        self.diagnostic_stage("reset-software");
         self.bits(CSR_RESET, RESET_SW);
         crate::wait::spin_until_timeout_no_exec(6, || false);
         let gp = self.read(CSR_GP);
@@ -414,6 +450,7 @@ impl Transport {
             return Err("AX201 reset MMIO unavailable");
         }
         self.write(CSR_GP, gp & !(GP_INIT_DONE | GP_ACCESS));
+        self.diagnostic_stage("reset-ownership");
         self.bits(0, 0x0040_0000);
         if !crate::wait::spin_until_timeout_no_exec(50, || {
             let value = self.read(0);
@@ -462,6 +499,7 @@ impl Transport {
     }
 
     fn start_inner(&mut self, phy_config: u32) -> Result<Notification, &'static str> {
+        self.diagnostic_stage("firmware-pci-ownership");
         let (bus, slot, function) = self.pci;
         // No IRQ handler is installed: keep PCI INTx disabled and poll CSR/RX.
         let command = crate::pci::config_read_u16(bus, slot, function, 4);
@@ -472,6 +510,7 @@ impl Transport {
             return Err("AX201 PCI ownership timeout");
         }
         self.bits(0x088, 1 << 5); // OS_ALIVE
+        self.diagnostic_stage("firmware-reset-ownership");
         self.bits(CSR_RESET, 0x80);
         crate::wait::spin_until_timeout_no_exec(6, || false);
         self.bits(0, 0x0040_0000);
@@ -486,6 +525,7 @@ impl Transport {
         self.bits(0x240, 0xffff_0000); // FH wait threshold
         self.bits(0x03c, 2); // L0s disabled, including 22000 devices
         self.bits(0, 0x0008_0000); // HAP_WAKE
+        self.diagnostic_stage("firmware-mac-clock");
         self.bits(CSR_GP, GP_INIT_DONE);
         if !self.poll_bits(CSR_GP, GP_CLOCK_READY, GP_CLOCK_READY, 25) {
             return Err("AX201 MAC clock timeout");
@@ -498,11 +538,13 @@ impl Transport {
         let radio = (hw_rev & 0xf) | (radio_type << 10) | (radio_step << 14) | (radio_dash << 12);
         self.write(0, (self.read(0) & !0xff0f) | radio);
         self.context.put16(0, hw_rev as u16);
+        self.diagnostic_stage("firmware-rfkill");
         self.write(0x05c, 2 | 4); // clear software RF-kill / command-blocked
         if self.read(CSR_GP) & 0x0800_0000 == 0 {
             return Err("AX201 hardware RF-kill active");
         }
         self.bits(0x0a8, 0x800f_ffff); // shadow registers
+        self.diagnostic_stage("firmware-context-publish");
         self.pin_and_flush();
         crate::pci::config_write_u16(bus, slot, function, 4, command | 2 | 4 | (1 << 10));
         self.write(CSR_CTXT, self.context.phys as u32);
@@ -511,6 +553,7 @@ impl Transport {
         self.prph_write(0xa05c44, 1); // UREG_CPU_INIT_RUN
         self.write(CSR_GP, self.read(CSR_GP) & !GP_ACCESS);
         crate::log_warn!(target: "net"; "iwl-ax201: stage=context-published dma=0x{:x} rx={} cmd=32\n", self.context.phys, RX_COUNT);
+        self.diagnostic_stage("firmware-alive");
         let mut result = None;
         let mut failure = None;
         let mut deferred = VecDeque::new();
@@ -534,7 +577,10 @@ impl Transport {
         if let Some(error) = failure {
             return Err(error);
         }
-        result.ok_or("AX201 firmware ALIVE timeout")
+        let alive = result.ok_or("AX201 firmware ALIVE timeout")?;
+        self.record_diagnostic_snapshot("firmware-alive-confirmed");
+        self.diagnostic_stage("transport-running");
+        Ok(alive)
     }
 
     fn report_error_tables(&self) {
@@ -583,6 +629,14 @@ impl Transport {
     }
 
     pub(crate) fn poll(&mut self) -> Result<Option<Notification>, &'static str> {
+        let result = self.poll_inner();
+        if let Err(reason) = result.as_ref() {
+            self.record_diagnostic_failure(self.diagnostic_stage, reason);
+        }
+        result
+    }
+
+    fn poll_inner(&mut self) -> Result<Option<Notification>, &'static str> {
         self.last_tx_completion = None;
         if self.failed {
             return Err("AX201 transport faulted");

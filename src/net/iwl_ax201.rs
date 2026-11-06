@@ -185,18 +185,26 @@ impl Driver for Ax201Driver {
             return Err("AX201 firmware start already attempted; recovery required");
         }
         self.start_attempted = true;
+        super::wifi::record_diagnostic_stage("driver-firmware-parse");
         let result = (|| {
-            let firmware = super::iwl_ax201_fw::parse(super::iwl_ax201_fw::EMBEDDED)?;
+            let firmware = super::iwl_ax201_fw::parse(super::iwl_ax201_fw::EMBEDDED).map_err(|reason| {
+                super::wifi::record_diagnostic_failure("driver-firmware-parse", reason);
+                reason
+            })?;
             crate::log_warn!(target: "net";
                 "iwl-ax201: stage=firmware-parsed api={}.{:08x}.{} bytes={} sections={}\n",
                 firmware.version.major, firmware.version.minor, firmware.version.local,
                 super::iwl_ax201_fw::EMBEDDED.len(), firmware.runtime.len());
+            super::wifi::record_diagnostic_stage("driver-transport-construct");
             let transport = super::iwl_ax201_transport::Transport::new(
                 self.mmio,
                 self.bar0_size,
                 (self.pci_bus, self.pci_device, self.pci_function),
                 &firmware,
-            )?;
+            ).map_err(|reason| {
+                super::wifi::record_diagnostic_failure("driver-transport-construct", reason);
+                reason
+            })?;
             self.runtime = Some(mvm::Runtime::new(transport, firmware));
             self.runtime.as_mut().unwrap().initialize()
         })();
@@ -254,6 +262,7 @@ impl NetworkDriver for Ax201Driver {
                         .ok_or("AX201 hardware MAC unavailable")
                         .and_then(|mac| runtime.begin_scan(mac));
                     if let Err(reason) = result {
+                        super::wifi::record_diagnostic_failure("driver-scan-request", reason);
                         self.firmware_error = Some(reason);
                         self.wifi_state = WifiState::Failed;
                         crate::log_warn!(target: "net"; "iwl-ax201: stage=scan-error reason={}\n", reason);
@@ -309,6 +318,7 @@ impl WifiDriver for Ax201Driver {
             return Err("AX201 recovery requires an idle or failed station");
         }
         let previous = self.last_error();
+        super::wifi::record_diagnostic_stage("driver-recovery");
         crate::log_warn!(target: "net";
             "iwl-ax201: stage=recovery-start state={:?} previous_error={:?}\n",
             self.wifi_state, previous);
@@ -328,6 +338,7 @@ impl WifiDriver for Ax201Driver {
                 self.firmware_error = None;
                 self.scan_requested = true;
                 self.wifi_state = WifiState::Scanning;
+                super::wifi::record_diagnostic_stage("driver-recovery-scan-pending");
                 crate::log_warn!(target: "net"; "iwl-ax201: stage=recovery-firmware-restarted scan=pending\n");
                 Ok(())
             }

@@ -970,6 +970,7 @@ pub mod logtotcp {
 
         const OWNER: &str = "logtotcp";
         const DRAIN_CHUNK: usize = 4096;
+        const LISTEN_RETRY_MS: u64 = 1_000;
 
         crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 
@@ -977,17 +978,14 @@ pub mod logtotcp {
         let events = NetQueue::new_leaked("logtotcp-evt", 64);
         register_app_queues(OWNER, cmds, events);
 
-        let _ = cmds.push(NetCommand::OpenTcpListen {
-            port: ports::LOGTOTCP_TCP_PORT,
-        });
-        crate::log!(
-            "logtotcp: listening on tcp {} ms={}\n",
-            ports::LOGTOTCP_TCP_PORT,
-            Instant::now().as_millis()
-        );
-
         let mut tcp_handle: Option<NetHandle> = None;
         let mut conn_handle: Option<NetHandle> = None;
+        let mut opening = false;
+        let mut opening_since_ms = 0u64;
+        let mut pending_report_at_ms = 0u64;
+        let mut retry_at_ms = 0u64;
+        let mut listen_failures = 0u64;
+        let mut socket_errors = 0u64;
         // A chunk is pending only until the adapter command queue accepts it.
         // The adapter owns an internal TCP backlog after that point, so waiting
         // for a TcpSent event here can wedge logging if that notification drops.
@@ -999,9 +997,24 @@ pub mod logtotcp {
             for ev in events.drain(32) {
                 match ev {
                     NetEvent::Opened { handle, kind } if kind == SocketKind::Tcp => {
+                        if tcp_handle.is_some() {
+                            continue;
+                        }
+                        opening = false;
                         tcp_handle = Some(handle);
+                        listen_failures = 0;
+                        crate::log_important!(target: "boot";
+                            "logtotcp: listening on tcp {} handle={} ms={} confirmed=1\n",
+                            ports::LOGTOTCP_TCP_PORT, handle.0, Instant::now().as_millis());
                     }
                     NetEvent::TcpEstablished { handle, .. } => {
+                        if tcp_handle != Some(handle) && !(tcp_handle.is_none() && opening) {
+                            continue;
+                        }
+                        // The adapter accepts on the listening socket itself.
+                        // This also recovers a missing Opened notification.
+                        opening = false;
+                        tcp_handle = Some(handle);
                         conn_handle = Some(handle);
                         snapshot_on_connect = super::flags::LAPTOP_BRINGUP_DIAG_PROFILE_ENABLED;
                         crate::log!(
@@ -1027,12 +1040,55 @@ pub mod logtotcp {
                         }
                         if tcp_handle == Some(handle) {
                             tcp_handle = None;
-                            let _ = cmds.push(NetCommand::OpenTcpListen {
-                                port: ports::LOGTOTCP_TCP_PORT,
-                            });
+                            retry_at_ms = Instant::now().as_millis().saturating_add(LISTEN_RETRY_MS);
+                        }
+                    }
+                    NetEvent::Error { msg } => {
+                        // NET_ANY_CONFIGURED can precede Wi-Fi association.
+                        // A failed bind is recoverable; queue admission alone
+                        // never establishes that the port is listening.
+                        // A delayed send error from the previous connection
+                        // must not release an unacknowledged listen request.
+                        if opening && matches!(msg,
+                            "tcp listen link down" | "listen failed" | "no sockets available")
+                        {
+                            opening = false;
+                            retry_at_ms = Instant::now().as_millis().saturating_add(LISTEN_RETRY_MS);
+                            listen_failures = listen_failures.saturating_add(1);
+                            if listen_failures <= 2 || listen_failures.is_power_of_two() {
+                                crate::log_warn!(target: "boot";
+                                    "logtotcp: listen failed error={} attempts_failed={} retry_ms={}\n",
+                                    msg, listen_failures, LISTEN_RETRY_MS);
+                            }
+                        } else {
+                            socket_errors = socket_errors.saturating_add(1);
+                            if socket_errors <= 2 || socket_errors.is_power_of_two() {
+                                crate::log_warn!(target: "boot";
+                                    "logtotcp: socket error={} count={} listener={:?} connection={:?}\n",
+                                    msg, socket_errors, tcp_handle, conn_handle);
+                            }
                         }
                     }
                     _ => {}
+                }
+            }
+            if opening && Instant::now().as_millis() >= pending_report_at_ms {
+                pending_report_at_ms = Instant::now().as_millis().saturating_add(5_000);
+                // A lost acknowledgement is not proof the bind failed. Opening
+                // another socket here could silently duplicate the listener.
+                crate::log_warn!(target: "boot";
+                    "logtotcp: listen acknowledgement pending elapsed_ms={} action=retain-single-open-request\n",
+                    Instant::now().as_millis().saturating_sub(opening_since_ms));
+            }
+            if tcp_handle.is_none() && conn_handle.is_none() && !opening
+                && Instant::now().as_millis() >= retry_at_ms
+            {
+                if cmds.push(NetCommand::OpenTcpListen { port: ports::LOGTOTCP_TCP_PORT }).is_ok() {
+                    opening = true;
+                    opening_since_ms = Instant::now().as_millis();
+                    pending_report_at_ms = opening_since_ms.saturating_add(5_000);
+                } else {
+                    retry_at_ms = Instant::now().as_millis().saturating_add(LISTEN_RETRY_MS);
                 }
             }
             if snapshot_on_connect && conn_handle.is_some() {
@@ -1040,10 +1096,11 @@ pub mod logtotcp {
                 // No log/ring lock is held here. These are retained software
                 // state and read-only register observations, never GPU probes.
                 crate::log_important!(target: "boot";
-                    "laptop-bringup-reconnect-snapshot: begin ms={}\n{}\n{}\nlaptop-bringup-reconnect-snapshot: end\n",
+                    "laptop-bringup-reconnect-snapshot: begin ms={}\n{}\n{}\n{}\nlaptop-bringup-reconnect-snapshot: end\n",
                     Instant::now().as_millis(),
                     crate::r::net::vlayer::usb_snapshot_text_host(),
-                    crate::intel::laptop_diagnostic_snapshot_text());
+                    crate::intel::laptop_diagnostic_snapshot_text(),
+                    crate::net::wifi::diagnostic_snapshot_text());
             }
             if conn_handle.is_some() && Instant::now().as_millis() >= next_loss_report_ms {
                 next_loss_report_ms = Instant::now().as_millis().saturating_add(1_000);

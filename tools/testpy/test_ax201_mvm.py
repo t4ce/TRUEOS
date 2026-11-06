@@ -33,6 +33,24 @@ mod net {
     #[path="WPA2"] pub(crate) mod iwl_ax201_wpa2;
     #[path="LINK"] pub(crate) mod iwl_ax201_link;
     pub(crate) mod wifi {
+
+        thread_local! {
+            pub static STAGES: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+            pub static FAILURES: std::cell::RefCell<Vec<(&'static str, &'static str)>> = const { std::cell::RefCell::new(Vec::new()) };
+            pub static REGISTERS: std::cell::RefCell<Vec<(&'static str, u32, u32, u32, u32, u16, u16, u16)>> = const { std::cell::RefCell::new(Vec::new()) };
+            pub static AP_DISCONNECTS: std::cell::RefCell<Vec<(u8,u16)>> = const { std::cell::RefCell::new(Vec::new()) };
+            pub static SEND_ERROR: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+        }
+        pub fn record_diagnostic_stage(stage:&'static str) { STAGES.with(|v|v.borrow_mut().push(stage)); }
+        pub fn record_diagnostic_failure(stage:&'static str, reason:&'static str) { FAILURES.with(|v|v.borrow_mut().push((stage,reason))); }
+        pub fn record_diagnostic_registers(stage:&'static str, int:u32, reset:u32, gp:u32, hw:u32, rr:u16, rw:u16, tw:u16) {
+            REGISTERS.with(|v|v.borrow_mut().push((stage,int,reset,gp,hw,rr,rw,tw)));
+        }
+        pub fn record_diagnostic_failure_registers(stage:&'static str,reason:&'static str,int:u32,reset:u32,gp:u32,hw:u32,rr:u16,rw:u16,tw:u16) {
+            record_diagnostic_registers(stage,int,reset,gp,hw,rr,rw,tw);
+            record_diagnostic_failure(stage,reason);
+        }
+        pub fn record_diagnostic_ap_disconnect(subtype:u8,reason:u16) { AP_DISCONNECTS.with(|v|v.borrow_mut().push((subtype,reason))); }
         #[derive(Clone,Copy,Debug,PartialEq,Eq)] pub enum WifiState {NoHardware,Disabled,Disconnected,Scanning,Connecting,Authenticating,Connected,Failed}
         #[derive(Clone,Copy,Debug,PartialEq,Eq)] pub enum WifiSecurity {Open,WEP,WPA,WPA2,WPA3,Unknown}
         #[derive(Clone,Debug)] pub struct WifiNetwork {
@@ -58,6 +76,8 @@ mod net {
         pub type Shared=Arc<Mutex<State>>;
         pub struct Transport(pub Shared);
         impl Transport {
+            pub fn record_diagnostic_snapshot(&self,stage:&'static str) { crate::net::wifi::record_diagnostic_registers(stage,0,0,0,0,0,0,0); }
+            pub fn record_diagnostic_failure(&self,stage:&'static str,reason:&'static str) { crate::net::wifi::record_diagnostic_failure_registers(stage,reason,0,0,0,0,0,0,0); }
             pub fn start(&mut self)->Result<Notification,&'static str>{self.0.lock().unwrap().alive.take().ok_or("no alive")}
             pub fn restart(&mut self)->Result<Notification,&'static str>{
                 let mut state=self.0.lock().unwrap();state.restarts+=1;
@@ -67,6 +87,7 @@ mod net {
                 Ok(Notification{group:0,id:1,sequence:0x8000,payload:vec![0xfe,0xca,0,0]})
             }
             pub fn send_command(&mut self,group:u8,id:u8,version:u8,payload:&[u8])->Result<u16,&'static str>{
+                if let Some(reason)=crate::net::wifi::SEND_ERROR.with(|v|v.get()){return Err(reason);}
                 let mut state=self.0.lock().unwrap();let sequence=state.sequence;state.sequence+=1;
                 state.sent.push(Command{group:if group==0{1}else{group},id,version,sequence,payload:payload.to_vec()});Ok(sequence)
             }
@@ -189,6 +210,8 @@ mod net {
         #[test] fn command_timeout_fails_once_and_never_claims_ready(){
             let(mut runtime,_)=fixture();crate::NOW.with(|value|value.set(2000));
             assert_eq!(runtime.poll().unwrap_err(),"AX201 initialization command timeout");
+            crate::net::wifi::FAILURES.with(|v| assert_eq!(v.borrow().last().copied(), Some(("unified-init-config", "AX201 initialization command timeout"))));
+            crate::net::wifi::REGISTERS.with(|v| assert_eq!(v.borrow().last().unwrap().0, "unified-init-config"));
             assert!(!runtime.poll().unwrap());assert!(runtime.nvm.is_none());
         }
         #[test] fn init_complete_timeout_is_separate_from_command_ack(){
@@ -585,11 +608,23 @@ mod link_lifecycle_tests {
         packet[5..7].copy_from_slice(&(2u16|8|64|128|256|512|4096).to_be_bytes());packet[9..17].copy_from_slice(&2u64.to_be_bytes());packet[97..99].copy_from_slice(&(key_data.len()as u16).to_be_bytes());packet.extend_from_slice(&key_data);
         let size=(packet.len()-4)as u16;packet[2..4].copy_from_slice(&size.to_be_bytes());let tag=hmac(&ptk[..16],&[&packet]);packet[81..97].copy_from_slice(&tag[..16]);packet
     }
+    #[test]fn failed_station_command_submission_keeps_exact_pending_stage(){
+        let mut f=fixture(false);
+        crate::net::wifi::SEND_ERROR.with(|v|v.set(Some("command queue unavailable")));
+        f.poll();
+        crate::net::wifi::SEND_ERROR.with(|v|v.set(None));
+        assert_eq!(f.connection.state(),WifiState::Failed);
+        assert!(f.shared.lock().unwrap().sent.is_empty());
+        crate::net::wifi::FAILURES.with(|v|assert_eq!(v.borrow().last().copied(),Some(("station-phy-context","command queue unavailable"))));
+        crate::net::wifi::REGISTERS.with(|v|assert_eq!(v.borrow().last().unwrap().0,"station-phy-context"));
+    }
     #[test]fn firmware_acks_alone_never_open_controlled_port(){
         let mut f=fixture(true);f.configure(false);assert!(!f.connection.connected());assert!(f.shared.lock().unwrap().raw.is_empty());
         assert!(f.connection.send(&mut f.transport,&ethernet()).is_err());
         crate::NOW.with(|clock|clock.set(2001));f.poll();assert_eq!(f.connection.state(),WifiState::Failed);
         assert_eq!(f.connection.last_error(),Some("AX201 station protocol timeout"));
+        crate::net::wifi::FAILURES.with(|v| assert_eq!(v.borrow().last().copied(), Some(("station-session-wait", "AX201 station protocol timeout"))));
+        crate::net::wifi::STAGES.with(|v| { let stages=v.borrow(); assert!(stages.contains(&"station-mac-context")); assert!(stages.contains(&"station-binding")); assert!(stages.contains(&"station-management-queue")); assert!(stages.contains(&"station-data-queue")); });
     }
     #[test]fn ap_auth_rejection_closes_station(){
         let mut f=fixture(true);f.configure(true);f.management(0xb0,&[0,0,2,0,1,0]);
@@ -622,9 +657,12 @@ mod link_lifecycle_tests {
         assert_eq!(f.connection.last_error(),Some("AX201 session protection failed"));
     }
     #[test]fn malformed_deauthentication_is_dropped_but_valid_ap_reason_closes_link(){
+        crate::net::wifi::AP_DISCONNECTS.with(|v|v.borrow_mut().clear());
         let mut f=fixture(false);f.associate();
         f.management(0xc0,&[]);assert_eq!(f.connection.state(),WifiState::Connected);
+        crate::net::wifi::AP_DISCONNECTS.with(|v|assert!(v.borrow().is_empty()));
         f.management(0xc0,&[4,0]);assert_eq!(f.connection.state(),WifiState::Failed);
+        crate::net::wifi::AP_DISCONNECTS.with(|v|assert_eq!(&*v.borrow(),&[(0xc0,4)]));
     }
     #[test]fn open_association_routes_ethernet_and_disconnect_closes_port(){
         let mut f=fixture(false);f.associate();assert!(f.connection.connected());
@@ -640,9 +678,11 @@ mod link_lifecycle_tests {
         let mut bad=message3();bad[82]^=1;let count=f.shared.lock().unwrap().raw.len();f.eapol(&bad);
         assert_eq!(f.shared.lock().unwrap().raw.len(),count);assert!(!f.connection.connected());
         f.eapol(&message3());let m4=f.raw();assert!(!f.connection.connected());assert!(f.connection.send(&mut f.transport,&ethernet()).is_err());
+        crate::net::wifi::STAGES.with(|v|assert_eq!(v.borrow().last().copied(),Some("station-wpa2-m4-ack")));
         let mut unrelated=m4.clone();unrelated.queue=1;f.tx_result(&unrelated,1);assert!(!f.connection.connected());
         let mut unrelated=m4.clone();unrelated.sequence+=1;f.tx_result(&unrelated,1);assert!(!f.connection.connected());
         f.tx_result(&m4,1);assert!(f.connection.connected());
+        crate::net::wifi::STAGES.with(|v|assert_eq!(v.borrow().last().copied(),Some("connected")));
         f.connection.send(&mut f.transport,&ethernet()).unwrap();let tx=f.raw();assert_eq!(tx.queue,2);assert!(tx.frame[1]&0x40!=0);assert!(!tx.options.encrypt);
         let key:[u8;16]=ptk()[32..48].try_into().unwrap();let mut ap_key=CcmpKey::new(key,0,STA).unwrap();
         let packet=ap_key.encrypt(&downlink([8,0],AP,&[0x66;46])).unwrap();f.frame(packet.clone());assert!(f.connection.receive().is_some());

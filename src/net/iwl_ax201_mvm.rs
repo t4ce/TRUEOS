@@ -43,6 +43,25 @@ enum Stage {
     Failed,
 }
 
+impl Stage {
+    fn diagnostic_label(self) -> &'static str {
+        match self {
+            Self::InitConfig => "unified-init-config",
+            Self::NvmComplete => "unified-nvm-complete",
+            Self::InitComplete => "unified-init-complete",
+            Self::NvmInfo => "unified-nvm-info",
+            Self::TxAntenna => "unified-tx-antenna",
+            Self::DqaEnable => "unified-dqa-enable",
+            Self::Ready => "unified-ready",
+            Self::ScanConfig => "scan-config",
+            Self::ScanRequest => "scan-request",
+            Self::Scanning => "scan-running",
+            Self::ScanFinished => "scan-finished",
+            Self::Failed => "mvm-failed",
+        }
+    }
+}
+
 pub(super) struct Runtime {
     transport: Transport,
     firmware: Firmware<'static>,
@@ -117,6 +136,11 @@ fn decode_nvm(data: &[u8]) -> Result<NvmInfo, &'static str> {
 }
 
 impl Runtime {
+    fn set_stage(&mut self, stage: Stage) {
+        self.stage = stage;
+        crate::net::wifi::record_diagnostic_stage(stage.diagnostic_label());
+    }
+
     /// Retain transport/DMA ownership even if initial firmware boot fails.
     pub fn new(transport: Transport, firmware: Firmware<'static>) -> Self {
         Self {
@@ -152,7 +176,7 @@ impl Runtime {
         // Close carrier and discard stale station keys/software frames even if
         // firmware cannot reboot. DMA belongs to Transport and remains pinned
         // until its checked stop/reset permits reclaiming the hardware queues.
-        self.stage = Stage::Failed;
+        self.set_stage(Stage::Failed);
         self.connection = None;
         self.nvm = None;
         self.pending = None;
@@ -167,17 +191,20 @@ impl Runtime {
     }
 
     fn initialize_alive(&mut self, alive: Notification) -> Result<(), &'static str> {
+        crate::net::wifi::record_diagnostic_stage("unified-alive-validate");
         if alive.group != 0
             || alive.id != 1
             || alive.payload.len() < 4
             || u16::from_le_bytes([alive.payload[0], alive.payload[1]]) != 0xcafe
         {
+            self.transport.record_diagnostic_failure("unified-alive-validate", "AX201 invalid firmware ALIVE notification");
             return Err("AX201 invalid firmware ALIVE notification");
         }
-        self.stage = Stage::InitConfig;
+        self.set_stage(Stage::InitConfig);
         // IWL_INIT_NVM is bit 1; NVM remains onboard rather than overwritten.
         if let Err(reason) = self.submit(SYSTEM, 3, &2u32.to_le_bytes()) {
-            self.stage = Stage::Failed;
+            self.transport.record_diagnostic_failure(self.stage.diagnostic_label(), reason);
+            self.set_stage(Stage::Failed);
             return Err(reason);
         }
         crate::log_warn!(target: "net"; "iwl-ax201: stage=unified-init firmware_alive=1\n");
@@ -202,7 +229,10 @@ impl Runtime {
         version: u8,
         payload: &[u8],
     ) -> Result<(), &'static str> {
-        self.pending = Some(self.transport.send_command(group, id, version, payload)?);
+        self.pending = Some(self.transport.send_command(group, id, version, payload).map_err(|reason| {
+            self.transport.record_diagnostic_failure(self.stage.diagnostic_label(), reason);
+            reason
+        })?);
         self.pending_command = Some((if group == 0 { 1 } else { group }, id));
         self.deadline_ms = trueos_time::Instant::now().as_millis() + COMMAND_TIMEOUT_MS;
         Ok(())
@@ -225,7 +255,7 @@ impl Runtime {
                 if complete.aborted {
                     return Err("AX201 firmware aborted scan");
                 }
-                self.stage = Stage::ScanFinished;
+                self.set_stage(Stage::ScanFinished);
                 self.pending = None;
                 self.pending_command = None;
                 let target = self
@@ -285,13 +315,13 @@ impl Runtime {
         self.pending_command = None;
         match self.stage {
             Stage::InitConfig => {
-                self.stage = Stage::NvmComplete;
+                self.set_stage(Stage::NvmComplete);
                 self.submit(NVM, 0, &[0; 4])?;
             }
             Stage::NvmComplete => {
                 // Unified QuZ, tx_with_siso_diversity=false: Linux explicitly
                 // skips PHY_CONFIGURATION; only INIT_NVM was requested.
-                self.stage = Stage::InitComplete;
+                self.set_stage(Stage::InitComplete);
                 self.deadline_ms = trueos_time::Instant::now().as_millis() + COMMAND_TIMEOUT_MS;
             }
             Stage::NvmInfo => {
@@ -310,31 +340,31 @@ impl Runtime {
                 }
                 let chains = info.tx_chains.to_le_bytes();
                 self.nvm = Some(info);
-                self.stage = Stage::TxAntenna;
+                self.set_stage(Stage::TxAntenna);
                 crate::log_warn!(target: "net"; "iwl-ax201: stage=radio-bootstrap command=tx-antenna group=1 id=0x98 wire_version=0\n");
                 self.submit_version(1, 0x98, 0, &chains)?;
             }
             Stage::TxAntenna => {
                 if self.firmware.has_capability(CAPA_DQA_SUPPORT) {
-                    self.stage = Stage::DqaEnable;
+                    self.set_stage(Stage::DqaEnable);
                     crate::log_warn!(target: "net"; "iwl-ax201: stage=radio-bootstrap command=dqa-enable group=5 id=0 wire_version=0\n");
                     self.submit_version(5, 0, 0, &0u32.to_le_bytes())?;
                 } else {
-                    self.stage = Stage::Ready;
+                    self.set_stage(Stage::Ready);
                     crate::log_warn!(target: "net"; "iwl-ax201: stage=radio-ready antenna=confirmed legacy_dqa=not-advertised queue_api=gen2\n");
                 }
             }
             Stage::DqaEnable => {
-                self.stage = Stage::Ready;
+                self.set_stage(Stage::Ready);
                 crate::log_warn!(target: "net"; "iwl-ax201: stage=radio-ready antenna=confirmed dqa=confirmed\n");
             }
             Stage::ScanConfig => {
-                self.stage = Stage::ScanRequest;
+                self.set_stage(Stage::ScanRequest);
                 let request = core::mem::take(&mut self.scan_request);
                 self.submit(scan::GROUP, scan::REQUEST_COMMAND, &request)?;
             }
             Stage::ScanRequest => {
-                self.stage = Stage::Scanning;
+                self.set_stage(Stage::Scanning);
                 self.deadline_ms = trueos_time::Instant::now().as_millis() + 30_000;
                 crate::log_warn!(target: "net"; "iwl-ax201: stage=passive-scan uid={} target_ssid=easyeasy\n", self.scan_uid);
             }
@@ -357,7 +387,7 @@ impl Runtime {
         self.scan_request = scan::passive_request(&self.firmware, self.scan_uid, mac, &channels)?;
         self.networks.clear();
         self.beacons.clear();
-        self.stage = Stage::ScanConfig;
+        self.set_stage(Stage::ScanConfig);
         self.submit(scan::GROUP, scan::CONFIG_COMMAND, &config)
     }
 
@@ -510,7 +540,7 @@ impl Runtime {
             if let Some(connection) = self.connection.as_mut() {
                 connection.transport_failed(reason);
             }
-            self.stage = Stage::Failed;
+            self.set_stage(Stage::Failed);
         }
         result
     }
@@ -526,13 +556,16 @@ impl Runtime {
             let Some(notification) = received else {
                 break;
             };
-            self.notification(notification)?;
+            if let Err(reason) = self.notification(notification) {
+                self.transport.record_diagnostic_failure(self.stage.diagnostic_label(), reason);
+                return Err(reason);
+            }
         }
         if let Some(connection) = self.connection.as_mut() {
             connection.poll(&mut self.transport);
         }
         if self.stage == Stage::InitComplete && self.init_complete {
-            self.stage = Stage::NvmInfo;
+            self.set_stage(Stage::NvmInfo);
             self.submit(NVM, 2, &[0; 4])?;
         }
         if !matches!(
@@ -541,6 +574,7 @@ impl Runtime {
         ) && trueos_time::Instant::now().as_millis() >= self.deadline_ms
         {
             crate::log_warn!(target: "net"; "iwl-ax201: stage=command-timeout waiting={:?}\n", self.stage);
+            self.transport.record_diagnostic_failure(self.stage.diagnostic_label(), "AX201 initialization command timeout");
             return Err("AX201 initialization command timeout");
         }
         Ok(matches!(

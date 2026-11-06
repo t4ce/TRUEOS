@@ -50,6 +50,24 @@ mod pci {
 }
 mod wait { pub fn spin_until_timeout_no_exec(_:u64,mut f:impl FnMut()->bool)->bool {f()} }
 mod net {
+    pub(crate) mod wifi {
+
+        thread_local! {
+            pub static STAGES: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+            pub static FAILURES: std::cell::RefCell<Vec<(&'static str, &'static str)>> = const { std::cell::RefCell::new(Vec::new()) };
+            pub static REGISTERS: std::cell::RefCell<Vec<(&'static str, u32, u32, u32, u32, u16, u16, u16)>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        pub fn record_diagnostic_stage(stage:&'static str) { STAGES.with(|v|v.borrow_mut().push(stage)); }
+        pub fn record_diagnostic_failure(stage:&'static str, reason:&'static str) { FAILURES.with(|v|v.borrow_mut().push((stage,reason))); }
+        pub fn record_diagnostic_registers(stage:&'static str, int:u32, reset:u32, gp:u32, hw:u32, rr:u16, rw:u16, tw:u16) {
+            REGISTERS.with(|v|v.borrow_mut().push((stage,int,reset,gp,hw,rr,rw,tw)));
+        }
+        pub fn record_diagnostic_failure_registers(stage:&'static str,reason:&'static str,int:u32,reset:u32,gp:u32,hw:u32,rr:u16,rw:u16,tw:u16) {
+            record_diagnostic_registers(stage,int,reset,gp,hw,rr,rw,tw);
+            record_diagnostic_failure(stage,reason);
+        }
+        pub fn record_diagnostic_ap_disconnect(_:u8,_:u16) {}
+    }
     #[path="FIRMWARE"] pub mod iwl_ax201_fw;
     pub mod iwl_ax201_transport {
 TRANSPORT
@@ -370,6 +388,8 @@ TRANSPORT
                 tr.commands.bytes_mut()[0]=0xa5;
                 let queue_dma=tr.data_queues[0].packets.virt;
                 assert_eq!(tr.quiesce_and_reset().unwrap_err(),"AX201 DMA master stop timeout");
+                crate::net::wifi::FAILURES.with(|v| assert_eq!(v.borrow().last().copied(), Some(("reset-master-stop", "AX201 DMA master stop timeout"))));
+                crate::net::wifi::REGISTERS.with(|v| { let record=*v.borrow().last().unwrap(); assert_eq!(record.0,"reset-master-stop"); assert_ne!(record.2&RESET_STOP_MASTER,0); assert_eq!(record.2&RESET_SW,0); });
                 assert!(tr.failed);assert!(tr.started==false);
                 assert_eq!(tr.commands.bytes()[0],0xa5);
                 assert_eq!(tr.data_queues.len(),1);assert!(crate::dma::is_live(queue_dma));
@@ -403,6 +423,8 @@ TRANSPORT
                     mmio[CSR_RESET/4]=RESET_MASTER_DISABLED;
                     mmio[CSR_GP/4]=0; // Never acknowledge clock readiness.
                     assert_eq!(tr.restart().unwrap_err(),"AX201 MAC clock timeout");
+                    crate::net::wifi::FAILURES.with(|v| assert_eq!(v.borrow().last().copied(), Some(("firmware-mac-clock", "AX201 MAC clock timeout"))));
+                    crate::net::wifi::STAGES.with(|v| { let stages=v.borrow(); assert!(stages.contains(&"reset-reclaim")); assert!(stages.contains(&"firmware-pci-ownership")); assert!(stages.contains(&"firmware-reset-ownership")); });
                     assert!(tr.failed);assert!(tr.started);
                     assert_eq!(tr.commands.phys,base);assert!(tr.commands.pinned);
                     assert!(crate::dma::is_live(tr.commands.virt));

@@ -3719,6 +3719,8 @@ pub(crate) async fn build_dump_text() -> String {
     writeln!(out).unwrap();
 
     append_nic_driver_snapshots(&mut out);
+    out.push_str(&crate::net::wifi::diagnostic_snapshot_text());
+    writeln!(out).unwrap();
 
     writeln!(out, "=== Block Devices ===").unwrap();
     let devices: alloc::vec::Vec<_> = crate::disc::block::devices()
