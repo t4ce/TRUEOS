@@ -24,6 +24,11 @@ mod ui4_bcs_queue;
 
 mod display_metrics;
 mod tgl_ui4_layout;
+mod bringup_diag;
+
+pub(super) fn capture_firmware_handoff_evidence(dev: crate::intel::Dev) {
+    bringup_diag::capture_firmware(dev);
+}
 
 fn native_ui4_for_pipe(pipe: PipeInfo) -> bool {
     pipe.slot == 0 && crate::intel::tgl_native_panel::ui4_handoff_active()
@@ -1083,6 +1088,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     if PRIMARY_BOOT_SURFACE_INIT.swap(true, Ordering::AcqRel) {
         return;
     }
+    bringup_diag::checkpoint("primary-start", usize::MAX);
 
     log_pipe_scanout_probe(dev, "before-primary-init");
     log_transcoder_a_state(dev, "before-primary-init");
@@ -1092,6 +1098,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         crate::log!("intel/display: primary-boot-surface skipped no active pipe discovered\n");
         return;
     };
+    bringup_diag::select_pipe(pipe);
     let pipe_src_raw = crate::intel::mmio_read(dev, pipe.pipe_src_off);
     let pipe_src_dims = decode_pipe_src(pipe_src_raw);
     let fb_dims = framebuffer_hint();
@@ -1128,6 +1135,10 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         return;
     };
     let gpu_capacity = primary_surface_gpu_capacity(pipe);
+    crate::log_important!(target: "gfx";
+        "intel/ui4-primary-allocation: pipe={} extent={}x{} backing={}x{} pitch={} bytes={} gpu=0x{:X} capacity={}\n",
+        pipe.name, width, height, backing_width, backing_height, pitch_bytes, byte_len, primary_gpu, gpu_capacity);
+    bringup_diag::checkpoint("primary-capacity-check", 0);
     if byte_len as u64 > gpu_capacity {
         crate::log_warn!(
             target: "intel/display";
@@ -1146,6 +1157,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         crate::log!("intel/display: primary-boot-surface alloc failed bytes=0x{:X}\n", byte_len);
         return;
     };
+    bringup_diag::checkpoint("primary-backing-allocated", 0);
 
     crate::intel::dma_flush(virt, byte_len);
 
@@ -1160,6 +1172,7 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
         return;
     }
     crate::intel::ggtt_invalidate(dev);
+    bringup_diag::checkpoint("primary-ggtt-mapped", 0);
 
     let Some(_stride_reg) = plane_stride_reg_value(pitch_bytes) else {
         crate::log!(
@@ -1583,6 +1596,8 @@ pub(crate) fn diagnostic_snapshot_text() -> String {
         dev.mmio as u64,
         dev.mmio_len
     );
+    bringup_diag::append(&mut out, dev);
+    bringup_diag::append_retained(&mut out);
     let snapshots = display_pipeline_snapshots_for_dev(dev);
     let selection = select_compatibility_pipeline_from_snapshots(&snapshots);
     for snapshot in snapshots {
@@ -3436,6 +3451,7 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
 
     let fail = |reason: &'static str| {
         UI4_RGBA8_PLANE_STACK_STATE.store(UI4_RGBA8_PLANE_STACK_FAILED, Ordering::Release);
+        bringup_diag::failed(reason, dev);
         crate::log_error!(target: "intel/display";
             "intel/display: ui4-rgba8-plane-stack bootstrap failed pipe={} reason={} retry=forbidden\n",
             primary.pipe.name,
@@ -3444,8 +3460,10 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
         false
     };
     let pipe = primary.pipe;
+    bringup_diag::checkpoint("transparent-front-allocation", usize::MAX);
     let mut overlay_surfaces = [None; UNIVERSAL_PLANE_SLOTS - 1];
     for slot in 1..UNIVERSAL_PLANE_SLOTS {
+        bringup_diag::checkpoint("transparent-front-allocation", slot);
         let Some(surface) = microfont_log_boot_surface(pipe, slot, primary.width, primary.height)
             .or_else(|| {
                 ensure_overlay_surface_for_pipe(dev, pipe, slot, primary.width, primary.height)
@@ -3483,6 +3501,7 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     ];
     let mut controls = [0u32; UNIVERSAL_PLANE_SLOTS];
     for slot in 0..UNIVERSAL_PLANE_SLOTS {
+        bringup_diag::checkpoint("static-contract-and-dbuf", slot);
         let pitch = if slot == 0 {
             primary.pitch_bytes
         } else {
@@ -3510,6 +3529,8 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
         }
     }
 
+    bringup_diag::latch(surface_regs, 0, 0);
+    bringup_diag::checkpoint("plane-arm", usize::MAX);
     // Publish every final CTL/SURF pair back-to-back and consume one common
     // latch. These are the only bootstrap SURF writes for slots 0-4.
     for slot in 0..UNIVERSAL_PLANE_SLOTS {
@@ -3519,6 +3540,7 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     }
     let (arm_frame_before, arm_frame_after, arm_frame_wait) = wait_for_pipe_next_frame(dev, pipe);
     let (live_mask, live_iters) = wait_for_plane_stack_live(dev, pipe, surface_regs, 5_000_000);
+    bringup_diag::latch(surface_regs, live_mask, live_iters);
     if live_mask != full_mask {
         return fail("plane-arm-timeout");
     }
@@ -3533,6 +3555,7 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     // readiness signal, so observing it must imply the display stack is ready.
     UI4_RGBA8_PLANE_STACK_PIPE_SLOT.store(pipe.slot as u32, Ordering::Release);
     UI4_RGBA8_PLANE_STACK_STATE.store(UI4_RGBA8_PLANE_STACK_READY, Ordering::Release);
+    bringup_diag::checkpoint("publish-output-capabilities", usize::MAX);
     let output = crate::ui4::OutputId::from_slot(0).expect("static UI4 D01 output");
     let application_plane_mask = (1u8 << crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT) - 1;
     if let Err(reason) =
@@ -3545,6 +3568,8 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     {
         return fail(reason);
     }
+    bringup_diag::checkpoint("ready", usize::MAX);
+    bringup_diag::log_ready(dev);
     crate::log!(
         "intel/display: ui4-rgba8-plane-stack bootstrap ok=1 pipe={} slots=0-3-composition+4-interaction size={}x{} slot0=xrgb8-opaque slots1-4=premultiplied-rgba8-linear contracts=once bootstrap_surf_writes=one-per-slot runtime=surf-flips-only dbuf_blocks={}/{}/{}/{}/{} commit_frame={}=>{} commit_wait={} live_iters={} live_mask=0x{:X}\n",
         pipe.name,

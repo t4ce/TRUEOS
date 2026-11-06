@@ -1,10 +1,9 @@
-//! Quarantined xHCI admission and first-step recovery service.
+//! xHCI admission, per-controller observation and guarded explicit repair.
 //!
-//! Delivered Intel and QEMU controller families enter their known CrabUSB
-//! profiles. Every other vendor remains owned by Heal before normal
-//! `USBHost::init()`. The initial recovery primitive is intentionally narrow:
-//! snapshot the controller and power software-controlled root ports with the
-//! same PORTSC-neutral write discipline as the xHCI laboratory.
+//! Known Intel/QEMU hosts keep their normal event pumps and class ownership.
+//! Unsupported hosts remain quarantined. Read-only snapshots work in either
+//! mode; transport reset is quarantine-only. Live USB2 root-port repair uses
+//! the normal PORTSC-neutral state machine and refuses ever-addressed ports.
 
 use alloc::{format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -50,7 +49,9 @@ const DEFAULT_MAX_SLOTS: u8 = 8;
 const DEFAULT_NOOP_TIMEOUT_MS: u32 = 1_000;
 
 static LATEST_SELECTION: Mutex<Option<XhciBackendSelection>> = Mutex::new(None);
-static LATEST_REPORT: Mutex<Option<HealServiceReport>> = Mutex::new(None);
+static REPORTS: Mutex<Vec<HealServiceReport>> = Mutex::new(Vec::new());
+static RESCAN_REQUESTED: [core::sync::atomic::AtomicBool; super::MAX_CRABUSB_CONTROLLERS] =
+    [const { core::sync::atomic::AtomicBool::new(false) }; super::MAX_CRABUSB_CONTROLLERS];
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -114,6 +115,8 @@ impl XhciBackendSelection {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HealServiceStage {
+    NormalRuntime,
+    Parked,
     Quarantined,
     ControllerConstructed,
     CapabilitiesReadable,
@@ -126,6 +129,8 @@ pub enum HealServiceStage {
 impl HealServiceStage {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::NormalRuntime => "normal-runtime",
+            Self::Parked => "parked",
             Self::Quarantined => "quarantined",
             Self::ControllerConstructed => "controller-constructed",
             Self::CapabilitiesReadable => "capabilities-readable",
@@ -174,8 +179,62 @@ pub struct HealTransportProof {
     pub completion_slot_id: u8,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HealControllerMode {
+    Initializing,
+    Quarantined,
+    Live,
+    Parked,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HealRegisters {
+    pub usbcmd: u32,
+    pub usbsts: u32,
+    pub config: u32,
+    pub crcr: u64,
+    pub dcbaap: u64,
+    pub erdp: u64,
+    pub iman: u32,
+    pub mfindex: u32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HealPortResetProof {
+    pub port_id: u8,
+    pub before_portsc: u32,
+    pub after_portsc: u32,
+    pub waited_ms: u32,
+    pub completed: bool,
+    pub rescan_requested: bool,
+    pub request_accepted: bool,
+    pub failure: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct HealOwnerStatus {
+    pub controller_phase: &'static str,
+    pub root_hub_lifecycle: &'static str,
+    pub event_ready: bool,
+    pub probe_requested: bool,
+    pub operation_requested: bool,
+    pub operation_stage: &'static str,
+    pub operation_elapsed_ms: u64,
+    pub operation_watchdog_timeouts: u64,
+    pub probe_watchdog_timeouts: u64,
+    pub last_probe_state: &'static str,
+    pub last_error: Option<String>,
+    pub snapshot_sequence: u64,
+    pub snapshot_at_ms: Option<u64>,
+    pub snapshot_age_ms: Option<u64>,
+    pub snapshot_error: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct HealServiceReport {
+    pub controller_index: usize,
+    pub mode: HealControllerMode,
     pub session_id: u64,
     pub revision: u64,
     pub seed: HealXhciSeed,
@@ -191,11 +250,18 @@ pub struct HealServiceReport {
     pub ports: Vec<HealPortReport>,
     pub transport: Option<HealTransportProof>,
     pub failure: Option<String>,
+    pub registers: Option<HealRegisters>,
+    pub last_port_reset: Option<HealPortResetProof>,
+    pub owner: Option<HealOwnerStatus>,
+    pub snapshot_at_ms: Option<u64>,
+    pub snapshot_age_ms: Option<u64>,
 }
 
 impl HealServiceReport {
-    fn new(session_id: u64, seed: HealXhciSeed) -> Self {
+    fn new(controller_index: usize, session_id: u64, seed: HealXhciSeed) -> Self {
         Self {
+            controller_index,
+            mode: HealControllerMode::Quarantined,
             session_id,
             revision: 1,
             seed,
@@ -211,20 +277,67 @@ impl HealServiceReport {
             ports: Vec::new(),
             transport: None,
             failure: None,
+            registers: None,
+            last_port_reset: None,
+            owner: None,
+            snapshot_at_ms: None,
+            snapshot_age_ms: None,
         }
     }
 }
 
+pub fn reports() -> Vec<HealServiceReport> {
+    REPORTS.lock().iter().map(response_report).collect()
+}
 
+pub(crate) fn response_report(report: &HealServiceReport) -> HealServiceReport {
+    let mut result = report.clone();
+    let owner = super::runtime::snapshot(report.controller_index);
+    let now_ms = trueos_time::Instant::now().as_millis();
+    result.snapshot_age_ms = report
+        .snapshot_at_ms
+        .map(|at_ms| now_ms.saturating_sub(at_ms));
+    result.owner = Some(HealOwnerStatus {
+        controller_phase: owner.controller_phase,
+        root_hub_lifecycle: owner.root_hub_lifecycle,
+        event_ready: owner.event_ready,
+        probe_requested: owner.probe_requested,
+        operation_requested: owner.operation_requested,
+        operation_stage: owner.operation_stage,
+        operation_elapsed_ms: owner.operation_elapsed_ms,
+        operation_watchdog_timeouts: owner.operation_watchdog_timeouts,
+        probe_watchdog_timeouts: owner.probe_watchdog_timeouts,
+        last_probe_state: owner.last_probe_state,
+        last_error: owner.last_error,
+        snapshot_sequence: owner.snapshot_sequence,
+        snapshot_at_ms: owner.snapshot_at_ms,
+        snapshot_age_ms: owner
+            .snapshot_at_ms
+            .map(|at_ms| now_ms.saturating_sub(at_ms)),
+        snapshot_error: owner.snapshot_error,
+    });
+    result
+}
+
+pub(crate) fn take_rescan_requested(index: usize) -> bool {
+    RESCAN_REQUESTED
+        .get(index)
+        .map(|request| request.swap(false, Ordering::AcqRel))
+        .unwrap_or(false)
+}
 
 pub fn latest_report() -> Option<HealServiceReport> {
-    LATEST_REPORT.lock().clone()
+    REPORTS
+        .lock()
+        .iter()
+        .find(|report| report.controller_index == 0)
+        .cloned()
 }
 
 pub(crate) fn claim_backend(
     dev: crate::pci::PciDevice,
     publish_selection: bool,
-) -> Option<XhciBackendSelection> {
+) -> Result<XhciBackendSelection, String> {
     let selection = select_backend(dev);
     if let Err(error) = crate::pci::claim_device(&dev, selection.claim_owner()) {
         crate::log!(
@@ -237,12 +350,15 @@ pub(crate) fn claim_backend(
             selection.claim_owner(),
             error
         );
-        return None;
+        return Err(format!(
+            "PCI claim owner={} failed: {error:?}",
+            selection.claim_owner()
+        ));
     }
     if publish_selection {
         *LATEST_SELECTION.lock() = Some(selection);
     }
-    Some(selection)
+    Ok(selection)
 }
 
 fn select_backend(dev: crate::pci::PciDevice) -> XhciBackendSelection {
@@ -286,14 +402,221 @@ fn select_backend(dev: crate::pci::PciDevice) -> XhciBackendSelection {
     }
 }
 
+fn seed_for_device(dev: crate::pci::PciDevice) -> HealXhciSeed {
+    HealXhciSeed {
+        bus: dev.bus,
+        slot: dev.slot,
+        function: dev.function,
+        vendor_id: dev.vendor_id,
+        device_id: dev.device_id,
+        revision: crate::pci::config_read_u8(dev.bus, dev.slot, dev.function, PCI_REVISION_ID),
+        subsystem_vendor_id: crate::pci::config_read_u16(
+            dev.bus,
+            dev.slot,
+            dev.function,
+            PCI_SUBSYSTEM_VENDOR_ID,
+        ),
+        subsystem_device_id: crate::pci::config_read_u16(
+            dev.bus,
+            dev.slot,
+            dev.function,
+            PCI_SUBSYSTEM_DEVICE_ID,
+        ),
+    }
+}
+
+pub(crate) async fn register_pending_controller(
+    index: usize,
+    dev: crate::pci::PciDevice,
+    host: &mut crabusb::USBHost,
+    _stage: &'static str,
+) -> HealServiceReport {
+    let mut report = HealServiceReport::new(index, next_session_id(), seed_for_device(dev));
+    report.mode = HealControllerMode::Initializing;
+    report.stage = HealServiceStage::ControllerConstructed;
+    let _ = observe_controller(host, &mut report).await;
+    publish(&report);
+    report
+}
+
+pub(crate) async fn register_live_controller(
+    index: usize,
+    dev: crate::pci::PciDevice,
+    host: &mut crabusb::USBHost,
+) -> HealServiceReport {
+    let mut report = HealServiceReport::new(index, next_session_id(), seed_for_device(dev));
+    report.mode = HealControllerMode::Live;
+    report.stage = HealServiceStage::NormalRuntime;
+    if let Err(reason) = observe_controller(host, &mut report).await {
+        report.failure = Some(reason);
+    }
+    publish(&report);
+    crate::log!(
+        "xhci-heal: controller={} pci={:02x}:{:02x}.{} session={} mode=live observe=available usb2-unprobed-reset=explicit whole-controller-reset=blocked\n",
+        index,
+        dev.bus,
+        dev.slot,
+        dev.function,
+        report.session_id
+    );
+    report
+}
+
+pub(crate) async fn register_failed_controller(
+    index: usize,
+    dev: crate::pci::PciDevice,
+    host: &mut crabusb::USBHost,
+    reason: String,
+) -> HealServiceReport {
+    let mut report = HealServiceReport::new(index, next_session_id(), seed_for_device(dev));
+    report.mode = HealControllerMode::Parked;
+    report.stage = HealServiceStage::Parked;
+    report.failure = Some(reason);
+    let _ = observe_controller(host, &mut report).await;
+    publish(&report);
+    report
+}
+
+/// Read registers through the existing owner; never consume the event ring.
+pub(crate) async fn observe_controller(
+    host: &mut crabusb::USBHost,
+    report: &mut HealServiceReport,
+) -> Result<(), String> {
+    match host.xhci_recover(XhciRecoveryRequest::Inspect).await {
+        Ok(XhciRecoveryResponse::Inspection(inspection)) => {
+            report.dma_bits = Some(inspection.dma_bits);
+            report.max_slots_enabled = Some(inspection.max_slots_enabled);
+            update_from_snapshot(report, &inspection.snapshot);
+            bump(report);
+            Ok(())
+        }
+        Ok(_) => Err(String::from("unexpected controller inspection response")),
+        Err(error) => Err(format!("controller inspection failed: {error:?}")),
+    }
+}
+
+/// The root-hub API independently refuses every port that has ever been
+/// handed to addressing. A disabled register alone is not an ownership proof.
+pub(crate) async fn reset_unprobed_usb2_port(
+    host: &mut crabusb::USBHost,
+    report: &mut HealServiceReport,
+    selector: super::heal_protocol::HealPortSelector,
+    timeout_ms: u32,
+) -> Result<(), String> {
+    let owner = super::runtime::snapshot(report.controller_index);
+    if !owner.event_ready || owner.probe_requested || owner.operation_requested {
+        return Err(String::from(
+            "port repair requires a running event pump and an idle controller owner",
+        ));
+    }
+    if report.mode != HealControllerMode::Live {
+        return Err(String::from(
+            "port repair requires the normal initialized root hub and its event pump",
+        ));
+    }
+    observe_controller(host, report).await?;
+    let port = match selector {
+        super::heal_protocol::HealPortSelector::FirstConnected => {
+            report.ports.iter().find(|port| {
+                port.protocol_major == Some(2)
+                    && port.connected
+                    && !port.enabled
+                    && !port.reset_active
+            })
+        }
+        super::heal_protocol::HealPortSelector::Port { port_id } => {
+            report.ports.iter().find(|port| port.port_id == port_id)
+        }
+    }
+    .ok_or_else(|| String::from("no matching USB2 root port"))?;
+    if port.protocol_major != Some(2) || !port.connected || port.enabled || port.reset_active {
+        return Err(String::from(
+            "USB2 repair requires a connected, disabled port with no reset in progress",
+        ));
+    }
+    let port_id = port.port_id;
+    let before_portsc = port.after_portsc;
+    let reset_result = host.request_root_port_reset(port_id).await;
+    let request_accepted = reset_result.is_ok();
+    let mut failure = reset_result
+        .err()
+        .map(|error| format!("root-hub reset rejected or failed: {error:?}"));
+    let mut waited_ms = 0;
+    let timeout_ms = timeout_ms.clamp(10, 1_000);
+    let mut completed = false;
+    loop {
+        if let Err(reason) = observe_controller(host, report).await {
+            if failure.is_none() {
+                failure = Some(reason);
+            }
+            break;
+        }
+        if let Some(port) = report.ports.iter().find(|port| port.port_id == port_id) {
+            completed = request_accepted && port.connected && port.enabled && !port.reset_active;
+            if !request_accepted || completed || !port.connected || waited_ms >= timeout_ms {
+                break;
+            }
+        } else {
+            break;
+        }
+        Timer::after(Duration::from_millis(10)).await;
+        waited_ms += 10;
+    }
+    // The normal owner performs discovery/handoff after an accepted reset.
+    // Even if later observation fails, retain the attempt and schedule that
+    // follow-up. A PORTSC transition does not establish a boot-HID class proof.
+    if request_accepted {
+        RESCAN_REQUESTED[report.controller_index].store(true, Ordering::Release);
+        if !completed && failure.is_none() {
+            failure = Some(String::from(
+                "root-port reset issued but active state was not proven within the deadline; normal discovery requested",
+            ));
+        }
+    }
+    let after_portsc = report
+        .ports
+        .iter()
+        .find(|port| port.port_id == port_id)
+        .map(|port| port.after_portsc)
+        .unwrap_or(before_portsc);
+    report.last_port_reset = Some(HealPortResetProof {
+        port_id,
+        before_portsc,
+        after_portsc,
+        waited_ms,
+        completed,
+        rescan_requested: request_accepted,
+        request_accepted,
+        failure: failure.clone(),
+    });
+    bump(report);
+    crate::log!(
+        "xhci-heal: controller={} action=explicit-usb2-unprobed-reset port={} before=0x{:08x} after=0x{:08x} waited_ms={} accepted={} completed={} rescan_requested={} failure={:?}\n",
+        report.controller_index,
+        port_id,
+        before_portsc,
+        after_portsc,
+        waited_ms,
+        request_accepted,
+        completed,
+        request_accepted,
+        failure
+    );
+    match failure {
+        Some(reason) => Err(reason),
+        None => Ok(()),
+    }
+}
+
 pub(crate) async fn run_quarantined(
+    controller_index: usize,
     mmio: crabusb::Mmio,
     mmio_len: usize,
     kernel: &'static dyn crabusb::KernelOp,
     seed: HealXhciSeed,
 ) -> ! {
     let session_id = next_session_id();
-    let mut report = HealServiceReport::new(session_id, seed);
+    let mut report = HealServiceReport::new(controller_index, session_id, seed);
     publish(&report);
     crate::log!(
         "xhci-heal: state=quarantined session={} pci={:02x}:{:02x}.{} vid={:04x} pid={:04x} rev={:02x} sub={:04x}:{:04x} normal-init=blocked
@@ -317,7 +640,10 @@ pub(crate) async fn run_quarantined(
     ) {
         Ok(host) => host,
         Err(error) => {
-            fail(&mut report, format!("quarantined controller construction failed: {error:?}"));
+            fail(
+                &mut report,
+                format!("quarantined controller construction failed: {error:?}"),
+            );
             super::heal_protocol::service_without_controller(report).await;
         }
     };
@@ -332,17 +658,24 @@ pub(crate) async fn run_quarantined(
             report.stage = HealServiceStage::CapabilitiesReadable;
             bump(&mut report);
         }
-        Ok(_) => {
-            fail(&mut report, String::from("CrabUSB returned an unexpected inspection response"))
-        }
-        Err(error) => {
-            fail(&mut report, format!("semantic controller inspection failed: {error:?}"))
-        }
+        Ok(_) => fail(
+            &mut report,
+            String::from("CrabUSB returned an unexpected inspection response"),
+        ),
+        Err(error) => fail(
+            &mut report,
+            format!("semantic controller inspection failed: {error:?}"),
+        ),
     }
 
     if !matches!(report.stage, HealServiceStage::Failed) {
-        let _ = prove_transport(&mut host, &mut report, DEFAULT_MAX_SLOTS, DEFAULT_NOOP_TIMEOUT_MS)
-            .await;
+        let _ = prove_transport(
+            &mut host,
+            &mut report,
+            DEFAULT_MAX_SLOTS,
+            DEFAULT_NOOP_TIMEOUT_MS,
+        )
+        .await;
     }
 
     loop {
@@ -458,6 +791,18 @@ fn apply_noop_proof(report: &mut HealServiceReport, proof: &XhciNoopProof) {
 }
 
 fn update_from_snapshot(report: &mut HealServiceReport, snapshot: &XhciControllerSnapshot) {
+    report.snapshot_at_ms = Some(trueos_time::Instant::now().as_millis());
+    report.snapshot_age_ms = Some(0);
+    report.registers = Some(HealRegisters {
+        usbcmd: snapshot.usbcmd,
+        usbsts: snapshot.usbsts,
+        config: snapshot.config,
+        crcr: snapshot.crcr,
+        dcbaap: snapshot.dcbaap,
+        erdp: snapshot.erdp,
+        iman: snapshot.iman,
+        mfindex: snapshot.mfindex,
+    });
     report.hciversion = Some(snapshot.hciversion);
     report.max_slots = Some((snapshot.hcsparams1 & 0xff) as u8);
     report.max_ports = Some(((snapshot.hcsparams1 >> 24) & 0xff) as u8);
@@ -520,7 +865,16 @@ fn bump(report: &mut HealServiceReport) {
 }
 
 pub(crate) fn publish(report: &HealServiceReport) {
-    *LATEST_REPORT.lock() = Some(report.clone());
+    let mut reports = REPORTS.lock();
+    if let Some(previous) = reports
+        .iter_mut()
+        .find(|item| item.controller_index == report.controller_index)
+    {
+        *previous = report.clone();
+    } else {
+        reports.push(report.clone());
+        reports.sort_by_key(|item| item.controller_index);
+    }
 }
 
 pub(crate) fn fail(report: &mut HealServiceReport, reason: String) {

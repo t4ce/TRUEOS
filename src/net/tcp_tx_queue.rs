@@ -61,6 +61,16 @@ impl TcpTxQueue {
         self.chunks.push_back(TcpTxChunk { bytes, cursor: 0 });
     }
 
+    /// Keep lossy diagnostic streams bounded when their peer stops reading.
+    /// The caller retains rejected bytes and decides how to report the gap.
+    pub(crate) fn push_bounded(&mut self, bytes: Vec<u8>, limit: usize) -> Result<(), Vec<u8>> {
+        if bytes.len() > limit.saturating_sub(self.queued_bytes) {
+            return Err(bytes);
+        }
+        self.push(bytes);
+        Ok(())
+    }
+
     #[inline]
     pub(crate) fn front(&self) -> Option<&[u8]> {
         self.chunks.front().map(TcpTxChunk::remaining)
@@ -85,6 +95,32 @@ impl TcpTxQueue {
 #[cfg(test)]
 mod tests {
     use super::TcpTxQueue;
+
+    #[test]
+    fn stalled_diagnostic_reader_cannot_grow_the_backlog_without_bound() {
+        let mut queue = TcpTxQueue::new();
+        let mut rejected = 0;
+        for _ in 0..10000 {
+            if let Err(bytes) = queue.push_bounded(vec![42; 4096], 256 * 1024) {
+                rejected += bytes.len();
+            }
+        }
+        assert_eq!(queue.len(), 256 * 1024);
+        assert_eq!(rejected, 10000 * 4096 - 256 * 1024);
+        queue.advance(4096);
+        assert!(queue.push_bounded(vec![7; 4096], 256 * 1024).is_ok());
+        assert_eq!(queue.len(), 256 * 1024);
+    }
+
+    #[test]
+    fn oversized_diagnostic_chunk_is_returned_without_changing_existing_bytes() {
+        let mut queue = TcpTxQueue::new();
+        queue.push(vec![1, 2, 3]);
+        let rejected = queue.push_bounded(vec![4; 10], 8).unwrap_err();
+        assert_eq!(rejected, vec![4; 10]);
+        assert_eq!(queue.len(), 3);
+        assert_eq!(queue.front(), Some(&[1, 2, 3][..]));
+    }
 
     #[test]
     fn retains_owned_chunks_and_advances_partial_sends() {

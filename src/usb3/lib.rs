@@ -138,13 +138,15 @@ impl crabusb::KernelOp for TrueosCrabKernel {
 
 pub fn map_xhci_host_inputs(
     dev: &crate::pci::PciDevice,
-) -> Option<(crabusb::Mmio, usize, &'static dyn crabusb::KernelOp)> {
+) -> Result<(crabusb::Mmio, usize, &'static dyn crabusb::KernelOp), String> {
     crate::pci::enable_mem_and_bus_master(dev.bus, dev.slot, dev.function);
-    let (bar, phys) = first_mmio_bar(dev)?;
+    let (bar, phys) = first_mmio_bar(dev).ok_or_else(|| String::from("no assigned memory BAR"))?;
     let size = crate::pci::bar_size_bytes(dev.bus, dev.slot, dev.function, bar)
         .unwrap_or(0x10000)
         .max(0x1000) as usize;
-    let mmio = crate::pci::mmio::map_mmio_region_exact(phys, size).ok()?;
+    let mmio = crate::pci::mmio::map_mmio_region_exact(phys, size).map_err(|error| {
+        alloc::format!("BAR{bar} phys={phys:#x} bytes={size:#x} mapping failed: {error:?}")
+    })?;
     crate::log!(
         "crabusb: xhci mapped pci={:02x}:{:02x}.{} vid={:04x} pid={:04x} bar={} phys=0x{:x} bytes=0x{:x} backend-policy=admission-owned
 ",
@@ -157,7 +159,7 @@ pub fn map_xhci_host_inputs(
         phys,
         size
     );
-    Some((mmio, size, &TRUEOS_CRAB_KERNEL))
+    Ok((mmio, size, &TRUEOS_CRAB_KERNEL))
 }
 
 fn first_mmio_bar(dev: &crate::pci::PciDevice) -> Option<(u8, u64)> {
@@ -199,6 +201,7 @@ pub fn pci_usb_controllers() -> Vec<UsbControllerInfo> {
             .copied()
             .filter(|dev| dev.class == 0x0c && dev.subclass == 0x03 && dev.prog_if == 0x30)
         {
+            let runtime = super::runtime::snapshot(out.len());
             out.push(UsbControllerInfo {
                 index: out.len(),
                 bus: dev.bus,
@@ -206,11 +209,11 @@ pub fn pci_usb_controllers() -> Vec<UsbControllerInfo> {
                 function: dev.function,
                 vendor_id: dev.vendor_id,
                 device_id: dev.device_id,
-                controller_phase: "crabusb",
-                root_hub_lifecycle: "active",
-                event_ready: true,
-                root_port_change_seen: false,
-                empty_probe_streak: 0,
+                controller_phase: runtime.controller_phase,
+                root_hub_lifecycle: runtime.root_hub_lifecycle,
+                event_ready: runtime.event_ready,
+                root_port_change_seen: runtime.root_port_change_seen,
+                empty_probe_streak: runtime.empty_probe_streak,
             });
         }
     });
@@ -333,29 +336,33 @@ pub struct TlbUsbSnapshot {
 }
 
 pub fn tlb_usb_snapshot() -> TlbUsbSnapshot {
-    let mut topology: Vec<TlbUsbTopologyNode> = super::lab::latest_snapshot()
-        .map(|snapshot| {
-            snapshot
-                .ports
-                .iter()
-                .map(|port| TlbUsbTopologyNode {
-                    kind: TlbUsbTopologyNodeKind::RootPort,
-                    controller_index: 0,
-                    root_port_id: port.port_id,
-                    port_id: port.port_id,
-                    depth: 0,
-                    slot_id: None,
-                    parent_slot_id: None,
-                    speed: xhci_port_speed_name(port.portsc),
-                    vendor_id: None,
-                    product_id: None,
-                    class: None,
-                    subclass: None,
-                    protocol: None,
+    let mut topology: Vec<TlbUsbTopologyNode> = (0..super::MAX_CRABUSB_CONTROLLERS)
+        .flat_map(|controller_index| {
+            super::lab::latest_snapshot(controller_index)
+                .into_iter()
+                .flat_map(move |snapshot| {
+                    snapshot
+                        .ports
+                        .into_iter()
+                        .map(move |port| TlbUsbTopologyNode {
+                            kind: TlbUsbTopologyNodeKind::RootPort,
+                            controller_index,
+                            root_port_id: port.port_id,
+                            port_id: port.port_id,
+                            depth: 0,
+                            slot_id: None,
+                            parent_slot_id: None,
+                            speed: xhci_port_speed_name(port.portsc),
+                            vendor_id: None,
+                            product_id: None,
+                            class: None,
+                            subclass: None,
+                            protocol: None,
+                        })
+                        .collect::<Vec<_>>()
                 })
-                .collect()
         })
-        .unwrap_or_default();
+        .collect();
     let mut devices = Vec::new();
     for (controller_index, observed) in OBSERVED_USB_DEVICES.iter().enumerate() {
         let observed = observed.lock().clone();
@@ -380,12 +387,30 @@ pub fn tlb_usb_snapshot() -> TlbUsbSnapshot {
         }));
         devices.extend(observed);
     }
+    let runtimes = (0..super::MAX_CRABUSB_CONTROLLERS)
+        .map(super::runtime::snapshot)
+        .collect::<Vec<_>>();
+    let probe_error = if runtimes
+        .iter()
+        .any(|runtime| runtime.root_hub_lifecycle == "failed")
+    {
+        Some("controller-failed")
+    } else if runtimes
+        .iter()
+        .any(|runtime| runtime.probe_requested && runtime.probe_watchdog_timeouts > 0)
+    {
+        Some("enumeration-pending")
+    } else if runtimes.iter().any(|runtime| runtime.probe_fail_streak > 0) {
+        Some("enumeration-failed")
+    } else {
+        None
+    };
     TlbUsbSnapshot {
         controllers: pci_usb_controllers(),
         probe_device_count: Some(devices.len()),
         devices,
         topology,
-        ..TlbUsbSnapshot::default()
+        probe_error,
     }
 }
 
@@ -400,14 +425,28 @@ pub fn observe_probed_devices(
     }
     for probed in devices {
         let next = tlb_device_from_probed(controller_index, probed);
-        if let Some(existing) = observed
-            .iter_mut()
-            .find(|device| device.stable_id == next.stable_id)
-        {
+        if let Some(existing) = observed.iter_mut().find(|device| {
+            device.stable_id == next.stable_id
+                || (device.root_port_id == next.root_port_id && device.path == next.path)
+        }) {
             *existing = next;
         } else {
             observed.push(next);
         }
+    }
+}
+
+pub(crate) fn reconcile_disconnected_roots(
+    index: usize,
+    snapshot: &crabusb::diag::XhciControllerSnapshot,
+) {
+    if let Some(observed) = OBSERVED_USB_DEVICES.get(index) {
+        observed.lock().retain(|device| {
+            snapshot
+                .ports
+                .iter()
+                .any(|port| port.port_id == device.root_port_id && port.portsc & 1 != 0)
+        });
     }
 }
 
@@ -578,22 +617,10 @@ pub fn crabusb_observed_devices(
     Ok(observed.lock().clone())
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct UsbRuntimeDiag {
-    pub probe_requested: bool,
-    pub probe_fail_streak: u32,
-    pub early_fatal_rebind_streak: u32,
-    pub last_probe_state: &'static str,
-    pub last_probe_device_count: usize,
-    pub recovery_quiescent_before_bind: bool,
-    pub recovery_quiescent_ms: u64,
-    pub recovery_initial_settle_ms: u64,
-    pub recovery_probe_quiet_ms: u64,
-    pub recovery_skip_delayed_event_handler: bool,
-}
+pub use super::runtime::UsbRuntimeDiag;
 
-pub fn crabusb_runtime_diag(_controller_index: usize) -> UsbRuntimeDiag {
-    UsbRuntimeDiag::default()
+pub fn crabusb_runtime_diag(controller_index: usize) -> UsbRuntimeDiag {
+    super::runtime::snapshot(controller_index)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -602,6 +629,16 @@ pub struct XhciPortDiag {
     pub portsc: u32,
     pub portpmsc: u32,
     pub portli: u32,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct XhciProtocolDiag {
+    pub major: u8,
+    pub minor: u8,
+    pub port_offset: u8,
+    pub port_count: u8,
+    pub slot_type: u8,
+    pub psi_count: u8,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -622,13 +659,11 @@ pub struct XhciMmioDiag {
     pub erstba: u64,
     pub erdp: u64,
     pub ports: Vec<XhciPortDiag>,
+    pub protocols: Vec<XhciProtocolDiag>,
 }
 
 pub fn controller_mmio_diag(controller_index: usize) -> Option<XhciMmioDiag> {
-    if controller_index != 0 {
-        return None;
-    }
-    let snapshot = super::lab::latest_snapshot()?;
+    let snapshot = super::lab::latest_snapshot(controller_index)?;
     Some(XhciMmioDiag {
         caplen: snapshot.caplength,
         hcsparams1: snapshot.hcsparams1,
@@ -645,6 +680,18 @@ pub fn controller_mmio_diag(controller_index: usize) -> Option<XhciMmioDiag> {
         erstsz: snapshot.erstsz,
         erstba: snapshot.erstba,
         erdp: snapshot.erdp,
+        protocols: snapshot
+            .protocols
+            .iter()
+            .map(|protocol| XhciProtocolDiag {
+                major: protocol.major,
+                minor: protocol.minor,
+                port_offset: protocol.port_offset,
+                port_count: protocol.port_count,
+                slot_type: protocol.slot_type,
+                psi_count: protocol.psi_count,
+            })
+            .collect(),
         ports: snapshot
             .ports
             .iter()

@@ -881,9 +881,9 @@ fn fallback_logo_ui_gate() -> bool {
 
 #[inline]
 fn http_trueosfs_gate() -> bool {
-    crate::r::readiness::is_set(
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
-    )
+    // Heal must be reachable when USB storage has not enumerated. The HTTP
+    // handlers already report missing/unready roots without touching a disk.
+    crate::r::readiness::is_set(crate::r::readiness::NET_ANY_CONFIGURED)
 }
 
 #[inline]

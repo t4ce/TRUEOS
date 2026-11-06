@@ -138,6 +138,8 @@ static GEN12_LUMEN_MOCS_READY: AtomicBool = AtomicBool::new(false);
 static DISPLAY_GGTT_POLICY_LOGGED: AtomicBool = AtomicBool::new(false);
 static GEN12_LUMEN_MOCS_BOOT_REPORT: Once<self::gt_state::Gen12LumenMocsInitReport> = Once::new();
 static PHYSICAL_GT_BOOT_REPORT: Once<PhysicalGtBootReport> = Once::new();
+// Preserve one complete post-init readback independently of the rotating log.
+static GT_CACHE_BOOT_EVIDENCE: Once<alloc::string::String> = Once::new();
 // The display device is selected exactly once during boot and never mutates.
 // Keep readers lock-free so interrupt-adjacent display/media paths cannot
 // deadlock an executor by re-entering a spin mutex held by the interrupted CPU.
@@ -156,7 +158,7 @@ pub(crate) struct Dev {
 unsafe impl Send for Dev {}
 unsafe impl Sync for Dev {}
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 struct PhysicalGtBootReport {
     device_id: u16,
     revision_id: u8,
@@ -230,6 +232,7 @@ pub fn init_once() {
         media_decode_enabled_for_device(dev.device_id) as u8
     );
     CLAIMED_DEVICE.call_once(|| dev);
+    log_bringup_checkpoint("claimed-before-gt-init");
     let physical_gt = init_physical_gt_once(dev);
     let forcewake_ready =
         device_uses_gen12_integrated_pat(dev.device_id) && physical_gt.forcewake_ready();
@@ -242,6 +245,7 @@ pub fn init_once() {
     let pat_ready = forcewake_ready && init_gen12_integrated_pat(dev);
     GEN12_INTEGRATED_PAT_READY.store(pat_ready, Ordering::Release);
     GEN12_LUMEN_MOCS_READY.store(pat_ready && lumen_mocs.accepted, Ordering::Release);
+    log_bringup_checkpoint("gt-cache-init-complete");
     log_gen12_lumen_mocs_init(dev, lumen_mocs);
     let media_fuse = media_vdbox_fuse_raw(dev);
     let media_platform_mask = media_platform_vdbox_mask(dev.device_id);
@@ -281,6 +285,7 @@ pub fn init_once() {
     };
     let fixed_render_ggtt_ready =
         guc_ready && physical_gt.accepted() && self::render::init_fixed_render_ggtt_for_boot(dev);
+    log_bringup_checkpoint("guc-transport-and-fixed-render-init-complete");
     let picasso_carrier_softcap = self::render::picasso_carrier_capacity();
     let picasso_carriers_ggtt =
         usize::from(self::render::picasso_carrier_control_ggtt_ready()) * picasso_carrier_softcap;
@@ -292,6 +297,7 @@ pub fn init_once() {
         picasso_carrier_softcap,
         guc_ready as u8,
     );
+    self::display::capture_firmware_handoff_evidence(dev);
     if self::tgl_native_panel::is_target(dev) {
         // Keep the proven native timing/source/scaler handoff, then enter
         // the ordinary UI4 plane/bootstrap path with native-sized backing.
@@ -308,6 +314,7 @@ pub fn init_once() {
         }
     }
     crate::log!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
+    log_bringup_checkpoint("display-handoff-complete");
 }
 
 fn init_required_guc_transport(dev: Dev) -> bool {
@@ -677,6 +684,96 @@ pub(crate) fn physical_extent_pixels_fraction(width: u32, height: u32, denominat
 
 pub(crate) fn display_diagnostic_snapshot_text() -> alloc::string::String {
     self::display::diagnostic_snapshot_text()
+}
+
+/// Observational bring-up evidence. Effective admission can be overridden by
+/// the TGL compatibility experiment; keep the physical evidence beside it.
+pub(crate) fn bringup_diagnostic_snapshot_text() -> alloc::string::String {
+    use core::fmt::Write;
+    let mut out = alloc::string::String::new();
+    let Some(dev) = claimed_device() else {
+        let _ = writeln!(out, "intel_bringup claimed=no");
+        return out;
+    };
+    let physical = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0);
+    let revision = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 8) as u8;
+    let experimental = crate::pci::experimental_tgl_9a49_active();
+    let _ = writeln!(out,
+        "intel_bringup bdf={:02X}:{:02X}.{} physical={:04X}:{:04X} physical_rev={:02X} effective=8086:{:04X} effective_rev={:02X} tgl_compatibility_override={} capture=read-only-no-forcewake-request",
+        dev.bus, dev.slot, dev.function, physical as u16, (physical >> 16) as u16,
+        revision, dev.device_id, dev.revision_id, experimental);
+    let _ = writeln!(out, "gt_boot_report={:?}", PHYSICAL_GT_BOOT_REPORT.get());
+    let _ = writeln!(out,
+        "gt_runtime render_ack=0x{:08X} media_ack=0x{:08X} gt_ack=0x{:08X} kernel_mask=0x{:08X} effective_rcs_gate={} effective_bcs_gate={} pat_boot_validated={} effective_pat_gate={} lumen_mocs_ready={}",
+        mmio_read(dev, FORCEWAKE_ACK_RENDER), mmio_read(dev, FORCEWAKE_ACK_MEDIA),
+        mmio_read(dev, FORCEWAKE_ACK_GT), FORCEWAKE_KERNEL, physical_gt_ready(dev),
+        physical_bcs_ready(dev), GEN12_INTEGRATED_PAT_READY.load(Ordering::Acquire),
+        gen12_integrated_pat_ready(), GEN12_LUMEN_MOCS_READY.load(Ordering::Acquire));
+    for (index, expected) in GEN12_INTEGRATED_PAT.iter().enumerate() {
+        let offset = GEN12_PAT_INDEX_BASE + index * GEN12_PAT_INDEX_STRIDE;
+        let raw = mmio_read(dev, offset);
+        let _ = writeln!(out, "pat index={} offset=0x{:X} raw=0x{:08X} expected=0x{:X} matches={}",
+            index, offset, raw, expected, raw & GEN12_PAT_VALUE_MASK == *expected);
+    }
+    let _ = writeln!(out, "lumen_mocs_boot_report={:?}", GEN12_LUMEN_MOCS_BOOT_REPORT.get());
+    out
+}
+
+fn log_bringup_checkpoint(stage: &'static str) {
+    let snapshot = bringup_diagnostic_snapshot_text();
+    if stage == "gt-cache-init-complete" {
+        GT_CACHE_BOOT_EVIDENCE.call_once(|| snapshot.clone());
+    }
+    crate::log_important!(target: "gfx";
+        "intel/bringup-checkpoint: stage={}\n{}", stage, snapshot);
+}
+
+pub(crate) fn retained_gt_boot_evidence() -> Option<&'static str> {
+    GT_CACHE_BOOT_EVIDENCE.get().map(|text| text.as_str())
+}
+
+pub(crate) fn gpu_client_diagnostic_snapshot_text() -> alloc::string::String {
+    use core::fmt::Write;
+    use crate::gpu::vgpu::KernelClient;
+    let mut out = alloc::string::String::new();
+    let _ = writeln!(out, "capture_policy=read-only-software-status-no-submission-or-recovery");
+    let _ = writeln!(out, "executor={:?}", crate::gpu::executor::status());
+    let _ = writeln!(out, "broker={:#?}", crate::gpu::vgpu::broker_status());
+    for client in [
+        KernelClient::Render, KernelClient::Render1, KernelClient::Render2,
+        KernelClient::GpgpuSystem, KernelClient::GpgpuFont, KernelClient::GpgpuExecution,
+        KernelClient::GpgpuEditLife, KernelClient::GpgpuCodec, KernelClient::Lfm25,
+        KernelClient::Ui4Compositor, KernelClient::Vcpy,
+    ] {
+        if let Some(timeline) = crate::gpu::vgpu::kernel_timeline(client) {
+            let _ = writeln!(out, "client={} submitted={} completed={} failures={} physical_serial={}",
+                client.name(), timeline.submitted, timeline.completed,
+                timeline.failures, timeline.last_physical_serial);
+        } else {
+            let _ = writeln!(out, "client={} timeline=not-created", client.name());
+        }
+    }
+    out
+}
+
+/// One finite reconnect snapshot. Call outside all log-sink locks. No engine
+/// submission, display commit, forcewake request or recovery is performed.
+pub(crate) fn laptop_diagnostic_snapshot_text() -> alloc::string::String {
+    use core::fmt::Write;
+    let mut out = alloc::string::String::new();
+    let _ = writeln!(out, "=== Retained Intel GT Boot Checkpoint ===");
+    out.push_str(retained_gt_boot_evidence().unwrap_or("post-init-checkpoint=not-reached\n"));
+    let _ = writeln!(out, "=== Current Intel GT and UI4 ===");
+    out.push_str(&bringup_diagnostic_snapshot_text());
+    out.push_str(&display_diagnostic_snapshot_text());
+    let _ = writeln!(out, "rcs_registers={:?} submit_seq_scope=legacy-direct-counter-not-guc-total", self::gpgpu::activity_snapshot());
+    let _ = writeln!(out, "guc_scheduler={:?}", self::guc_submission::scheduler_status());
+    let _ = writeln!(out, "guc_contexts={:?}", self::guc_submission::context_status());
+    let _ = writeln!(out, "=== GPU Client Progress ===");
+    out.push_str(&gpu_client_diagnostic_snapshot_text());
+    let _ = writeln!(out, "=== Spirit Producer and Cursor Progress ===");
+    out.push_str(&crate::spirit::bringup_diag::snapshot_text());
+    out
 }
 
 pub(crate) fn copy_engine_activity_snapshot() -> self::blt::CopyEngineActivitySnapshot {

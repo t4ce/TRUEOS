@@ -62,6 +62,12 @@ static LOGTOTCP_TX4_SAMPLE_COUNT: AtomicU32 = AtomicU32::new(0);
 static LOGTOTCP_SEND_FLUSH_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
 static LOGTOTCP_SEND_FLUSH_SUPPRESSED: AtomicU64 = AtomicU64::new(0);
 static LOGTOTCP_SEND_FLUSH_BYTES: AtomicU64 = AtomicU64::new(0);
+static LOGTOTCP_BACKLOG_DROPPED_BYTES: AtomicU64 = AtomicU64::new(0);
+const LOGTOTCP_MAX_BACKLOG_BYTES: usize = 256 * 1024;
+
+pub(crate) fn take_log_backlog_dropped_bytes() -> u64 {
+    LOGTOTCP_BACKLOG_DROPPED_BYTES.swap(0, Ordering::AcqRel)
+}
 
 fn net_log_once_per_second(last: &AtomicU64) -> bool {
     const ONE_SECOND_NS: u64 = 1_000_000_000;
@@ -4423,9 +4429,17 @@ impl NetService {
                             data.len()
                         );
                     }
-                    // Don't drop on backpressure; queue and flush when the socket becomes writable.
-                    // This is especially important for TLS handshakes (ClientHello) right after connect.
-                    self.records[idx].tcp_tx.push(data);
+                    // Application traffic retains FIFO data under backpressure.
+                    // Diagnostic logging uses a bounded, explicitly lossy queue
+                    // so a stalled reader cannot exhaust kernel memory.
+                    if owner == "logtotcp" {
+                        if let Err(rejected) = self.records[idx].tcp_tx.push_bounded(data, LOGTOTCP_MAX_BACKLOG_BYTES) {
+                            LOGTOTCP_BACKLOG_DROPPED_BYTES.fetch_add(rejected.len() as u64, Ordering::Relaxed);
+                            return;
+                        }
+                    } else {
+                        self.records[idx].tcp_tx.push(data);
+                    }
                     self.flush_tcp_tx(idx);
                 } else {
                     let _ = push_event(owner, NetEvent::Closed { handle });

@@ -21,6 +21,7 @@ use trueos_time::{Duration, Instant, Timer};
 pub(crate) mod ui4_interaction;
 pub(crate) mod gpu_logger;
 mod intel_cursor;
+pub(crate) mod bringup_diag;
 mod lilly;
 mod lilly_cursor;
 mod paper_demo;
@@ -1223,6 +1224,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
         return;
     }
     let fence_index = id.0;
+    bringup_diag::stage(id, "cursor-preparing");
 
     while let Err(error) = intel_cursor::spirit_cursor_prepare(fence_index) {
         crate::log_warn!(
@@ -1233,6 +1235,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
         );
         Timer::after(Duration::from_millis(SPIRIT_RETRY_MS)).await;
     }
+    bringup_diag::stage(id, "waiting-for-resident-source");
 
     let mut retained_normal: Option<QueuedFrame> = None;
     let mut retained_gpu_logger: Option<QueuedFrame> = None;
@@ -1318,6 +1321,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
             match crate::intel::gpgpu::poll_spirit_vfx_submission(producing.submission) {
                 crate::intel::gpgpu::SpiritVfxCompletion::Pending => {
                     producing.polls = producing.polls.saturating_add(1);
+                    bringup_diag::producer_pending(id, producing.polls);
                     gpu_inflight = Some(producing);
                     Timer::after(Duration::from_millis(SPIRIT_GPU_POLL_MS)).await;
                     continue;
@@ -1327,6 +1331,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                         cancel_pending(producing.lease);
                         gpu_inflight = None;
                         stream_aborted = true;
+                        bringup_diag::failed(id, "producer-release-rejected");
                         crate::log_error!(
                             target: "gfx";
                             "trueos-spirit: vfx producer release rejected frame={} shader_frame={} tag={} fence={} sequence={} polls={} error={:?} action=abort-stream\n",
@@ -1353,6 +1358,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                         );
                     }
                     gpu_inflight = None;
+                    bringup_diag::released(id);
                     continue;
                 }
                 completion @ (crate::intel::gpgpu::SpiritVfxCompletion::Failed
@@ -1360,6 +1366,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     cancel_pending(producing.lease);
                     gpu_inflight = None;
                     stream_aborted = true;
+                    bringup_diag::failed(id, "producer-completion-failed");
                     crate::log_error!(
                         target: "gfx";
                         "trueos-spirit: vfx producer failed frame={} shader_frame={} tag={} fence={} sequence={} polls={} completion={:?} action=abort-stream-retain-last-surflive\n",
@@ -1379,6 +1386,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
         if let Some(mut active) = inflight {
             match intel_cursor::spirit_cursor_poll(active.flip) {
                 Ok(intel_cursor::SpiritCursorFlipState::Visible { ctl, base, live }) => {
+                    bringup_diag::display(id, true, active.polls, ctl, base, live);
                     if active.completes_fence {
                         complete_frame(active.frame.lease);
                         if active.frame.producer == SpiritFrameProducer::Vfx {
@@ -1466,6 +1474,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                 }
                 Ok(intel_cursor::SpiritCursorFlipState::Waiting { ctl, base, live }) => {
                     active.polls = active.polls.saturating_add(1);
+                    bringup_diag::display(id, false, active.polls, ctl, base, live);
                     let now = Instant::now();
                     let wait_ms = now
                         .saturating_duration_since(active.attempt_started)
@@ -1499,6 +1508,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                                     continue;
                                 }
                                 Err(error) => {
+                                    bringup_diag::failed(id, "cursor-surflive-retry-failed");
                                     stop_failed_cursor_flip(id, active);
                                     crate::log_error!(
                                         target: "gfx";
@@ -1521,6 +1531,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                         }
 
                         stop_failed_cursor_flip(id, active);
+                        bringup_diag::failed(id, "cursor-surflive-timeout");
                         crate::log_error!(
                             target: "gfx";
                             "trueos-spirit: cursor SURFLIVE terminal failure frame={} fence={} sequence={} pipe={} buffer={} attempts={} polls={} wait_ms={} timeout_ms={} ctl=0x{:08X} base=0x{:08X} expected=0x{:08X} live=0x{:08X} action=stop-spirit-stream-no-more-retries\n",
@@ -1562,6 +1573,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     continue;
                 }
                 Ok(intel_cursor::SpiritCursorFlipState::Interrupted { ctl, base, live }) => {
+                    bringup_diag::stage(id, "cursor-interrupted");
                     crate::log_warn!(
                         target: "gfx";
                         "trueos-spirit: cursor flip interrupted fence={} sequence={} pipe={} ctl=0x{:08X} base=0x{:08X} expected=0x{:08X} live=0x{:08X}\n",
@@ -1712,6 +1724,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                             scheduled
                         };
                         stream_queued_frames = stream_queued_frames.saturating_add(1);
+                        bringup_diag::submitted(id, producing.lease.fence.sequence);
                         if spirit_should_trace_frame(stream_queued_frames) {
                             crate::log_info!(
                                 target: "gfx";
@@ -1746,6 +1759,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
         };
         match intel_cursor::spirit_cursor_arm(frame.lease.surface) {
             Ok(flip) => {
+                bringup_diag::cursor_armed(id, frame.lease.fence.sequence, frame.lease.surface.cursor_gpu);
                 arm_deferred_polls = 0;
                 if !completes_fence {
                     resignal_current_move(id);

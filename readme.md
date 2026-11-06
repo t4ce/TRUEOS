@@ -53,13 +53,17 @@ The next generation of algorithms will stand on the same first stone.
 
 ## § STEPS OF GUIDANCE
 
-These come in this order, ahead of anything else in this document:
+These take precedence over anything else in this document:
 
 - **A.** Security of all participants. This matters most.
-- **B.** The system runs fine for the daily tasks it has to solve.
+- **B.** TRUEOS runs fine for the daily tasks it has to solve.
 - **C.** It should be a fun experience.
 
-We are not at that stage yet. We are driving there at full speed, because security needs features first, and then the security work is built on those features.
+Security is not a stage that comes after features, and a feature is not secure just because it exists. Hardware capabilities form the foundation: CPU randomness, a trusted platform module (TPM), and CPU virtualization such as Intel VT-x. They give us the means to design mathematically grounded security on top, but a secure foundation does not make the layers above it secure.
+
+So we start with the feature, assuming the hardware capabilities are there, and then we make it secure. Making a feature secure mostly means that one or more users can use it, by telling the software what it may access on the filesystem and on the network layer. Hardware virtual machines can keep each app separate, using the same CPU capability.
+
+**Achieved:** CPU randomness (RDRAND and RDSEED) and VT-x guests are in tree, Blueprints have a VT-x guest launch path, and an access-key model exists. **Next:** turn the access checks from warnings into enforcement, close the open hypervisor mitigations in [security.rs](src/hv/security.rs), and add a TPM backend for the machine key.
 
 ## THE CODEX OF 10 KEYPOINTS, DEDICATED TO AI
 

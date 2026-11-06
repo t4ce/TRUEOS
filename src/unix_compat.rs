@@ -45,7 +45,7 @@ pub(crate) fn unsupported_unix_import_reason(name: &str) -> Option<&'static str>
 pub(crate) fn is_unix_import(name: &str) -> bool {
     matches!(
         name,
-        "iswspace" | "iswalpha" | "iswdigit" | "iswalnum"
+        "abs" | "iswspace" | "iswalpha" | "iswdigit" | "iswalnum"
             | "__ctype_b_loc"
             | "__errno"
             | "__errno_location"
@@ -95,6 +95,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "ftruncate"
             | "ftruncate64"
             | "futimens"
+            | "futimes"
             | "gai_strerror"
             | "getaddrinfo"
             | "getcwd"
@@ -226,6 +227,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         return None;
     }
     match name {
+        "abs" => Some(crate::std_abi_shim::abs as *const () as usize),
         "iswspace" => Some(crate::blueprint_shims::ctype::iswspace as *const () as usize),
         "iswalpha" => Some(crate::blueprint_shims::ctype::iswalpha as *const () as usize),
         "iswdigit" => Some(crate::blueprint_shims::ctype::iswdigit as *const () as usize),
@@ -280,6 +282,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "ftruncate" => Some(crate::std_abi_shim::ftruncate as *const () as usize),
         "ftruncate64" => Some(crate::std_abi_shim::ftruncate64 as *const () as usize),
         "futimens" => Some(crate::std_abi_shim::futimens as *const () as usize),
+        "futimes" => Some(crate::std_abi_shim::futimes as *const () as usize),
         "gai_strerror" => Some(crate::std_abi_shim::gai_strerror as *const () as usize),
         "getaddrinfo" => Some(crate::std_abi_shim::getaddrinfo as *const () as usize),
         "getcwd" => Some(crate::std_abi_shim::getcwd as *const () as usize),

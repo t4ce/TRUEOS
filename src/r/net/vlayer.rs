@@ -349,8 +349,25 @@ pub fn usb_snapshot_text_host() -> String {
             runtime.last_probe_state,
             runtime.last_probe_device_count,
         );
+        let _ = writeln!(out,
+            "runtime\t{}\tprobe_attempts={}\tprobe_successes={}\tprobe_failures={}\twatchdogs={}\tprobe_elapsed_ms={}\tsnapshot_seq={}\tsnapshot_ms={:?}\tlast_error_stage={}\tlast_error={:?}\tsnapshot_error={:?}",
+            controller.index, runtime.probe_attempts, runtime.probe_successes,
+            runtime.probe_failures, runtime.probe_watchdog_timeouts,
+            runtime.last_probe_elapsed_ms, runtime.snapshot_sequence, runtime.snapshot_at_ms,
+            runtime.last_error_stage, runtime.last_error, runtime.snapshot_error);
+        let _ = writeln!(out,
+            "operation\t{}\tstage={}\tpending={}\tstarted_ms={:?}\telapsed_ms={}\twatchdogs={}",
+            controller.index, runtime.operation_stage, runtime.operation_requested,
+            runtime.operation_started_ms, runtime.operation_elapsed_ms,
+            runtime.operation_watchdog_timeouts);
 
         if let Some(mmio) = crate::usb2::controller_mmio_diag(controller.index) {
+            for protocol in &mmio.protocols {
+                let _ = writeln!(out,
+                    "protocol\t{}\t{}.{}\tport_offset={}\tport_count={}\tslot_type={}\tpsi_count={}",
+                    controller.index, protocol.major, protocol.minor, protocol.port_offset,
+                    protocol.port_count, protocol.slot_type, protocol.psi_count);
+            }
             for port in mmio.ports {
                 let speed = usb_port_speed_name(port.portsc);
                 let link_state = usb_port_link_state_name(port.portsc);

@@ -70,11 +70,12 @@ struct CodexAuth;
 enum RemoteCatalogCacheRefreshMode { Force }
 struct RemoteCatalogCacheRefreshRequest {
     service_config: (), auth: Option<CodexAuth>,
-    scopes: BTreeSet<RemotePluginScope>, mode: RemoteCatalogCacheRefreshMode,
+    scopes: BTreeSet<RemotePluginScope>,
 }
 fn remote_plugin_service_config(_: &PluginsConfigInput) {}
 #[derive(Default)] struct PluginManager { scheduled: AtomicUsize }
 impl PluginManager {
+    fn remote_plugin_service_config(&self, _: &PluginsConfigInput) {}
     fn schedule_remote_catalog_cache_refresh(&self, _: RemoteCatalogCacheRefreshRequest) {
         self.scheduled.fetch_add(1, Ordering::Relaxed);
     }
@@ -96,7 +97,6 @@ fn catalog_refresh_cannot_be_admitted_when_plugins_are_disabled() {
     manager.maybe_start_remote_catalog_cache_refresh(
         &PluginsConfigInput { plugins_enabled: features.enabled(Feature::Plugins) },
         Some(CodexAuth), BTreeSet::from([RemotePluginScope::Global]),
-        RemoteCatalogCacheRefreshMode::Force,
     );
     assert_eq!(manager.scheduled.load(Ordering::Relaxed),
         if cfg!(target_os = "trueos") { 0 } else { 1 });

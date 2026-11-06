@@ -31,6 +31,15 @@ const fn seeded() -> [AtomicU32; LogArea::ALL.len()] {
 static POLICIES: [AtomicU32; LogArea::ALL.len()] = seeded();
 static PROFILE: AtomicUsize = AtomicUsize::new(0);
 
+pub(crate) const fn laptop_bringup_policy(area: LogArea) -> P {
+    use LogArea as A;
+    P::up(match area {
+        A::Usb | A::Gfx | A::Gpgpu | A::Render | A::Global => F::Trace,
+        A::Boot | A::Service | A::Net | A::Storage => F::Info,
+        _ => F::Warn,
+    })
+}
+
 pub(crate) fn area_log_policy(area: LogArea) -> P {
     decode(POLICIES[area.index() as usize].load(Ordering::Acquire))
 }
@@ -57,9 +66,10 @@ pub(crate) enum Profile {
     Shell2Render,
     QuadTexture,
     HelioGfx,
+    LaptopBringup,
 }
 impl Profile {
-    pub(crate) const ALL: [Self; 16] = [
+    pub(crate) const ALL: [Self; 17] = [
         Self::Build,
         Self::Normal,
         Self::TglGpu,
@@ -76,6 +86,7 @@ impl Profile {
         Self::Shell2Render,
         Self::QuadTexture,
         Self::HelioGfx,
+        Self::LaptopBringup,
     ];
     pub(crate) const fn name(self) -> &'static str {
         match self {
@@ -95,6 +106,7 @@ impl Profile {
             Self::Shell2Render => "Shell2 render",
             Self::QuadTexture => "QuadTexture",
             Self::HelioGfx => "Helio graphics",
+            Self::LaptopBringup => "Laptop USB + GPU bring-up",
         }
     }
     /// Standalone resolved matrices; selecting one replaces the previous preset.
@@ -102,6 +114,9 @@ impl Profile {
         use LogArea as A;
         if matches!(self, Self::Build) {
             return super::flags::build_area_log_policy(area);
+        }
+        if matches!(self, Self::LaptopBringup) {
+            return laptop_bringup_policy(area);
         }
         let level = match (self, area) {
             (Self::Normal, A::Storage | A::Net | A::Usb | A::Apps | A::Blueprint) => F::Info,

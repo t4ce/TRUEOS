@@ -2883,6 +2883,7 @@ fn append_pmu_dump(out: &mut String) {
     writeln!(out, "gpgpu_available={}", yes_no(gpu.available)).unwrap();
     writeln!(out, "gpgpu_direct_rcs_enabled={}", yes_no(gpu.direct_rcs_enabled)).unwrap();
     writeln!(out, "gpgpu_submit_seq={}", gpu.submit_seq).unwrap();
+    writeln!(out, "gpgpu_submit_seq_scope=legacy-direct-counter-use-guc-and-client-timelines-for-progress").unwrap();
     writeln!(
         out,
         "gpgpu_rcs head=0x{:08X} tail=0x{:08X} start=0x{:08X} ctl=0x{:08X} acthd=0x{:08X}",
@@ -2911,6 +2912,12 @@ fn append_pmu_dump(out: &mut String) {
 }
 
 fn append_intel_gpu_dump(out: &mut String) {
+    writeln!(out, "=== Intel Physical Bring-up Evidence ===").unwrap();
+    writeln!(out, "retained_checkpoint=gt-cache-init-complete").unwrap();
+    out.push_str(crate::intel::retained_gt_boot_evidence().unwrap_or("checkpoint=not-reached\n"));
+    writeln!(out, "current_readback:").unwrap();
+    out.push_str(&crate::intel::bringup_diagnostic_snapshot_text());
+    writeln!(out).unwrap();
     writeln!(out, "=== Intel Display Engine ===").unwrap();
     out.push_str(&crate::intel::display_diagnostic_snapshot_text());
     if !out.ends_with('\n') {
@@ -3070,6 +3077,13 @@ fn append_intel_gpu_dump(out: &mut String) {
     } else {
         writeln!(out, "physical_adapter=unavailable").unwrap();
     }
+    writeln!(out).unwrap();
+
+    writeln!(out, "=== GPU Client Progress ===").unwrap();
+    out.push_str(&crate::intel::gpu_client_diagnostic_snapshot_text());
+    writeln!(out).unwrap();
+    writeln!(out, "=== Spirit Producer and Cursor Progress ===").unwrap();
+    out.push_str(&crate::spirit::bringup_diag::snapshot_text());
     writeln!(out).unwrap();
 }
 
@@ -3985,6 +3999,39 @@ fn append_usb_endpoint_rows(out: &mut String, table: &TlbTable, dev: &crate::usb
     }
 }
 
+fn usb_runtime_evidence_text(ctrl: &crate::usb2::UsbControllerInfo) -> String {
+    let runtime = crate::usb2::crabusb_runtime_diag(ctrl.index);
+    let now_ms = trueos_time::Instant::now().as_millis();
+    alloc::format!(
+        "ctrl {} runtime bdf={:02X}:{:02X}.{} pci={:04X}:{:04X} phase={} lifecycle={} event={} port_change={} probe_req={} last={} devices={} empty={} fail_streak={} attempts={} successes={} failures={} watchdog_timeouts={} last_probe_started_ms={:?} last_probe_elapsed_ms={} last_error_stage={} last_error={:?}\nctrl {} snapshot sequence={} captured_ms={:?} age_ms={:?} error={:?} capture=cached-controller-owner-observation\nctrl {} operation stage={} requested={} started_ms={:?} elapsed_ms={} watchdog_timeouts={}\n",
+        ctrl.index, ctrl.bus, ctrl.slot, ctrl.function, ctrl.vendor_id, ctrl.device_id,
+        runtime.controller_phase, runtime.root_hub_lifecycle, yn(runtime.event_ready),
+        yn(runtime.root_port_change_seen), yn(runtime.probe_requested), runtime.last_probe_state,
+        runtime.last_probe_device_count, runtime.empty_probe_streak, runtime.probe_fail_streak,
+        runtime.probe_attempts, runtime.probe_successes, runtime.probe_failures, runtime.probe_watchdog_timeouts,
+        runtime.last_probe_started_ms, runtime.last_probe_elapsed_ms, runtime.last_error_stage, runtime.last_error,
+        ctrl.index, runtime.snapshot_sequence, runtime.snapshot_at_ms,
+        runtime.snapshot_at_ms.map(|captured| now_ms.saturating_sub(captured)), runtime.snapshot_error,
+        ctrl.index, runtime.operation_stage, yn(runtime.operation_requested), runtime.operation_started_ms,
+        runtime.operation_elapsed_ms, runtime.operation_watchdog_timeouts,
+    )
+}
+
+fn usb_raw_port_evidence_text(index: usize, diag: &crate::usb2::XhciMmioDiag) -> String {
+    let mut out = String::new();
+    for protocol in &diag.protocols {
+        let _ = writeln!(out,
+            "ctrl {} protocol version={}.{} port_offset={} port_count={} slot_type={} psi_count={}",
+            index, protocol.major, protocol.minor, protocol.port_offset, protocol.port_count,
+            protocol.slot_type, protocol.psi_count);
+    }
+    for port in &diag.ports {
+        let _ = writeln!(out, "ctrl {} port={} raw_portsc=0x{:08X} portpmsc=0x{:08X} portli=0x{:08X}",
+            index, port.port_id, port.portsc, port.portpmsc, port.portli);
+    }
+    out
+}
+
 fn append_usb_overview_dump(out: &mut String) {
     const USB_DUMP_TABLE_WIDTH: usize = 180;
 
@@ -4078,6 +4125,7 @@ fn append_usb_overview_dump(out: &mut String) {
     let mut disconnected_ports_summary: Vec<String> = Vec::new();
     for ctrl in controllers.iter() {
         let bdf = alloc::format!("{:02X}:{:02X}.{}", ctrl.bus, ctrl.slot, ctrl.function);
+        out.push_str(&usb_runtime_evidence_text(ctrl));
         let Some(diag) = crate::usb2::controller_mmio_diag(ctrl.index) else {
             let row = [
                 ctrl.index.to_string(),
@@ -4093,7 +4141,7 @@ fn append_usb_overview_dump(out: &mut String) {
                 String::from("-"),
                 String::from("-"),
                 String::from("-"),
-                String::from("no-mmio"),
+                String::from("no-snapshot"),
                 String::from("-"),
                 String::from("-"),
                 String::from("-"),
@@ -4103,6 +4151,7 @@ fn append_usb_overview_dump(out: &mut String) {
             });
             continue;
         };
+        out.push_str(&usb_raw_port_evidence_text(ctrl.index, &diag));
         let runtime = crate::usb2::crabusb_runtime_diag(ctrl.index);
         writeln!(
             out,
@@ -4268,6 +4317,7 @@ fn append_usb_stashed_detail_dump(out: &mut String) {
 
     for ctrl in controllers.iter() {
         let runtime = crate::usb2::crabusb_runtime_diag(ctrl.index);
+        out.push_str(&usb_runtime_evidence_text(ctrl));
         writeln!(
             out,
             "Controller {} {:02X}:{:02X}.{} {:04X}:{:04X} phase={} lifecycle={} event={} probe_req={} port_change={} empty={} fail={} early_fatal={} last={} probe_new={} recovery_quiescent_before={}",
@@ -4511,6 +4561,9 @@ fn cmd_tlb_usb(io: &Output) {
 
     for ctrl in controllers.iter() {
         let bdf = alloc::format!("{:02X}:{:02X}.{}", ctrl.bus, ctrl.slot, ctrl.function);
+        for evidence in usb_runtime_evidence_text(ctrl).lines() {
+            line(io, evidence);
+        }
         let Some(diag) = crate::usb2::controller_mmio_diag(ctrl.index) else {
             let row = [
                 ctrl.index.to_string(),
@@ -4526,7 +4579,7 @@ fn cmd_tlb_usb(io: &Output) {
                 String::from("-"),
                 String::from("-"),
                 String::from("-"),
-                String::from("no-mmio"),
+                String::from("no-snapshot"),
                 String::from("-"),
                 String::from("-"),
                 String::from("-"),
@@ -4534,6 +4587,9 @@ fn cmd_tlb_usb(io: &Output) {
             table.emit_row(&row, |text| Output::line(io, text));
             continue;
         };
+        for evidence in usb_raw_port_evidence_text(ctrl.index, &diag).lines() {
+            line(io, evidence);
+        }
         let runtime = crate::usb2::crabusb_runtime_diag(ctrl.index);
         line(
             io,

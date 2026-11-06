@@ -41,7 +41,7 @@ def function(source, name):
 
 DOTENV_HARNESS = r'''#![allow(dead_code)]
 #[path = @POLICY@] mod policy;
-mod dotenvy { pub struct Error; }
+mod dotenvy { pub enum Error { Io(std::io::Error), Parse } }
 mod startup_timing {
     pub static MARKS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     pub fn mark(stage: &str) { MARKS.lock().unwrap().push(stage.to_owned()); }
@@ -60,7 +60,7 @@ fn main() {
     let allowed = [prewarm, "TOKIO_WORKER_THREADS"];
     for key in allowed { unsafe { std::env::remove_var(key) }; }
     let mut valid = rows(&[(prewarm, "1"), ("TOKIO_WORKER_THREADS", "2")]);
-    valid.insert(1, Err(dotenvy::Error));
+    valid.insert(1, Err(dotenvy::Error::Parse));
     set_filtered(valid);
     assert_eq!(value(prewarm).as_deref(), Some("1"));
     assert_eq!(value("TOKIO_WORKER_THREADS").as_deref(), Some("2"));
@@ -102,6 +102,42 @@ fn main() {
         set_filtered(rows(&[(key, "case-value")]));
         assert_eq!(value(key).as_deref(), Some("case-value"));
     }
+    assert!(marks().is_empty());
+
+    // The production stream filter skips consumed invalid UTF-8 lines and parse errors.
+    let invalid_data_key = "DOTENV_FIXTURE_AFTER_INVALID_DATA";
+    unsafe { std::env::remove_var(invalid_data_key); }
+    set_filtered(vec![
+        Err(dotenvy::Error::Io(std::io::Error::from(std::io::ErrorKind::InvalidData))),
+        Ok((invalid_data_key.into(), "retained".into())),
+    ]);
+    assert_eq!(value(invalid_data_key).as_deref(), Some("retained"));
+    assert!(marks().is_empty());
+
+    // A persistent read failure must stop polling rather than spinning or applying later rows.
+    for kind in [std::io::ErrorKind::Interrupted, std::io::ErrorKind::WouldBlock,
+                 std::io::ErrorKind::UnexpectedEof, std::io::ErrorKind::Other] {
+        let before = "DOTENV_FIXTURE_BEFORE_IO_ERROR";
+        let after = "DOTENV_FIXTURE_AFTER_IO_ERROR";
+        unsafe { std::env::remove_var(before); std::env::remove_var(after); }
+        let polls = std::cell::Cell::new(0);
+        let stream = vec![
+            Ok((before.into(), "retained".into())),
+            Err(dotenvy::Error::Io(std::io::Error::from(kind))),
+            Ok((after.into(), "must not apply".into())),
+        ].into_iter().inspect(|_| polls.set(polls.get()+1));
+        set_filtered(stream);
+        assert_eq!(polls.get(), 2);
+        assert_eq!(value(before).as_deref(), Some("retained"));
+        assert!(value(after).is_none());
+    }
+    let polls = std::cell::Cell::new(0);
+    set_filtered(std::iter::from_fn(|| {
+        polls.set(polls.get()+1);
+        assert!(polls.get() <= 1, "persistent read failure was polled repeatedly");
+        Some(Err(dotenvy::Error::Io(std::io::Error::from(std::io::ErrorKind::Other))))
+    }));
+    assert_eq!(polls.get(),1);
     assert!(marks().is_empty());
     println!("production dotenv filter child contract passed trueos={}", cfg!(target_os = "trueos"));
 }

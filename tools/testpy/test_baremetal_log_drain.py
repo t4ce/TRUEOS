@@ -22,6 +22,23 @@ SPEC.loader.exec_module(reader)
 
 
 class BaremetalLogDrain(unittest.TestCase):
+    def test_boot_marker_after_long_offline_retry_history_is_found(self):
+        with tempfile.TemporaryDirectory(prefix="trueos-late-boot-marker-") as temporary:
+            directory = Path(temporary)
+            log = directory / "trueos-baremetal.0.log"
+            log.write_text("offline retry\n" * 10000 + "laptop-bringup-build-id=test-image\n")
+            state = directory / "state"
+            state.write_text(f"log_path={log}\n")
+            env = dict(os.environ,
+                TRUEOS_BAREMETAL_LOG_DIR=str(directory),
+                TRUEOS_BAREMETAL_LOG_PID=str(state),
+                TRUEOS_BAREMETAL_LOG_WAIT_TIMEOUT="1",
+                TRUEOS_BAREMETAL_BOOT_MARKER="laptop-bringup-build-id=test-image")
+            result = subprocess.run(["bash", str(ROOT / "tools/baremetal-log-drain.sh"), "wait"],
+                                    env=env, capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("boot marker verified", result.stdout)
+
     def test_reader_probes_quiet_peers_and_preserves_received_bytes(self):
         stream = MagicMock()
         stream.__enter__.return_value = stream

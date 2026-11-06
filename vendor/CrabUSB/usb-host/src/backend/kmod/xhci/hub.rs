@@ -35,6 +35,7 @@ impl PortChangeWaker {
                 change_waker: AtomicWaker::new(),
                 changed: AtomicBool::new(false),
                 state: PortState::Uninit,
+                ever_probed: false,
             });
         }
         Self {
@@ -56,6 +57,9 @@ pub struct Port {
     change_waker: AtomicWaker,
     changed: AtomicBool,
     state: PortState,
+    // Monotonic ownership boundary: a disconnected/disabled register does not
+    // establish that an addressed device or its DMA has been retired.
+    ever_probed: bool,
 }
 
 /// xHCI Root Hub
@@ -120,6 +124,19 @@ impl HubOp for XhciRootHub {
 
     fn request_port_reset<'a>(&'a mut self, port_id: u8) -> BoxFuture<'a, Result<(), USBError>> {
         async move {
+            let idx = usize::from(port_id.checked_sub(1).ok_or_else(||
+                USBError::Other(anyhow::anyhow!("invalid root port reset port=0")))?);
+            let port = self.ports().get(idx).ok_or_else(||
+                USBError::Other(anyhow::anyhow!("root port reset out of range port={}", port_id)))?;
+            if self.root_port_ignored_by_physics(port_id) {
+                return Err(USBError::Other(anyhow::anyhow!("root port {} is excluded by controller policy", port_id)));
+            }
+            let caplength = usize::from(self.reg.capability.caplength.read_volatile().get());
+            let address = self.reg.mmio_base + caplength + 0x400 + idx * 0x10;
+            let portsc = unsafe { core::ptr::read_volatile(address as *const u32) };
+            if let Some(reason) = explicit_reset_rejection(port.ever_probed, portsc) {
+                return Err(USBError::Other(anyhow::anyhow!("root port {} repair rejected: {}", port_id, reason)));
+            }
             self.request_root_port_reset(port_id)?;
             Ok(())
         }
@@ -407,6 +424,7 @@ impl XhciRootHub {
             self.log_port_status("root-hub-before-probed-port", id);
             self.fail_if_halted("root-hub-before-probed-port")?;
             self.ports_mut()[i].state = PortState::Probed;
+            self.ports_mut()[i].ever_probed = true;
 
             out.push(PortChangeInfo {
                 root_port_id: id,
@@ -472,4 +490,14 @@ impl XhciRootHub {
         }
         Ok(())
     }
+}
+
+/// Public repair may start only before addressing has ever owned the port.
+/// Internal root-hub enumeration keeps its existing reset state machine.
+fn explicit_reset_rejection(ever_probed: bool, portsc: u32) -> Option<&'static str> {
+    if ever_probed { return Some("port has admitted device addressing; endpoint/DMA teardown is required"); }
+    if portsc & 1 == 0 { return Some("port is disconnected"); }
+    if portsc & (1 << 1) != 0 { return Some("port is already enabled"); }
+    if portsc & ((1 << 4) | (1 << 31)) != 0 { return Some("port reset is already active"); }
+    None
 }

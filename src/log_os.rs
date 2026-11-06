@@ -41,6 +41,10 @@ pub(crate) mod flags {
     use log_os_core::{LogLevel, LogLevelFilter};
     use spin::Once;
 
+    /// Laptop USB + Tiger Lake bring-up. This must precede every narrower
+    /// profile: rejected records never reach the TCP drain, even at Trace.
+    pub(crate) const LAPTOP_BRINGUP_DIAG_PROFILE_ENABLED: bool = true;
+
     /// Finite-page GPU-first capture for the 9A49 laptop investigation.
     /// This build-wide override wins over the other diagnostic profiles below;
     /// set false to restore their existing policies without changing the sinks.
@@ -62,7 +66,8 @@ pub(crate) mod flags {
 
     /// Compact font warm/coverage breadcrumbs, using the existing Gpgpu/Info
     /// policy and rate limiter. No Render/Info or screen-specific filter.
-    pub(crate) const FONT_WARM_DIAG_PROFILE_ENABLED: bool = TGL_GPU_DIAG_PROFILE_ENABLED;
+    pub(crate) const FONT_WARM_DIAG_PROFILE_ENABLED: bool =
+        TGL_GPU_DIAG_PROFILE_ENABLED || LAPTOP_BRINGUP_DIAG_PROFILE_ENABLED;
 
     /// Full forensic USB profile. The exact switch settings are preserved in
     /// `log_os.usb_full_diag_profile.txt` beside this source file.
@@ -223,11 +228,12 @@ pub(crate) mod flags {
     pub(crate) const HTML_SHACK_IDLE_LOGS: bool = false;
     // Stage1 suppresses the rate-limited present diagnostics when enabled.
     pub(crate) const INTEL_STAGE1_LOGS: bool = false;
-    pub(crate) const INTEL_RENDER_NGIN_LOGS: bool = false;
-    pub(crate) const INTEL_RENDER_NGIN_BATCH_LOGS: bool = false;
-    pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = false;
+    pub(crate) const INTEL_RENDER_NGIN_LOGS: bool = LAPTOP_BRINGUP_DIAG_PROFILE_ENABLED;
+    pub(crate) const INTEL_RENDER_NGIN_BATCH_LOGS: bool = LAPTOP_BRINGUP_DIAG_PROFILE_ENABLED;
+    pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = LAPTOP_BRINGUP_DIAG_PROFILE_ENABLED;
     pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
-    pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = USB_UAS_DIAG_PROFILE_ENABLED;
+    pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool =
+        USB_UAS_DIAG_PROFILE_ENABLED || LAPTOP_BRINGUP_DIAG_PROFILE_ENABLED;
     pub(crate) const STORAGE_TRACE_LOGS: bool = false;
     pub(crate) const NVME_VERBOSE: bool = false;
     pub(crate) static BGRT_LOG_ONCE: Once<()> = Once::new();
@@ -237,6 +243,9 @@ pub(crate) mod flags {
     ///
     /// Seeds the live policies and supplies the Build defaults preset.
     pub(crate) const fn build_area_log_policy(area: LogArea) -> LogLevelPolicy {
+        if LAPTOP_BRINGUP_DIAG_PROFILE_ENABLED {
+            return super::policy::laptop_bringup_policy(area);
+        }
         // UI4 and vGPU targets resolve to Global. Honor this focused override
         // before early-return profiles, including the ordinary TGL policy.
         if UI4_DIAG_PROFILE_ENABLED && matches!(area, LogArea::Global) {
@@ -755,6 +764,20 @@ pub fn log_once_with_target(
 
 pub fn init_global_dispatch() {
     log_os_core::install_global_log_dispatch(&TRUEOS_LOG_ROUTER);
+    if flags::LAPTOP_BRINGUP_DIAG_PROFILE_ENABLED {
+        log_with_area_level(
+            flags::LogArea::Boot,
+            LogLevel::Important,
+            format_args!("log-profile=laptop-usb-gpu-bringup-v1 usb/gfx/gpgpu/render/global=Up(Trace) boot/service/net/storage=Up(Info) other=Up(Warn) tcp_ring_bytes=8388608 boot_prefix_bytes=1048576 heal=/usb/heal\n"),
+        );
+        log_with_area_level(
+            flags::LogArea::Boot, LogLevel::Important,
+            format_args!("laptop-bringup-build-id={}\n",
+                option_env!("TRUEOS_BRINGUP_BUILD_ID").unwrap_or("unlabelled-local-build")),
+        );
+        crate::log_font_warm_diag!("phase=profile version=1 first=2 every=128 clip_budget=320\n");
+        return;
+    }
     if flags::BLUEPRINT_HV_DEBUG_PROFILE_ENABLED {
         log_with_area_level(
             flags::LogArea::Boot,
@@ -793,12 +816,24 @@ pub mod logtotcp {
     use core::{cmp::min, fmt};
     use spin::Mutex;
 
-    const MAX_BYTES: usize = 256 * 1024;
+    const MAX_BYTES: usize = if super::flags::LAPTOP_BRINGUP_DIAG_PROFILE_ENABLED {
+        8 * 1024 * 1024
+    } else {
+        256 * 1024
+    };
+    // Preserve first boot evidence even if Trace wraps the live ring before
+    // Wi-Fi connects. TCP sends prefix, explicit gap (if any), then live tail.
+    const BOOT_PREFIX_BYTES: usize = if super::flags::LAPTOP_BRINGUP_DIAG_PROFILE_ENABLED {
+        1024 * 1024
+    } else {
+        0
+    };
 
     struct TcpLogRing {
         buf: [u8; MAX_BYTES],
+        boot_prefix: [u8; BOOT_PREFIX_BYTES],
         head: usize,
-        len: usize,
+        tcp_cursor: u64,
         // Independent of TCP's unread length: the screen is a second reader.
         written: u64,
     }
@@ -807,14 +842,20 @@ pub mod logtotcp {
         const fn new() -> Self {
             Self {
                 buf: [0; MAX_BYTES],
+                boot_prefix: [0; BOOT_PREFIX_BYTES],
                 head: 0,
-                len: 0,
+                tcp_cursor: 0,
                 written: 0,
             }
         }
 
         #[inline]
         fn write_bytes(&mut self, bytes: &[u8]) {
+            if self.written < BOOT_PREFIX_BYTES as u64 {
+                let start = self.written as usize;
+                let take = bytes.len().min(BOOT_PREFIX_BYTES - start);
+                self.boot_prefix[start..start + take].copy_from_slice(&bytes[..take]);
+            }
             self.written = self.written.saturating_add(bytes.len() as u64);
             if bytes.is_empty() {
                 return;
@@ -824,7 +865,6 @@ pub mod logtotcp {
                 let keep = &bytes[bytes.len() - MAX_BYTES..];
                 self.buf.copy_from_slice(keep);
                 self.head = 0;
-                self.len = MAX_BYTES;
                 return;
             }
 
@@ -837,29 +877,38 @@ pub mod logtotcp {
             }
 
             self.head = (self.head + bytes.len()) % MAX_BYTES;
-            self.len = min(self.len + bytes.len(), MAX_BYTES);
-        }
-
-        #[inline]
-        fn oldest_index(&self) -> usize {
-            (self.head + MAX_BYTES - self.len) % MAX_BYTES
         }
 
         fn drain_bytes(&mut self, max: usize) -> Vec<u8> {
-            let take = self.len.min(max);
-            if take == 0 {
+            if max == 0 || self.tcp_cursor >= self.written {
                 return Vec::new();
             }
-
-            let start = self.oldest_index();
-            let first = min(take, MAX_BYTES - start);
-            let mut out = Vec::with_capacity(take);
+            let prefix_end = self.written.min(BOOT_PREFIX_BYTES as u64);
+            if self.tcp_cursor < prefix_end {
+                let start = self.tcp_cursor as usize;
+                let take = max.min(prefix_end as usize - start);
+                self.tcp_cursor += take as u64;
+                return self.boot_prefix[start..start + take].to_vec();
+            }
+            let oldest = self.written.saturating_sub(MAX_BYTES as u64);
+            let mut out = Vec::new();
+            if self.tcp_cursor < oldest {
+                out.extend_from_slice(alloc::format!(
+                    "\n[boot] [warn] logtotcp: capture-gap dropped_bytes={} from={} to={}\n",
+                    oldest - self.tcp_cursor, self.tcp_cursor, oldest,
+                ).as_bytes());
+                self.tcp_cursor = oldest;
+            }
+            let behind = (self.written - self.tcp_cursor) as usize;
+            let take = max.min(behind);
+            let start = (self.head + MAX_BYTES - behind) % MAX_BYTES;
+            let first = take.min(MAX_BYTES - start);
             out.extend_from_slice(&self.buf[start..start + first]);
             if take > first {
                 out.extend_from_slice(&self.buf[..take - first]);
             }
 
-            self.len -= take;
+            self.tcp_cursor += take as u64;
             out
         }
         /// Copy retained bytes without advancing TCP's destructive drain.
@@ -943,6 +992,8 @@ pub mod logtotcp {
         // The adapter owns an internal TCP backlog after that point, so waiting
         // for a TcpSent event here can wedge logging if that notification drops.
         let mut pending_chunk: Option<Vec<u8>> = None;
+        let mut snapshot_on_connect = false;
+        let mut next_loss_report_ms = 0u64;
 
         loop {
             for ev in events.drain(32) {
@@ -952,7 +1003,7 @@ pub mod logtotcp {
                     }
                     NetEvent::TcpEstablished { handle, .. } => {
                         conn_handle = Some(handle);
-                        pending_chunk = None;
+                        snapshot_on_connect = super::flags::LAPTOP_BRINGUP_DIAG_PROFILE_ENABLED;
                         crate::log!(
                             "logtotcp: client connected handle={} ms={}\n",
                             handle.0,
@@ -962,7 +1013,12 @@ pub mod logtotcp {
                     NetEvent::Closed { handle } => {
                         if conn_handle == Some(handle) {
                             conn_handle = None;
-                            pending_chunk = None;
+                            // Bytes not yet submitted stay pending for the next
+                            // connection. Adapter-accepted bytes have no delivery
+                            // acknowledgement, so make that loss boundary explicit.
+                            crate::log_important!(target: "boot";
+                                "logtotcp: capture-transport-gap handle={} adapter_delivery=unknown retained_unsent_bytes={}\n",
+                                handle.0, pending_chunk.as_ref().map_or(0, Vec::len));
                             crate::log!(
                                 "logtotcp: client disconnected handle={} ms={}\n",
                                 handle.0,
@@ -979,12 +1035,36 @@ pub mod logtotcp {
                     _ => {}
                 }
             }
+            if snapshot_on_connect && conn_handle.is_some() {
+                snapshot_on_connect = false;
+                // No log/ring lock is held here. These are retained software
+                // state and read-only register observations, never GPU probes.
+                crate::log_important!(target: "boot";
+                    "laptop-bringup-reconnect-snapshot: begin ms={}\n{}\n{}\nlaptop-bringup-reconnect-snapshot: end\n",
+                    Instant::now().as_millis(),
+                    crate::r::net::vlayer::usb_snapshot_text_host(),
+                    crate::intel::laptop_diagnostic_snapshot_text());
+            }
+            if conn_handle.is_some() && Instant::now().as_millis() >= next_loss_report_ms {
+                next_loss_report_ms = Instant::now().as_millis().saturating_add(1_000);
+                let dropped = crate::net::adapter::take_log_backlog_dropped_bytes();
+                if dropped != 0 {
+                    crate::log_important!(target: "boot";
+                        "logtotcp: capture-backlog-gap dropped_bytes={} adapter_limit_bytes=262144 cause=slow-or-stalled-reader\n", dropped);
+                }
+            }
 
-            if let Some(handle) = conn_handle {
+            // Retain the original conservative drain rate. Command-queue
+            // admission is not TCP delivery credit; a faster burst can turn
+            // the bounded log ring into an unbounded adapter heap backlog.
+            for _ in 0..1 {
+                let Some(handle) = conn_handle else { break; };
                 if pending_chunk.is_none() {
                     let chunk = drain_bytes(DRAIN_CHUNK);
                     if !chunk.is_empty() {
                         pending_chunk = Some(chunk);
+                    } else {
+                        break;
                     }
                 }
 
@@ -997,6 +1077,8 @@ pub mod logtotcp {
                         .is_ok()
                 {
                     pending_chunk = None;
+                } else {
+                    break;
                 }
             }
 

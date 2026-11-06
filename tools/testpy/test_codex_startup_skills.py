@@ -106,7 +106,18 @@ impl Instant { fn now() -> Self {
 struct RequestHandle { ready: Arc<AtomicBool>, failed: bool }
 struct Sender(Arc<Mutex<Vec<AppEvent>>>);
 impl Sender { fn send(&self, event: AppEvent) { self.0.lock().unwrap().push(event); } }
-async fn fetch_skills_list(handle: RequestHandle, _: PathBuf) -> Result<SkillsListResponse> {
+enum RequestId { String(String) }
+struct Uuid;
+impl Uuid { fn new_v4() -> Self { Self } }
+impl std::fmt::Display for Uuid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "fixture-id") }
+}
+struct SkillsListParams { cwds: Vec<PathBuf>, force_reload: bool }
+async fn fetch_skills_list(handle: RequestHandle, request_id: RequestId, params: SkillsListParams) -> Result<SkillsListResponse> {
+    let RequestId::String(request_id) = request_id;
+    assert_eq!(request_id, "startup-skills-list-fixture-id");
+    assert_eq!(params.cwds, [PathBuf::from("/fixture")]);
+    assert!(params.force_reload);
     std::future::poll_fn(|_| {
         record("fetch_polled");
         if handle.ready.load(Ordering::Relaxed) {
@@ -278,6 +289,29 @@ fn expiry_stops_both_budgets_and_early_handoff_leaves_number_gap() {
     assert_eq!(CLOCK_READS.load(Ordering::Relaxed), 3);
     assert!(deadline.is_none());
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThreadParamsMode { Embedded, Remote, Cloud }
+struct AppServer { mode: ThreadParamsMode }
+impl AppServer { fn thread_params_mode(&self) -> ThreadParamsMode { self.mode } }
+fn cwds_differ(left: &std::path::Path, right: &std::path::Path) -> bool { left != right }
+impl App {
+    fn rejects_skills_result(&self, app_server: &AppServer, cwd: &std::path::Path) -> bool {
+        @STALE_GUARD@
+    }
+}
+#[test]
+fn actual_result_guard_keeps_current_local_results_and_rejects_stale_and_cloud_results() {
+    let app = App::new();
+    for mode in [ThreadParamsMode::Embedded, ThreadParamsMode::Remote] {
+        let app_server = AppServer { mode };
+        assert!(!app.rejects_skills_result(&app_server, std::path::Path::new("/fixture")));
+        assert!(app.rejects_skills_result(&app_server, std::path::Path::new("/changed")));
+    }
+    let cloud = AppServer { mode: ThreadParamsMode::Cloud };
+    assert!(app.rejects_skills_result(&cloud, std::path::Path::new("/fixture")));
+    assert!(app.rejects_skills_result(&cloud, std::path::Path::new("/changed")));
+}
 '''
 
 
@@ -303,14 +337,21 @@ def main():
     assert "let event_name: &'static str = (&event).into();" in startup
     assert "event={event_name} op={op}" in startup
     # Preserve the existing stale-result guard and explicit/manual RPC path.
-    assert "AppEvent::SkillsListLoaded { ref cwd, .. }\n                if cwds_differ(cwd, self.config.cwd.as_path())" in dispatch
+    guard_match = re.search(
+        r"AppEvent::SkillsListLoaded \{ ref cwd, \.\. \}\s+if (?P<guard>.*?) =>\s*\{",
+        dispatch, re.S,
+    )
+    assert guard_match, "SkillsListLoaded admission guard"
+    stale_guard = guard_match.group("guard")
+    assert "cwds_differ(cwd, self.config.cwd.as_path())" in stale_guard
+    assert "app_server.thread_params_mode() == crate::ThreadParamsMode::Cloud" in stale_guard
     routing = (TUI / "app/thread_routing.rs").read_text()
     arm = routing[routing.index("            AppCommand::ListSkills { cwds, force_reload } => {"):]
     arm = arm[:arm.index("            AppCommand::Compact =>")]
     assert ".skills_list(" in arm and ".await," in arm
     policy = TUI / "app/startup_skills.rs"
     source = HARNESS.replace("@POLICY_PATH@", json.dumps(str(policy)))
-    source = source.replace("@DISPATCH_ENTRY@", entry).replace("@BACKGROUND@", detached).replace("@SAMPLER@", sampler)
+    source = source.replace("@DISPATCH_ENTRY@", entry).replace("@BACKGROUND@", detached).replace("@SAMPLER@", sampler).replace("@STALE_GUARD@", stale_guard)
     with tempfile.TemporaryDirectory(prefix="codex-startup-skills-") as td:
         source_path = Path(td) / "harness.rs"
         source_path.write_text(source)

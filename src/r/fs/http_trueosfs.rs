@@ -566,6 +566,53 @@ fn http_owned_plain_response(status: &'static str, msg: String) -> HttpResponseP
     }
 }
 
+fn http_json_response(status: &'static str, body: Vec<u8>) -> HttpResponsePlan {
+    HttpResponsePlan {
+        status,
+        content_type: "application/json; charset=utf-8",
+        extra_headers: String::from("Cache-Control: no-store\r\n"),
+        body_len: body.len() as u64,
+        body: HttpBodyPlan::Bytes(body),
+    }
+}
+
+/// The HTTP lane never touches USB registers. Live requests enter the bounded,
+/// controller-selected queue and execute on the task owning the existing host.
+async fn http_heal_request(body: &[u8]) -> HttpResponsePlan {
+    use crate::usb3::heal_protocol::{self, HealSubmitError, HealWaitError};
+    let pending = match heal_protocol::submit_json(body) {
+        Ok(pending) => pending,
+        Err(error) => {
+            let (status, detail) = match error {
+                HealSubmitError::TooLarge => ("HTTP/1.1 413 Payload Too Large\r\n", "Heal JSON exceeds 8192 bytes\n"),
+                HealSubmitError::InvalidJson => ("HTTP/1.1 400 Bad Request\r\n", "invalid Heal JSON\n"),
+                HealSubmitError::QueueFull => ("HTTP/1.1 503 Service Unavailable\r\n", "Heal queue full\n"),
+                HealSubmitError::OwnerBusy => ("HTTP/1.1 503 Service Unavailable\r\n", "Heal repair unavailable: event pump stopped or owner enumeration/handoff in progress; use cached GET /usb/heal/observe\n"),
+                HealSubmitError::ControllerUnavailable => ("HTTP/1.1 503 Service Unavailable\r\n", "controller has no Heal owner report; use GET /usb/heal/observe\n"),
+            };
+            return http_plain_response(status, detail);
+        }
+    };
+    match pending.wait().await {
+        Ok(response) => {
+            let status = if response.status == heal_protocol::HealResponseStatus::Ok {
+                "HTTP/1.1 200 OK\r\n"
+            } else {
+                "HTTP/1.1 409 Conflict\r\n"
+            };
+            http_json_response(status, serde_json::to_vec(&response).unwrap_or_default())
+        }
+        Err(HealWaitError::ExpiredBeforeExecution) => http_plain_response(
+            "HTTP/1.1 504 Gateway Timeout\r\n",
+            "Heal owner busy; queued request cancelled before execution; inspect cached /usb/heal/observe and runtime dump\n",
+        ),
+        Err(HealWaitError::OperationInProgress) => http_plain_response(
+            "HTTP/1.1 504 Gateway Timeout\r\n",
+            "Heal operation already executing; owner retains its bounded future; inspect /usb/heal/observe before retrying\n",
+        ),
+    }
+}
+
 fn http_upload_content_type(
     target: &str,
     name: &str,
@@ -1045,11 +1092,23 @@ pub async fn http_trueosfs_task() {
                         let req = request.raw_bytes();
                         let body_bytes = request.body_bytes();
                         let keep_alive = request.keep_alive();
-                        let roots = crate::r::fs::trueosfs::list_roots();
                         let mut staged_blob_upload: Option<(u64, DeviceHandle, String)> = None;
 
                         let path_only = vhttp_srv::path_only(target.as_str());
-                        let response: HttpResponsePlan = if method == "GET"
+                        // Diagnostics must not depend on filesystem mounts or
+                        // even acquire the root registry while replay is busy.
+                        let roots = if matches!(path_only, "/usb/heal" | "/usb/heal/describe" | "/usb/heal/observe") {
+                            Vec::new()
+                        } else {
+                            crate::r::fs::trueosfs::list_roots()
+                        };
+                        let response: HttpResponsePlan = if method == "GET" && path_only == "/usb/heal/describe" {
+                            http_json_response("HTTP/1.1 200 OK\r\n", crate::usb3::heal_protocol::api_description_json())
+                        } else if method == "GET" && path_only == "/usb/heal/observe" {
+                            http_json_response("HTTP/1.1 200 OK\r\n", crate::usb3::heal_protocol::latest_report_json())
+                        } else if method == "POST" && path_only == "/usb/heal" {
+                            http_heal_request(body_bytes).await
+                        } else if method == "GET"
                             && path_only.starts_with("/dl/")
                         {
                             // Download endpoint: /dl/<root_raw>/<path>

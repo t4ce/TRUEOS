@@ -3,7 +3,7 @@ mod cdc;
 pub mod class;
 mod descriptor;
 mod dev_gears;
-mod heal_protocol;
+pub(crate) mod heal_protocol;
 mod heal_service;
 pub mod hid;
 pub(crate) mod lab;
@@ -11,6 +11,7 @@ mod lib;
 mod mass;
 mod net;
 mod pen;
+mod runtime;
 mod scsi;
 mod skhynix;
 
@@ -23,8 +24,8 @@ const CRABUSB_CONTROLLER_ID: u32 = 3;
 const MAX_CRABUSB_CONTROLLERS: usize = 2;
 const HOT_RESCAN_DEBOUNCE_MS: u64 = 100;
 const HOT_RESCAN_HANDOFF_SETTLE_MS: u64 = 500;
-const TEMPORARY_SKHYNIX_FS_RESCAN_READY: u32 =
-    crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY;
+const PROBE_WATCHDOG_MS: u64 = 2_000;
+const PROBE_RETRY_MS: u64 = 1_000;
 static USB_PORT_CHANGE_SEQ: [core::sync::atomic::AtomicU32; MAX_CRABUSB_CONTROLLERS] =
     [const { core::sync::atomic::AtomicU32::new(0) }; MAX_CRABUSB_CONTROLLERS];
 // Emergency BSP isolation switch. Keep this runtime-visible so the complete
@@ -59,13 +60,20 @@ pub async fn usb_controller_service_task() {
     for (index, &device) in controllers.iter().enumerate().skip(1) {
         match usb_additional_controller_task(index, device) {
             Ok(token) => spawner.spawn(token),
-            Err(err) => crate::log!(
-                "crabusb: controller task allocation failed pci={:02x}:{:02x}.{} error={:?}\n",
-                device.bus,
-                device.slot,
-                device.function,
-                err
-            ),
+            Err(err) => {
+                controller_failure(
+                    index,
+                    "task-allocation",
+                    alloc::format!("controller task allocation failed: {err:?}"),
+                );
+                crate::log!(
+                    "crabusb: controller task allocation failed pci={:02x}:{:02x}.{} error={:?}\n",
+                    device.bus,
+                    device.slot,
+                    device.function,
+                    err
+                );
+            }
         }
     }
     run_usb_controller(0, first).await;
@@ -80,7 +88,10 @@ fn start_device_pool_worker(spawner: &trueos_executor::Spawner) {
     let device_pool_token = match dev_gears::usb_device_pool_worker_task() {
         Ok(token) => token,
         Err(err) => {
-            crate::log!("crabusb: device pool worker task allocation failed error={:?}\n", err);
+            crate::log!(
+                "crabusb: device pool worker task allocation failed error={:?}\n",
+                err
+            );
             return;
         }
     };
@@ -102,9 +113,14 @@ fn start_device_pool_worker(spawner: &trueos_executor::Spawner) {
 }
 
 async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
+    controller_stage(index, "admission", "unclaimed");
     crate::r::services::microfont_log_service::usb_controller_stage("xHCI: backend admission");
-    let Some(selection) = heal_service::claim_backend(xhci_device, index == 0) else {
-        return;
+    let selection = match heal_service::claim_backend(xhci_device, index == 0) {
+        Ok(selection) => selection,
+        Err(reason) => {
+            controller_failure(index, "claim-failed", reason);
+            return;
+        }
     };
     let controller_id = CRABUSB_CONTROLLER_ID + index as u32;
     crate::log!(
@@ -116,8 +132,13 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
         xhci_device.function
     );
     crate::r::services::microfont_log_service::usb_controller_stage("xHCI: map controller");
-    let Some((mmio, mmio_len, kernel)) = lib::map_xhci_host_inputs(&xhci_device) else {
-        return;
+    controller_stage(index, "mapping", "claimed");
+    let (mmio, mmio_len, kernel) = match lib::map_xhci_host_inputs(&xhci_device) {
+        Ok(inputs) => inputs,
+        Err(error) => {
+            controller_failure(index, "map-failed", error);
+            return;
+        }
     };
     let root_hub_policy = match selection {
         XhciBackendSelection::KnownIntel(profile) => {
@@ -139,9 +160,11 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
             crabusb::XhciRootHubInitPolicy::FullAllPorts
         }
         XhciBackendSelection::HealRequired(seed) => {
-            heal_service::run_quarantined(mmio, mmio_len, kernel, seed).await
+            controller_stage(index, "heal-quarantined", "quarantined");
+            heal_service::run_quarantined(index, mmio, mmio_len, kernel, seed).await
         }
     };
+    controller_stage(index, "constructing", "claimed");
     let mut host = match crabusb::USBHost::new_xhci_with_root_hub_init_policy_and_mmio_len(
         mmio,
         mmio_len,
@@ -150,6 +173,11 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
     ) {
         Ok(host) => host,
         Err(err) => {
+            controller_failure(
+                index,
+                "construction-failed",
+                alloc::format!("controller construction failed: {err:?}"),
+            );
             crate::log!(
                 "crabusb: controller index={} construction failed error={:?}\n",
                 index,
@@ -158,19 +186,32 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
             return;
         }
     };
+    let _ = lab::refresh_snapshot(index, &mut host).await;
+    controller_stage(index, "initializing", "initializing");
+    let _ =
+        heal_service::register_pending_controller(index, xhci_device, &mut host, "initializing")
+            .await;
     crate::r::services::microfont_log_service::usb_controller_stage("xHCI: initialize controller");
-    if let Err(err) = host.init().await {
+    if let Err(err) = await_controller_operation(index, "initializing", host.init()).await {
         crate::r::services::microfont_log_service::usb_controller_stage(
             "xHCI: initialization failed",
         );
-        crate::log!("crabusb: controller index={} init failed error={:?}\n", index, err);
-        return;
+        crate::log!(
+            "crabusb: controller index={} init failed error={:?}\n",
+            index,
+            err
+        );
+        let reason = alloc::format!("controller initialization failed: {err:?}");
+        controller_failure(index, "init-failed", reason.clone());
+        park_failed_controller(index, xhci_device, &mut host, reason).await;
     }
 
-    let event_handler = host.create_event_handler();
+    // Keep an owner reference to the event ring even if task allocation fails
+    // or the consumer stops; hardware may still hold its DMA address.
+    let event_handler = alloc::sync::Arc::new(host.create_event_handler());
     let spawner: trueos_executor::Spawner =
         unsafe { trueos_executor::Spawner::for_current_executor().await };
-    let event_pump_token = match usb_event_pump_task(index, event_handler) {
+    let event_pump_token = match usb_event_pump_task(index, event_handler.clone()) {
         Ok(token) => token,
         Err(err) => {
             crate::log!(
@@ -178,27 +219,34 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
                 index,
                 err
             );
-            return;
+            let reason = alloc::format!("event pump task allocation failed: {err:?}");
+            controller_failure(index, "event-allocation-failed", reason.clone());
+            park_failed_controller(index, xhci_device, &mut host, reason).await;
         }
     };
     spawner.spawn(event_pump_token);
     crate::log!("crabusb: controller index={} event pump started\n", index);
-    if index == 0 {
-        if let Err(reason) = lab::refresh_snapshot(&mut host).await {
-            crate::log!("crabusb: initial xhci wisdom snapshot failed reason={}\n", reason);
-        }
+    controller_stage(index, "discovering", "active");
+    if let Err(reason) = lab::refresh_snapshot(index, &mut host).await {
+        crate::log_important!(target: "usb"; "crabusb: controller={} initial snapshot failed reason={}\n", index, reason);
     }
+    let mut heal_report =
+        heal_service::register_live_controller(index, xhci_device, &mut host).await;
     crate::r::services::microfont_log_service::usb_controller_stage("xHCI: discover USB devices");
-    let Some(news) = probe_devices_with_log(&mut host, "initial", index).await else {
-        crate::r::services::microfont_log_service::usb_controller_stage(
-            "xHCI: initial discovery failed",
-        );
-        return;
-    };
+    let mut retry_needed = false;
+    if let Some(news) = probe_devices_with_log(&mut host, "initial", index).await {
+        await_controller_operation(
+            index,
+            "handoff",
+            open_and_handoff_devices(&mut host, news, &spawner, controller_id),
+        )
+        .await;
+    } else {
+        retry_needed = true;
+    }
     crate::r::services::microfont_log_service::usb_controller_stage(
         "USB discovered: waiting for RTL8153",
     );
-    open_and_handoff_devices(&mut host, news, &spawner, controller_id).await;
 
     // The first root-hub pass can only *start* a USB2 port reset. Its
     // completion may arrive during device handoff, before we establish the
@@ -206,16 +254,25 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
     // explicitly instead of waiting for another physical hotplug edge.
     for _ in 0..3 {
         trueos_time::Timer::after(trueos_time::Duration::from_millis(150)).await;
-        let Some(news) = probe_devices_with_log(&mut host, "initial-settle", index).await else {
-            return;
-        };
-        open_and_handoff_devices(&mut host, news, &spawner, controller_id).await;
+        if let Some(news) = probe_devices_with_log(&mut host, "initial-settle", index).await {
+            await_controller_operation(
+                index,
+                "handoff",
+                open_and_handoff_devices(&mut host, news, &spawner, controller_id),
+            )
+            .await;
+            retry_needed = false;
+        } else {
+            retry_needed = true;
+        }
     }
 
-    let mut observed_port_change_seq =
-        USB_PORT_CHANGE_SEQ[index].load(core::sync::atomic::Ordering::Acquire);
+    // Keep boot reset/change events pending for the maintenance pass too.
+    let mut observed_port_change_seq = 0;
     let mut next_snapshot = trueos_time::Instant::now()
         + trueos_time::Duration::from_millis(crate::allcaps::usb::CONTROLLER_SNAPSHOT_CADENCE_MS);
+    let mut next_retry =
+        trueos_time::Instant::now() + trueos_time::Duration::from_millis(PROBE_RETRY_MS);
     loop {
         if index == 0 {
             USB_LEGENDARY_LEGACY_SAVEWRAPPER_LMAO(&mut host).await;
@@ -225,12 +282,15 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
             ))
             .await;
         }
-        if index == 0 && trueos_time::Instant::now() >= next_snapshot {
+        let _ = heal_protocol::service_one(&mut host, &mut heal_report).await;
+        let heal_rescan = heal_service::take_rescan_requested(index);
+        retry_needed |= heal_rescan;
+        if trueos_time::Instant::now() >= next_snapshot {
             next_snapshot = trueos_time::Instant::now()
                 + trueos_time::Duration::from_millis(
                     crate::allcaps::usb::CONTROLLER_SNAPSHOT_CADENCE_MS,
                 );
-            if let Err(reason) = lab::refresh_snapshot(&mut host).await {
+            if let Err(reason) = lab::refresh_snapshot(index, &mut host).await {
                 crate::log_trace!(
                     target: "usb";
                     "crabusb: periodic xhci wisdom snapshot failed reason={}\n",
@@ -240,64 +300,99 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
         }
         let next_port_change_seq =
             USB_PORT_CHANGE_SEQ[index].load(core::sync::atomic::Ordering::Acquire);
-        if next_port_change_seq == observed_port_change_seq {
+        let retry_due = retry_needed && trueos_time::Instant::now() >= next_retry;
+        if next_port_change_seq == observed_port_change_seq && !retry_due && !heal_rescan {
             continue;
         }
-
-        // TEMPORARY boot-ordering bridge, not a USB device dependency: the
-        // current SKHynix filesystem replay can outlive the normal quarantine
-        // timeout. Retain the pending port change until that replay publishes
-        // its root and index, then let every waiting USB device probe normally.
-        if !crate::r::readiness::is_set(TEMPORARY_SKHYNIX_FS_RESCAN_READY) {
-            crate::log_warn!(target: "usb";
-                "crabusb: temporary rescan gate waiting for SKHynix-backed TRUEOSFS root+index readiness; HID/other USB devices are not functionally dependent on SKHynix action=retain-pending-port-change\n"
-            );
-            crate::r::readiness::wait_for(TEMPORARY_SKHYNIX_FS_RESCAN_READY).await;
-            crate::log!(
-                "crabusb: temporary rescan gate released by TRUEOSFS root+index readiness action=resume-normal-usb-probe\n"
-            );
+        if retry_needed && !retry_due {
+            continue;
         }
-        let quarantine = if index == 0 {
-            match lab::enter_controller_quarantine().await {
-                Ok(guard) => Some(guard),
-                Err(reason) => {
-                    crate::log!(
-                        "crabusb: probe_devices trigger=port-change seq={} quarantine-error={}\n",
-                        observed_port_change_seq,
-                        reason
-                    );
-                    continue;
-                }
+        if !runtime::snapshot(index).event_ready {
+            // Do not submit commands after the sole event consumer stopped.
+            // Keep the host's DMA allocations and diagnostic/Heal owner alive.
+            continue;
+        }
+        let quarantine = match lab::enter_controller_quarantine().await {
+            Ok(guard) => guard,
+            Err(reason) => {
+                runtime::update(index, |runtime| {
+                    runtime.failure("rescan-quarantine", reason.clone())
+                });
+                retry_needed = true;
+                next_retry = trueos_time::Instant::now()
+                    + trueos_time::Duration::from_millis(PROBE_RETRY_MS);
+                crate::log!(
+                    "crabusb: probe_devices trigger=port-change seq={} quarantine-error={}\n",
+                    observed_port_change_seq,
+                    reason
+                );
+                continue;
             }
-        } else {
-            None
         };
         // Only consume the sequence after normal probing has actually been
         // admitted. A failed quarantine must leave the rescan pending.
-        observed_port_change_seq = next_port_change_seq;
         trueos_time::Timer::after(trueos_time::Duration::from_millis(HOT_RESCAN_DEBOUNCE_MS)).await;
+        // Keep events arriving during this probe pending. Consuming the final
+        // global sequence used to lose reset completions and real hotplugs.
+        let probing_port_change_seq =
+            USB_PORT_CHANGE_SEQ[index].load(core::sync::atomic::Ordering::Acquire);
         crate::log!(
             "crabusb: probe_devices trigger=port-change seq={} quarantine=active\n",
-            observed_port_change_seq
+            probing_port_change_seq
         );
+        retry_needed = true;
         if let Some(news) = probe_devices_with_log(&mut host, "rescan", index).await {
+            retry_needed = false;
+            observed_port_change_seq = probing_port_change_seq;
             if !news.is_empty() {
-                open_and_handoff_devices(&mut host, news, &spawner, controller_id).await;
+                await_controller_operation(
+                    index,
+                    "handoff",
+                    open_and_handoff_devices(&mut host, news, &spawner, controller_id),
+                )
+                .await;
                 trueos_time::Timer::after(trueos_time::Duration::from_millis(
                     HOT_RESCAN_HANDOFF_SETTLE_MS,
                 ))
                 .await;
             }
         }
+        next_retry =
+            trueos_time::Instant::now() + trueos_time::Duration::from_millis(PROBE_RETRY_MS);
         drop(quarantine);
-        // Port reset/probe work emits its own xHCI change events. Consume that
-        // resulting sequence here so maintenance cannot recursively rescan itself.
-        observed_port_change_seq =
-            USB_PORT_CHANGE_SEQ[index].load(core::sync::atomic::Ordering::Acquire);
         crate::log!(
             "crabusb: probe_devices trigger=port-change seq={} quarantine=released\n",
             observed_port_change_seq
         );
+    }
+}
+
+fn controller_stage(index: usize, phase: &'static str, lifecycle: &'static str) {
+    runtime::update(index, |runtime| runtime.stage(phase, lifecycle));
+    crate::log_important!(target: "usb"; "crabusb: controller={} phase={} lifecycle={}\n", index, phase, lifecycle);
+}
+
+fn controller_failure(index: usize, stage: &'static str, reason: alloc::string::String) {
+    crate::log_important!(target: "usb"; "crabusb: controller={} stage={} failure={}\n", index, stage, reason);
+    runtime::update(index, |runtime| {
+        runtime.stage(stage, "failed");
+        runtime.failure(stage, reason);
+    });
+}
+
+async fn park_failed_controller(
+    index: usize,
+    device: crate::pci::PciDevice,
+    host: &mut crabusb::USBHost,
+    reason: alloc::string::String,
+) -> ! {
+    // A partial initialization may already have exposed DMA addresses to the
+    // controller. Retain its owner and rings instead of dropping a live host.
+    let mut report = heal_service::register_failed_controller(index, device, host, reason).await;
+    loop {
+        let _ = lab::refresh_snapshot(index, host).await;
+        let _ = heal_protocol::service_one(host, &mut report).await;
+        trueos_time::Timer::after(trueos_time::Duration::from_millis(250)).await;
     }
 }
 
@@ -314,28 +409,108 @@ async fn probe_devices_with_log(
     label: &'static str,
     controller_index: usize,
 ) -> Option<alloc::vec::Vec<crabusb::ProbedDevice>> {
-    let news =
-        match trueos_time::with_timeout(trueos_time::Duration::from_secs(2), host.probe_devices())
-            .await
+    runtime::update(controller_index, |runtime| {
+        runtime.probe_started(label, trueos_time::Instant::now().as_millis())
+    });
+    crate::log_important!(target: "usb"; "crabusb: controller={} probe label={} state=started\n", controller_index, label);
+    let result = await_probe_without_cancel(controller_index, host.probe_devices()).await;
+    let now_ms = trueos_time::Instant::now().as_millis();
+    let news = match result {
+        Ok(news) => {
+            runtime::update(controller_index, |runtime| {
+                runtime.probe_finished(Ok(news.len()), now_ms)
+            });
+            lib::observe_probed_devices(controller_index, label, &news);
+            let runtime = runtime::snapshot(controller_index);
+            crate::log_important!(target: "usb";
+                "crabusb: controller={} probe label={} state={} count={} elapsed_ms={} attempts={} successes={} failures={} watchdogs={}\n",
+                controller_index, label, runtime.last_probe_state, news.len(), runtime.last_probe_elapsed_ms,
+                runtime.probe_attempts, runtime.probe_successes, runtime.probe_failures, runtime.probe_watchdog_timeouts);
+            Some(news)
+        }
+        Err(error) => {
+            let reason = alloc::format!("probe label={label} failed: {error:?}");
+            runtime::update(controller_index, |runtime| {
+                runtime.probe_finished(Err(reason.clone()), now_ms)
+            });
+            crate::log_important!(target: "usb"; "crabusb: controller={} {} owner=retained event-pump=retained\n", controller_index, reason);
+            None
+        }
+    };
+    let _ = lab::refresh_snapshot(controller_index, host).await;
+    news
+}
+
+async fn await_probe_without_cancel<F: core::future::Future>(
+    controller_index: usize,
+    probe: F,
+) -> F::Output {
+    // Enumeration can already have submitted commands/transfers and exposed
+    // DMA buffers. A watchdog may drop its borrowed projection, never the
+    // operation itself; retain the same future until completion.
+    let mut probe = core::pin::pin!(probe);
+    loop {
+        match trueos_time::with_timeout(
+            trueos_time::Duration::from_millis(PROBE_WATCHDOG_MS),
+            probe.as_mut(),
+        )
+        .await
         {
-            Ok(Ok(news)) => news,
-            Ok(Err(err)) => {
-                crate::log!("crabusb: probe_devices label={} error={:?}\n", label, err);
-                return None;
+            Ok(result) => return result,
+            Err(_) => {
+                runtime::update(controller_index, |runtime| {
+                    runtime.probe_watchdog(trueos_time::Instant::now().as_millis())
+                });
+                let runtime = runtime::snapshot(controller_index);
+                if runtime.probe_watchdog_timeouts == 1
+                    || runtime.probe_watchdog_timeouts.is_multiple_of(5)
+                {
+                    crate::log_important!(target: "usb";
+                        "crabusb: controller={} probe state=pending elapsed_ms={} watchdogs={} event_ready={} action=retain-operation-and-dma\n",
+                        controller_index, runtime.last_probe_elapsed_ms, runtime.probe_watchdog_timeouts, runtime.event_ready);
+                }
+            }
+        }
+    }
+}
+
+async fn await_controller_operation<F: core::future::Future>(
+    controller_index: usize,
+    stage: &'static str,
+    operation: F,
+) -> F::Output {
+    runtime::update(controller_index, |runtime| {
+        runtime.operation_started(stage, trueos_time::Instant::now().as_millis())
+    });
+    let mut operation = core::pin::pin!(operation);
+    loop {
+        match trueos_time::with_timeout(
+            trueos_time::Duration::from_millis(PROBE_WATCHDOG_MS),
+            operation.as_mut(),
+        )
+        .await
+        {
+            Ok(result) => {
+                runtime::update(controller_index, |runtime| {
+                    runtime.operation_finished(trueos_time::Instant::now().as_millis())
+                });
+                return result;
             }
             Err(_) => {
-                crate::log!(
-                    "crabusb: probe_devices label={} timeout waiting for xhci completion\n",
-                    label
-                );
-                return None;
+                runtime::update(controller_index, |runtime| {
+                    runtime.operation_watchdog(trueos_time::Instant::now().as_millis())
+                });
+                let runtime = runtime::snapshot(controller_index);
+                if runtime.operation_watchdog_timeouts == 1
+                    || runtime.operation_watchdog_timeouts.is_multiple_of(5)
+                {
+                    crate::log_important!(target: "usb";
+                        "crabusb: controller={} operation={} state=pending elapsed_ms={} watchdogs={} action=retain-operation-and-dma\n",
+                        controller_index, stage, runtime.operation_elapsed_ms, runtime.operation_watchdog_timeouts);
+                }
             }
-        };
-    if label == "initial" || !news.is_empty() {
-        crate::log!("crabusb: probe_devices label={} count={}\n", label, news.len());
+        }
     }
-    lib::observe_probed_devices(controller_index, label, &news);
-    Some(news)
 }
 
 async fn open_and_handoff_devices(
@@ -459,7 +634,9 @@ fn log_hub_device_info(hub: &crabusb::HubDeviceInfo) {
 // Each controller retains its pump for its lifetime; a single task slot keeps
 // the second controller from reaching device discovery.
 #[trueos_executor::task(pool_size = MAX_CRABUSB_CONTROLLERS)]
-pub async fn usb_event_pump_task(index: usize, handler: crabusb::EventHandler) {
+pub async fn usb_event_pump_task(index: usize, handler: alloc::sync::Arc<crabusb::EventHandler>) {
+    runtime::update(index, |runtime| runtime.event_ready = true);
+    crate::log_important!(target: "usb"; "crabusb: controller={} event pump state=running\n", index);
     let mut last_transfer_activity_count = None;
     loop {
         let mut active = false;
@@ -469,7 +646,12 @@ pub async fn usb_event_pump_task(index: usize, handler: crabusb::EventHandler) {
                 crabusb::Event::PortChange { port } => {
                     active = true;
                     USB_PORT_CHANGE_SEQ[index].fetch_add(1, core::sync::atomic::Ordering::AcqRel);
-                    crate::log!("crabusb: event controller={} port-change port={}\n", index, port);
+                    runtime::update(index, |runtime| runtime.root_port_change_seen = true);
+                    crate::log!(
+                        "crabusb: event controller={} port-change port={}\n",
+                        index,
+                        port
+                    );
                 }
                 crabusb::Event::TransferActivity { count } => {
                     active = true;
@@ -484,7 +666,8 @@ pub async fn usb_event_pump_task(index: usize, handler: crabusb::EventHandler) {
                     }
                 }
                 crabusb::Event::Stopped => {
-                    crate::log!("crabusb: event pump stopped\n");
+                    runtime::update(index, |runtime| runtime.pump_stopped());
+                    crate::log_important!(target: "usb"; "crabusb: controller={} event pump state=stopped\n", index);
                     return;
                 }
             }

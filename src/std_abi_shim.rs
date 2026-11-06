@@ -3194,6 +3194,11 @@ unsafe fn cstr_contains_byte(text: *const c_char, needle: u8) -> bool {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn abs(value: c_int) -> c_int {
+    value.wrapping_abs()
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn log(value: c_double) -> c_double {
     libm::log(value)
 }
@@ -6500,13 +6505,24 @@ pub unsafe extern "C" fn fchown(fd: c_int, _owner: u32, _group: u32) -> c_int {
     0
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn futimens(fd: c_int, _times: *const c_void) -> c_int {
+fn reject_fd_timestamp_update(fd: c_int) -> c_int {
     let valid = (0..=2).contains(&fd)
         || OPEN_FILES.lock().get(fd).is_some()
         || SOCKET_FDS.lock().get(fd).is_some();
     TRUEOS_ERRNO.store(if valid { TRUEOS_ENOSYS } else { TRUEOS_EBADF }, Ordering::Relaxed);
     -1
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn futimens(fd: c_int, _times: *const c_void) -> c_int {
+    reject_fd_timestamp_update(fd)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn futimes(fd: c_int, _times: *const c_void) -> c_int {
+    // timeval and timespec have different units. Neither can set TRUEOSFS
+    // logical revisions as POSIX wall-clock timestamps; preserve that error.
+    reject_fd_timestamp_update(fd)
 }
 
 #[unsafe(no_mangle)]

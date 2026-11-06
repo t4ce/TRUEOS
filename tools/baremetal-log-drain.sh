@@ -384,15 +384,21 @@ start() {
 
 marker_present() {
     local log_path="$1"
-    local line
-    local lines=0
-
-    while IFS= read -r line; do
-        [[ "$line" == *"$boot_marker"* ]] && return 0
-        lines=$((lines + 1))
-        ((lines >= 512)) && break
-    done < "$log_path"
-    return 1
+    # Retry headers can precede the next boot by many thousands of lines.
+    # Scan this run's complete file; a 512-line prefix gave false timeouts.
+    python3 - "$log_path" "$boot_marker" <<'PY'
+from pathlib import Path
+import sys
+needle = sys.argv[2].encode()
+tail = b''
+with Path(sys.argv[1]).open('rb') as stream:
+    while chunk := stream.read(65536):
+        chunk = tail + chunk
+        if needle in chunk:
+            raise SystemExit(0)
+        tail = chunk[-max(0, len(needle) - 1):] if len(needle) > 1 else b''
+raise SystemExit(1)
+PY
 }
 
 wait_for_marker() {
