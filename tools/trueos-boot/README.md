@@ -52,9 +52,9 @@ cargo rigreal  # release kernel
 ```
 
 `cargo rigreal --native-only` builds the audited core/alloc subset: Commander,
-Img, OS, Backup, Termdir, Paper and Edit. Each invocation creates a fresh
+Img, OS, Backup, Termdir, Paper, Edit and Apps. Each invocation creates a fresh
 `tgt/native-only.XXXXXX/` directory containing separate builtin and kernel
-targets, a seven-app AppDB, and a kernel link map. No prior Cargo object or AppDB
+targets, an eight-app AppDB, and a kernel link map. No prior Cargo object or AppDB
 is reused in these targets. The normal configuration continues to select all
 apps in `TRUEOS-Buildins/buildins.json`.
 
@@ -68,7 +68,7 @@ removed, including their reexported C allocation aliases. Legacy Blueprint
 imports fail prebind and cannot fall through to loader stubs. Freestanding
 memory, string and math helpers remain available.
 
-Use `--native-only` for the current runnable image. The other five configured
+Use `--native-only` for the current runnable image. The other four configured
 builtins remain in the ownership manifest, but their compatibility imports
 deliberately fail the build's ABI check until they are ported.
 

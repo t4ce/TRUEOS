@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Compile actual feature policy and catalog admission for host and TRUEOS cfg.
+"""Compile actual plugin availability and catalog admission for host and TRUEOS.
 
 The full Codex workspace can require unrelated platform dependencies. This harness
 uses the production enums, registry, policy methods, config-map application, and
 catalog scheduling gate unchanged. Fixtures replace only legacy notices/aliases
 (not used here), tracing, authentication, and the scheduling boundary.
+
+The startup source guard complements the app-server integration test
+app_server_startup_downloads_installed_plugin_bundles_without_discovery; it does
+not substitute for executing installed plugins on TRUEOS.
 """
 
 import json
@@ -33,6 +37,22 @@ def main():
     source = (CODEX / "codex-rs/features/src/lib.rs").read_text()
     tests = (CODEX / "codex-rs/features/src/tests.rs").read_text()
     manager = (CODEX / "codex-rs/core-plugins/src/manager.rs").read_text()
+    startup = item(manager, r"^    pub fn maybe_start_plugin_startup_tasks_for_config\b")
+    # Startup retains runtime refreshes but must not pull the discovery catalog.
+    # Listing explicitly invokes discovery and uses the same admission gate below.
+    for forbidden in [
+        "maybe_start_remote_catalog_cache_refresh",
+        "maybe_start_remote_plugin_caches_refresh",
+        "recommended_plugins_mode_for_config",
+        "featured_plugin_ids_for_config",
+        "fetch_and_cache_remote_plugin_catalog",
+    ]:
+        assert forbidden not in startup, f"startup eagerly calls {forbidden}"
+    for required in [
+        "maybe_start_remote_installed_plugins_cache_refresh_with_notify",
+        "maybe_start_remote_installed_plugin_bundle_sync",
+    ]:
+        assert required in startup, f"startup lost installed-plugin refresh {required}"
     registry_start = source.index("pub const FEATURES:")
     registry_end = source.index("\n];", registry_start) + 3
     declarations = [
@@ -67,12 +87,10 @@ mod legacy { pub fn feature_for_key(_: &str) -> Option<super::Feature> { None } 
 struct PluginsConfigInput { plugins_enabled: bool }
 struct CodexAuth;
 #[derive(PartialEq, Eq, PartialOrd, Ord)] enum RemotePluginScope { Global }
-enum RemoteCatalogCacheRefreshMode { Force }
 struct RemoteCatalogCacheRefreshRequest {
     service_config: (), auth: Option<CodexAuth>,
     scopes: BTreeSet<RemotePluginScope>,
 }
-fn remote_plugin_service_config(_: &PluginsConfigInput) {}
 #[derive(Default)] struct PluginManager { scheduled: AtomicUsize }
 impl PluginManager {
     fn remote_plugin_service_config(&self, _: &PluginsConfigInput) {}
@@ -82,31 +100,46 @@ impl PluginManager {
 """
     + item(manager, r"^    fn maybe_start_remote_catalog_cache_refresh\b") + "}"]
     for name in [
-        "plugin_features_respect_the_platform_policy",
-        "plugin_platform_policy_applies_to_config_toggles",
-        "plugin_platform_policy_also_filters_imported_feature_sets",
-        "plugin_platform_policy_preserves_apps_and_other_features",
+        "plugin_features_support_explicit_toggles_on_all_targets",
+        "plugin_features_support_config_toggles_on_all_targets",
+        "plugin_features_preserve_imported_feature_sets",
+        "plugin_recommendations_keep_their_feature_dependencies",
     ]:
         declarations += ["#[test]", item(tests, rf"^fn {name}\b")]
     declarations += ["""
 #[test]
 fn catalog_refresh_cannot_be_admitted_when_plugins_are_disabled() {
-    let mut features = Features::with_defaults();
-    features.apply_map(&BTreeMap::from([("plugins".into(), true)]));
+    let manager = Arc::new(PluginManager::default());
+    manager.maybe_start_remote_catalog_cache_refresh(
+        &PluginsConfigInput { plugins_enabled: false },
+        Some(CodexAuth), BTreeSet::from([RemotePluginScope::Global]),
+    );
+    assert_eq!(manager.scheduled.load(Ordering::Relaxed), 0);
+}
+#[test]
+fn explicit_catalog_refresh_is_available_on_all_targets() {
+    let features = Features::with_defaults();
     let manager = Arc::new(PluginManager::default());
     manager.maybe_start_remote_catalog_cache_refresh(
         &PluginsConfigInput { plugins_enabled: features.enabled(Feature::Plugins) },
         Some(CodexAuth), BTreeSet::from([RemotePluginScope::Global]),
     );
-    assert_eq!(manager.scheduled.load(Ordering::Relaxed),
-        if cfg!(target_os = "trueos") { 0 } else { 1 });
+    assert_eq!(manager.scheduled.load(Ordering::Relaxed), 1);
 }
 #[test]
-fn plugin_defaults_respect_the_platform_policy() {
+fn catalog_refresh_requires_explicit_scopes() {
+    let manager = Arc::new(PluginManager::default());
+    manager.maybe_start_remote_catalog_cache_refresh(
+        &PluginsConfigInput { plugins_enabled: true }, Some(CodexAuth), BTreeSet::new(),
+    );
+    assert_eq!(manager.scheduled.load(Ordering::Relaxed), 0);
+}
+#[test]
+fn plugin_defaults_match_upstream_on_all_targets() {
     let features = Features::with_defaults();
     for feature in [Feature::Plugins, Feature::RemotePlugin, Feature::PluginSharing] {
-        assert_eq!(feature.default_enabled(), !cfg!(target_os = "trueos"));
-        assert_eq!(features.enabled(feature), !cfg!(target_os = "trueos"));
+        assert!(feature.default_enabled());
+        assert!(features.enabled(feature));
     }
 }
 """
@@ -121,10 +154,11 @@ fn plugin_defaults_respect_the_platform_policy() {
             if trueos:
                 command += ["--cfg", 'target_os="trueos"', "-Aexplicit_builtin_cfgs_in_flags"]
             subprocess.run(command, check=True)
-            output = subprocess.check_output([str(binary)], text=True)
-            assert "6 passed; 0 failed" in output, output
-            results.append({"platform": binary.name, "passed": 6})
-    print(json.dumps({"status": "PASS", "results": results}))
+            result = subprocess.run([str(binary)], check=False, capture_output=True, text=True)
+            assert result.returncode == 0, result.stdout + result.stderr
+            assert "8 passed; 0 failed" in result.stdout, result.stdout
+            results.append({"platform": binary.name, "passed": 8})
+    print(json.dumps({"status": "PASS", "startup_discovery_source_guard": "PASS", "results": results}))
 
 
 if __name__ == "__main__":

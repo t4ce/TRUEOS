@@ -329,6 +329,8 @@ pub const OP_BP_NET_OPEN: u32 = 0x20;
 pub const OP_BP_NET_SUBMIT: u32 = 0x21;
 pub const OP_BP_NET_POLL: u32 = 0x22;
 pub const OP_BP_FETCH_BYTES_START: u32 = 0x23;
+// arg0=total timeout milliseconds, arg1=decoded body byte cap, payload=UTF-8 URL.
+pub const OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1: u32 = 0x24d;
 pub const OP_BP_FETCH_BYTES_RESULT_LEN: u32 = 0x24;
 pub const OP_BP_FETCH_BYTES_READ: u32 = 0x25;
 pub const OP_BP_FETCH_BYTES_FINAL_URL_V1: u32 = 0x246;

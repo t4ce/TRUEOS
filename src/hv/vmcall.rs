@@ -326,6 +326,7 @@ pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
 pub const OP_BP_NET_SUBMIT: u32 = 0x21; // request payload is wire Command
 pub const OP_BP_NET_POLL: u32 = 0x22; // response payload is optional wire Event
 pub const OP_BP_FETCH_BYTES_START: u32 = 0x23; // flags: bit0 Happy Eyeballs, bit1 URL\0Referer; response is op id
+pub const OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1: u32 = trueos_vm::vmcall::OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1;
 pub const OP_BP_FETCH_BYTES_RESULT_LEN: u32 = 0x24; // arg0 is op id, response is signed len/rc
 pub const OP_BP_FETCH_BYTES_READ: u32 = 0x25; // arg0 op id,arg1 offset:cap,response payload bytes
 pub const OP_BP_FETCH_BYTES_FINAL_URL_V1: u32 = 0x246; // arg0 op id,arg1 zero=>len or offset:cap=>non-consuming URL bytes
@@ -4155,6 +4156,37 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
             DispatchOutcome::Resume
         }
+        OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1 => {
+            let n = req_len as usize;
+            if n == 0 || n > PAYLOAD_CAP {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let payload = unsafe { &(&(*p).payload)[..n] };
+            let Some((url, timeout_ms, max_bytes)) =
+                crate::r::net::https::bounded_fetch_request(payload, arg0, arg1)
+            else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Some(generation) = crate::hv::vm_run_generation(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let op_id = crate::r::net::https::cabi_net_fetch_bytes_start_bounded_host(
+                url, u64::from(timeout_ms), max_bytes as u64, Some((vm_id, generation)),
+            );
+            if op_id == 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, u64::from(op_id), 0);
+            }
+            DispatchOutcome::Resume
+        }
         OP_BP_FETCH_POST_JSON_BYTES_START => {
             let n = req_len as usize;
             if arg0 > u64::from(u32::MAX) || n == 0 || n > PAYLOAD_CAP {
@@ -4188,7 +4220,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_FETCH_BYTES_RESULT_LEN => {
-            if arg0 > u64::from(u32::MAX) {
+            if arg0 > u64::from(u32::MAX)
+                || !crate::r::net::https::bounded_fetch_accessible_to_vm(arg0 as u32, vm_id)
+            {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             }
@@ -4197,7 +4231,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_FETCH_BYTES_READ => {
-            if arg0 > u64::from(u32::MAX) {
+            if arg0 > u64::from(u32::MAX)
+                || !crate::r::net::https::bounded_fetch_accessible_to_vm(arg0 as u32, vm_id)
+            {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             }
@@ -4225,7 +4261,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_FETCH_BYTES_DISCARD => {
-            if arg0 > u64::from(u32::MAX) {
+            if arg0 > u64::from(u32::MAX)
+                || !crate::r::net::https::bounded_fetch_accessible_to_vm(arg0 as u32, vm_id)
+            {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             }
@@ -4234,7 +4272,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_FETCH_BYTES_FINAL_URL_V1 => {
-            if arg0 > u64::from(u32::MAX) {
+            if arg0 > u64::from(u32::MAX)
+                || !crate::r::net::https::bounded_fetch_accessible_to_vm(arg0 as u32, vm_id)
+            {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             }

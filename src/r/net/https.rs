@@ -52,6 +52,188 @@ static CABI_NET_FETCH_BYTES_RESULTS: Mutex<BTreeMap<u32, CabiNetFetchBytesResult
 static CABI_JSON_POST_CANCELLATIONS: Mutex<BTreeMap<u32, Arc<JsonPostCancellation>>> =
     Mutex::new(BTreeMap::new());
 
+// The versioned package-fetch entry keeps its budgets independent of the
+// browser/asset defaults. Limits cross the VM boundary as integers, never pointers.
+const BOUNDED_FETCH_TIMEOUT_MAX_MS: u64 = 90_000;
+const BOUNDED_FETCH_BODY_MAX_BYTES: u64 = 128 * 1024 * 1024;
+
+pub(crate) fn bounded_fetch_options(timeout_ms: u64, max_bytes: u64) -> Option<(u32, usize)> {
+    if !(1..=BOUNDED_FETCH_TIMEOUT_MAX_MS).contains(&timeout_ms)
+        || !(1..=BOUNDED_FETCH_BODY_MAX_BYTES).contains(&max_bytes)
+    {
+        return None;
+    }
+    Some((u32::try_from(timeout_ms).ok()?, usize::try_from(max_bytes).ok()?))
+}
+
+pub(crate) fn bounded_fetch_request(
+    payload: &[u8], timeout_ms: u64, max_bytes: u64,
+) -> Option<(&str, u32, usize)> {
+    let (timeout_ms, max_bytes) = bounded_fetch_options(timeout_ms, max_bytes)?;
+    if payload.is_empty() || payload.len() > trueos_vm::vmcall::PAYLOAD_CAP
+        || payload.iter().any(|byte| byte.is_ascii_control())
+    {
+        return None;
+    }
+    let url = core::str::from_utf8(payload).ok()?;
+    parse_fetch_url(url).ok()?;
+    Some((url, timeout_ms, max_bytes))
+}
+
+fn bounded_fetch_error_code(error: &str) -> i32 {
+    if error == "timeout" || error == "timed out" || error.starts_with("timeout ") {
+        NET_ERR_TIMEOUT
+    } else if error.starts_with("too large response framing") {
+        NET_ERR_RESPONSE_FRAMING
+    } else if error.starts_with("too large") {
+        FS_ERR_TOO_LARGE
+    } else if error.contains("allocation failed") {
+        -5
+    } else if error == "cancelled" {
+        FS_ERR_BAD_PARAM
+    } else {
+        fetch_error_to_code(error)
+    }
+}
+
+/// Signal timeout through the request's cancellation path, then keep polling
+/// until its TLS-owner fence retires. Dropping the request would skip that fence.
+async fn await_bounded_fetch<T>(
+    future: impl Future<Output = Result<T, String>>,
+    cancellation: &JsonPostCancellation,
+    timeout_ms: u32,
+) -> Result<T, i32> {
+    let mut future = core::pin::pin!(future);
+    let mut timer = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(u64::from(timeout_ms))));
+    let mut expired = false;
+    core::future::poll_fn(|cx| {
+        if !expired && timer.as_mut().poll(cx).is_ready() {
+            expired = true;
+            cancellation.cancel();
+        }
+        match future.as_mut().poll(cx) {
+            Poll::Ready(_) if expired => Poll::Ready(Err(NET_ERR_TIMEOUT)),
+            Poll::Ready(result) => {
+                // A ready request can have performed several immediately
+                // ready steps in one poll. Its final body still shares the
+                // same absolute deadline as connect and redirect work.
+                if timer.as_mut().poll(cx).is_ready() {
+                    cancellation.cancel();
+                    Poll::Ready(Err(NET_ERR_TIMEOUT))
+                } else {
+                    Poll::Ready(result.map_err(|error| bounded_fetch_error_code(&error)))
+                }
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }).await
+}
+
+async fn fetch_bounded_response(
+    url: String, timeout_ms: u32, max_bytes: usize, cancellation: &JsonPostCancellation,
+) -> Result<FetchedBytes, String> {
+    let request = HttpsRequest {
+        method: "GET", headers_only: false, content_type: None, headers: Vec::new(), body: &[],
+    };
+    let deadline = Instant::now() + EmbassyDuration::from_millis(u64::from(timeout_ms));
+    let mut current = url;
+    let mut seen = alloc::collections::BTreeSet::new();
+    for hop in 0..=10 {
+        if cancellation.is_cancelled() { return Err(String::from(HTTPS_REQUEST_CANCELLED)); }
+        if !seen.insert(current.clone()) { return Err(String::from("redirect loop")); }
+        let target = parse_fetch_url(&current).map_err(String::from)?;
+        let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
+        if remaining == 0 { return Err(String::from("timeout")); }
+        if target.scheme == "http" {
+            // Pool wait cancellation removes queued/ready work or abandons an
+            // active completion. Its worker retains its own finite I/O timeout.
+            return await_json_post_or_cancel(
+                crate::surfer::html_shack::fetch_bytes_via_pool(current, remaining, max_bytes),
+                cancellation,
+            ).await.map_err(|_| String::from(HTTPS_REQUEST_CANCELLED))?
+                .map(|response| FetchedBytes { final_url: response.url, body: response.bytes });
+        }
+        let response = request_https_response_once_cancellable(
+            &target, &request, remaining.min(u64::from(u32::MAX)) as u32,
+            max_bytes, Some(cancellation),
+        ).await?;
+        if cancellation.is_cancelled() { return Err(String::from(HTTPS_REQUEST_CANCELLED)); }
+        if matches!(response.status, 301 | 302 | 303 | 307 | 308) {
+            if hop == 10 { return Err(String::from("too many redirects")); }
+            let location = response.location.ok_or_else(|| String::from("redirect missing location"))?;
+            let next = resolve_fetch_redirect(&target, &location)?;
+            if parse_fetch_url(&next).map_err(String::from)?.scheme != "https" {
+                return Err(String::from("https redirect to insecure scheme"));
+            }
+            current = next;
+        } else {
+            return success_body(response).map(|body| FetchedBytes { final_url: current, body });
+        }
+    }
+    Err(String::from("too many redirects"))
+}
+
+pub(crate) fn cabi_net_fetch_bytes_start_bounded_host(
+    url: &str, timeout_ms: u64, max_bytes: u64, owner: Option<(u8, u64)>,
+) -> u32 {
+    let Some((_, timeout_ms, max_bytes)) = bounded_fetch_request(url.as_bytes(), timeout_ms, max_bytes) else {
+        return 0;
+    };
+    let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
+    CABI_NET_FETCH_BYTES_RESULTS.lock().insert(op_id, CabiNetFetchBytesResult { owner, ..Default::default() });
+    let cancellation = register_json_post_cancellation(op_id);
+    let url = String::from(url);
+    crate::wait::spawn_local_detached(async move {
+        let result = await_bounded_fetch(
+            fetch_bounded_response(url, timeout_ms, max_bytes, cancellation.as_ref()),
+            cancellation.as_ref(), timeout_ms,
+        ).await;
+        finish_json_post_operation(op_id);
+        if owner.is_some_and(|(vm, generation)| crate::hv::vm_run_generation(vm) != Some(generation)) {
+            let _ = cabi_net_fetch_bytes_discard_host(op_id);
+            return;
+        }
+        // Discard removes the slot. A late task may retire its transport, but
+        // can never recreate a consumed result or replace a newer VM's result.
+        if let Some(slot) = CABI_NET_FETCH_BYTES_RESULTS.lock().get_mut(&op_id) {
+            if slot.owner != owner { return; }
+            match result {
+                Ok(response) => {
+                    slot.body = response.body;
+                    slot.final_url = Some(response.final_url);
+                    slot.rc = Some(0);
+                }
+                Err(code) => slot.rc = Some(code),
+            }
+        }
+    });
+    op_id
+}
+
+/// Finite native GET with caller-selected total deadline and decoded-body cap.
+/// The versioned entry accepts at most 90 seconds and 128 MiB.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_net_fetch_bytes_start_with_options_v1(
+    url_ptr: *const u8, url_len: usize, timeout_ms: u32, max_bytes: u64,
+) -> u32 {
+    if bounded_fetch_options(u64::from(timeout_ms), max_bytes).is_none()
+        || url_len == 0 || url_len > trueos_vm::vmcall::PAYLOAD_CAP
+    {
+        return 0;
+    }
+    let Some(url) = (unsafe { abi_str(url_ptr, url_len) }) else { return 0; };
+    if bounded_fetch_request(url.as_bytes(), u64::from(timeout_ms), max_bytes).is_none() { return 0; }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, value) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1,
+            u64::from(timeout_ms), max_bytes, url.as_bytes(), &mut [],
+        );
+        guest_vmcall_op_id(status, value)
+    } else {
+        cabi_net_fetch_bytes_start_bounded_host(url, u64::from(timeout_ms), max_bytes, None)
+    }
+}
+
 struct JsonPostCancellation {
     cancelled: AtomicBool,
     waker: AtomicWaker,
@@ -143,6 +325,8 @@ fn finish_json_post_operation(op_id: u32) {
 
 #[derive(Default)]
 struct CabiNetFetchBytesResult {
+    // Only versioned bounded fetches are tied to a native VM incarnation.
+    owner: Option<(u8, u64)>,
     rc: Option<i32>,
     body: Vec<u8>,
     final_url: Option<String>,
@@ -830,7 +1014,9 @@ fn header_value_has_token(value: &[u8], token: &[u8]) -> bool {
 }
 
 fn decode_chunked(body: &[u8], max_bytes: usize) -> Result<Option<Vec<u8>>, String> {
-    let mut out = Vec::new();
+    // Scan framing before allocating. Incomplete TLS batches must not copy the
+    // entire decoded prefix repeatedly while a large package is arriving.
+    let mut decoded_len = 0usize;
     let mut offset = 0usize;
     loop {
         let Some(line_rel) = body[offset..].windows(2).position(|w| w == b"\r\n") else {
@@ -839,33 +1025,49 @@ fn decode_chunked(body: &[u8], max_bytes: usize) -> Result<Option<Vec<u8>>, Stri
         let line = &body[offset..offset + line_rel];
         let text = core::str::from_utf8(line.split(|b| *b == b';').next().unwrap_or(&[]))
             .map_err(|_| String::from("bad chunk size"))?;
-        let size =
-            usize::from_str_radix(text.trim(), 16).map_err(|_| String::from("bad chunk size"))?;
+        let size = usize::from_str_radix(text.trim(), 16).map_err(|_| String::from("bad chunk size"))?;
         offset += line_rel + 2;
         if size == 0 {
-            // A zero chunk is followed by trailers and their final empty line.
             let tail = &body[offset..];
-            return Ok(
-                (tail.starts_with(b"\r\n") || tail.windows(4).any(|w| w == b"\r\n\r\n"))
-                    .then_some(out),
-            );
+            if !tail.starts_with(b"\r\n") && !tail.windows(4).any(|w| w == b"\r\n\r\n") {
+                return Ok(None);
+            }
+            break;
         }
-        if size > max_bytes.saturating_sub(out.len()) {
+        if size > max_bytes.saturating_sub(decoded_len) {
             return Err(String::from("too large chunked body"));
         }
-        let end = offset
-            .checked_add(size)
-            .and_then(|end| end.checked_add(2))
+        let end = offset.checked_add(size).and_then(|end| end.checked_add(2))
             .ok_or_else(|| String::from("bad chunk size"))?;
-        if end > body.len() {
-            return Ok(None);
-        }
-        if &body[end - 2..end] != b"\r\n" {
-            return Err(String::from("bad chunk delimiter"));
-        }
-        out.extend_from_slice(&body[offset..end - 2]);
+        if end > body.len() { return Ok(None); }
+        if &body[end - 2..end] != b"\r\n" { return Err(String::from("bad chunk delimiter")); }
+        decoded_len += size;
         offset = end;
     }
+
+    let mut out = Vec::new();
+    out.try_reserve_exact(decoded_len).map_err(|_| String::from("response allocation failed"))?;
+    offset = 0;
+    loop {
+        let line_rel = body[offset..].windows(2).position(|w| w == b"\r\n")
+            .ok_or_else(|| String::from("bad chunk size"))?;
+        let line = &body[offset..offset + line_rel];
+        let text = core::str::from_utf8(line.split(|b| *b == b';').next().unwrap_or(&[]))
+            .map_err(|_| String::from("bad chunk size"))?;
+        let size = usize::from_str_radix(text.trim(), 16).map_err(|_| String::from("bad chunk size"))?;
+        offset += line_rel + 2;
+        if size == 0 { return Ok(Some(out)); }
+        out.extend_from_slice(&body[offset..offset + size]);
+        offset += size + 2;
+    }
+}
+
+/// Headers plus a separate finite framing allowance. This is not an increase
+/// to the decoded-body cap: very fragmented transfer encodings can exceed the
+/// transport budget even when their decoded bytes would fit.
+fn response_transport_limit(max_bytes: usize) -> usize {
+    let framing = (max_bytes / 128).min(1024 * 1024);
+    max_bytes.saturating_add(HTTPS_RESPONSE_OVERHEAD_MAX).saturating_add(framing)
 }
 
 fn final_response_bytes(mut response: &[u8]) -> Result<&[u8], String> {
@@ -961,6 +1163,9 @@ fn complete_http_response(
         if body.len() < len {
             return Ok(None);
         }
+        let mut decoded = Vec::new();
+        decoded.try_reserve_exact(len).map_err(|_| String::from("response allocation failed"))?;
+        decoded.extend_from_slice(&body[..len]);
         return Ok(Some(HttpsJsonResponse {
             status,
             location,
@@ -969,7 +1174,7 @@ fn complete_http_response(
             content_disposition,
             retry_after,
             date,
-            body: body[..len].to_vec(),
+            body: decoded,
         }));
     }
 
@@ -1103,6 +1308,9 @@ fn http_response_from_bytes(
                 len
             ));
         }
+        let mut decoded = Vec::new();
+        decoded.try_reserve_exact(len).map_err(|_| String::from("response allocation failed"))?;
+        decoded.extend_from_slice(&body[..len]);
         return Ok(HttpsJsonResponse {
             status,
             location,
@@ -1111,13 +1319,16 @@ fn http_response_from_bytes(
             content_disposition,
             retry_after,
             date,
-            body: body[..len].to_vec(),
+            body: decoded,
         });
     }
 
     if body.len() > max_bytes {
         return Err(String::from("too large"));
     }
+    let mut decoded = Vec::new();
+    decoded.try_reserve_exact(body.len()).map_err(|_| String::from("response allocation failed"))?;
+    decoded.extend_from_slice(body);
     Ok(HttpsJsonResponse {
         status,
         location,
@@ -1126,7 +1337,7 @@ fn http_response_from_bytes(
         content_disposition,
         retry_after,
         date,
-        body: body.to_vec(),
+        body: decoded,
     })
 }
 
@@ -1653,16 +1864,17 @@ async fn request_https_response_preconnected(
                         continue;
                     }
                     if response.len().saturating_add(data.len())
-                        > max_bytes.saturating_add(HTTPS_RESPONSE_OVERHEAD_MAX)
+                        > response_transport_limit(max_bytes)
                     {
                         let _ = cmds.push(TlsCommand::Close { handle });
                         return Err(format!(
-                            "too large received={} next={} max={}",
+                            "too large response framing received={} next={} max={}",
                             response.len(),
                             data.len(),
                             max_bytes
                         ));
                     }
+                    response.try_reserve(data.len()).map_err(|_| String::from("response allocation failed"))?;
                     response.extend_from_slice(data.as_slice());
                     match complete_http_response(response.as_slice(), max_bytes) {
                         Ok(Some(parsed)) => {
@@ -2498,6 +2710,24 @@ pub(crate) fn cabi_net_fetch_post_json_bytes_start_host(
     op_id
 }
 
+/// Untagged legacy operations keep their existing access contract.
+pub(crate) fn bounded_fetch_accessible_to_vm(op_id: u32, vm_id: u8) -> bool {
+    let owner = CABI_NET_FETCH_BYTES_RESULTS.lock().get(&op_id).and_then(|entry| entry.owner);
+    owner.is_none_or(|owner| {
+        crate::hv::vm_run_generation(vm_id).map(|generation| (vm_id, generation)) == Some(owner)
+    })
+}
+
+/// Teardown (including a pause that releases network resources) retires the
+/// current run's bodies and signals in-flight requests. Resuming retries them.
+pub(crate) fn discard_bounded_fetches_for_vm(vm_id: u8, generation: u64) -> usize {
+    let ids: Vec<u32> = CABI_NET_FETCH_BYTES_RESULTS.lock().iter()
+        .filter_map(|(&id, result)| (result.owner == Some((vm_id, generation))).then_some(id))
+        .collect();
+    for &id in &ids { let _ = cabi_net_fetch_bytes_discard_host(id); }
+    ids.len()
+}
+
 pub(crate) fn cabi_net_fetch_bytes_result_len_host(op_id: u32) -> isize {
     match CABI_NET_FETCH_BYTES_RESULTS.lock().get(&op_id) {
         Some(entry) => match entry.rc {
@@ -3085,6 +3315,7 @@ mod tests {
                 rc: Some(0),
                 body: body.clone(),
                 final_url: None,
+                ..Default::default()
             },
         );
 

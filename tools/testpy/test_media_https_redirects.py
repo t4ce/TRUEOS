@@ -44,7 +44,7 @@ VM_CONSTANTS = "\n".join(
     ])
 )
 VM_START = VMCALL[VMCALL.index("        OP_BP_FETCH_BYTES_START => {"):
-                  VMCALL.index("        OP_BP_FETCH_POST_JSON_BYTES_START => {")]
+                  VMCALL.index("        OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1 => {")]
 VM_DISPATCH = r'''
 fn dispatch_start(vm_id:u8,arg0:u64,req_len:u32)->DispatchOutcome {
     let seq=7;

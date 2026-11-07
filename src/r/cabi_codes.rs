@@ -17,6 +17,8 @@ pub const BLUEPRINT_ASYNC_FS_MAX_PATH: usize = 1024;
 pub const NET_ERR_BAD_URL: i32 = -10;
 pub const NET_ERR_TIMEOUT: i32 = -11;
 pub const NET_ERR_HTTP: i32 = -12;
+/// Encoded HTTP framing exceeds the separate bounded transport allowance.
+pub const NET_ERR_RESPONSE_FRAMING: i32 = -115;
 pub const NET_ERR_TLS: i32 = -13;
 
 pub const NET_ERR_TIMEOUT_DNS: i32 = -111;
@@ -43,6 +45,7 @@ pub fn cabi_rc_name(rc: i32) -> &'static [u8] {
         NET_ERR_BAD_URL => b"NET_ERR_BAD_URL",
         NET_ERR_TIMEOUT => b"NET_ERR_TIMEOUT",
         NET_ERR_HTTP => b"NET_ERR_HTTP",
+        NET_ERR_RESPONSE_FRAMING => b"NET_ERR_RESPONSE_FRAMING",
         NET_ERR_TLS => b"NET_ERR_TLS",
         NET_ERR_TIMEOUT_DNS => b"NET_ERR_TIMEOUT_DNS",
         NET_ERR_TIMEOUT_CONNECT => b"NET_ERR_TIMEOUT_CONNECT",

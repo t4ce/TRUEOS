@@ -33,8 +33,9 @@ pub fn fetch_bytes(url: &[u8]) -> Result<u32, i32> {
 
 /// Start a finite native GET. The deadline includes service readiness, DNS,
 /// redirects and body reception; the decoded body is bounded before publishing.
+/// Accepts deadlines through 90 seconds and decoded bodies through 128 MiB.
 pub fn fetch_bytes_with_options(url: &[u8], timeout_ms: u32, max_bytes: usize) -> Result<u32, i32> {
-    if timeout_ms == 0 || timeout_ms > 90_000 || max_bytes == 0 || max_bytes > 512 * 1024 * 1024 {
+    if timeout_ms == 0 || timeout_ms > 90_000 || max_bytes == 0 || max_bytes > 128 * 1024 * 1024 {
         return Err(-4);
     }
     let id = unsafe {
@@ -191,7 +192,7 @@ pub fn fetch_bytes_read_bounded(op_id: u32, max_bytes: usize) -> Result<Vec<u8>,
         fn drop(&mut self) { let _ = fetch_bytes_discard(self.0); }
     }
     let _operation = Operation(op_id);
-    if op_id == 0 || max_bytes == 0 || max_bytes > 512 * 1024 * 1024 { return Err(-4); }
+    if op_id == 0 || max_bytes == 0 || max_bytes > 128 * 1024 * 1024 { return Err(-4); }
     let len = fetch_bytes_result_len(op_id)?;
     if len > max_bytes { return Err(-7); }
     let mut bytes = Vec::new();
@@ -203,6 +204,7 @@ pub fn fetch_bytes_read_bounded(op_id: u32, max_bytes: usize) -> Result<Vec<u8>,
     Ok(bytes)
 }
 
+#[inline]
 pub fn fetch_bytes_read(op_id: u32) -> Result<Vec<u8>, i32> {
     let len = fetch_bytes_result_len(op_id)?;
     let mut bytes = vec![0u8; len];

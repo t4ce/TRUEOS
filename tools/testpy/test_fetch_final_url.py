@@ -50,6 +50,7 @@ def production():
                         ["FS_ERR_BAD_PARAM", "FS_ERR_TOO_LARGE", "FS_ERR_NOT_FOUND", "FS_ERR_IO"])]
     selected.append("#[derive(Default)]\n" + item(https, "struct CabiNetFetchBytesResult {"))
     for signature in [
+        "pub(crate) fn bounded_fetch_accessible_to_vm(",
         "fn pack_fetch_bytes_vm_read(",
         "pub(crate) fn decode_fetch_bytes_vm_read(",
         "pub(crate) fn cabi_net_fetch_bytes_result_len_host(",
@@ -106,6 +107,7 @@ fn write_response(_:u8,_:u32,status:u32,value:u64,length:u32) {
     VM_RESPONSE.with(|response|response.set((status,value,length)));
 }
 mod hv {
+    pub fn vm_run_generation(_:u8)->Option<u64> {Some(7)}
     pub fn current_hull_guest_context_vm_id()->Option<u8> {
         crate::GUEST.with(|guest|guest.get().then_some(1))
     }
@@ -113,7 +115,7 @@ mod hv {
 mod r {pub mod net {pub mod https {
     pub(crate) use crate::{cabi_net_fetch_bytes_result_len_host,
         cabi_net_fetch_bytes_read_chunk_host,cabi_net_fetch_bytes_final_url_read_chunk_host,
-        decode_fetch_bytes_vm_read};
+        decode_fetch_bytes_vm_read,bounded_fetch_accessible_to_vm};
 }}}
 mod trueos_vm {pub mod vmcall {
     pub use crate::{PAYLOAD_CAP,STATUS_OK,OP_BP_FETCH_BYTES_RESULT_LEN,
@@ -171,6 +173,7 @@ TESTS = r'''
         CABI_NET_FETCH_BYTES_RESULTS.lock().clear();
         CABI_NET_FETCH_BYTES_RESULTS.lock().insert(ID,CabiNetFetchBytesResult {
             rc,body:body.to_vec(),final_url:url.map(String::from),
+            ..Default::default()
         });
     }
     fn final_url(op:u32)->Result<Vec<u8>,isize> {
@@ -263,6 +266,20 @@ TESTS = r'''
             copied+=want;
         }
         assert_eq!(copied,url.len());assert_eq!(vnetfs::fetch_bytes_read(ID).unwrap(),BODY);
+    }
+    #[test]fn package_sized_guest_body_crosses_old_eight_mib_limit_and_consumes_result() {
+        // Current Codex archive size, rather than a tiny artificial payload.
+        let mut body=vec![0x5a;80_561_558];
+        for offset in (0..body.len()).step_by(PAYLOAD_CAP) {body[offset]=(offset/PAYLOAD_CAP) as u8;}
+        setup(true,Some(0),Some(URL),&body);
+        assert_eq!(vnetfs::fetch_bytes_read(ID).unwrap(),body);
+        let reads=VM_CALLS.with(|calls|calls.borrow().iter().filter(|(op,_,_,_)|*op==OP_BP_FETCH_BYTES_READ).count());
+        assert_eq!(reads,body.len().div_ceil(PAYLOAD_CAP));
+        assert_eq!(reads,492);
+        assert_eq!(trueos_cabi_net_fetch_bytes_result_len(ID),-8);
+        // The bounded API's maximum also fits the unchanged u32 offset field.
+        let packed=pack_fetch_bytes_vm_read(128*1024*1024-1,1).unwrap();
+        assert_eq!(decode_fetch_bytes_vm_read(packed),Some((128*1024*1024-1,1)));
     }
     #[test]fn body_guest_reads_still_chunk_and_consume_on_the_final_chunk() {
         let body=(0..PAYLOAD_CAP+73).map(|index|(index%251) as u8).collect::<Vec<_>>();
