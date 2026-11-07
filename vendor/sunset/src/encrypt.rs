@@ -82,6 +82,10 @@ impl KeyState {
         matches!(self.enc.cipher, EncKey::NoCipher)
     }
 
+    pub(crate) fn is_recv_cleartext(&self) -> bool {
+        matches!(self.dec.cipher, DecKey::NoCipher)
+    }
+
     pub fn is_rekey_needed(&self) -> bool {
         self.rekey_blocks_in.0 > REKEY_BLOCKS_IN_LIMIT
             || self.rekey_blocks_out.0 > REKEY_BLOCKS_OUT_LIMIT

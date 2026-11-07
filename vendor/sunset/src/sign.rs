@@ -721,17 +721,14 @@ impl TryFrom<ssh_key::PrivateKey> for SignKey {
 
             #[cfg(feature = "rsa")]
             ssh_key::private::KeypairData::Rsa(k) => {
-                let primes = vec![
-                    (&k.private.p).try_into().map_err(|_| Error::BadKey)?,
-                    (&k.private.q).try_into().map_err(|_| Error::BadKey)?,
-                ];
+                let positive = |value: &ssh_key::Mpint| value.as_positive_bytes()
+                    .map(rsa::BigUint::from_bytes_be).ok_or(Error::BadKey);
                 let key = rsa::RsaPrivateKey::from_components(
-                    (&k.public.n).try_into().map_err(|_| Error::BadKey)?,
-                    (&k.public.e).try_into().map_err(|_| Error::BadKey)?,
-                    (&k.private.d).try_into().map_err(|_| Error::BadKey)?,
-                    primes,
-                )
-                .map_err(|_| Error::BadKey)?;
+                    positive(k.public().n())?, positive(k.public().e())?,
+                    positive(k.private().d())?,
+                    vec![positive(k.private().p())?, positive(k.private().q())?],
+                ).map_err(|_| Error::BadKey)?;
+                key.validate().map_err(|_| Error::BadKey)?;
                 Ok(SignKey::RSA(key))
             }
             #[cfg(feature = "ecdsa256")]
@@ -771,5 +768,42 @@ impl TryFrom<ssh_key::PrivateKey> for SignKey {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    // TODO: tests for sign()/verify() and invalid signatures
+    use super::*;
+
+    fn check_signature(key: SignKey, kind: SigType) {
+        let message = b"native SSH signature fixture".as_slice();
+        let signature = key.sign(&message).unwrap();
+        let signature: Signature<'_> = (&signature).into();
+        kind.verify(&key.pubkey(), &message, &signature).unwrap();
+        assert!(kind.verify(&key.pubkey(), &b"altered message".as_slice(), &signature).is_err());
+        let mut wire = [0u8; 512];
+        let size = sshwire::write_ssh(&mut wire, &signature).unwrap();
+        let decoded: Signature<'_> = sshwire::read_ssh(&wire[..size], None).unwrap();
+        kind.verify(&key.pubkey(), &message, &decoded).unwrap();
+    }
+
+    #[test]
+    fn ed25519_signature_roundtrip_and_message_binding() {
+        check_signature(SignKey::Ed25519(dalek::SigningKey::from_bytes(&[37; 32])), SigType::Ed25519);
+    }
+
+    #[cfg(feature = "ecdsa256")]
+    #[test]
+    fn p256_signature_roundtrip_and_message_binding() {
+        check_signature(SignKey::ECDSA256(ecdsa::SigningKey::from_slice(&[37; 32]).unwrap()), SigType::ECDSA256);
+    }
+
+    #[cfg(feature = "ecdsa384")]
+    #[test]
+    fn p384_signature_roundtrip_and_message_binding() {
+        check_signature(SignKey::ECDSA384(ecdsa::SigningKey::from_slice(&[37; 48]).unwrap()), SigType::ECDSA384);
+    }
+
+    #[cfg(feature = "ecdsa521")]
+    #[test]
+    fn p521_signature_roundtrip_and_message_binding() {
+        let mut scalar = [37; 66];
+        scalar[0] = 1;
+        check_signature(SignKey::ECDSA521(ecdsa::SigningKey::from_slice(&scalar).unwrap()), SigType::ECDSA521);
+    }
 }

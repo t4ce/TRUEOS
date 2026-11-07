@@ -408,7 +408,7 @@ impl<CS: CliServ> Conn<CS> {
         r
     }
 
-    pub(crate) fn is_first_kex(&self) -> bool {
+    fn is_first_kex(&self) -> bool {
         self.sess_id.is_none()
     }
 
@@ -661,7 +661,7 @@ impl Conn<Server> {
         let packet = self.packet(payload)?;
         if let Packet::UserauthInfoResponse(p) = packet {
             // Incoming cry policy still asks for exactly one authenticator.
-            if p.responses.len() != 1 { return Err(Error::SSHProto); }
+            if p.responses.len() != 1 { return error::SSHProto.fail(); }
             return Ok(p.responses[0]);
         }
         if let Packet::UserauthRequest(UserauthRequest {

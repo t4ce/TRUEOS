@@ -31,7 +31,11 @@ mod encrypt;
 mod ident;
 mod kex;
 mod sign;
+#[cfg(feature = "key-import")]
+mod key_import;
 mod test;
+#[cfg(all(test, feature = "alloc"))]
+mod native_protocol_tests;
 
 mod cliauth;
 mod client;

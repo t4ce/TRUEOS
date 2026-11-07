@@ -64,6 +64,23 @@ impl<CS: CliServ> core::fmt::Debug for Runner<'_, CS> {
 }
 
 impl<'a> Runner<'a, client::Client> {
+    /// Request a PTY independently of the SessionOpened guard, allowing retries
+    /// after wire-output backpressure. Call before request_shell().
+    pub fn request_pty(&mut self, channel: &ChanHandle, pty: crate::Pty) -> Result<()> {
+        let mut sender = self.traf_out.sender(&mut self.keys);
+        let channel = self.conn.channels.by_handle_mut(channel);
+        let result = channel::Req::Pty(pty).send(channel, &mut sender);
+        self.wake();
+        result
+    }
+
+    pub fn request_shell(&mut self, channel: &ChanHandle) -> Result<()> {
+        let mut sender = self.traf_out.sender(&mut self.keys);
+        let channel = self.conn.channels.by_handle_mut(channel);
+        let result = channel::Req::Shell.send(channel, &mut sender);
+        self.wake();
+        result
+    }
     /// `inbuf` and `outbuf` must be sized to fit the largest SSH packet allowed.
     pub fn new_client(
         inbuf: &'a mut [u8],
@@ -291,8 +308,8 @@ impl<'a> Runner<'a, server::Server> {
             num, want_reply: false,
             req: packets::ChannelReqType::ExitStatus(packets::ExitStatus { status: 0 }),
         })?;
-        sender.send(packets::ChannelEof { num })?;
-        sender.send(packets::ChannelClose { num })
+        self.send_channel_eof(channel)?;
+        self.close_channel(channel)
     }
 
     pub fn set_auth_methods(
@@ -322,26 +339,32 @@ impl Runner<'static, server::Server> {
 impl<'a, CS: CliServ> Runner<'a, CS> {
     /// The first encrypted key exchange has completed. Rekeying keeps this true.
     pub fn initial_kex_complete(&self) -> bool {
-        !self.conn.is_first_kex()
+        !self.keys.is_recv_cleartext()
     }
 
     /// Half-close local channel data after queued application bytes are sent.
     pub fn send_channel_eof(&mut self, channel: &ChanHandle) -> Result<()> {
         let mut sender = self.traf_out.sender(&mut self.keys);
-        self.conn.channels.send_eof(channel, &mut sender)
+        self.conn.channels.send_eof(channel, &mut sender)?;
+        self.wake();
+        Ok(())
     }
 
     /// Close a channel after the application has drained its incoming data.
     pub fn close_channel(&mut self, channel: &ChanHandle) -> Result<()> {
         let mut sender = self.traf_out.sender(&mut self.keys);
-        self.conn.channels.send_close(channel, &mut sender)
+        self.conn.channels.send_close(channel, &mut sender)?;
+        self.wake();
+        Ok(())
     }
 
     /// Queue a normal application disconnect; drain wire output before TCP close.
     pub fn disconnect(&mut self) -> Result<()> {
         self.traf_out.sender(&mut self.keys).send(packets::Disconnect {
             reason: 11, desc: "Application closed the connection".into(), lang: "",
-        })
+        })?;
+        self.wake();
+        Ok(())
     }
     pub fn new(inbuf: &'a mut [u8], outbuf: &'a mut [u8]) -> Runner<'a, CS> {
         Self::new_traf(TrafIn::new(inbuf), TrafOut::new(outbuf))
@@ -521,7 +544,7 @@ impl<'a, CS: CliServ> Runner<'a, CS> {
     pub fn output(&mut self, buf: &mut [u8]) -> usize {
         let out = self.output_buf();
         let l = out.len().min(buf.len());
-        buf.copy_from_slice(&out[..l]);
+        buf[..l].copy_from_slice(&out[..l]);
         self.consume_output(l);
         l
     }

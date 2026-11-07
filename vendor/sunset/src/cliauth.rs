@@ -300,7 +300,7 @@ impl CliAuth {
         if *pending != Some(answers.len()) { return error::BadUsage.fail(); }
         let mut responses = packets::KbiList::new();
         for answer in answers {
-            responses.push((*answer).into()).map_err(|_| Error::BadUsage)?;
+            responses.push((*answer).into()).map_err(|_| error::BadUsage.build())?;
         }
         s.send(packets::UserauthInfoResponse { responses })?;
         *pending = None;
@@ -370,4 +370,154 @@ fn req_packet_pubkey<'b>(
         service: SSH_SERVICE_CONNECTION,
         method,
     })
+}
+
+#[cfg(test)]
+mod native_client_tests {
+    use super::*;
+    use crate::encrypt::KeyState;
+    use crate::packets::{KbiList, KeyboardPrompt, UserauthInfoRequest};
+    use crate::traffic::TrafOut;
+
+    fn encrypted_keys() -> KeyState {
+        use crate::encrypt::{Cipher, Integ, KeysSend};
+        let session = SessId::from_slice(&[7; 32]).unwrap();
+        let output = kex::KexOutput::new_test(b"unit-test-only shared secret", &session);
+        let algorithms = kex::Algos::<Client> {
+            kex: kex::SharedSecret::from_name(SSH_NAME_CURVE25519).unwrap(),
+            hostsig: sign::SigType::Ed25519,
+            cipher_enc: Cipher::ChaPoly, cipher_dec: Cipher::ChaPoly,
+            integ_enc: Integ::ChaPoly, integ_dec: Integ::ChaPoly,
+            discard_next: false, send_ext_info: false, strict_kex: false,
+            _cs: core::marker::PhantomData,
+        };
+        let mut keys = KeyState::new_cleartext();
+        keys.rekey_send(KeysSend::new(&output, &session, &algorithms));
+        keys
+    }
+
+    fn challenge(count: usize) -> UserauthInfoRequest<'static> {
+        let mut prompts = KbiList::new();
+        for i in 0..count {
+            prompts.push(KeyboardPrompt { prompt: "Prompt: ".into(), echo: i % 2 == 0 }).unwrap();
+        }
+        UserauthInfoRequest { name: "MFA".into(), instruction: "Two rounds".into(), language: "".into(), prompts }
+    }
+
+    #[test]
+    fn interactive_zero_multiple_and_repeated_rounds_require_exact_answers() {
+        let mut auth = CliAuth::default();
+        let mut bytes = [0u8; 8192];
+        let mut output = TrafOut::new(&mut bytes);
+        let mut keys = encrypted_keys();
+        let mut send = output.sender(&mut keys);
+        let mut ctx = ParseContext::new();
+        let session = SessId::from_slice(&[3; 32]).unwrap();
+        let failure = packets::UserauthFailure { methods: "keyboard-interactive".try_into().unwrap(), partial: false };
+        assert!(matches!(auth.failure(&failure, &mut ctx, &mut send).unwrap(), DispatchEvent::None));
+        assert_eq!(ctx.cli_auth_type, Some(AuthType::KeyboardInteractive));
+        for count in [0, 2, 1] {
+            let request = Userauth60::InfoRequest(challenge(count));
+            assert!(matches!(auth.auth60(&request, &session, &mut ctx, &mut send).unwrap(), DispatchEvent::CliEvent(CliEventId::KeyboardInteractive)));
+            let answers = vec!["answer"; count];
+            assert!(auth.resume_interactive(&mut send, &["wrong count"; 3]).is_err());
+            auth.resume_interactive(&mut send, &answers).unwrap();
+            assert!(auth.resume_interactive(&mut send, &answers).is_err());
+        }
+        // Answering a challenge is still awaiting a server decision.
+        assert!(matches!(auth.state, AuthState::Interactive { pending: None }));
+        assert!(matches!(auth.success(), DispatchEvent::CliEvent(CliEventId::Authenticated)));
+    }
+
+    #[test]
+    fn signed_key_partial_success_advances_without_reoffering_key() {
+        let mut auth = CliAuth::default();
+        let mut bytes = [0u8; 8192];
+        let mut output = TrafOut::new(&mut bytes);
+        let mut keys = encrypted_keys();
+        let mut send = output.sender(&mut keys);
+        let mut ctx = ParseContext::new();
+        let session = SessId::from_slice(&[3; 32]).unwrap();
+        let key = SignKey::generate(KeyType::Ed25519, None).unwrap();
+        let public = key.pubkey();
+        let failure = packets::UserauthFailure { methods: "publickey,keyboard-interactive,password".try_into().unwrap(), partial: false };
+        assert!(matches!(auth.failure(&failure, &mut ctx, &mut send).unwrap(), DispatchEvent::CliEvent(CliEventId::Pubkey)));
+        let _ = auth.resume_pubkey(&mut send, Some(key.clone()), &mut ctx).unwrap();
+        let ok = Userauth60::PkOk(UserauthPkOk { algo: SSH_NAME_ED25519, key: sshwire::Blob(public) });
+        let _ = auth.auth60(&ok, &session, &mut ctx, &mut send).unwrap();
+        let partial = packets::UserauthFailure { methods: "publickey,keyboard-interactive".try_into().unwrap(), partial: true };
+        assert!(matches!(auth.failure(&partial, &mut ctx, &mut send).unwrap(), DispatchEvent::None));
+        assert!(!auth.try_pubkey);
+        assert!(matches!(auth.state, AuthState::Interactive { .. }));
+        // A failed second factor cannot fall back to an unadvertised password.
+        let failed = packets::UserauthFailure { methods: "keyboard-interactive".try_into().unwrap(), partial: false };
+        assert!(auth.failure(&failed, &mut ctx, &mut send).is_err());
+    }
+
+    #[test]
+    fn unsigned_key_cannot_be_a_completed_factor() {
+        let mut auth = CliAuth::default();
+        let mut bytes = [0u8; 8192];
+        let mut output = TrafOut::new(&mut bytes);
+        let mut keys = encrypted_keys();
+        let mut send = output.sender(&mut keys);
+        let mut ctx = ParseContext::new();
+        let _ = auth.resume_pubkey(&mut send, Some(SignKey::generate(KeyType::Ed25519, None).unwrap()), &mut ctx).unwrap();
+        let partial = packets::UserauthFailure { methods: "password".try_into().unwrap(), partial: true };
+        assert!(auth.failure(&partial, &mut ctx, &mut send).is_err());
+    }
+
+    #[test]
+    fn exhausted_keys_follow_advertised_methods_only() {
+        let mut auth = CliAuth::default();
+        let mut bytes = [0u8; 8192];
+        let mut output = TrafOut::new(&mut bytes);
+        let mut keys = encrypted_keys();
+        let mut send = output.sender(&mut keys);
+        let mut ctx = ParseContext::new();
+        let failure = packets::UserauthFailure { methods: "publickey".try_into().unwrap(), partial: false };
+        let _ = auth.failure(&failure, &mut ctx, &mut send).unwrap();
+        assert!(auth.resume_pubkey(&mut send, None, &mut ctx).is_err());
+    }
+
+    #[test]
+    fn rejected_interactive_can_fall_back_to_advertised_password() {
+        let mut auth = CliAuth::default();
+        let mut bytes = [0u8; 8192];
+        let mut output = TrafOut::new(&mut bytes);
+        let mut keys = encrypted_keys();
+        let mut send = output.sender(&mut keys);
+        let mut ctx = ParseContext::new();
+        let failure = packets::UserauthFailure { methods: "keyboard-interactive,password".try_into().unwrap(), partial: false };
+        let _ = auth.failure(&failure, &mut ctx, &mut send).unwrap();
+        assert!(matches!(auth.failure(&failure, &mut ctx, &mut send).unwrap(), DispatchEvent::CliEvent(CliEventId::Password)));
+        let _ = auth.resume_password(&mut send, Some("secret"), &mut ctx).unwrap();
+        assert_eq!(ctx.cli_auth_type, Some(AuthType::Password));
+    }
+
+    #[test]
+    fn interactive_wire_roundtrip_preserves_metadata_and_hides_answers() {
+        for count in [0, 2, 32, 64] {
+            let request = packets::Packet::Userauth60(Userauth60::InfoRequest(challenge(count)));
+            let mut bytes = [0u8; 8192];
+            let len = sshwire::write_ssh(&mut bytes, &request).unwrap();
+            let ctx = ParseContext { cli_auth_type: Some(AuthType::KeyboardInteractive), ..ParseContext::new() };
+            let packets::Packet::Userauth60(Userauth60::InfoRequest(decoded)) = sshwire::packet_from_bytes(&bytes[..len], &ctx).unwrap() else { panic!() };
+            assert_eq!(decoded.prompts.len(), count);
+            assert_eq!(decoded.instruction.to_str().unwrap(), "Two rounds");
+            for (i, prompt) in decoded.prompts.iter().enumerate() { assert_eq!(prompt.echo, i % 2 == 0); }
+        }
+        let mut responses = KbiList::new();
+        responses.push("never print this secret".into()).unwrap();
+        let response = packets::UserauthInfoResponse { responses };
+        assert!(!format!("{response:?}").contains("never print"));
+    }
+
+    #[test]
+    fn interactive_wire_rejects_forged_counts_and_trailing_bytes() {
+        let mut bytes = vec![61, 0xff, 0xff, 0xff, 0xff];
+        assert!(sshwire::packet_from_bytes(&bytes, &ParseContext::new()).is_err());
+        bytes = vec![61, 0, 0, 0, 0, 99];
+        assert!(sshwire::packet_from_bytes(&bytes, &ParseContext::new()).is_err());
+    }
 }

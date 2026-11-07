@@ -487,7 +487,8 @@ impl PubKey<'_> {
 
         // Compare canonical key data for every enabled curve, not just Ed25519.
         let presented: ssh_key::PublicKey = self.try_into()?;
-        Ok(presented == k)
+        // OpenSSH comments are labels, not part of the trusted key identity.
+        Ok(presented.key_data() == k.key_data())
     }
 
     #[cfg(feature = "openssh-key")]
@@ -513,10 +514,10 @@ impl TryFrom<&PubKey<'_>> for ssh_key::PublicKey {
 
             #[cfg(feature = "rsa")]
             PubKey::RSA(r) => {
-                let k = ssh_key::public::RsaPublicKey {
-                    n: r.key.n().try_into().map_err(|_| Error::BadKey)?,
-                    e: r.key.e().try_into().map_err(|_| Error::BadKey)?,
-                };
+                let k = ssh_key::public::RsaPublicKey::new(
+                    ssh_key::Mpint::from_positive_bytes(&r.key.e().to_bytes_be()),
+                    ssh_key::Mpint::from_positive_bytes(&r.key.n().to_bytes_be()),
+                ).map_err(|_| Error::BadKey)?;
                 Ok(k.into())
             }
 

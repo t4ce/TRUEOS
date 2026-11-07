@@ -717,6 +717,10 @@ impl SSHWireDigestUpdate for sha2::Sha256 {
     }
 }
 
+impl SSHWireDigestUpdate for sha2::Sha384 {
+    fn digest_update(&mut self, data: &[u8]) { self.update(data) }
+}
+
 impl SSHWireDigestUpdate for sha2::Sha512 {
     fn digest_update(&mut self, data: &[u8]) {
         self.update(data)

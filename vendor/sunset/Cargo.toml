@@ -53,10 +53,11 @@ ecdsa-all = ["ecdsa256", "ecdsa384", "ecdsa521"]
 embedded-io = ["dep:embedded-io"]
 larger = []
 mlkem = ["dep:ml-kem"]
-openssh-key = ["ssh-key"]
+openssh-key = ["alloc", "dep:ssh-key", "ssh-key/ecdsa"]
+key-import = ["openssh-key", "dep:base64ct", "dep:sha1", "dep:pkcs8", "dep:der", "ed25519-dalek/pkcs8", "p256?/pkcs8", "p384?/pkcs8", "p521?/pkcs8"]
 rsa = [
     "dep:rsa",
-    "ssh-key/rsa",
+    "ssh-key?/alloc",
 ]
 std = [
     "snafu/std",
@@ -183,8 +184,31 @@ features = ["rust_1_81"]
 default-features = false
 
 [dependencies.ssh-key]
-version = "0.6"
-features = ["getrandom"]
+version = "=0.7.0-rc.11"
+features = ["alloc"]
+optional = true
+default-features = false
+
+[dependencies.base64ct]
+version = "1.8"
+features = ["alloc"]
+optional = true
+default-features = false
+
+[dependencies.sha1]
+version = "0.10"
+optional = true
+default-features = false
+
+[dependencies.pkcs8]
+version = "0.10.2"
+features = ["alloc", "pem"]
+optional = true
+default-features = false
+
+[dependencies.der]
+version = "0.7.10"
+features = ["alloc", "oid"]
 optional = true
 default-features = false
 

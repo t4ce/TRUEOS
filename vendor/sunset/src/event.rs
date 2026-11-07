@@ -218,8 +218,6 @@ impl CliEventId {
         self,
         runner: &'g mut CliRunner<'a>,
     ) -> Result<CliEvent<'g, 'a>> {
-        let pk = runner.packet()?;
-
         match self {
             Self::Username => Ok(CliEvent::Username(RequestUsername { runner })),
             Self::Password => Ok(CliEvent::Password(RequestPassword { runner })),
@@ -227,7 +225,7 @@ impl CliEventId {
             Self::Pubkey => Ok(CliEvent::Pubkey(RequestPubkey { runner })),
             Self::AgentSign => Ok(CliEvent::AgentSign(RequestSign { runner })),
             Self::Hostkey => {
-                debug_assert!(matches!(pk, Some(Packet::KexDHReply(_))));
+                debug_assert!(matches!(runner.packet()?, Some(Packet::KexDHReply(_))));
                 Ok(CliEvent::Hostkey(CheckHostkey { runner }))
             }
             Self::Authenticated => Ok(CliEvent::Authenticated),
