@@ -1,0 +1,9 @@
+PuTTY-User-Key-File-3: ssh-ed25519
+Encryption: none
+Comment: trueos-independent-fixture
+Public-Lines: 2
+AAAAC3NzaC1lZDI1NTE5AAAAIKxRP1ExFWMo/CFsg7CAXd2TFby/rRSTDiIHnrwG
+0utR
+Private-Lines: 1
+AAAAIPID1Nny7Qf77f9PhYeX7sKqdlK6K6vBdDkpk6v+0aZz
+Private-MAC: ea7113e854e44ad52ff810dc578c18f8dfe58deb0cd65723803815bb64bdfdc9

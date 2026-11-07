@@ -970,7 +970,10 @@ impl<'a> Runner<'a, client::Client> {
 
         let (chan, p) =
             self.conn.channels.open(packets::ChannelOpenType::Session)?;
-        self.traf_out.send_packet(p, &mut self.keys)?;
+        if let Err(error) = self.traf_out.send_packet(p, &mut self.keys) {
+            self.conn.channels.cancel_unsent_open(chan)?;
+            return Err(error);
+        }
         self.wake();
         Ok(ChanHandle(chan))
     }

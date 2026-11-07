@@ -54,7 +54,7 @@ embedded-io = ["dep:embedded-io"]
 larger = []
 mlkem = ["dep:ml-kem"]
 openssh-key = ["alloc", "dep:ssh-key", "ssh-key/ecdsa"]
-key-import = ["openssh-key", "dep:base64ct", "dep:sha1", "dep:pkcs8", "dep:der", "ed25519-dalek/pkcs8", "p256?/pkcs8", "p384?/pkcs8", "p521?/pkcs8"]
+key-import = ["openssh-key", "dep:ssh-encoding", "dep:base64ct", "dep:sha1", "dep:pkcs8", "dep:der", "ed25519-dalek/pkcs8", "p256?/pkcs8", "p384?/pkcs8", "p521?/pkcs8"]
 rsa = [
     "dep:rsa",
     "ssh-key?/alloc",
@@ -197,6 +197,12 @@ default-features = false
 
 [dependencies.sha1]
 version = "0.10"
+optional = true
+default-features = false
+
+[dependencies.ssh-encoding]
+version = "0.2"
+features = ["alloc"]
 optional = true
 default-features = false
 

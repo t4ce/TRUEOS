@@ -244,9 +244,11 @@ impl SigType {
         sig: &packets::ECDSASig,
     ) -> Result<()>
     where
-        C: ecdsa::elliptic_curve::PrimeCurve + ecdsa::elliptic_curve::CurveArithmetic,
+        C: ecdsa::elliptic_curve::PrimeCurve
+            + ecdsa::elliptic_curve::CurveArithmetic,
         ecdsa::elliptic_curve::AffinePoint<C>: ecdsa::hazmat::VerifyPrimitive<C>,
-        ecdsa::SignatureSize<C>: ecdsa::elliptic_curve::generic_array::ArrayLength<u8>,
+        ecdsa::SignatureSize<C>:
+            ecdsa::elliptic_curve::generic_array::ArrayLength<u8>,
         D: digest::Digest + sshwire::SSHWireDigestUpdate,
     {
         // RFC5656 defined r and s as mpint, so SSH will trim leading zeros.
@@ -630,7 +632,10 @@ impl SignKey {
                     .sign_prehash_with_rng(&mut rand_core::OsRng, &h)
                     .map_err(|_| Error::BadKey)?;
                 let (r, s) = sig.split_bytes();
-                OwnedSig::ECDSA521 { r: r.as_slice().try_into().map_err(|_| Error::BadSig)?, s: s.as_slice().try_into().map_err(|_| Error::BadSig)? }
+                OwnedSig::ECDSA521 {
+                    r: r.as_slice().try_into().map_err(|_| Error::BadSig)?,
+                    s: s.as_slice().try_into().map_err(|_| Error::BadSig)?,
+                }
             }
 
             // callers should check for agent keys first
@@ -715,45 +720,71 @@ impl TryFrom<ssh_key::PrivateKey> for SignKey {
         match k.key_data() {
             ssh_key::private::KeypairData::Ed25519(k) => {
                 let key = dalek::SigningKey::from_bytes(&k.private.to_bytes());
-                if key.verifying_key().to_bytes() != k.public.0 { return Err(Error::BadKey); }
+                if key.verifying_key().to_bytes() != k.public.0 {
+                    return Err(Error::BadKey);
+                }
                 Ok(SignKey::Ed25519(key))
             }
 
             #[cfg(feature = "rsa")]
             ssh_key::private::KeypairData::Rsa(k) => {
-                let positive = |value: &ssh_key::Mpint| value.as_positive_bytes()
-                    .map(rsa::BigUint::from_bytes_be).ok_or(Error::BadKey);
+                let positive = |value: &ssh_key::Mpint| {
+                    value
+                        .as_positive_bytes()
+                        .map(rsa::BigUint::from_bytes_be)
+                        .ok_or(Error::BadKey)
+                };
                 let key = rsa::RsaPrivateKey::from_components(
-                    positive(&k.public.n)?, positive(&k.public.e)?,
+                    positive(&k.public.n)?,
+                    positive(&k.public.e)?,
                     positive(&k.private.d)?,
                     vec![positive(&k.private.p)?, positive(&k.private.q)?],
-                ).map_err(|_| Error::BadKey)?;
+                )
+                .map_err(|_| Error::BadKey)?;
                 key.validate().map_err(|_| Error::BadKey)?;
                 Ok(SignKey::RSA(key))
             }
             #[cfg(feature = "ecdsa256")]
-            ssh_key::private::KeypairData::Ecdsa(ssh_key::private::EcdsaKeypair::NistP256 { public, private }) => {
-                let key = ecdsa::SigningKey::<p256::NistP256>::from_slice(private.as_slice())
-                    .map_err(|_| Error::BadKey)?;
-                if key.verifying_key().to_encoded_point(false).as_bytes() != public.as_bytes() {
+            ssh_key::private::KeypairData::Ecdsa(
+                ssh_key::private::EcdsaKeypair::NistP256 { public, private },
+            ) => {
+                let key = ecdsa::SigningKey::<p256::NistP256>::from_slice(
+                    private.as_slice(),
+                )
+                .map_err(|_| Error::BadKey)?;
+                if key.verifying_key().to_encoded_point(false).as_bytes()
+                    != public.as_bytes()
+                {
                     return Err(Error::BadKey);
                 }
                 Ok(SignKey::ECDSA256(key))
             }
             #[cfg(feature = "ecdsa384")]
-            ssh_key::private::KeypairData::Ecdsa(ssh_key::private::EcdsaKeypair::NistP384 { public, private }) => {
-                let key = ecdsa::SigningKey::<p384::NistP384>::from_slice(private.as_slice())
-                    .map_err(|_| Error::BadKey)?;
-                if key.verifying_key().to_encoded_point(false).as_bytes() != public.as_bytes() {
+            ssh_key::private::KeypairData::Ecdsa(
+                ssh_key::private::EcdsaKeypair::NistP384 { public, private },
+            ) => {
+                let key = ecdsa::SigningKey::<p384::NistP384>::from_slice(
+                    private.as_slice(),
+                )
+                .map_err(|_| Error::BadKey)?;
+                if key.verifying_key().to_encoded_point(false).as_bytes()
+                    != public.as_bytes()
+                {
                     return Err(Error::BadKey);
                 }
                 Ok(SignKey::ECDSA384(key))
             }
             #[cfg(feature = "ecdsa521")]
-            ssh_key::private::KeypairData::Ecdsa(ssh_key::private::EcdsaKeypair::NistP521 { public, private }) => {
-                let key = ecdsa::SigningKey::<p521::NistP521>::from_slice(private.as_slice())
-                    .map_err(|_| Error::BadKey)?;
-                if key.verifying_key().to_encoded_point(false).as_bytes() != public.as_bytes() {
+            ssh_key::private::KeypairData::Ecdsa(
+                ssh_key::private::EcdsaKeypair::NistP521 { public, private },
+            ) => {
+                let key = ecdsa::SigningKey::<p521::NistP521>::from_slice(
+                    private.as_slice(),
+                )
+                .map_err(|_| Error::BadKey)?;
+                if key.verifying_key().to_encoded_point(false).as_bytes()
+                    != public.as_bytes()
+                {
                     return Err(Error::BadKey);
                 }
                 Ok(SignKey::ECDSA521(key))
@@ -775,7 +806,10 @@ pub(crate) mod tests {
         let signature = key.sign(&message).unwrap();
         let signature: Signature<'_> = (&signature).into();
         kind.verify(&key.pubkey(), &message, &signature).unwrap();
-        assert!(kind.verify(&key.pubkey(), &b"altered message".as_slice(), &signature).is_err());
+        assert!(
+            kind.verify(&key.pubkey(), &b"altered message".as_slice(), &signature)
+                .is_err()
+        );
         let mut wire = [0u8; 512];
         let size = sshwire::write_ssh(&mut wire, &signature).unwrap();
         let decoded: Signature<'_> = sshwire::read_ssh(&wire[..size], None).unwrap();
@@ -784,19 +818,28 @@ pub(crate) mod tests {
 
     #[test]
     fn ed25519_signature_roundtrip_and_message_binding() {
-        check_signature(SignKey::Ed25519(dalek::SigningKey::from_bytes(&[37; 32])), SigType::Ed25519);
+        check_signature(
+            SignKey::Ed25519(dalek::SigningKey::from_bytes(&[37; 32])),
+            SigType::Ed25519,
+        );
     }
 
     #[cfg(feature = "ecdsa256")]
     #[test]
     fn p256_signature_roundtrip_and_message_binding() {
-        check_signature(SignKey::ECDSA256(ecdsa::SigningKey::from_slice(&[37; 32]).unwrap()), SigType::ECDSA256);
+        check_signature(
+            SignKey::ECDSA256(ecdsa::SigningKey::from_slice(&[37; 32]).unwrap()),
+            SigType::ECDSA256,
+        );
     }
 
     #[cfg(feature = "ecdsa384")]
     #[test]
     fn p384_signature_roundtrip_and_message_binding() {
-        check_signature(SignKey::ECDSA384(ecdsa::SigningKey::from_slice(&[37; 48]).unwrap()), SigType::ECDSA384);
+        check_signature(
+            SignKey::ECDSA384(ecdsa::SigningKey::from_slice(&[37; 48]).unwrap()),
+            SigType::ECDSA384,
+        );
     }
 
     #[cfg(feature = "ecdsa521")]
@@ -804,6 +847,9 @@ pub(crate) mod tests {
     fn p521_signature_roundtrip_and_message_binding() {
         let mut scalar = [37; 66];
         scalar[0] = 1;
-        check_signature(SignKey::ECDSA521(ecdsa::SigningKey::from_slice(&scalar).unwrap()), SigType::ECDSA521);
+        check_signature(
+            SignKey::ECDSA521(ecdsa::SigningKey::from_slice(&scalar).unwrap()),
+            SigType::ECDSA521,
+        );
     }
 }

@@ -30,6 +30,13 @@ pub(crate) struct Channels {
 }
 
 impl Channels {
+    pub(crate) fn cancel_unsent_open(&mut self, num: ChanNum) -> Result<()> {
+        // No handle has escaped and no packet was accepted by TrafOut.
+        if !matches!(self.get_any_mut(num)?.state, ChanState::Opening) {
+            return error::BadUsage.fail();
+        }
+        self.remove_any(num)
+    }
     pub(crate) fn send_eof(&mut self, handle: &ChanHandle, sender: &mut TrafSend) -> Result<()> {
         let channel = self.get_mut(handle.0)?;
         if !channel.sent_eof && !channel.sent_close && !channel.is_closed() {

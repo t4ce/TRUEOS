@@ -1,0 +1,1 @@
+{"input_manifest_families":4,"results":[{"file":"ed25519.ppk2","valid":true},{"file":"ed25519.ppk3","valid":true},{"file":"p256.ppk2","valid":true},{"file":"p256.ppk3","valid":true},{"file":"p384.ppk2","valid":true},{"file":"p384.ppk3","valid":true},{"file":"p521.ppk2","valid":true},{"file":"p521.ppk3","valid":true}],"status":"passed"}

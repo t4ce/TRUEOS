@@ -1,0 +1,11 @@
+PuTTY-User-Key-File-2: ecdsa-sha2-nistp384
+Encryption: none
+Comment: trueos-independent-fixture
+Public-Lines: 3
+AAAAE2VjZHNhLXNoYTItbmlzdHAzODQAAAAIbmlzdHAzODQAAABhBPCg+u9EY40X
+iyjeyN5DNdWzpPPsvCaEKzOZZefU6lmtjiEcL6i+bLTeJqTY2zRxcsCjaDIhjpfB
+B72+lU9gB6GAYv+nPz/DKpXxBGIAV9dbkLGpINPuxqF+JxU0t3VAkw==
+Private-Lines: 2
+AAAAMQD8pYR/lczTo54zU3YqRpfIlBY672s8Ii9NZcpzuihgmIy2L3GxzD+Q/8Zw
+1BZExfs=
+Private-MAC: 1f5b9714b1deec894bf6bffc494449b7c48e76e1
