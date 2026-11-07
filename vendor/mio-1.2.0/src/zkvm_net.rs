@@ -2,7 +2,6 @@
 #![allow(missing_docs)]
 use crate::{Interest, Registry, Token};
 
-use alloc::{vec, vec::Vec};
 use core::net::SocketAddr;
 use trueos_io as io;
 
@@ -15,20 +14,13 @@ const STATUS_IO: i32 = -6;
 const STATUS_TIMED_OUT: i32 = -7;
 const STATUS_NO_DEVICE: i32 = -8;
 const STATUS_RESOURCE_EXHAUSTED: i32 = -9;
+const STATUS_BROKEN_PIPE: i32 = -10;
 
 pub(crate) const READY_READABLE: u8 = 0b0000_0001;
 pub(crate) const READY_WRITABLE: u8 = 0b0000_0010;
 pub(crate) const READY_ERROR: u8 = 0b0000_0100;
 pub(crate) const READY_READ_CLOSED: u8 = 0b0000_1000;
 pub(crate) const READY_WRITE_CLOSED: u8 = 0b0001_0000;
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub(crate) struct ReadyEventRaw {
-    pub token: usize,
-    pub readiness: u8,
-    pub reserved: [u8; 7],
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -39,7 +31,6 @@ struct SocketAddrRaw {
     addr: [u8; 16],
 }
 
-const _: () = assert!(core::mem::size_of::<ReadyEventRaw>() == 16);
 const _: () = assert!(core::mem::size_of::<SocketAddrRaw>() == 20);
 
 unsafe extern "C" {
@@ -47,10 +38,12 @@ unsafe extern "C" {
     fn trueos_mio_tcp_stream_connect(addr: SocketAddrRaw, out_socket_id: *mut u32) -> i32;
     fn trueos_mio_udp_socket_bind(addr: SocketAddrRaw, out_socket_id: *mut u32) -> i32;
     fn trueos_mio_socket_close(socket_id: u32) -> i32;
+    fn trueos_mio_socket_shutdown(socket_id: u32, how: u32) -> i32;
     fn trueos_mio_socket_local_addr(socket_id: u32, out_addr: *mut SocketAddrRaw) -> i32;
     fn trueos_mio_socket_peer_addr(socket_id: u32, out_addr: *mut SocketAddrRaw) -> i32;
     fn trueos_mio_socket_take_error(socket_id: u32) -> i32;
     fn trueos_mio_tcp_stream_read(socket_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize;
+    fn trueos_mio_tcp_stream_peek(socket_id: u32, out_ptr: *mut u8, out_cap: usize) -> isize;
     fn trueos_mio_tcp_stream_write(socket_id: u32, data_ptr: *const u8, data_len: usize) -> isize;
     fn trueos_mio_udp_socket_connect(socket_id: u32, addr: SocketAddrRaw) -> i32;
     fn trueos_mio_udp_socket_send_to(
@@ -70,29 +63,20 @@ unsafe extern "C" {
         out_socket_id: *mut u32,
         out_addr: *mut SocketAddrRaw,
     ) -> i32;
-    fn trueos_mio_selector_register_socket(
-        selector_id: usize,
-        socket_id: u32,
-        token: usize,
-        interests: u8,
-    ) -> i32;
-    fn trueos_mio_selector_deregister_socket(selector_id: usize, socket_id: u32) -> i32;
-    fn trueos_mio_selector_poll(
-        selector_id: usize,
-        out_events: *mut ReadyEventRaw,
-        out_cap: usize,
-        timeout_nanos: u64,
-    ) -> usize;
-    fn trueos_mio_selector_wake(selector_id: usize) -> i32;
+    fn trueos_mio_socket_poll_ready(socket_id: u32, interests: u8) -> i32;
 }
 
 #[derive(Debug)]
 pub(crate) struct Socket {
     id: u32,
+    registration: Option<crate::sys::SocketRegistration>,
 }
 
 impl Drop for Socket {
     fn drop(&mut self) {
+        // Remove local readiness state before releasing the kernel ID. A later
+        // socket can therefore never inherit this source's token on ID reuse.
+        drop(self.registration.take());
         let _ = unsafe { trueos_mio_socket_close(self.id) };
     }
 }
@@ -102,29 +86,30 @@ impl Socket {
         let mut id = 0u32;
         let status = unsafe { trueos_mio_tcp_listener_bind(socket_addr_to_raw(addr), &mut id) };
         status_to_result(status, "mio zkvm TCP listener bind failed")?;
-        Ok(Self { id })
+        Ok(Self { id, registration: None })
     }
 
     pub(crate) fn tcp_stream_connect(addr: SocketAddr) -> io::Result<Self> {
         let mut id = 0u32;
         let status = unsafe { trueos_mio_tcp_stream_connect(socket_addr_to_raw(addr), &mut id) };
         status_to_result(status, "mio zkvm TCP stream connect failed")?;
-        Ok(Self { id })
+        Ok(Self { id, registration: None })
     }
 
     pub(crate) fn udp_bind(addr: SocketAddr) -> io::Result<Self> {
         let mut id = 0u32;
         let status = unsafe { trueos_mio_udp_socket_bind(socket_addr_to_raw(addr), &mut id) };
         status_to_result(status, "mio zkvm UDP bind failed")?;
-        Ok(Self { id })
+        Ok(Self { id, registration: None })
     }
 
     pub(crate) fn accept(&self) -> io::Result<(Self, SocketAddr)> {
         let mut id = 0u32;
         let mut addr = SocketAddrRaw::default();
         let status = unsafe { trueos_mio_tcp_listener_accept(self.id, &mut id, &mut addr) };
+        self.rearm_if_blocked(status as isize, READY_READABLE);
         status_to_result(status, "mio zkvm TCP accept failed")?;
-        Ok((Self { id }, raw_to_socket_addr(addr)?))
+        Ok((Self { id, registration: None }, raw_to_socket_addr(addr)?))
     }
 
     pub(crate) fn local_addr(&self) -> io::Result<SocketAddr> {
@@ -143,6 +128,7 @@ impl Socket {
 
     pub(crate) fn take_error(&self) -> io::Result<Option<io::Error>> {
         let status = unsafe { trueos_mio_socket_take_error(self.id) };
+        if let Some(registration) = &self.registration { registration.rearm(READY_ERROR); }
         if status == 0 {
             Ok(None)
         } else {
@@ -150,18 +136,28 @@ impl Socket {
         }
     }
 
-    pub(crate) fn shutdown(&self) -> io::Result<()> {
-        let status = unsafe { trueos_mio_socket_close(self.id) };
+    pub(crate) fn shutdown(&self, how: u32) -> io::Result<()> {
+        // Shutdown changes the stream directions, not its owned socket ID.
+        // Keep that ID alive for the remaining direction and close it on Drop.
+        let status = unsafe { trueos_mio_socket_shutdown(self.id, how) };
         status_to_result(status, "mio zkvm socket shutdown failed")
     }
 
     pub(crate) fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
         let status = unsafe { trueos_mio_tcp_stream_read(self.id, buf.as_mut_ptr(), buf.len()) };
+        self.rearm_if_blocked(status, READY_READABLE);
         read_write_result(status, "mio zkvm tcp read failed")
+    }
+
+    pub(crate) fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
+        let status = unsafe { trueos_mio_tcp_stream_peek(self.id, buf.as_mut_ptr(), buf.len()) };
+        self.rearm_if_blocked(status, READY_READABLE);
+        read_write_result(status, "mio zkvm tcp peek failed")
     }
 
     pub(crate) fn write(&self, buf: &[u8]) -> io::Result<usize> {
         let status = unsafe { trueos_mio_tcp_stream_write(self.id, buf.as_ptr(), buf.len()) };
+        self.rearm_if_blocked(status, READY_WRITABLE);
         read_write_result(status, "mio zkvm tcp write failed")
     }
 
@@ -179,6 +175,7 @@ impl Socket {
                 buf.len(),
             )
         };
+        self.rearm_if_blocked(status, READY_WRITABLE);
         read_write_result(status, "mio zkvm udp send failed")
     }
 
@@ -187,64 +184,53 @@ impl Socket {
         let status = unsafe {
             trueos_mio_udp_socket_recv_from(self.id, &mut addr, buf.as_mut_ptr(), buf.len())
         };
+        self.rearm_if_blocked(status, READY_READABLE);
         Ok((read_write_result(status, "mio zkvm udp recv failed")?, raw_to_socket_addr(addr)?))
     }
 
     pub(crate) fn register(
-        &self,
+        &mut self,
         registry: &Registry,
         token: Token,
         interests: Interest,
     ) -> io::Result<()> {
-        let status = unsafe {
-            trueos_mio_selector_register_socket(
-                registry.selector().id(),
-                self.id,
-                token.0,
-                interest_bits(interests),
-            )
-        };
-        status_to_result(status, "mio zkvm socket registration failed")
+        if self.registration.as_ref().is_some_and(|entry| entry.is_live()) {
+            return Err(io::ErrorKind::AlreadyExists.into());
+        }
+        self.registration = Some(registry.selector().register_socket(self.id, token, interests)?);
+        Ok(())
     }
 
     pub(crate) fn reregister(
-        &self,
+        &mut self,
         registry: &Registry,
         token: Token,
         interests: Interest,
     ) -> io::Result<()> {
-        self.register(registry, token, interests)
+        self.registration.as_mut().ok_or(io::ErrorKind::NotFound)?
+            .reregister(registry.selector(), token, interests)
     }
 
-    pub(crate) fn deregister(&self, registry: &Registry) -> io::Result<()> {
-        let status =
-            unsafe { trueos_mio_selector_deregister_socket(registry.selector().id(), self.id) };
-        status_to_result(status, "mio zkvm socket deregistration failed")
+    pub(crate) fn deregister(&mut self, registry: &Registry) -> io::Result<()> {
+        self.registration.as_ref().ok_or(io::ErrorKind::NotFound)?.deregister(registry.selector())?;
+        drop(self.registration.take());
+        Ok(())
+    }
+
+    fn rearm_if_blocked(&self, status: isize, direction: u8) {
+        if status == STATUS_WOULD_BLOCK as isize {
+            if let Some(registration) = &self.registration { registration.rearm(direction); }
+        }
     }
 }
 
-pub(crate) fn selector_poll(
-    selector_id: usize,
-    out_events: &mut Vec<ReadyEventRaw>,
-    timeout: Option<core::time::Duration>,
-) {
-    let cap = out_events.capacity();
-    out_events.clear();
-    if cap == 0 {
-        return;
+pub(crate) fn socket_ready(socket_id: u32, interests: Interest) -> io::Result<u8> {
+    let status = unsafe { trueos_mio_socket_poll_ready(socket_id, interest_bits(interests)) };
+    if status >= 0 {
+        Ok(status as u8)
+    } else {
+        Err(status_to_error(status, "mio native readiness query failed"))
     }
-    let mut raw = vec![ReadyEventRaw::default(); cap];
-    let timeout_nanos = timeout
-        .map(crate::zkvm_compat::duration_to_nanos)
-        .unwrap_or(u64::MAX);
-    let len = unsafe {
-        trueos_mio_selector_poll(selector_id, raw.as_mut_ptr(), raw.len(), timeout_nanos)
-    };
-    out_events.extend(raw.into_iter().take(len));
-}
-
-pub(crate) fn selector_wake(selector_id: usize) {
-    let _ = unsafe { trueos_mio_selector_wake(selector_id) };
 }
 
 fn socket_addr_to_raw(addr: SocketAddr) -> SocketAddrRaw {
@@ -319,6 +305,7 @@ fn status_to_error(status: i32, _detail: &'static str) -> io::Error {
         STATUS_TIMED_OUT => io::ErrorKind::TimedOut,
         STATUS_NO_DEVICE => io::ErrorKind::NotFound,
         STATUS_RESOURCE_EXHAUSTED => io::ErrorKind::Other,
+        STATUS_BROKEN_PIPE => io::ErrorKind::BrokenPipe,
         STATUS_IO => io::ErrorKind::Other,
         _ => io::ErrorKind::Other,
     };

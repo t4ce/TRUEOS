@@ -200,6 +200,15 @@ def audit(builtins):
     ready_path = builtins / "ready.json"
     ready = json.loads(ready_path.read_text()) if ready_path.is_file() else {}
     objects = sorted(builtins.glob("objects/*/module.stripped.o"))
+    selected = ready.get("packages")
+    unselected = []
+    missing = []
+    if isinstance(selected, dict):
+        # Object caches outlive retired packages. Count only the generation
+        # selected by ready.json, and keep stale/missing artifacts visible.
+        unselected = [module for module in objects if module.parent.name not in selected]
+        objects = [module for module in objects if module.parent.name in selected]
+        missing = sorted(set(selected) - {module.parent.name for module in objects})
     if not objects:
         raise ValueError(f"no objects/*/module.stripped.o under {builtins}")
     consumers, all_imports = {}, set()
@@ -230,7 +239,7 @@ def audit(builtins):
                              "imported_symbols": sorted(all_imports & group)}
     return {
         "utc": datetime.now(timezone.utc).isoformat(), "builtins_directory": str(builtins),
-        "scope": "Current compact builtin ELF imports, package hashes, and current kernel resolver source.",
+        "scope": "Selected compact builtin ELF imports, package hashes, and current kernel resolver source.",
         "limits": [
             "Static imports identify contracts, not runtime call frequency or performance cost.",
             "No claim of source freshness, loaded rig version, or historical size change.",
@@ -242,6 +251,9 @@ def audit(builtins):
         ],
         "classifier": dict(file_info(classifier_path), symbol_count=len(unix_names)),
         "ready_manifest": file_info(ready_path),
+        "consumer_selection": "ready manifest packages" if isinstance(selected, dict) else "all cached objects (no ready package set)",
+        "unselected_cached_modules": [file_info(path) for path in unselected],
+        "selected_missing_modules": missing,
         "resolver_sources": [file_info(path) for path in sources],
         "generated_cabi_resolver_available": bool(generated),
         "allocation_implementation_evidence": alloc,

@@ -1,20 +1,9 @@
 use ::core::fmt;
-use core::time::Duration;
 use trueos_io as io;
 
 #[allow(dead_code)]
 pub(crate) fn unsupported_io_error(detail: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::Other, detail)
-}
-
-#[inline]
-pub(crate) fn now_nanos() -> u64 {
-    crate::platform::monotonic_nanos()
-}
-
-#[inline]
-pub(crate) fn duration_to_nanos(duration: Duration) -> u64 {
-    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
 #[cfg(feature = "log")]

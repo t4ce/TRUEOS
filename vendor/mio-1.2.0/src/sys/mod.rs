@@ -81,6 +81,7 @@ cfg_os_poll! {
 }
 
 cfg_not_os_poll! {
+    #[cfg_attr(not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat"))), path = "shell_fallback/mod.rs")]
     mod shell;
     pub(crate) use self::shell::*;
 

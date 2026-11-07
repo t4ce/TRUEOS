@@ -693,16 +693,15 @@ pub fn platform_wake_vm_scope(vm_id: u8) -> usize {
     count
 }
 
-/// Wake only existing Blueprint I/O queues. Network producers use this as a
-/// coarse readiness edge; userspace poll/Mio re-probes exact descriptors.
+/// Wake existing I/O queues in both Blueprint and native host scopes. Network
+/// producers publish a coarse readiness edge; poll/Mio re-probes exact sockets.
 pub fn platform_wake_all_blueprint_io_waiters() -> usize {
     let queues = crate::allocators::with_host_alloc_domain_strong(|| {
         let queues = PLATFORM_WAIT_QUEUES.lock();
         queues
             .iter()
-            .filter_map(|(&(scope, key), queue)| {
-                (scope != PLATFORM_WAIT_HOST_SCOPE && key == BLUEPRINT_IO_WAIT_KEY)
-                    .then(|| queue.clone())
+            .filter_map(|(&(_, key), queue)| {
+                (key == BLUEPRINT_IO_WAIT_KEY).then(|| queue.clone())
             })
             .collect::<Vec<_>>()
     });

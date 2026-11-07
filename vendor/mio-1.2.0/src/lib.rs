@@ -54,7 +54,7 @@ extern crate self as std;
 #[cfg(feature = "std-compat")]
 #[macro_use]
 extern crate std;
-#[cfg(feature = "std-compat")]
+#[cfg(any(feature = "std-compat", not(any(target_os = "trueos", target_os = "zkvm"))))]
 pub mod io {
     //! Standard I/O boundary for legacy Tokio and terminal consumers.
     pub use std::io::*;

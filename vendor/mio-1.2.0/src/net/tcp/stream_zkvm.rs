@@ -35,8 +35,13 @@ impl TcpStream {
         self.inner.local_addr()
     }
 
-    pub fn shutdown(&self, _: crate::net::Shutdown) -> io::Result<()> {
-        self.inner.shutdown()
+    pub fn shutdown(&self, how: crate::net::Shutdown) -> io::Result<()> {
+        let how = match how {
+            crate::net::Shutdown::Read => 0,
+            crate::net::Shutdown::Write => 1,
+            crate::net::Shutdown::Both => 2,
+        };
+        self.inner.shutdown(how)
     }
 
     pub fn set_nodelay(&self, _: bool) -> io::Result<()> {
@@ -59,11 +64,8 @@ impl TcpStream {
         self.inner.take_error()
     }
 
-    pub fn peek(&self, _: &mut [u8]) -> io::Result<usize> {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            "mio zkvm TcpStream::peek is not wired yet",
-        ))
+    pub fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.peek(buf)
     }
 
     pub fn try_io<F, T>(&self, f: F) -> io::Result<T>

@@ -896,7 +896,10 @@ fn pop_command_for_device(device_index: usize) -> Option<(&'static str, NetComma
 fn push_event(target: &'static str, event: NetEvent) -> bool {
     let wakes_io = matches!(
         event,
-        NetEvent::TcpData { .. }
+        NetEvent::Opened { .. }
+            | NetEvent::Error { .. }
+            | NetEvent::TcpSent { .. }
+            | NetEvent::TcpData { .. }
             | NetEvent::TcpReadClosed { .. }
             | NetEvent::TcpEstablished { .. }
             | NetEvent::Closed { .. }

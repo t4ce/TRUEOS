@@ -1108,6 +1108,8 @@ unsafe extern "C" {
     pub fn trueos_cabi_free(ptr: *mut u8);
     pub fn trueos_cabi_realloc(ptr: *mut u8, size: usize) -> *mut u8;
     pub fn sys_alloc_aligned(size: usize, align: usize) -> *mut u8;
+    /// Free a native Rust layout allocation through its address-owned heap.
+    pub fn sys_dealloc(ptr: *mut u8);
     pub fn sys_rand(recv_buf: *mut u32, words: usize);
     pub fn trueos_cabi_malloc_usable_size(ptr: *const u8) -> usize;
     pub fn trueos_cabi_heap_stats(out: *mut TrueosCabiHeapStats) -> i32;

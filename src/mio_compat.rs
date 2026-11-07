@@ -1312,10 +1312,18 @@ pub(crate) fn mio_socket_poll_ready_for_vm_host(
     socket_id: u32,
     interests: u8,
 ) -> Option<u8> {
+    mio_socket_poll_ready_owned_host(Some(vm_id), socket_id, interests)
+}
+
+fn mio_socket_poll_ready_owned_host(
+    owner_vm: Option<u8>,
+    socket_id: u32,
+    interests: u8,
+) -> Option<u8> {
     with_compat(|compat| {
         compat.kick_net();
         let socket = compat.socket(socket_id)?;
-        if socket.owner_vm != Some(vm_id) {
+        if socket.owner_vm != owner_vm {
             return None;
         }
         let ready = compat.ready_mask(socket, interests);
@@ -1326,6 +1334,22 @@ pub(crate) fn mio_socket_poll_ready_for_vm_host(
         }
         Some(ready)
     })
+}
+
+/// Query a native socket without introducing a descriptor or selector registry.
+/// Direct callers must own the socket, including callers in the host namespace.
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_mio_socket_poll_ready(socket_id: u32, interests: u8) -> i32 {
+    if interests == 0 || interests & !(READY_READABLE | READY_WRITABLE) != 0 {
+        return STATUS_INVALID_INPUT;
+    }
+    let ready = if vm_guest_vmcall_active() {
+        mio_socket_poll_ready(socket_id, interests)
+    } else {
+        let owner = crate::r::threads::current_vm_id().or_else(current_owner_vm);
+        mio_socket_poll_ready_owned_host(owner, socket_id, interests)
+    };
+    ready.map_or(STATUS_NOT_FOUND, i32::from)
 }
 
 pub(crate) fn mio_socket_poll_ready_host(socket_id: u32, interests: u8) -> Option<u8> {
@@ -1817,6 +1841,13 @@ pub(crate) fn mio_socket_shutdown(socket_id: u32, how: u32) -> i32 {
         };
     }
     mio_socket_shutdown_host(socket_id, how)
+}
+
+// Preserve the native socket's ownership and the opposite half of a TCP stream.
+// Closing the socket is a separate operation performed by its owner's Drop.
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_mio_socket_shutdown(socket_id: u32, how: u32) -> i32 {
+    mio_socket_shutdown(socket_id, how)
 }
 
 pub(crate) fn close_sockets_for_vm(vm_id: u8) -> usize {

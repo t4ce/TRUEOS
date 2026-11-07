@@ -1351,6 +1351,12 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_mio_socket_close" => {
             Some(crate::mio_compat::trueos_mio_socket_close as *const () as usize)
         }
+        "trueos_mio_socket_shutdown" => {
+            Some(crate::mio_compat::trueos_mio_socket_shutdown as *const () as usize)
+        }
+        "trueos_mio_socket_poll_ready" => {
+            Some(crate::mio_compat::trueos_mio_socket_poll_ready as *const () as usize)
+        }
         "trueos_mio_socket_local_addr" => {
             Some(crate::mio_compat::trueos_mio_socket_local_addr as *const () as usize)
         }
@@ -1362,6 +1368,9 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         }
         "trueos_mio_tcp_stream_read" => {
             Some(crate::mio_compat::trueos_mio_tcp_stream_read as *const () as usize)
+        }
+        "trueos_mio_tcp_stream_peek" => {
+            Some(crate::mio_compat::trueos_mio_tcp_stream_peek as *const () as usize)
         }
         "trueos_mio_tcp_stream_write" => {
             Some(crate::mio_compat::trueos_mio_tcp_stream_write as *const () as usize)
