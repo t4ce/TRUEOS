@@ -44,6 +44,80 @@ const HUB_PR_HS_SINGLE_TT: u8 = 1; /* Hi-speed hub with single TT */
 const HUB_PR_HS_MULTI_TT: u8 = 2; /* Hi-speed hub with multiple TT */
 const HUB_PR_SS: u8 = 3; /* Super speed hub */
 
+fn parse_hub_descriptor(bytes: &[u8], superspeed: bool) -> Result<HubDescriptor, USBError> {
+    let Some(header) = bytes.get(..7) else {
+        return Err(USBError::Other(anyhow!(
+            "hub descriptor is shorter than its fixed header"
+        )));
+    };
+    let wire_len = usize::from(header[0]);
+    let descriptor_type = if superspeed { 0x2a } else { 0x29 };
+    let min_len = if superspeed {
+        12
+    } else {
+        7 + 2 * (usize::from(header[2]) + 1).div_ceil(8)
+    };
+    if header[1] != descriptor_type
+        || header[2] == 0
+        || wire_len < min_len
+        || wire_len > bytes.len()
+    {
+        return Err(USBError::Other(anyhow!(
+            "invalid hub descriptor type={:#x} ports={} length={} received={} minimum={}",
+            header[1],
+            header[2],
+            wire_len,
+            bytes.len(),
+            min_len
+        )));
+    }
+
+    // USB2 descriptors can be only 9 bytes, whereas the shared representation
+    // also contains the 12-byte USB3 tail. Copy the validated wire bytes into
+    // a zeroed representation; never read the full struct from a shorter Vec.
+    let mut descriptor: HubDescriptor = unsafe { core::mem::zeroed() };
+    let copy_len = wire_len.min(core::mem::size_of::<HubDescriptor>());
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            core::ptr::addr_of_mut!(descriptor).cast::<u8>(),
+            copy_len,
+        );
+    }
+    Ok(descriptor)
+}
+
+fn decode_hub_port_status(raw: u16, superspeed: bool) -> PortStatus {
+    PortStatus {
+        connected: (raw & 0x0001) != 0,
+        enabled: (raw & 0x0002) != 0,
+        suspended: if superspeed {
+            ((raw >> 5) & 0xf) == 3
+        } else {
+            (raw & 0x0004) != 0
+        },
+        over_current: (raw & 0x0008) != 0,
+        resetting: (raw & 0x0010) != 0,
+        powered: (raw & if superspeed { 0x0200 } else { 0x0100 }) != 0,
+        low_speed: !superspeed && (raw & 0x0200) != 0,
+        high_speed: !superspeed && (raw & 0x0400) != 0,
+        // A SuperSpeed hub cannot have USB2 children on its SS bus. In its
+        // wPortStatus, bit9 is power, not the USB2 low-speed indicator.
+        speed: if superspeed {
+            Speed::SuperSpeed
+        } else {
+            Speed::from_usb2_hub_status(raw)
+        },
+        change: PortStatusChange {
+            connection_changed: false,
+            enabled_changed: false,
+            reset_complete: false,
+            suspend_changed: false,
+            over_current_changed: false,
+        },
+    }
+}
+
 /// Hub 设备
 ///
 /// 表示一个 Hub 设备（Root Hub 或 External Hub）。
@@ -148,14 +222,14 @@ impl HubDevice {
     }
 
     /// 创建新的 Hub 设备
-    pub async fn new(
+    pub fn new(
         dev: Device,
         settings: HubSettings,
         root_port_id: u8,
         parent_hub_slot_id: u8,
         kernel: &Kernel,
-    ) -> Result<Self, USBError> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             settings,
             data: Box::new(Inner {
                 state: HubState::Uninitialized,
@@ -167,61 +241,58 @@ impl HubDevice {
                 root_port_id,
             }),
             kernel: kernel.clone(),
-        })
+        }
     }
 
     pub async fn changed_ports(&mut self) -> Result<Vec<PortChangeInfo>, USBError> {
         let mut changed_ports = vec![];
 
-        // 收集所有端口号，避免借用冲突
-
-        for port_idx in 0..self.data.num_ports {
-            let port_id = port_idx + 1;
-            let (status, change) = self.get_port_status(port_id).await?;
-
-            debug!("Port {} status: {:?}", port_id, status);
-
-            if change.connection_changed {
-                info!("Port {} connection changed: {}", port_id, status.connected);
-                // 清除连接变化标志
-                self.clear_port_feature(port_id, PortFeature::CConnection)
-                    .await?;
-            }
-
-            if status.connected && self.data.ports[port_idx as usize].state == PortState::Uninit {
-                info!(
-                    "Port {} connection changed: connected={}, enabled={}",
-                    port_id, status.connected, status.enabled
-                );
-
-                // 执行端口验证流程（参考 xHCI Root Hub）
-                let validation_result = self.handle_port_connection(port_id, &status).await?;
-
-                self.data.ports[port_idx as usize].state = PortState::Probed;
-
-                changed_ports.push(validation_result);
-            }
-
-            if change.enabled_changed {
-                info!("Port {} enabled changed: {}", port_id, status.enabled);
-                self.clear_port_feature(port_id, PortFeature::CEnable)
-                    .await?;
-                if let Some(port) = self.data.ports.iter_mut().find(|p| p.id == port_id) {
-                    port.status = status;
-                }
-            }
-
-            if change.reset_complete {
-                debug!("Port {} reset complete", port_id);
-                self.clear_port_feature(port_id, PortFeature::CReset)
-                    .await?;
-                if let Some(port) = self.data.ports.iter_mut().find(|p| p.id == port_id) {
-                    port.status = status;
+        for port_id in 1..=self.data.num_ports {
+            match self.changed_port(port_id).await {
+                Ok(Some(port)) => changed_ports.push(port),
+                Ok(None) => {}
+                Err(error) => {
+                    warn!(
+                        "USB hub port scan failed root_port={} hub_slot={} port={} error={}; continuing other ports",
+                        self.data.root_port_id,
+                        self.data.dev.slot_id(),
+                        port_id,
+                        error
+                    );
                 }
             }
         }
 
         Ok(changed_ports)
+    }
+
+    async fn changed_port(&mut self, port_id: u8) -> Result<Option<PortChangeInfo>, USBError> {
+        let (status, change) = self.get_port_status(port_id).await?;
+        debug!("Port {} status: {:?}", port_id, status);
+
+        // Complete fallible acknowledgements before handing out a candidate.
+        // An error after marking Probed would otherwise lose that candidate.
+        if change.connection_changed {
+            self.clear_port_feature(port_id, PortFeature::CConnection)
+                .await?;
+        }
+        if change.enabled_changed {
+            self.clear_port_feature(port_id, PortFeature::CEnable)
+                .await?;
+        }
+        if change.reset_complete {
+            self.clear_port_feature(port_id, PortFeature::CReset)
+                .await?;
+        }
+        let port_idx = usize::from(port_id - 1);
+        self.data.ports[port_idx].status = status;
+
+        if status.connected && self.data.ports[port_idx].state == PortState::Uninit {
+            let candidate = self.handle_port_connection(port_id, &status).await?;
+            self.data.ports[port_idx].state = PortState::Probed;
+            return Ok(Some(candidate));
+        }
+        Ok(None)
     }
 
     pub fn is_superspeed(&self) -> bool {
@@ -371,19 +442,36 @@ impl HubDevice {
     /// 获取 Hub 描述符（参考 Linux 内核实现）
     async fn get_hub_descriptor(&mut self) -> Result<HubDescriptor, USBError> {
         let mut buff = vec![0u8; 4]; // Hub 描述符最小长度
-        self.read_hub_descriptor_raw(&mut buff).await?;
+        let received = self.read_hub_descriptor_raw(&mut buff).await?;
+        if received < buff.len() {
+            return Err(USBError::Other(anyhow!(
+                "short hub descriptor header: {} bytes",
+                received
+            )));
+        }
         let desc_len = buff[0] as usize;
+        if desc_len < 7 {
+            return Err(USBError::Other(anyhow!(
+                "invalid hub descriptor length {}",
+                desc_len
+            )));
+        }
         trace!("Hub descriptor length from initial read: {}", desc_len);
 
         let mut full_buff = vec![0u8; desc_len];
 
-        self.read_hub_descriptor_raw(&mut full_buff).await?;
-
-        let desc = unsafe { (full_buff.as_ptr() as *const HubDescriptor).read_unaligned() };
-        Ok(desc)
+        let received = self.read_hub_descriptor_raw(&mut full_buff).await?;
+        if received < desc_len {
+            return Err(USBError::Other(anyhow!(
+                "short hub descriptor: {} of {} bytes",
+                received,
+                desc_len
+            )));
+        }
+        parse_hub_descriptor(&full_buff, self.is_superspeed())
     }
 
-    async fn read_hub_descriptor_raw(&mut self, buff: &mut [u8]) -> Result<(), USBError> {
+    async fn read_hub_descriptor_raw(&mut self, buff: &mut [u8]) -> Result<usize, USBError> {
         const DT_SS_HUB: u16 = 0x0a;
         const DT_HUB: u16 = 0x9;
         const TYPE_CLASS: u16 = 1 << 5;
@@ -411,7 +499,7 @@ impl HubDevice {
             .await?;
         trace!("Hub raw descriptor read {n} bytes");
 
-        Ok(())
+        Ok(n)
     }
 
     async fn hub_power_on(&mut self) -> Result<(), USBError> {
@@ -485,24 +573,7 @@ impl HubDevice {
 
     /// 解析端口状态原始数据
     fn parse_port_status(&self, raw: u16) -> PortStatus {
-        PortStatus {
-            connected: (raw & 0x0001) != 0,
-            enabled: (raw & 0x0002) != 0,
-            suspended: (raw & 0x0004) != 0,
-            over_current: (raw & 0x0008) != 0,
-            resetting: (raw & 0x0010) != 0,
-            powered: (raw & 0x0100) != 0,
-            low_speed: (raw & 0x0200) != 0,
-            high_speed: (raw & 0x0400) != 0,
-            speed: Speed::from_usb2_hub_status(raw),
-            change: PortStatusChange {
-                connection_changed: false,
-                enabled_changed: false,
-                reset_complete: false,
-                suspend_changed: false,
-                over_current_changed: false,
-            },
-        }
+        decode_hub_port_status(raw, self.is_superspeed())
     }
 
     /// 解析端口状态变化标志

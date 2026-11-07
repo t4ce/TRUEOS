@@ -49,12 +49,13 @@ pub mod kfs {
         AlreadyExists,
         TypeRequired,
         TypeMismatch,
+        PermissionDenied,
         Device(block::Error),
     }
 
     impl From<block::Error> for FsError {
         fn from(value: block::Error) -> Self {
-            FsError::Device(value)
+            if value == block::Error::PermissionDenied { FsError::PermissionDenied } else { FsError::Device(value) }
         }
     }
 
@@ -74,8 +75,8 @@ pub mod kfs {
         Ok((disk, name))
     }
 
-    pub(crate) fn prepare_volatile_files(root: &str) -> Result<crate::r::fs::volatile_files::SeedStats> {
-        wait_for_filesystem(crate::r::fs::request_broker::prepare_volatile_files(String::from(root)))
+    pub(crate) fn prepare_volatile_files(root: &str, archive: &str, account: Option<trueos_crypto::AccountId>) -> Result<crate::r::fs::volatile_files::SeedStats> {
+        wait_for_filesystem(crate::r::fs::request_broker::prepare_volatile_files(String::from(root), String::from(archive), account))
     }
 
     /// Compatibility boundary for APIs whose public contract is synchronous.

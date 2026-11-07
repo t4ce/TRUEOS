@@ -141,7 +141,8 @@ impl Session {
                         ServEvent::Hostkeys(h) => h.hostkeys(&[&self.host_key])?,
                         ServEvent::FirstAuth(mut h) => {
                             self.access_account = None;
-                            if super::ssh_boot::allow_none() {
+                            if super::ssh_boot::allow_none()
+                                && !crate::crypt::ssh_requires_public_key(h.username()?) {
                                 h.allow()?;
                             } else {
                                 h.set_auth_methods(false, true)?;

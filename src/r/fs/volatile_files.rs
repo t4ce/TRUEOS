@@ -88,6 +88,23 @@ async fn create_home_directories(disk: block::DeviceHandle, home: &str) -> Resul
     Ok(())
 }
 
+/// Mirror a trusted app-root identity into an already prepared RAM workspace.
+/// The durable root is stamped separately by its owner. A later preparation
+/// copies that committed root key before creating any supporting children.
+pub(crate) async fn stamp_workspace_key(root: &str, key: fs::RecordKey) -> Result<()> {
+    let Some(disk) = disk_for_path(root) else { return Ok(()); };
+    if !fs::stamp_directory_key_async(disk, root, key).await? { return Err(FsError::NoSpace); }
+    Ok(())
+}
+
+async fn inherit_workspace_key(source: block::DeviceHandle, destination: block::DeviceHandle, root: &str) -> Result<()> {
+    let node = fs::node_info_async(source, root).await?.ok_or(FsError::NotFound)?;
+    if matches!(node.record_key, fs::RecordKey::Key(_))
+        && !fs::stamp_directory_key_async(destination, root, node.record_key).await?
+    { return Err(FsError::NoSpace); }
+    Ok(())
+}
+
 async fn ensure_durable_codex_home(disk: block::DeviceHandle, root: &str) -> Result<()> {
     if !fs::dir_create_all_async(disk, &alloc::format!("{root}/.codex")).await? {
         return Err(FsError::NoSpace);
@@ -125,6 +142,7 @@ pub(crate) async fn prepare(root: &str) -> Result<SeedStats> {
     // seeding. Never copy an old `.codex` snapshot into the RAM placeholder.
     ensure_durable_codex_home(source, root).await?;
     if let Some(disk) = disk_for_path(root) {
+        inherit_workspace_key(source, disk, root).await?;
         create_home_directories(disk, &home).await?;
         return Ok(SeedStats::default());
     }
@@ -158,6 +176,7 @@ pub(crate) async fn prepare(root: &str) -> Result<SeedStats> {
     if !fs::dir_create_all_async(destination, root).await? {
         return Err(FsError::NoSpace);
     }
+    inherit_workspace_key(source, destination, root).await?;
     let mut stats = SeedStats::default();
     let mut directories = alloc::vec![String::from(root)];
     let mut buffer = alloc::vec![0u8; COPY_CHUNK_BYTES];

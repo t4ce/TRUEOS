@@ -5,11 +5,13 @@ use spin::Mutex;
 use trueos_ide::{source_image::SourceImage, store_protocol::{self, Command, Reply, Request}};
 use super::ide_workspace_service::{self as workspace, Identity};
 use crate::r::{cabi_codes::*, fs::trueosfs as fs};
+use fs::authorized::{self, Actor};
 
 const MAX_DATABASES: usize = 8;
 const MAX_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 const VM_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
-static IMAGES: AsyncMutex<crate::wait::EmbassySpinRawMutex, BTreeMap<String, SourceImage>> = AsyncMutex::new(BTreeMap::new());
+struct CachedImage { image: SourceImage, keys: Vec<fs::RecordKey> }
+static IMAGES: AsyncMutex<crate::wait::EmbassySpinRawMutex, BTreeMap<String, CachedImage>> = AsyncMutex::new(BTreeMap::new());
 static REPLIES: [Mutex<Option<(Identity, Vec<u8>)>>; VM_LIMIT] = [const { Mutex::new(None) }; VM_LIMIT];
 static BACKEND_LEASES: Mutex<Vec<(String, crate::r::fs::advisory_lock::Owner)>> = Mutex::new(Vec::new());
 
@@ -74,7 +76,7 @@ pub(crate) async fn write_for_owner(owner: u32, bytes: &[u8]) -> Result<(), i32>
         && !workspace::owns_project(identity, &key, project)? {
         host(|| failure("not_owner", "This Edit window does not own that project"))
     } else {
-        execute(&mut images, &resolved, &key, request.command, writing).await
+        execute(Actor::Vm(identity.vm), &mut images, &resolved, &key, request.command, writing).await
     };
     let encoded = host(|| serde_json::to_vec(&reply)).map_err(|_| FS_ERR_BAD_PARAM)?;
     if encoded.len() > store_protocol::MAX_FRAME_BYTES { return Err(FS_ERR_TOO_LARGE); }
@@ -84,51 +86,63 @@ pub(crate) async fn write_for_owner(owner: u32, bytes: &[u8]) -> Result<(), i32>
     Ok(())
 }
 
-async fn execute(images: &mut BTreeMap<String, SourceImage>, resolved: &str, key: &str, command: Command, writing: bool) -> Reply {
+async fn execute(actor: Actor, images: &mut BTreeMap<String, CachedImage>, resolved: &str, key: &str, command: Command, writing: bool) -> Reply {
     let (disk, path) = match crate::r::io::async_fs_cabi::selected_disk(resolved) {
         Ok(selected) => selected, Err(code) => return host(|| failure("store_failed", code)),
     };
+    // A cached database retains the keys captured with its bytes. Recheck both
+    // those keys and the current pathname before acting for a different caller.
+    if let Some(cached) = images.get(key) {
+        if authorized::authorize_keys(actor, &cached.keys).is_err() {
+            return host(|| failure("access_denied", "Source image access denied"));
+        }
+    }
+    match authorized::node_info(actor, disk, path).await {
+        Ok(Some(info)) if info.data_len > MAX_IMAGE_BYTES => return host(|| failure("store_failed", "Source image is too large")),
+        Ok(_) => {},
+        Err(error) => return host(|| failure("access_denied", alloc::format!("Source image access failed: {error:?}"))),
+    }
     if !images.contains_key(key) {
         if images.len() >= MAX_DATABASES { return host(|| failure("store_busy", "Too many open source images")); }
         if let Err(code) = host(|| reserve_backend(key)) {
             return host(|| failure("store_busy", alloc::format!("The source image is open outside the source service ({code})")));
         }
-        let bytes = match fs::file_info_async(disk, path).await {
-            Ok(Some(info)) if info.data_len > MAX_IMAGE_BYTES => return host(|| failure("store_failed", "Source image is too large")),
-            Ok(Some(_)) => match fs::file_out_async(disk, path).await {
-                Ok(Some(bytes)) => bytes,
-                _ => return host(|| failure("store_failed", "Cannot read source image")),
-            },
-            Ok(None) => Vec::new(),
+        let (bytes, keys) = match authorized::read_snapshot(actor, disk, path, MAX_IMAGE_BYTES).await {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => (Vec::new(), Vec::new()),
             Err(error) => return host(|| failure("store_failed", alloc::format!("Source image read failed: {error:?}"))),
         };
         match host(|| SourceImage::open(&bytes)) {
-            Ok(image) => { host(|| images.insert(key.into(), image)); },
+            Ok(image) => { host(|| images.insert(key.into(), CachedImage { image, keys })); },
             Err(error) => return host(|| failure("store_failed", error)),
         }
     }
-    if !writing { return host(|| apply(images.get_mut(key).unwrap(), command)); }
+    if !writing { return host(|| apply(&mut images.get_mut(key).unwrap().image, command)); }
     // No project edit is acknowledged until the complete image is durable.
     // On failure discard the candidate; the next request reloads disk state.
     let mut image = host(|| images.remove(key).unwrap());
-    let reply = host(|| apply(&mut image, command));
+    let reply = host(|| apply(&mut image.image, command));
     if matches!(reply, Reply::Error { .. }) {
         host(|| images.insert(key.into(), image));
         return reply;
     }
-    let bytes = match host(|| image.into_bytes()) {
+    let bytes = match host(|| image.image.into_bytes()) {
         Ok(bytes) if bytes.len() as u64 <= MAX_IMAGE_BYTES => bytes,
         _ => return host(|| failure("store_failed", "Cannot finish source image")),
     };
     if let Some((parent, _)) = path.rsplit_once('/')
-        && !matches!(fs::dir_create_all_async(disk, parent).await, Ok(true)) {
+        && !matches!(authorized::create_dir_all(actor, disk, parent).await, Ok(true)) {
         return host(|| failure("store_failed", "Cannot create source image directory"));
     }
-    if !matches!(fs::file_in_async(disk, path, &bytes).await, Ok(true)) {
+    if !matches!(authorized::write(actor, disk, path, &bytes, fs::ContentTypeId::BLOB, true).await, Ok(true)) {
         return host(|| failure("store_failed", "Cannot persist source image"));
     }
-    match host(|| SourceImage::open(&bytes)) {
-        Ok(image) => { host(|| images.insert(key.into(), image)); reply },
+    let (saved, keys) = match authorized::read_snapshot(actor, disk, path, MAX_IMAGE_BYTES).await {
+        Ok(Some(snapshot)) => snapshot,
+        _ => return host(|| failure("store_failed", "Cannot reopen persisted source image")),
+    };
+    match host(|| SourceImage::open(&saved)) {
+        Ok(image) => { host(|| images.insert(key.into(), CachedImage { image, keys })); reply },
         Err(error) => host(|| failure("store_failed", error)),
     }
 }

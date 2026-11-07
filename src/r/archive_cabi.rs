@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 use crate::r::io::cabi::{
     BLUEPRINT_ASYNC_FS_MAX_PATH, FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_BAD_UTF8, FS_ERR_IO,
     FS_ERR_NO_SPACE, FS_ERR_NOT_FOUND, FS_ERR_TOO_LARGE, FS_ERR_TYPE_REQUIRED,
+    FS_ERR_PERMISSION_DENIED,
 };
 
 /// A bounded path list keeps a guest request inside one comm-page payload and
@@ -43,6 +44,7 @@ pub(crate) fn map_error(error: &crate::r::codec::CodecError) -> i32 {
         CodecError::NotReady | CodecError::PathConflict | CodecError::UnsupportedContentType(_) => {
             FS_ERR_BAD_PARAM
         }
+        CodecError::Fs(crate::disc::block::Error::PermissionDenied) => FS_ERR_PERMISSION_DENIED,
         CodecError::ReadFailed
         | CodecError::WriteFailed
         | CodecError::Lz4(_)

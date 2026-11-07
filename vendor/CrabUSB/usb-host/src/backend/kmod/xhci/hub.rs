@@ -252,21 +252,23 @@ impl XhciRootHub {
 
         info!("xhci: root hub qemu/full reset all ports");
         for idx in 0..self.reg.port_register_set.len() {
-            self.reg.port_register_set.update_volatile_at(idx, |reg| {
-                if !reg.portsc.port_power() {
-                    trace!("Powering on port {}", idx + 1);
-                    reg.portsc.set_port_power();
-                }
-            });
+            // PORTSC.PED is RW1C. Even writing back an otherwise unchanged
+            // powered/enabled port would disable its negotiated USB3 link.
+            if !self
+                .reg
+                .port_register_set
+                .read_volatile_at(idx)
+                .portsc
+                .port_power()
+            {
+                self.write_portsc_action(idx, (idx + 1) as u8, "init-power-on", Self::PORT_PP, 0)?;
+            }
         }
         self.log_status_mut("root-hub-after-port-power");
         self.fail_if_halted("root-hub-after-port-power")?;
 
         for idx in 0..self.reg.port_register_set.len() {
-            self.reg.port_register_set.update_volatile_at(idx, |reg| {
-                reg.portsc.set_0_port_enabled_disabled();
-                reg.portsc.set_port_reset();
-            });
+            self.write_portsc_action(idx, (idx + 1) as u8, "init-reset", Self::PORT_PR, 0)?;
         }
         self.log_status_mut("root-hub-after-all-port-reset");
         self.fail_if_halted("root-hub-after-all-port-reset")?;
@@ -290,6 +292,7 @@ impl XhciRootHub {
             .ports()
             .iter()
             .filter(|port| matches!(port.state, PortState::Uninit))
+            .filter(|port| !port.ever_probed)
             .filter(|port| !self.root_port_ignored_by_physics(port.port_id))
             .map(|p| p.port_id)
             .collect::<Vec<_>>();
@@ -351,19 +354,14 @@ impl XhciRootHub {
             let connection_changed = portsc.connect_status_change();
             self.write_portsc_action(idx, port_id, "ack-change-edge", 0, Self::PORT_CHANGE_MASK)?;
 
-            // A reset-completion event can sit in the controller event ring
-            // while the freshly discovered device is already being addressed.
-            // If that port is still connected/enabled and CSC is clear, the
-            // edge is stale bookkeeping; re-probing it would assign a second
-            // slot to a device that CrabUSB already owns.
-            if matches!(prior_state, PortState::Probed)
-                && connected
-                && enabled
-                && !connection_changed
-            {
+            // Neither a stale reset-completion edge nor a genuine disconnect
+            // proves Disable Slot and endpoint/DMA teardown. Keep the ownership
+            // boundary monotonic for successful and failed enumerations alike.
+            if self.ports()[idx].ever_probed {
+                self.ports_mut()[idx].state = PortState::Probed;
                 info!(
-                    "xhci: root port {} edge consumed state=probed-retained reason=stable-no-csc",
-                    port_id
+                    "xhci: root port {} edge consumed state=probed-retained connected={} enabled={} csc={} prior={:?} reason=slot-teardown-required",
+                    port_id, connected, enabled, connection_changed, prior_state
                 );
                 continue;
             }
@@ -404,6 +402,7 @@ impl XhciRootHub {
             .ports()
             .iter()
             .filter(|port| matches!(port.state, PortState::Reseted))
+            .filter(|port| !port.ever_probed)
             .filter(|port| !self.root_port_ignored_by_physics(port.port_id))
             .map(|p| p.port_id)
             .collect::<Vec<_>>();

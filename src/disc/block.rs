@@ -17,6 +17,7 @@ const DEFAULT_MAX_TRANSFER_BYTES: u64 = 256 * 1024;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Error {
     NotSupported,
+    PermissionDenied,
     NotReady,
     InvalidParam,
     OutOfBounds,

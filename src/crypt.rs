@@ -1167,6 +1167,15 @@ pub(crate) fn ssh_authorized_keys() -> Vec<[u8; 32]> {
     CRY_STATE.lock().ssh_public_keys.clone()
 }
 
+/// An enrolled account must prove its SSH key instead of taking the anonymous
+/// development none-auth route. Other names remain anonymous terminals.
+pub(crate) fn ssh_requires_public_key(username: &str) -> bool {
+    let state = CRY_STATE.lock();
+    state.durable.is_some()
+        && state.username.as_deref() == Some(username)
+        && !state.ssh_public_keys.is_empty()
+}
+
 /// Return only the persisted account which enrolled this exact SSH key.
 /// The SSH transport must separately verify the request's signature before
 /// binding the account to a session; a suitability probe is not authentication.

@@ -377,6 +377,7 @@ impl PreparedTrueosFsVideo {
 pub(crate) async fn prepare_trueosfs_ui4_video(
     session: crate::ui4::VideoPlaybackSession,
     path: &str,
+    actor: crate::r::fs::trueosfs::authorized::Actor,
 ) -> Result<PreparedTrueosFsVideo, &'static str> {
     crate::log_info!(target: "ui4";
         "shell2/vid: stage=trueosfs-entry source=trueosfs-h264-auto asset={} next=media-engine-check\n",
@@ -428,7 +429,7 @@ pub(crate) async fn prepare_trueosfs_ui4_video(
         )
     };
     h264_wait_for_fs_index(session, disk).await?;
-    let file = crate::r::fs::trueosfs::file_read_open_async(disk, file_path)
+    let file = crate::r::fs::trueosfs::authorized::open_read(actor, disk, file_path)
         .await
         .map_err(|_| "TRUEOSFS video stream open failed")?
         .ok_or("video asset missing from TRUEOSFS root")?;

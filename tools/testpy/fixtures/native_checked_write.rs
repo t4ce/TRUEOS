@@ -95,6 +95,17 @@ mod disc {
         }
     }
 }
+// This fixture exercises trusted host conditional-write races; caller policy
+// and real parent inheritance are exercised by native_file_objects.rs.
+mod authorized {
+    #[derive(Clone, Copy)] pub enum Actor { Host }
+    pub async fn check_path_under_lease(_: Actor, _: crate::block::DeviceHandle, _: &crate::trueos_fs::FsParams, _: &str) -> Result<(), crate::block::Error> {
+        assert!(crate::HELD.load(crate::Ordering::SeqCst)); Ok(())
+    }
+}
+async fn inherited_record_key_under_lease(_: block::DeviceHandle, _: &trueos_fs::FsParams, _: &str) -> Result<RecordKey, block::Error> {
+    assert!(HELD.load(Ordering::SeqCst)); Ok(RecordKey::Ffa)
+}
 struct Placement {
     super_lba: u64,
     data_lba: u64,

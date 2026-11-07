@@ -55,6 +55,7 @@ pub struct Device {
     eps: BTreeMap<u8, Endpoint>,
     ep_interfaces: BTreeMap<u8, u8>,
     cmd: CommandRing,
+    enumeration_stage: &'static str,
 }
 
 // TRUEOS's UAS transport assigns tags 3 through 15. xHCI reserves context
@@ -62,6 +63,45 @@ pub struct Device {
 // smallest configuration that exposes every assigned stream ID.
 const UAS_PRIMARY_STREAM_CONTEXTS: usize = 16;
 const UAS_MAX_PRIMARY_STREAMS: u8 = primary_streams_encoding(UAS_PRIMARY_STREAM_CONTEXTS);
+
+fn ep0_max_packet_size(speed: Speed, encoded: u8) -> Result<u16> {
+    let packet_size = match (speed, encoded) {
+        (Speed::SuperSpeed | Speed::SuperSpeedPlus, 9) => 512,
+        (Speed::Low, 8) => 8,
+        (Speed::High, 64) => 64,
+        (Speed::Full | Speed::Wireless, 8 | 16 | 32 | 64) => u16::from(encoded),
+        _ => {
+            return Err(USBError::Other(anyhow!(
+                "invalid EP0 bMaxPacketSize0={} for speed={:?}",
+                encoded,
+                speed
+            )));
+        }
+    };
+    Ok(packet_size)
+}
+
+fn transaction_translator(info: &DeviceAddressInfo) -> Option<(u8, u8, bool)> {
+    if !matches!(info.port_speed, Speed::Low | Speed::Full) {
+        return None;
+    }
+    let mut parent_id = info.parent_hub;
+    let mut child_port = info.port_id;
+    while let Some(id) = parent_id {
+        let parent = info.infos.get(&id)?;
+        if parent.hub_depth == -1 {
+            break;
+        }
+        if matches!(parent.speed, Speed::High) {
+            // The TT port belongs to the child below the selected HS hub,
+            // not to that hub's own upstream attachment.
+            return Some((parent.slot_id, child_port, parent.tt.multi));
+        }
+        child_port = parent.port_id;
+        parent_id = parent.parent;
+    }
+    None
+}
 
 impl Device {
     pub(crate) async fn new(host: &mut Xhci) -> Result<Self> {
@@ -93,7 +133,12 @@ impl Device {
             eps: BTreeMap::new(),
             ep_interfaces: BTreeMap::new(),
             cmd: host.cmd.clone(),
+            enumeration_stage: "allocate-ep0",
         })
+    }
+
+    pub(crate) fn enumeration_stage(&self) -> &'static str {
+        self.enumeration_stage
     }
 
     fn new_ep(&mut self, dci: Dci) -> Result<XhciEndpoint> {
@@ -117,23 +162,30 @@ impl Device {
         self.port_speed = info.port_speed;
         // let speed = info.port_speed.to_xhci_portsc_value();
 
+        self.enumeration_stage = "allocate-ep0";
         let ep = self.new_ep(Dci::CTRL)?;
         self.ctrl_ep = Some(Endpoint::new(EndpointInfo::control(), ep));
+        self.enumeration_stage = "address-device";
         self.address(host, info).await?;
         // self.dump_device_out();
+        self.enumeration_stage = "get-device-descriptor-base";
         let base = self.get_device_descriptor_base().await?;
         debug!("Device Descriptor Base: {:#x?}", base);
 
+        self.enumeration_stage = "evaluate-ep0";
         self.setup_max_packet(base).await?;
 
         // 读取当前配置（应该返回 0，表示未配置）
+        self.enumeration_stage = "get-configuration";
         let current_config = self.get_configuration().await?;
         debug!("Current configuration value: {}", current_config);
 
+        self.enumeration_stage = "get-device-descriptor";
         self.read_descriptor().await?;
 
         // 读取所有配置描述符
         for i in 0..self.desc.num_configurations {
+            self.enumeration_stage = "get-config-descriptor";
             let config_desc = self
                 .control_endpoint_mut()
                 .get_configuration_descriptor(i)
@@ -146,9 +198,11 @@ impl Device {
         if !self.config_desc.is_empty() {
             let config_value = self.config_desc[0].configuration_value;
             debug!("Setting device configuration to {}", config_value);
+            self.enumeration_stage = "set-configuration";
             self._set_configuration(config_value).await?;
         }
 
+        self.enumeration_stage = "ready";
         debug!("device descriptor ok");
         Ok(())
     }
@@ -170,13 +224,7 @@ impl Device {
 
     async fn setup_max_packet(&mut self, desc: DeviceDescriptorBase) -> Result {
         self.ctx.perper_change();
-        // USB 设备描述符的 bMaxPacketSize0 字段（偏移 7）
-        // 对于控制端点，这是直接的字节数值，不需要解码
-        let packet_size = if desc.max_packet_size_0 == 0 {
-            8u8
-        } else {
-            desc.max_packet_size_0
-        } as u16;
+        let packet_size = ep0_max_packet_size(self.port_speed, desc.max_packet_size_0)?;
 
         let dci = Dci::CTRL;
         self.ctx.with_input(|input| {
@@ -248,38 +296,16 @@ impl Device {
             slot_context.set_parent_hub_slot_id(0);
 
             // TT info is only valid for LS/FS devices behind a HS hub.
-            if matches!(info.port_speed, Speed::Low | Speed::Full) {
-                let mut parent_id = info.parent_hub;
-                let mut tt_port = info.port_id;
-                let mut hs_parent = None;
-
-                while let Some(p) = parent_id {
-                    let parent_hub = info.infos.get(&p).unwrap();
-                    tt_port = parent_hub.port_id;
-                    if parent_hub.hub_depth == -1 {
-                        break;
-                    }
-                    if matches!(parent_hub.speed, Speed::High) {
-                        hs_parent = Some(p);
-                        break;
-                    }
-                    parent_id = parent_hub.parent;
+            if let Some((slot_id, tt_port, multi_tt)) = transaction_translator(info) {
+                if multi_tt {
+                    slot_context.set_multi_tt();
                 }
-
-                if let Some(hs_id) = hs_parent {
-                    let parent = info.infos.get(&hs_id).unwrap();
-                    let slot_id = parent.slot_id;
-                    if parent.tt.multi {
-                        slot_context.set_multi_tt();
-                    }
-
-                    slot_context.set_parent_hub_slot_id(slot_id);
-                    slot_context.set_parent_port_number(tt_port);
-                    debug!(
-                        "Setting parent_port_number (TT): {}, parent_hub_slot_id: {}",
-                        tt_port, slot_id
-                    );
-                }
+                slot_context.set_parent_hub_slot_id(slot_id);
+                slot_context.set_parent_port_number(tt_port);
+                debug!(
+                    "Setting parent_port_number (TT): {}, parent_hub_slot_id: {}",
+                    tt_port, slot_id
+                );
             }
 
             slot_context.set_tt_think_time(0);
@@ -358,11 +384,17 @@ impl Device {
         let mut data = vec![0u8; 8];
 
         // DMA 传输
-        self.control_endpoint_mut()
+        let received = self
+            .control_endpoint_mut()
             .get_descriptor(DescriptorType::DEVICE, 0, 0, data.as_mut_slice())
             .await?;
-
-        let desc = unsafe { *(data.as_mut_slice().as_ptr() as *const DeviceDescriptorBase) };
+        if received < core::mem::size_of::<DeviceDescriptorBase>() {
+            return Err(USBError::Other(anyhow!(
+                "short device descriptor header: received {} bytes",
+                received
+            )));
+        }
+        let desc = unsafe { (data.as_ptr() as *const DeviceDescriptorBase).read_unaligned() };
 
         Ok(desc)
     }
@@ -375,6 +407,7 @@ impl Device {
 
     async fn _set_configuration(&mut self, configuration_value: u8) -> Result {
         self.ctx.perper_change();
+        self.enumeration_stage = "set-configuration";
         self.control_endpoint_mut()
             .set_configuration(configuration_value)
             .await?;
@@ -387,6 +420,7 @@ impl Device {
             let c = input.control_mut();
             c.set_configuration_value(configuration_value);
         });
+        self.enumeration_stage = "evaluate-config-context";
         self.evaluate().await?;
         debug!("Device configuration set to {configuration_value}");
         Ok(())

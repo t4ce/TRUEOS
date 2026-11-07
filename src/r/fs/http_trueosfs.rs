@@ -9,6 +9,7 @@ use v::vhttp_srv;
 use v::vnet as api;
 
 use crate::disc::block::DeviceHandle;
+use crate::r::fs::trueosfs::authorized::{self as public_fs, Actor};
 use crate::r::fs::content_type_boundary::{
     IngressTypeError, mime_or_octet_stream, verify_named_bytes,
 };
@@ -448,7 +449,7 @@ async fn http_stream_file_range(
         let want = core::cmp::min(remaining, buf.len() as u64) as usize;
         let t0 = tsc_now();
         let read =
-            match crate::r::fs::trueosfs::file_read_range_async(disk, path, off, &mut buf[..want])
+            match public_fs::read_range(Actor::Public, disk, path, off, &mut buf[..want])
                 .await
             {
                 Ok(Some(n)) => n,
@@ -841,9 +842,10 @@ async fn http_prepare_file_response(
     path: String,
     req: &[u8],
 ) -> HttpResponsePlan {
-    let info = match crate::r::fs::trueosfs::file_info_async(disk, path.as_str()).await {
-        Ok(Some(v)) => v,
-        Ok(None) => return http_plain_response("HTTP/1.1 404 Not Found\r\n", "not found\n"),
+    let info = match public_fs::node_info(Actor::Public, disk, path.as_str()).await {
+        Ok(Some(v)) if v.kind == crate::r::fs::trueosfs::NodeKind::File => v,
+        Ok(Some(_)) | Ok(None) => return http_plain_response("HTTP/1.1 404 Not Found\r\n", "not found\n"),
+        Err(crate::disc::block::Error::PermissionDenied) => return http_plain_response("HTTP/1.1 403 Forbidden\r\n", "access denied\n"),
         Err(_) => {
             return http_plain_response("HTTP/1.1 500 Internal Server Error\r\n", "read error\n");
         }
@@ -1236,12 +1238,11 @@ pub async fn http_trueosfs_task() {
                                     );
                                 };
                                 let upload = pending_blob_uploads.remove(pos);
-                                match crate::r::fs::trueosfs::file_in_typed_async(
+                                match public_fs::write(Actor::Public,
                                     upload.disk,
                                     upload.path.as_str(),
                                     upload.body_bytes(),
-                                    infer::ContentTypeId::BLOB,
-                                )
+                                    infer::ContentTypeId::BLOB, false)
                                 .await
                                 {
                                     Ok(true) => {
@@ -1259,12 +1260,11 @@ pub async fn http_trueosfs_task() {
                                                 http_root_artifact_timestamp_path(upload.path.as_str());
                                             let mut stamp = http_current_timestamp_label();
                                             stamp.push('\n');
-                                            let _ = crate::r::fs::trueosfs::file_in_typed_async(
+                                            let _ = public_fs::write(Actor::Public,
                                                 upload.disk,
                                                 stamp_path.as_str(),
                                                 stamp.as_bytes(),
-                                                infer::ContentTypeId::UTF8_TEXT,
-                                            )
+                                                infer::ContentTypeId::UTF8_TEXT, false)
                                             .await;
                                         }
                                         http_plain_response("HTTP/1.1 200 OK\r\n", "upload ok\n")
@@ -1375,12 +1375,11 @@ pub async fn http_trueosfs_task() {
                                             break 'resp response;
                                         }
                                     };
-                                match crate::r::fs::trueosfs::file_in_typed_async(
+                                match public_fs::write(Actor::Public,
                                     disk,
                                     full_path.as_str(),
                                     body_bytes,
-                                    content_type,
-                                )
+                                    content_type, false)
                                 .await
                                 {
                                     Ok(true) => {
@@ -1391,18 +1390,20 @@ pub async fn http_trueosfs_task() {
                                             let stamp_path = http_root_artifact_timestamp_path(full_path.as_str());
                                             let mut stamp = http_current_timestamp_label();
                                             stamp.push('\n');
-                                            let _ = crate::r::fs::trueosfs::file_in_typed_async(
+                                            let _ = public_fs::write(Actor::Public,
                                                 disk,
                                                 stamp_path.as_str(),
                                                 stamp.as_bytes(),
-                                                infer::ContentTypeId::UTF8_TEXT,
-                                            )
+                                                infer::ContentTypeId::UTF8_TEXT, false)
                                             .await;
                                         }
                                         http_plain_response("HTTP/1.1 200 OK\r\n", "upload ok\n")
                                     }
                                     Ok(false) => {
                                         http_plain_response("HTTP/1.1 507 Insufficient Storage\r\n", "upload failed\n")
+                                    }
+                                    Err(crate::disc::block::Error::PermissionDenied) => {
+                                        break 'resp http_plain_response("HTTP/1.1 403 Forbidden\r\n", "access denied\n");
                                     }
                                     Err(_) => {
                                         http_plain_response("HTTP/1.1 500 Internal Server Error\r\n", "upload error\n")
@@ -1447,10 +1448,13 @@ pub async fn http_trueosfs_task() {
                                     }
                                 };
                                 let folder = http_join_rel_path(dir.as_str(), name.as_str());
-                                match crate::r::fs::trueosfs::dir_create_all_async(disk, folder.as_str()).await {
+                                match public_fs::create_dir_all(Actor::Public, disk, folder.as_str()).await {
                                     Ok(true) => http_plain_response("HTTP/1.1 200 OK\r\n", "mkdir ok\n"),
                                     Ok(false) => {
                                         http_plain_response("HTTP/1.1 507 Insufficient Storage\r\n", "mkdir failed\n")
+                                    }
+                                    Err(crate::disc::block::Error::PermissionDenied) => {
+                                        break 'resp http_plain_response("HTTP/1.1 403 Forbidden\r\n", "access denied\n");
                                     }
                                     Err(_) => {
                                         http_plain_response("HTTP/1.1 500 Internal Server Error\r\n", "mkdir error\n")
@@ -1502,9 +1506,12 @@ pub async fn http_trueosfs_task() {
                                     }
                                 };
 
-                                let kind = match crate::r::fs::trueosfs::node_info_async(disk, src.as_str()).await {
+                                let kind = match public_fs::node_info(Actor::Public, disk, src.as_str()).await {
                                     Ok(Some(info)) => info.kind,
                                     Ok(None) => break 'resp http_plain_response("HTTP/1.1 404 Not Found\r\n", "source not found\n"),
+                                    Err(crate::disc::block::Error::PermissionDenied) => {
+                                        break 'resp http_plain_response("HTTP/1.1 403 Forbidden\r\n", "access denied\n");
+                                    }
                                     Err(_) => {
                                         break 'resp http_plain_response(
                                             "HTTP/1.1 500 Internal Server Error\r\n",
@@ -1513,8 +1520,11 @@ pub async fn http_trueosfs_task() {
                                     }
                                 };
                                 let moved = if kind == crate::r::fs::trueosfs::NodeKind::File {
-                                    match crate::r::fs::trueosfs::file_rename_async(disk, src.as_str(), dst.as_str()).await {
+                                    match public_fs::rename(Actor::Public, disk, src.as_str(), dst.as_str(), false, false).await {
                                         Ok(v) => v,
+                                        Err(crate::disc::block::Error::PermissionDenied) => {
+                                            break 'resp http_plain_response("HTTP/1.1 403 Forbidden\r\n", "access denied\n");
+                                        }
                                         Err(_) => {
                                             break 'resp http_plain_response(
                                                 "HTTP/1.1 500 Internal Server Error\r\n",
@@ -1523,8 +1533,11 @@ pub async fn http_trueosfs_task() {
                                         }
                                     }
                                 } else {
-                                    match crate::r::fs::trueosfs::dir_rename_async(disk, src.as_str(), dst.as_str()).await {
+                                    match public_fs::rename(Actor::Public, disk, src.as_str(), dst.as_str(), false, true).await {
                                         Ok(v) => v,
+                                        Err(crate::disc::block::Error::PermissionDenied) => {
+                                            break 'resp http_plain_response("HTTP/1.1 403 Forbidden\r\n", "access denied\n");
+                                        }
                                         Err(_) => {
                                             break 'resp http_plain_response(
                                                 "HTTP/1.1 500 Internal Server Error\r\n",
@@ -1578,9 +1591,12 @@ pub async fn http_trueosfs_task() {
                                         );
                                     }
                                 };
-                                match crate::r::fs::trueosfs::remove_recursive_async(disk, path.as_str()).await {
+                                match public_fs::remove(Actor::Public, disk, path.as_str(), None).await {
                                     Ok(true) => http_plain_response("HTTP/1.1 200 OK\r\n", "delete ok\n"),
                                     Ok(false) => http_plain_response("HTTP/1.1 404 Not Found\r\n", "not found\n"),
+                                    Err(crate::r::fs::trueosfs::RemoveNodeError::Device(crate::disc::block::Error::PermissionDenied)) => {
+                                        http_plain_response("HTTP/1.1 403 Forbidden\r\n", "access denied\n")
+                                    }
                                     Err(_) => {
                                         http_plain_response("HTTP/1.1 500 Internal Server Error\r\n", "delete error\n")
                                     }

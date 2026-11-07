@@ -213,6 +213,25 @@ pub struct HealPortResetProof {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct HealEnumerationFailure {
+    pub root_port_id: u8,
+    pub port_id: u8,
+    pub slot_id: Option<u8>,
+    pub stage: &'static str,
+    pub reason: String,
+    pub reason_truncated: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct HealEnumerationReport {
+    pub failure_count: u64,
+    pub first_failure: Option<HealEnumerationFailure>,
+    pub last_failure: Option<HealEnumerationFailure>,
+    pub snapshot_at_ms: Option<u64>,
+    pub snapshot_age_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct HealOwnerStatus {
     pub controller_phase: &'static str,
     pub root_hub_lifecycle: &'static str,
@@ -252,6 +271,7 @@ pub struct HealServiceReport {
     pub failure: Option<String>,
     pub registers: Option<HealRegisters>,
     pub last_port_reset: Option<HealPortResetProof>,
+    pub enumeration: HealEnumerationReport,
     pub owner: Option<HealOwnerStatus>,
     pub snapshot_at_ms: Option<u64>,
     pub snapshot_age_ms: Option<u64>,
@@ -279,6 +299,7 @@ impl HealServiceReport {
             failure: None,
             registers: None,
             last_port_reset: None,
+            enumeration: HealEnumerationReport::default(),
             owner: None,
             snapshot_at_ms: None,
             snapshot_age_ms: None,
@@ -295,6 +316,18 @@ pub(crate) fn response_report(report: &HealServiceReport) -> HealServiceReport {
     let owner = super::runtime::snapshot(report.controller_index);
     let now_ms = trueos_time::Instant::now().as_millis();
     result.snapshot_age_ms = report
+        .snapshot_at_ms
+        .map(|at_ms| now_ms.saturating_sub(at_ms));
+    // Normal discovery refreshes the lab census independently of this report.
+    // Keep GET observation useful after an isolated device failure even when
+    // no caller has requested a fresh full register inspection yet.
+    if let Some(snapshot) = super::lab::latest_snapshot(report.controller_index) {
+        if snapshot.enumeration.failure_count >= result.enumeration.failure_count {
+            result.enumeration = enumeration_report(&snapshot.enumeration, owner.snapshot_at_ms);
+        }
+    }
+    result.enumeration.snapshot_age_ms = result
+        .enumeration
         .snapshot_at_ms
         .map(|at_ms| now_ms.saturating_sub(at_ms));
     result.owner = Some(HealOwnerStatus {
@@ -790,9 +823,34 @@ fn apply_noop_proof(report: &mut HealServiceReport, proof: &XhciNoopProof) {
     });
 }
 
+fn enumeration_failure(failure: &crabusb::diag::XhciEnumerationFailure) -> HealEnumerationFailure {
+    HealEnumerationFailure {
+        root_port_id: failure.root_port_id,
+        port_id: failure.port_id,
+        slot_id: failure.slot_id,
+        stage: failure.stage,
+        reason: String::from(failure.reason()),
+        reason_truncated: failure.reason_truncated,
+    }
+}
+
+fn enumeration_report(
+    diagnostic: &crabusb::diag::XhciEnumerationDiagnostics,
+    snapshot_at_ms: Option<u64>,
+) -> HealEnumerationReport {
+    HealEnumerationReport {
+        failure_count: diagnostic.failure_count,
+        first_failure: diagnostic.first_failure.as_ref().map(enumeration_failure),
+        last_failure: diagnostic.last_failure.as_ref().map(enumeration_failure),
+        snapshot_at_ms,
+        snapshot_age_ms: snapshot_at_ms.map(|_| 0),
+    }
+}
+
 fn update_from_snapshot(report: &mut HealServiceReport, snapshot: &XhciControllerSnapshot) {
     report.snapshot_at_ms = Some(trueos_time::Instant::now().as_millis());
     report.snapshot_age_ms = Some(0);
+    report.enumeration = enumeration_report(&snapshot.enumeration, report.snapshot_at_ms);
     report.registers = Some(HealRegisters {
         usbcmd: snapshot.usbcmd,
         usbsts: snapshot.usbsts,

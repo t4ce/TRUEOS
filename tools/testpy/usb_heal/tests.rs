@@ -5,6 +5,64 @@ mod regression {
     use crate::usb3::heal_service;
 
     #[test]
+    fn enumeration_evidence_survives_empty_passes_and_reaches_observe_json() {
+        let mut controller = host();
+        let mut report = block_on(heal_service::register_live_controller(0, dev(0), &mut controller));
+        assert_eq!(report.enumeration.failure_count, 0);
+        controller.snapshot.enumeration.record_failure(
+            2, 2, Some(1), "address-device", "UsbTransactionError",
+        );
+        controller.snapshot.enumeration.record_failure(
+            6, 3, Some(4), "configure-hub", "StallError",
+        );
+        controller.snapshot.mfindex = 20;
+        crate::usb3::lab::publish(0, Some(controller.snapshot.clone()));
+        let cached: serde_json::Value = serde_json::from_slice(&latest_report_json()).unwrap();
+        let cached_controller = cached.as_array().unwrap().iter().find(|item|
+            item["controller_index"] == 0).unwrap();
+        let enumeration = &cached_controller["enumeration"];
+        assert_eq!(cached_controller["registers"]["mfindex"], 5);
+        assert_eq!(report.enumeration.failure_count, 0);
+        assert_eq!(enumeration["failure_count"], 2);
+        assert_eq!(enumeration["first_failure"]["root_port_id"], 2);
+        assert_eq!(enumeration["first_failure"]["port_id"], 2);
+        assert_eq!(enumeration["first_failure"]["slot_id"], 1);
+        assert_eq!(enumeration["first_failure"]["stage"], "address-device");
+        assert_eq!(enumeration["first_failure"]["reason"], "UsbTransactionError");
+        assert_eq!(enumeration["last_failure"]["root_port_id"], 6);
+        assert_eq!(enumeration["last_failure"]["port_id"], 3);
+        assert_eq!(enumeration["last_failure"]["slot_id"], 4);
+        assert_eq!(enumeration["last_failure"]["stage"], "configure-hub");
+        assert_eq!(enumeration["last_failure"]["reason"], "StallError");
+
+        // An empty/successful probe does not call record_failure. Later fresh
+        // register snapshots must keep both records available through HTTP.
+        controller.snapshot.mfindex += 1;
+        let pending = submit_json(br#"{"op":"observe","api":1,"controller":0}"#).unwrap();
+        assert!(block_on(service_one(&mut controller, &mut report)));
+        let response = block_on(pending.wait()).unwrap();
+        let fresh = serde_json::to_value(response.report.unwrap()).unwrap();
+        assert_eq!(&fresh["enumeration"], enumeration);
+        assert_eq!(fresh["registers"]["mfindex"], 21);
+
+        // An explicitly inspected newer failure must also survive an older lab
+        // census while the normal owner has not refreshed that cache yet.
+        controller.snapshot.enumeration.record_failure(
+            7, 7, None, "enable-slot-or-context", "no slots",
+        );
+        let pending = submit_json(br#"{"op":"observe","api":1,"controller":0}"#).unwrap();
+        assert!(block_on(service_one(&mut controller, &mut report)));
+        let response = block_on(pending.wait()).unwrap();
+        let fresh = serde_json::to_value(response.report.unwrap()).unwrap();
+        assert_eq!(fresh["enumeration"]["failure_count"], 3);
+        assert_eq!(fresh["enumeration"]["first_failure"]["stage"], "address-device");
+        assert_eq!(fresh["enumeration"]["last_failure"]["stage"], "enable-slot-or-context");
+        assert_eq!(fresh["enumeration"]["last_failure"]["slot_id"], serde_json::Value::Null);
+        assert_eq!(controller.controller_resets + controller.port_resets, 0);
+        crate::usb3::lab::publish(0, None);
+    }
+
+    #[test]
     fn routed_live_observation_and_guarded_repair_preserve_ownership() {
         let mut host0 = host();
         let mut host1 = host();

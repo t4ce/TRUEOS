@@ -35,7 +35,12 @@ static VM_STORE_ONLINE: AtomicBool = AtomicBool::new(false);
 // Warm checkpoints are deliberately independent from the block registry.  A
 // slot owns one immutable byte image and `eject` can therefore reclaim it
 // without leaving an immortal private ramdisk device behind.
-static VM_STORE_IMAGES: [Mutex<Option<Arc<[u8]>>>; VM_STORE_VM_ID_LIMIT] =
+#[derive(Clone)]
+struct StoredVmImage {
+    bytes: Arc<[u8]>,
+    protected: bool,
+}
+static VM_STORE_IMAGES: [Mutex<Option<StoredVmImage>>; VM_STORE_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; VM_STORE_VM_ID_LIMIT];
 static VM_STORE_QUEUE: Mutex<Deque<Request, VM_STORE_QUEUE_CAP>> = Mutex::new(Deque::new());
 static VM_STORE_QUEUE_WAIT: WaitQueue = WaitQueue::new();
@@ -67,7 +72,7 @@ pub enum VmStoreResponse {
 }
 
 enum RequestKind {
-    Save(u8, Vec<u8>),
+    Save(u8, Vec<u8>, bool),
     Load(u8),
 }
 
@@ -108,7 +113,23 @@ fn vm_id_supported(vm_id: u8) -> bool {
 fn vm_store_image(vm_id: u8) -> Option<Arc<[u8]>> {
     VM_STORE_IMAGES
         .get(vm_id as usize)
-        .and_then(|slot| slot.lock().clone())
+        .and_then(|slot| slot.lock().as_ref().map(|image| image.bytes.clone()))
+}
+
+fn vm_export_image(vm_id: u8) -> Option<Arc<[u8]>> {
+    if crate::access_key_db::is_protected_vm(vm_id) { return None; }
+    VM_STORE_IMAGES.get(vm_id as usize).and_then(|slot| {
+        slot.lock().as_ref().filter(|image| !image.protected).map(|image| image.bytes.clone())
+    })
+}
+
+fn deny_protected_export(vm_id: u8) -> Result<(), VmStoreError> {
+    let stored_private = VM_STORE_IMAGES.get(vm_id as usize)
+        .is_some_and(|slot| slot.lock().as_ref().is_some_and(|image| image.protected));
+    if stored_private || crate::access_key_db::is_protected_vm(vm_id) {
+        return Err(VmStoreError::Write(block::Error::PermissionDenied));
+    }
+    Ok(())
 }
 
 #[inline]
@@ -120,7 +141,8 @@ pub fn save_bytes(vm_id: u8, bytes: Vec<u8>) -> Result<usize, VmStoreError> {
     if !vm_id_supported(vm_id) {
         return Err(VmStoreError::ServiceOffline);
     }
-    match enqueue(RequestKind::Save(vm_id, bytes))?.wait_blocking()? {
+    let protected = crate::access_key_db::is_protected_vm(vm_id);
+    match enqueue(RequestKind::Save(vm_id, bytes, protected))?.wait_blocking()? {
         VmStoreResponse::Saved(len) => Ok(len),
         VmStoreResponse::Loaded(_) => Err(VmStoreError::Write(block::Error::Io)),
     }
@@ -130,7 +152,8 @@ pub async fn save_bytes_async(vm_id: u8, bytes: Vec<u8>) -> Result<usize, VmStor
     if !vm_id_supported(vm_id) {
         return Err(VmStoreError::ServiceOffline);
     }
-    match enqueue(RequestKind::Save(vm_id, bytes))?
+    let protected = crate::access_key_db::is_protected_vm(vm_id);
+    match enqueue(RequestKind::Save(vm_id, bytes, protected))?
         .wait_async()
         .await?
     {
@@ -285,6 +308,7 @@ fn persistent_header(vm_id: u8, lengths: [usize; 4]) -> Vec<u8> {
 /// Commit the current warm checkpoint and the retained Blueprint-owned memory
 /// to physical TRUEOSFS. The warm checkpoint remains resident.
 pub async fn store_persistent_async(vm_id: u8, name: &str) -> Result<usize, VmStoreError> {
+    deny_protected_export(vm_id)?;
     let state = crate::hv::vm_state(vm_id);
     if !state.supported || !state.pause_latched || state.running || state.starting {
         return Err(VmStoreError::BadEnvelope);
@@ -354,6 +378,7 @@ pub async fn store_persistent_async(vm_id: u8, name: &str) -> Result<usize, VmSt
 /// checkpoint. Unlike a VM image, this envelope is intentionally independent
 /// of Hull code, guest registers, page tables, and pointer-bearing memory.
 pub async fn store_replication_async(vm_id: u8, name: &str) -> Result<usize, VmStoreError> {
+    deny_protected_export(vm_id)?;
     let state = crate::hv::vm_state(vm_id);
     if !state.supported
         || !state.replicatable
@@ -585,7 +610,7 @@ fn queue_vm_listing(out: &mut Vec<u8>) {
     let mut has_any = false;
     for vm_id in 0..VM_STORE_VM_ID_LIMIT {
         let vm_id = vm_id as u8;
-        if seqs.contains_key(&vm_id) {
+        if seqs.contains_key(&vm_id) && vm_export_image(vm_id).is_some() {
             push_line(out, format!("VMS {}", vm_id).as_str());
             has_any = true;
         }
@@ -766,7 +791,7 @@ pub async fn vm_store_replication_task() {
                                     push_line(&mut tx_buf, "NO");
                                     continue;
                                 }
-                                let Some(bytes) = vm_store_image(id) else {
+                                let Some(bytes) = vm_export_image(id) else {
                                     push_line(&mut tx_buf, "NO");
                                     continue;
                                 };
@@ -864,7 +889,7 @@ pub async fn vm_store_replication_task() {
 
 async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, VmStoreError> {
     match kind {
-        RequestKind::Save(vm_id, bytes) => {
+        RequestKind::Save(vm_id, bytes, protected) => {
             let seq = VM_STORE_OBJECT_SEQ.fetch_add(1, Ordering::Relaxed).max(1);
             crate::log!(
                 "hv-store: save queued id={} vm_id={} bytes={} seq={}\n",
@@ -875,7 +900,10 @@ async fn handle_request(id: u64, kind: RequestKind) -> Result<VmStoreResponse, V
             );
             let len = bytes.len();
             if let Some(slot) = VM_STORE_IMAGES.get(vm_id as usize) {
-                *slot.lock() = Some(Arc::from(bytes.into_boxed_slice()));
+                *slot.lock() = Some(StoredVmImage {
+                    bytes: Arc::from(bytes.into_boxed_slice()),
+                    protected: protected || crate::access_key_db::is_protected_vm(vm_id),
+                });
             }
             let mut seqs = VM_STORE_COMMITTED_SEQS.lock();
             seqs.insert(vm_id, seq);

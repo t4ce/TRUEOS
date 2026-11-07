@@ -215,6 +215,8 @@ enum Request {
     PrepareVolatileFiles {
         id: u64,
         root: String,
+        archive: String,
+        account: Option<trueos_crypto::AccountId>,
         completion: Completion<super::volatile_files::SeedStats>,
     },
     ReadFile {
@@ -455,8 +457,10 @@ pub fn read_file(
 
 pub(crate) fn prepare_volatile_files(
     root: String,
+    archive: String,
+    account: Option<trueos_crypto::AccountId>,
 ) -> core::result::Result<FsResult<super::volatile_files::SeedStats>, BlockingRequestError> {
-    submit(|id, completion| Request::PrepareVolatileFiles { id, root, completion })
+    submit(|id, completion| Request::PrepareVolatileFiles { id, root, archive, account, completion })
 }
 
 pub fn read_file_len(
@@ -658,6 +662,7 @@ pub fn exists(
 
 async fn process_request(owned: OwnedRequest) {
     let OwnedRequest { request, owner, mut progress } = owned;
+    let actor = super::trueosfs::authorized::Actor::from(owner);
     progress.advance(progress::SERVICE, 0, crate::r::input_timing::now_ms);
     let (request_id, operation) = request.metadata();
     crate::log_trace!(target: "filesystem";
@@ -715,8 +720,8 @@ async fn process_request(owned: OwnedRequest) {
         crate::access_key_db::audit_path(vm, disk, path, operation, create).await;
     }
     match request {
-        Request::PrepareVolatileFiles { id, root, completion } => {
-            let result = super::volatile_files::prepare(&root).await;
+        Request::PrepareVolatileFiles { id, root, archive, account, completion } => {
+            let result = crate::access_key_workspace::prepare(&archive, &root, account).await;
             finish(id, "prepare-volatile-files", completion, result, &mut progress);
         }
         Request::ReadFile {
@@ -725,7 +730,7 @@ async fn process_request(owned: OwnedRequest) {
             path,
             completion,
         } => {
-            let result = match super::trueosfs::file_out_async(disk, path.as_str()).await {
+            let result = match super::trueosfs::authorized::read(actor, disk, path.as_str(), u64::MAX).await {
                 Ok(Some(bytes)) => Ok(bytes),
                 Ok(None) => Err(FsError::NotFound),
                 Err(error) => Err(error.into()),
@@ -738,7 +743,7 @@ async fn process_request(owned: OwnedRequest) {
             path,
             completion,
         } => {
-            let result = match super::trueosfs::file_info_async(disk, path.as_str()).await {
+            let result = match super::trueosfs::authorized::node_info(actor, disk, path.as_str()).await {
                 Ok(Some(info)) => Ok(info.data_len as usize),
                 Ok(None) => Err(FsError::NotFound),
                 Err(error) => Err(error.into()),
@@ -755,23 +760,7 @@ async fn process_request(owned: OwnedRequest) {
         } => {
             progress.advance(progress::RANGE_SCRATCH, 0, crate::r::input_timing::now_ms);
             let mut scratch = alloc::vec![0u8; cap];
-            let result = match super::trueosfs::file_read_range_observed_async(
-                disk,
-                path.as_str(),
-                offset,
-                scratch.as_mut_slice(),
-                |phase| {
-                    use super::trueosfs::ReadRangePhase;
-                    let phase = match phase {
-                        ReadRangePhase::Placement => progress::RANGE_PLACEMENT,
-                        ReadRangePhase::RecordCache => progress::RANGE_RECORD_CACHE,
-                        ReadRangePhase::Index => progress::RANGE_INDEX,
-                        ReadRangePhase::Read => progress::RANGE_READ,
-                    };
-                    progress.advance(phase, 0, crate::r::input_timing::now_ms);
-                },
-            )
-            .await
+            let result = match super::trueosfs::authorized::read_range(actor, disk, path.as_str(), offset, scratch.as_mut_slice()).await
             {
                 Ok(Some(got)) => {
                     scratch.truncate(got);
@@ -788,7 +777,7 @@ async fn process_request(owned: OwnedRequest) {
             path,
             completion,
         } => {
-            let result = stat_async(disk, path.as_str()).await;
+            let result = stat_async(actor, disk, path.as_str()).await;
             finish(id, "stat", completion, result, &mut progress);
         }
         Request::TypedStat {
@@ -797,7 +786,7 @@ async fn process_request(owned: OwnedRequest) {
             path,
             completion,
         } => {
-            let result = match super::trueosfs::node_info_async(disk, path.as_str()).await {
+            let result = match super::trueosfs::authorized::node_info(actor, disk, path.as_str()).await {
                 Ok(Some(info)) => Ok((
                     FsStat {
                         kind: match info.kind {
@@ -823,7 +812,7 @@ async fn process_request(owned: OwnedRequest) {
             total_len,
             completion,
         } => {
-            let result = match super::trueosfs::file_info_async(disk, path.as_str()).await {
+            let result = match super::trueosfs::authorized::node_info(actor, disk, path.as_str()).await {
                 Ok(Some(info)) if info.content_type != super::trueosfs::ContentTypeId::BLOB => {
                     super::trueosfs::record_type_reject(
                         super::trueosfs::ContentIdentityRejectReason::LegacyDowngrade,
@@ -831,7 +820,7 @@ async fn process_request(owned: OwnedRequest) {
                     Err(FsError::TypeRequired)
                 }
                 Ok(_) => {
-                    match super::trueosfs::file_write_begin_async(disk, path.as_str(), total_len)
+                    match super::trueosfs::authorized::write_begin(actor, disk, path.as_str(), total_len, super::trueosfs::ContentTypeId::BLOB, true)
                         .await
                     {
                         Ok(Some(handle)) => Ok(handle),
@@ -854,11 +843,11 @@ async fn process_request(owned: OwnedRequest) {
             content_type,
             completion,
         } => {
-            let result = match super::trueosfs::file_write_begin_typed_async(
-                disk,
+            let result = match super::trueosfs::authorized::write_begin(
+                actor, disk,
                 path.as_str(),
                 total_len,
-                content_type,
+                content_type, false,
             )
             .await
             {
@@ -877,7 +866,7 @@ async fn process_request(owned: OwnedRequest) {
             path,
             completion,
         } => {
-            let result = create_dir_all_async(disk, path.as_str()).await;
+            let result = create_dir_all_async(actor, disk, path.as_str()).await;
             finish(id, "create-dir-all", completion, result, &mut progress);
         }
         Request::WriteFileChunk {
@@ -922,10 +911,8 @@ async fn process_request(owned: OwnedRequest) {
             max_entries,
             completion,
         } => {
-            let result = match super::fs_html::html_tree_async(disk, max_entries).await {
-                Ok(Some(value)) => Ok(value),
-                Ok(None) => Err(FsError::NoRoot),
-                Err(error) => Err(error.into()),
+            let result = match super::fs_html::html_tree_for_actor_async(actor, disk, max_entries).await {
+                Ok(Some(value)) => Ok(value), Ok(None) => Err(FsError::NoRoot), Err(error) => Err(error.into()),
             };
             finish(id, "html-tree", completion, result, &mut progress);
         }
@@ -935,10 +922,8 @@ async fn process_request(owned: OwnedRequest) {
             max_entries,
             completion,
         } => {
-            let result = match super::trueosfs::json_all_async(disk, max_entries).await {
-                Ok(Some(value)) => Ok(value),
-                Ok(None) => Err(FsError::NoRoot),
-                Err(error) => Err(error.into()),
+            let result = match super::trueosfs::authorized::json_all(actor, disk, max_entries).await {
+                Ok(Some(value)) => Ok(value), Ok(None) => Err(FsError::NoRoot), Err(error) => Err(error.into()),
             };
             finish(id, "json-all", completion, result, &mut progress);
         }
@@ -948,7 +933,7 @@ async fn process_request(owned: OwnedRequest) {
             path,
             completion,
         } => {
-            let result = match super::trueosfs::list_dir_async(disk, path.as_str()).await {
+            let result = match super::trueosfs::authorized::list(actor, disk, path.as_str(), 4096).await {
                 Ok(Some(value)) if value.truncated => {
                     Err(FsError::Device(block::Error::OutOfBounds))
                 }
@@ -969,7 +954,7 @@ async fn process_request(owned: OwnedRequest) {
             path,
             completion,
         } => {
-            let result = match super::trueosfs::list_dir_async(disk, path.as_str()).await {
+            let result = match super::trueosfs::authorized::list(actor, disk, path.as_str(), 4096).await {
                 Ok(Some(value)) => Ok(value),
                 Ok(None) => Err(FsError::NoRoot),
                 Err(error) => Err(error.into()),
@@ -982,7 +967,7 @@ async fn process_request(owned: OwnedRequest) {
             path,
             completion,
         } => {
-            let result = match super::trueosfs::remove_recursive_async(disk, path.as_str()).await {
+            let result = match super::trueosfs::authorized::remove(actor, disk, path.as_str(), None).await.map_err(|error| match error { super::trueosfs::RemoveNodeError::Device(error) => error, _ => block::Error::InvalidParam }) {
                 Ok(true) => Ok(()),
                 Ok(false) => Err(FsError::NotFound),
                 Err(error) => Err(error.into()),
@@ -995,7 +980,7 @@ async fn process_request(owned: OwnedRequest) {
             path,
             completion,
         } => {
-            let result = super::trueosfs::node_info_async(disk, path.as_str())
+            let result = super::trueosfs::authorized::node_info(actor, disk, path.as_str())
                 .await
                 .map(|info| info.is_some())
                 .map_err(FsError::from);
@@ -1037,7 +1022,7 @@ fn queue_retired_write_aborts() {
     }
 }
 
-async fn stat_async(disk: block::DeviceHandle, path: &str) -> FsResult<FsStat> {
+async fn stat_async(actor: super::trueosfs::authorized::Actor, disk: block::DeviceHandle, path: &str) -> FsResult<FsStat> {
     if path.is_empty() {
         return Ok(FsStat {
             kind: FsNodeKind::Directory,
@@ -1048,7 +1033,7 @@ async fn stat_async(disk: block::DeviceHandle, path: &str) -> FsResult<FsStat> {
         });
     }
 
-    if let Some(info) = super::trueosfs::node_info_async(disk, path).await? {
+    if let Some(info) = super::trueosfs::authorized::node_info(actor, disk, path).await? {
         return Ok(FsStat {
             kind: match info.kind {
                 super::trueosfs::NodeKind::File => FsNodeKind::File,
@@ -1063,8 +1048,8 @@ async fn stat_async(disk: block::DeviceHandle, path: &str) -> FsResult<FsStat> {
     Err(FsError::NotFound)
 }
 
-async fn create_dir_all_async(disk: block::DeviceHandle, path: &str) -> FsResult<()> {
-    match super::trueosfs::dir_create_all_async(disk, path).await? {
+async fn create_dir_all_async(actor: super::trueosfs::authorized::Actor, disk: block::DeviceHandle, path: &str) -> FsResult<()> {
+    match super::trueosfs::authorized::create_dir_all(actor, disk, path).await? {
         true => Ok(()),
         false => Err(FsError::NoSpace),
     }

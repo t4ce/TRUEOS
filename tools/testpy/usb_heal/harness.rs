@@ -48,6 +48,17 @@ mod pci {
 }
 mod usb3 {
     pub const MAX_CRABUSB_CONTROLLERS: usize = 2;
+    pub mod lab {
+        use super::crabusb::diag::XhciControllerSnapshot;
+        static LATEST: [spin::Mutex<Option<XhciControllerSnapshot>>; super::MAX_CRABUSB_CONTROLLERS] =
+            [const { spin::Mutex::new(None) }; super::MAX_CRABUSB_CONTROLLERS];
+        pub fn latest_snapshot(index: usize) -> Option<XhciControllerSnapshot> {
+            LATEST.get(index)?.lock().clone()
+        }
+        pub fn publish(index: usize, snapshot: Option<XhciControllerSnapshot>) {
+            *LATEST[index].lock() = snapshot;
+        }
+    }
     pub mod runtime {
         use std::sync::atomic::{AtomicBool, Ordering};
         pub static READY: AtomicBool = AtomicBool::new(true);
@@ -132,6 +143,7 @@ fn host() -> usb3::crabusb::USBHost {
     use usb3::crabusb::{self, diag::*};
     crabusb::USBHost {
         snapshot: XhciControllerSnapshot {
+            enumeration: XhciEnumerationDiagnostics::default(),
             mmio_len: 4096, caplength: 32, hciversion: 0x110,
             hcsparams1: (1 << 24) | 32, hcsparams2: 0, hcsparams3: 0,
             hccparams1: 1 << 3, hccparams2: 0, dboff: 0, rtsoff: 0,

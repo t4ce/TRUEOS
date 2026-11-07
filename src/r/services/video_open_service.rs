@@ -177,7 +177,7 @@ async fn browser_prepare_task(owner: u32) {
                     None
                 };
                 if let Some(worker) = crate::workers::pick_background_spawner() {
-                    if let Ok(task) = playback_task(Source::Browser(url), Session(session), target) {
+                    if let Ok(task) = playback_task(Source::Browser(url), Session(session), target, crate::r::fs::trueosfs::authorized::Actor::Public) {
                         worker.spawn(task);
                     }
                 } else {
@@ -273,7 +273,7 @@ pub(crate) fn enqueue(vm: u8, payload: &[u8], qualified: bool) -> i32 {
         return -11;
     };
     let target = crate::hv::blueprint_console_target(vm);
-    match playback_task(source, Session(session), target) {
+    match playback_task(source, Session(session), target, crate::r::fs::trueosfs::authorized::Actor::Vm(vm)) {
         Ok(task) => {
             worker.spawn(task);
             0
@@ -287,8 +287,9 @@ async fn playback_task(
     source: Source,
     session: Session,
     target: Option<crate::shell3::MatrixTarget>,
+    actor: crate::r::fs::trueosfs::authorized::Actor,
 ) {
-    let result = play(source, session.0).await;
+    let result = play(source, session.0, actor).await;
     if let Err(error) = result {
         crate::log_os::blueprint_important_line(format_args!("video: {error}\n"));
         if let Some(target) = target {
@@ -300,10 +301,10 @@ async fn playback_task(
     }
 }
 
-async fn play(source: Source, session: VideoPlaybackSession) -> Result<(), &'static str> {
+async fn play(source: Source, session: VideoPlaybackSession, actor: crate::r::fs::trueosfs::authorized::Actor) -> Result<(), &'static str> {
     let mut prepared = match &source {
         Source::File(path) => {
-            Some(crate::intel::media::hw_vid::prepare_trueosfs_ui4_video(session, path).await?)
+            Some(crate::intel::media::hw_vid::prepare_trueosfs_ui4_video(session, path, actor).await?)
         }
         Source::Url(_) | Source::Browser(_) => None,
     };
@@ -320,7 +321,7 @@ async fn play(source: Source, session: VideoPlaybackSession) -> Result<(), &'sta
                 let asset = match prepared.take() {
                     Some(asset) => asset,
                     None => {
-                        crate::intel::media::hw_vid::prepare_trueosfs_ui4_video(session, path)
+                        crate::intel::media::hw_vid::prepare_trueosfs_ui4_video(session, path, actor)
                             .await?
                     }
                 };

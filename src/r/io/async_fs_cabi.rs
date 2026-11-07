@@ -468,6 +468,7 @@ fn map_block_error(error: crate::disc::block::Error) -> i32 {
         crate::disc::block::Error::InvalidParam | crate::disc::block::Error::OutOfBounds => {
             FS_ERR_BAD_PARAM
         }
+        crate::disc::block::Error::PermissionDenied => FS_ERR_PERMISSION_DENIED,
         crate::disc::block::Error::NotReady => FS_ERR_NOT_FOUND,
         crate::disc::block::Error::NotSupported
         | crate::disc::block::Error::Timeout
@@ -1127,14 +1128,16 @@ fn mounted_roots_text() -> String {
 }
 
 async fn process(request: &Request) -> OperationState {
+    let actor = match crate::r::fs::trueosfs::authorized::actor_from_owner(request.owner) { Ok(actor) => actor, Err(error) => return OperationState::Failed(map_block_error(error)) };
     if let RequestKind::FileObject(command) = &request.kind {
-        let result = if command.op == 1 {
+        let result = if matches!(command.op, 1 | 14) {
             let path = match core::str::from_utf8(&command.payload) { Ok(path) => path, Err(_) => return OperationState::Failed(FS_ERR_BAD_UTF8) };
             let (disk,path) = match selected_disk(path) { Ok(selected) => selected, Err(code) => return OperationState::Failed(code) };
             if let Some(vm) = vm_for_owner(request.owner) {
                 crate::access_key_db::audit_path(vm, disk, path, "file-open", command.flags & 48 != 0).await;
             }
-            crate::r::fs::trueosfs::file_objects::open(request.owner, disk, path, command.flags).await
+            if command.op == 14 { crate::r::fs::trueosfs::authorized::assert_private_path(actor, disk, path).await.map(|()| Vec::new()).map_err(map_block_error) }
+            else { crate::r::fs::trueosfs::file_objects::open(request.owner, disk, path, command.flags).await }
         } else { crate::r::fs::trueosfs::file_objects::operate(request.owner, command).await };
         return match result { Ok(bytes) => OperationState::Read(bytes), Err(code) => OperationState::Failed(code) };
     }
@@ -1209,13 +1212,13 @@ async fn process(request: &Request) -> OperationState {
             if !archive.ends_with(".bp") { return OperationState::Failed(FS_ERR_BAD_PATH); }
             let (disk, file) = match selected_disk(&path) { Ok(selected) => selected, Err(code) => return OperationState::Failed(code) };
             crate::access_key_db::audit_path(vm as u8, disk, file, "appdb-install-read", false).await;
-            let len = match crate::r::fs::trueosfs::file_info_async(disk, file).await {
+            let len = match crate::r::fs::trueosfs::authorized::node_info(actor, disk, file).await {
                 Ok(Some(info)) => info.data_len,
                 Ok(None) => return OperationState::Failed(FS_ERR_NOT_FOUND),
                 Err(error) => return OperationState::Failed(map_block_error(error)),
             };
             if len > 512 * 1024 * 1024 { return OperationState::Failed(FS_ERR_TOO_LARGE); }
-            let bytes = match crate::r::fs::trueosfs::file_out_async(disk, file).await {
+            let bytes = match crate::r::fs::trueosfs::authorized::read(actor, disk, file, 512 * 1024 * 1024).await {
                 Ok(Some(bytes)) => bytes,
                 Ok(None) => return OperationState::Failed(FS_ERR_NOT_FOUND),
                 Err(error) => return OperationState::Failed(map_block_error(error)),
@@ -1260,36 +1263,32 @@ async fn process(request: &Request) -> OperationState {
             }
         }
         if source_path == destination_path {
-            return match path_kind_async(source_disk, source_path).await {
+            return match crate::r::fs::trueosfs::authorized::node_info(actor, source_disk, source_path).await.map(|info| info.map(|node| node.kind == crate::r::fs::trueosfs::NodeKind::File)) {
                 Ok(Some(_)) => OperationState::Unit,
                 Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
                 Err(error) => OperationState::Failed(map_block_error(error)),
             };
         }
-        let destination_is_file = match path_kind_async(destination_disk, destination_path).await {
+        let destination_is_file = match crate::r::fs::trueosfs::authorized::node_info(actor, destination_disk, destination_path).await.map(|info| info.map(|node| node.kind == crate::r::fs::trueosfs::NodeKind::File)) {
             Ok(Some(true)) if *replace_file => true,
             Ok(Some(_)) => return OperationState::Failed(FS_ERR_ALREADY_EXISTS),
             Ok(None) => false,
             Err(error) => return OperationState::Failed(map_block_error(error)),
         };
 
-        let result = match path_kind_async(source_disk, source_path).await {
+        let result = match crate::r::fs::trueosfs::authorized::node_info(actor, source_disk, source_path).await.map(|info| info.map(|node| node.kind == crate::r::fs::trueosfs::NodeKind::File)) {
             Ok(Some(true)) => {
                 if *replace_file {
-                    crate::r::fs::trueosfs::file_rename_replace_async(
-                        source_disk, source_path, destination_path,
-                    ).await
+                    crate::r::fs::trueosfs::authorized::rename(actor, source_disk, source_path, destination_path, true, false).await
                 } else {
-                    crate::r::fs::trueosfs::file_rename_async(
-                        source_disk, source_path, destination_path,
-                    ).await
+                    crate::r::fs::trueosfs::authorized::rename(actor, source_disk, source_path, destination_path, false, false).await
                 }
             }
             Ok(Some(false)) if destination_is_file => {
                 return OperationState::Failed(FS_ERR_ALREADY_EXISTS);
             }
             Ok(Some(false)) => {
-                crate::r::fs::trueosfs::dir_rename_async(source_disk, source_path, destination_path)
+                crate::r::fs::trueosfs::authorized::rename(actor, source_disk, source_path, destination_path, false, true)
                     .await
             }
             Ok(None) => return OperationState::Failed(FS_ERR_NOT_FOUND),
@@ -1297,7 +1296,7 @@ async fn process(request: &Request) -> OperationState {
         };
         return match result {
             Ok(true) => OperationState::Unit,
-            Ok(false) => match path_kind_async(destination_disk, destination_path).await {
+            Ok(false) => match crate::r::fs::trueosfs::authorized::node_info(actor, destination_disk, destination_path).await.map(|info| info.map(|node| node.kind == crate::r::fs::trueosfs::NodeKind::File)) {
                 Ok(Some(_)) => OperationState::Failed(FS_ERR_ALREADY_EXISTS),
                 Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
                 Err(error) => OperationState::Failed(map_block_error(error)),
@@ -1337,11 +1336,11 @@ async fn process(request: &Request) -> OperationState {
     match &request.kind {
         RequestKind::Read { path: _ } => {
             let path = selected_path;
-            match crate::r::fs::trueosfs::file_info_async(disk, path).await {
+            match crate::r::fs::trueosfs::authorized::node_info(actor, disk, path).await {
                 Ok(Some(info)) if info.data_len > ASYNC_FS_MAX_FILE_READ_BYTES => {
                     OperationState::Failed(FS_ERR_TOO_LARGE)
                 }
-                Ok(Some(_)) => match crate::r::fs::trueosfs::file_out_async(disk, path).await {
+                Ok(Some(_)) => match crate::r::fs::trueosfs::authorized::read(actor, disk, path, ASYNC_FS_MAX_FILE_READ_BYTES).await {
                     Ok(Some(bytes)) => OperationState::Read(bytes),
                     Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
                     Err(error) => OperationState::Failed(map_block_error(error)),
@@ -1361,14 +1360,9 @@ async fn process(request: &Request) -> OperationState {
             if let Some(options) = checked {
                 use crate::r::fs::trueosfs::CheckedWriteError;
                 let result = if options.reset_blob {
-                    crate::r::fs::trueosfs::reset_blob_checked_async(
-                        disk, selected_path, options.expected_sha256.expect("validated reset digest"),
-                    ).await
+                    crate::r::fs::trueosfs::authorized::write_checked(actor, disk, selected_path, &[], crate::r::fs::trueosfs::ContentTypeId::BLOB, false, options.expected_sha256, false, true).await
                 } else {
-                    crate::r::fs::trueosfs::file_in_typed_checked_async(
-                        disk, selected_path, bytes.as_slice(), *content_type,
-                        options.create_new, options.expected_sha256, options.infer_blob,
-                    ).await
+                    crate::r::fs::trueosfs::authorized::write_checked(actor, disk, selected_path, bytes.as_slice(), *content_type, options.create_new, options.expected_sha256, options.infer_blob, false).await
                 };
                 return match result {
                     Ok(true) => OperationState::Unit,
@@ -1379,7 +1373,7 @@ async fn process(request: &Request) -> OperationState {
                 };
             }
             if *legacy_blob {
-                match crate::r::fs::trueosfs::file_info_async(disk, selected_path).await {
+                match crate::r::fs::trueosfs::authorized::node_info(actor, disk, selected_path).await {
                     Ok(Some(info))
                         if info.content_type != crate::r::fs::trueosfs::ContentTypeId::BLOB =>
                     {
@@ -1393,14 +1387,9 @@ async fn process(request: &Request) -> OperationState {
                 }
             }
             let result = if *legacy_blob {
-                crate::r::fs::trueosfs::file_in_async(disk, selected_path, bytes.as_slice()).await
+                crate::r::fs::trueosfs::authorized::write(actor, disk, selected_path, bytes.as_slice(), crate::r::fs::trueosfs::ContentTypeId::BLOB, true).await
             } else {
-                crate::r::fs::trueosfs::file_in_typed_async(
-                    disk,
-                    selected_path,
-                    bytes.as_slice(),
-                    *content_type,
-                )
+                crate::r::fs::trueosfs::authorized::write(actor, disk, selected_path, bytes.as_slice(), *content_type, false)
                 .await
             };
             match result {
@@ -1411,7 +1400,7 @@ async fn process(request: &Request) -> OperationState {
         }
         RequestKind::CreateDirAll { path } => {
             let _ = path;
-            match crate::r::fs::trueosfs::dir_create_all_async(disk, selected_path).await {
+            match crate::r::fs::trueosfs::authorized::create_dir_all(actor, disk, selected_path).await {
                 Ok(true) => OperationState::Unit,
                 Ok(false) => OperationState::Failed(FS_ERR_NO_SPACE),
                 Err(error) => OperationState::Failed(map_block_error(error)),
@@ -1419,7 +1408,7 @@ async fn process(request: &Request) -> OperationState {
         }
         RequestKind::CreateDir { .. } => {
             use crate::r::fs::trueosfs::CreateDirectoryError;
-            match crate::r::fs::trueosfs::create_directory_new_async(disk, selected_path).await {
+            match crate::r::fs::trueosfs::authorized::create_dir(actor, disk, selected_path, true).await {
                 Ok(true) => OperationState::Unit,
                 Ok(false) => OperationState::Failed(FS_ERR_NO_SPACE),
                 Err(CreateDirectoryError::AlreadyExists) => OperationState::Failed(FS_ERR_ALREADY_EXISTS),
@@ -1434,7 +1423,7 @@ async fn process(request: &Request) -> OperationState {
             let stat = if path.is_empty() {
                 Ok((2u32, 0u64))
             } else {
-                match crate::r::fs::trueosfs::node_info_async(disk, path).await {
+                match crate::r::fs::trueosfs::authorized::node_info(actor, disk, path).await {
                     Ok(Some(info)) => Ok((
                         match info.kind {
                             crate::r::fs::trueosfs::NodeKind::File => 1,
@@ -1463,7 +1452,7 @@ async fn process(request: &Request) -> OperationState {
                     data_len: 0, content_type: crate::r::fs::trueosfs::ContentTypeId::NONE,
                     record_key: crate::r::fs::trueosfs::RecordKey::Ffa,
                 }))
-            } else { crate::r::fs::trueosfs::node_info_async(disk, selected_path).await };
+            } else { crate::r::fs::trueosfs::authorized::node_info(actor, disk, selected_path).await };
             match info {
                 Ok(Some(info)) => {
                     let mut bytes = Vec::with_capacity(24);
@@ -1484,7 +1473,7 @@ async fn process(request: &Request) -> OperationState {
             }
         }
         RequestKind::TypedStat { path: _ } => {
-            match crate::r::fs::trueosfs::node_info_async(disk, selected_path).await {
+            match crate::r::fs::trueosfs::authorized::node_info(actor, disk, selected_path).await {
                 Ok(Some(info)) => {
                     let mut bytes = Vec::with_capacity(16);
                     bytes.extend_from_slice(
@@ -1504,7 +1493,7 @@ async fn process(request: &Request) -> OperationState {
         }
         RequestKind::RecordKey { path } => {
             let _ = path;
-            match crate::r::fs::trueosfs::file_info_async(disk, selected_path).await {
+            match crate::r::fs::trueosfs::authorized::node_info(actor, disk, selected_path).await {
                 Ok(Some(info)) => {
                     let mut bytes = Vec::with_capacity(56);
                     match info.record_key {
@@ -1529,7 +1518,7 @@ async fn process(request: &Request) -> OperationState {
                 request.owner,
                 selected_path
             );
-            let state = match crate::r::fs::trueosfs::list_dir_async(disk, selected_path).await {
+            let state = match crate::r::fs::trueosfs::authorized::list(actor, disk, selected_path, 4096).await {
                 Ok(Some(listing)) => match encode_dir_listing(&listing) {
                     Some(bytes) if bytes.len() as u64 <= ASYNC_FS_MAX_RESULT_BYTES => {
                         OperationState::Read(bytes)
@@ -1558,7 +1547,7 @@ async fn process(request: &Request) -> OperationState {
             state
         }
         RequestKind::TypedListDir { path: _ } => {
-            match crate::r::fs::trueosfs::list_dir_async(disk, selected_path).await {
+            match crate::r::fs::trueosfs::authorized::list(actor, disk, selected_path, 4096).await {
                 Ok(Some(listing)) => match encode_typed_dir_listing(&listing) {
                     Some(bytes) => OperationState::Read(bytes),
                     None => OperationState::Failed(FS_ERR_IO),
@@ -1572,8 +1561,8 @@ async fn process(request: &Request) -> OperationState {
             max_depth,
             ..
         } => {
-            match crate::r::fs::trueosfs::select_files_async(
-                disk,
+            match crate::r::fs::trueosfs::authorized::select(
+                actor, disk,
                 selected_path,
                 *content_type,
                 *max_depth,
@@ -1591,7 +1580,7 @@ async fn process(request: &Request) -> OperationState {
         }
         RequestKind::Remove { path } => {
             let _ = path;
-            match crate::r::fs::trueosfs::remove_recursive_async(disk, selected_path).await {
+            match crate::r::fs::trueosfs::authorized::remove(actor, disk, selected_path, None).await.map_err(|error| match error { crate::r::fs::trueosfs::RemoveNodeError::Device(error) => error, _ => crate::disc::block::Error::InvalidParam }) {
                 Ok(true) => OperationState::Unit,
                 Ok(false) => OperationState::Failed(FS_ERR_NOT_FOUND),
                 Err(error) => OperationState::Failed(map_block_error(error)),
@@ -1599,7 +1588,7 @@ async fn process(request: &Request) -> OperationState {
         }
         RequestKind::RemoveLeaf { kind, .. } => {
             use crate::r::fs::trueosfs::RemoveNodeError;
-            match crate::r::fs::trueosfs::remove_leaf_async(disk, selected_path, *kind).await {
+            match crate::r::fs::trueosfs::authorized::remove(actor, disk, selected_path, Some(*kind)).await {
                 Ok(true) => OperationState::Unit,
                 Ok(false) => OperationState::Failed(FS_ERR_NOT_FOUND),
                 Err(RemoveNodeError::KindMismatch) => OperationState::Failed(FS_ERR_BAD_PATH),

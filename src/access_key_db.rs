@@ -1,7 +1,7 @@
-//! Kernel adapter for AccessKeyDB. Policy failures are diagnostic during bring-up.
+//! Kernel access-key policy for captured app principals and native file operations.
 //!
 //! AppDB contains executable bytes; this database contains permission relations.
-//! Nothing here grants a key or container membership as a side effect of launch.
+//! Trusted workspace provisioning installs persisted owner grants before launch.
 //! Only trusted kernel account-management code may configure policy. There is
 //! deliberately no guest ABI for choosing an account or changing this database.
 
@@ -15,14 +15,7 @@ use trueos_fs::{
 };
 
 static ACCESS_KEY_DB: Mutex<AccessKeyDb> = Mutex::new(AccessKeyDb::new());
-static WORKSPACE_PREPARE: embassy_sync::mutex::Mutex<crate::wait::EmbassySpinRawMutex, ()> =
-    embassy_sync::mutex::Mutex::new(());
 const MAX_WARNINGS_PER_VM: usize = 32;
-/// Reserved shared configuration image beside Cry's `users/<name>` profiles.
-/// AccessKeyDB belongs in that Redb image, separately from volatile `app.db`.
-/// Storage and account-profile migration are intentionally not activated yet.
-#[allow(dead_code)]
-pub(crate) const CONFIGURATION_DB_PATH: &str = "users/configuration.redb";
 
 /// FFA is the public/default namespace. A keyed record requires the captured
 /// launch account's grant; a different frontend's current login is irrelevant.
@@ -32,61 +25,64 @@ pub(crate) fn authorize_record(vm_id: u8, key: RecordKey) -> Result<(), AccessDe
     ACCESS_KEY_DB.lock().check_file(subject.account, &subject.container, key)
 }
 
-/// Trusted host provisioning, before Codex executes. Persist ownership before
-/// granting access; a failed write never manufactures a boot-local permission.
-pub(crate) async fn prepare_owned_workspace(
-    archive: &str,
-    workspace: &str,
-    account: Option<AccountId>,
-) -> Result<RecordKey, crate::r::io::kfs::FsError> {
-    use crate::r::io::kfs::FsError;
-    use crate::r::fs::trueosfs as fs;
-    use sha2::{Digest, Sha256};
-    let account = account.ok_or(FsError::PermissionDenied)?;
-    let container = container_for_workspace(archive, workspace).ok_or(FsError::BadPath)?;
-    let _prepare = WORKSPACE_PREPARE.lock().await;
-    let disk = fs::primary_root_handle().ok_or(FsError::NoRoot)?;
-    let image = fs::file_out_async(disk, CONFIGURATION_DB_PATH).await
-        .map_err(|_| FsError::Io)?;
-    let mut handle = [0u8; 32];
-    crate::crypt::fill_access_key_handle(&mut handle).map_err(|_| FsError::Io)?;
-    let candidate = crate::access_key_store::software_key(handle).map_err(|_| FsError::Io)?;
-    let update = crate::access_key_store::ensure_workspace(
-        image.as_deref().unwrap_or_default(), workspace, account, candidate,
-    ).map_err(|error| match error {
-        crate::access_key_store::StoreError::ForeignOwner => FsError::PermissionDenied,
-        _ => FsError::Io,
-    })?;
-    if let Some(next) = update.image {
-        if !fs::dir_create_all_async(disk, "users").await.map_err(|_| FsError::Io)? {
-            return Err(FsError::NoSpace);
-        }
-        let digest = image.as_ref().map(|bytes| <[u8;32]>::from(Sha256::digest(bytes)));
-        fs::file_in_typed_checked_async(
-            disk, CONFIGURATION_DB_PATH, &next, fs::ContentTypeId::BLOB,
-            image.is_none(), digest, false,
-        ).await.map_err(|_| FsError::Io)?.then_some(()).ok_or(FsError::NoSpace)?;
-        let saved = fs::file_out_async(disk, CONFIGURATION_DB_PATH).await.map_err(|_| FsError::Io)?;
-        if saved.as_deref() != Some(next.as_slice()) { return Err(FsError::Io); }
-    }
-    let key = update.record.key;
-    if !fs::dir_create_all_async(disk, workspace).await.map_err(|_| FsError::Io)?
-        || !fs::stamp_directory_key_async(disk, workspace, key).await.map_err(|_| FsError::PermissionDenied)? {
-        return Err(FsError::NoSpace);
-    }
+/// Install only a durably provisioned owner/key relation. This trusted entry
+/// point changes permission state; binding another VM never manufactures it.
+pub(crate) fn grant_owned_workspace(
+    archive: &str, workspace: &str, account: AccountId, key: RecordKey,
+) -> Result<(), AccessDenied> {
+    let container = container_for_workspace(archive, workspace)
+        .ok_or(AccessDenied::UnknownContainer)?;
+    if key == RecordKey::Ffa { return Err(AccessDenied::UnknownKey); }
     crate::allocators::with_host_alloc_domain_strong(|| {
+        let mut workspaces = OWNED_WORKSPACES.lock();
+        if workspaces.iter().any(|(id, owner, stored)| id == &container && (*owner != account || *stored != key)) {
+            return Err(AccessDenied::PrincipalMismatch);
+        }
         let mut database = ACCESS_KEY_DB.lock();
         match database.register_container(container.clone(), ContainerPolicy::Private { owner: account }) {
             Ok(()) | Err(trueos_fs::access::PolicyError::ContainerAlreadyRegistered) => {}
-            Err(_) => return Err(FsError::PermissionDenied),
+            Err(_) => return Err(AccessDenied::UnknownContainer),
         }
-        database.add_member(&container, account).map_err(|_| FsError::PermissionDenied)?;
+        database.add_member(&container, account).map_err(|_| AccessDenied::NotMember)?;
         database.register_key(key);
         database.grant(account, GrantScope::App(container.app().clone()), key)
-            .map_err(|_| FsError::PermissionDenied)?;
+            .map_err(|_| AccessDenied::MissingGrant)?;
+        if !workspaces.iter().any(|(id, _, _)| id == &container) {
+            workspaces.push((container, account, key));
+        }
         Ok(())
-    })?;
-    Ok(key)
+    })
+}
+
+static OWNED_WORKSPACES: Mutex<Vec<(ContainerId, AccountId, RecordKey)>> = Mutex::new(Vec::new());
+
+pub(crate) fn workspace_for_vm(vm_id: u8) -> Option<String> {
+    Some(principal(vm_id)?.container.workspace_root())
+}
+
+/// A legacy checkpoint/replication export has no private-key envelope.
+pub(crate) fn is_protected_vm(vm_id: u8) -> bool {
+    principal(vm_id).is_some_and(|subject| {
+        OWNED_WORKSPACES.lock().iter().any(|(id, _, _)| id == &subject.container)
+    })
+}
+
+/// Retained protected runs can only be controlled by their captured account.
+/// Public development apps keep their existing control behavior.
+pub(crate) fn authorize_vm_control(vm_id: u8, actor: Option<AccountId>) -> Result<(), AccessDenied> {
+    let Some(subject) = principal(vm_id) else { return Ok(()); };
+    if !OWNED_WORKSPACES.lock().iter().any(|(id, _, _)| id == &subject.container) { return Ok(()); }
+    ACCESS_KEY_DB.lock().check_resume(actor, subject.account, &subject.container)
+}
+
+/// Credential paths must use this launch's exact persisted owner/key binding.
+pub(crate) fn authorize_protected_workspace(vm_id: u8, root_key: RecordKey) -> Result<(), AccessDenied> {
+    let subject = principal(vm_id).ok_or(AccessDenied::MissingIdentity)?;
+    let account = subject.account.ok_or(AccessDenied::MissingIdentity)?;
+    if !OWNED_WORKSPACES.lock().iter().any(|(id, owner, key)| {
+        id == &subject.container && *owner == account && *key == root_key
+    }) { return Err(AccessDenied::MissingGrant); }
+    authorize_record(vm_id, root_key)
 }
 
 #[derive(Clone)]
@@ -129,7 +125,7 @@ pub(crate) fn configure_policy(update: impl FnOnce(&mut AccessKeyDb)) {
 /// Resolve the loader's path to an app-prefixed container identity. The bare
 /// app directory is container 0; a flat `apps/name_id` directory is another
 /// container ID. A physical `apps/name_0` is not an alias for container 0.
-fn container_for_workspace(archive: &str, workspace: &str) -> Option<ContainerId> {
+pub(crate) fn container_for_workspace(archive: &str, workspace: &str) -> Option<ContainerId> {
     let app_root = crate::hv::blueprint::app_fs_root_for_archive(archive, &[]);
     let app = AppId::new(app_root.strip_prefix("apps/").unwrap_or(&app_root));
     if workspace == app_root {

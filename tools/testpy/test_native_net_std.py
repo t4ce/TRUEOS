@@ -120,7 +120,7 @@ edition="2024"
 full-signal-check=["tokio/process","tokio/signal"]
 native-fd-check=[]
 [dependencies]
-mio={{path="mio",default-features=false,features=["std-compat","native-net","os-poll","os-ext","net"]}}
+mio={{path="mio",default-features=false,features=["std-compat","native-net","os-poll","os-ext","net","log"]}}
 tokio={{path={json.dumps(str(tokio))},default-features=false,features=["native-net","net","rt","rt-multi-thread","io-util","sync","time"]}}
 trueos-runtime={{path={json.dumps(str(ROOT / 'crates/trueos-runtime'))}}}
 [patch.crates-io]

@@ -386,7 +386,9 @@ pub(crate) fn fs_error_to_code(err: super::kfs::FsError) -> i32 {
         FsError::AlreadyExists => FS_ERR_ALREADY_EXISTS,
         FsError::TypeRequired => FS_ERR_TYPE_REQUIRED,
         FsError::TypeMismatch => FS_ERR_TYPE_MISMATCH,
+        FsError::PermissionDenied => FS_ERR_PERMISSION_DENIED,
         FsError::Device(e) => match e {
+            crate::disc::block::Error::PermissionDenied => FS_ERR_PERMISSION_DENIED,
             crate::disc::block::Error::InvalidParam => FS_ERR_BAD_PARAM,
             crate::disc::block::Error::OutOfBounds => FS_ERR_BAD_PARAM,
             crate::disc::block::Error::NotReady => FS_ERR_NOT_FOUND,

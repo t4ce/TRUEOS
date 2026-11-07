@@ -3178,7 +3178,7 @@ fn prepare_blueprint_launch_on_lane(
             "apps: vm{} preparing boot-local Codex files from {}",
             vm_id, app_fs_root
         ));
-        crate::r::io::kfs::prepare_volatile_files(app_fs_root.as_str())
+        crate::r::io::kfs::prepare_volatile_files(app_fs_root.as_str(), pending.archive.as_str(), pending.access_account)
             .map_err(|err| alloc::format!("Codex RAM files preparation failed: {:?}", err))?;
     }
     let files_at_ms = lifecycle_now_ms();

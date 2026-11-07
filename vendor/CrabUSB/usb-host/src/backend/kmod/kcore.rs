@@ -34,6 +34,16 @@ pub trait CoreOp: Send + 'static {
 
     fn kernel(&self) -> &Kernel;
 
+    fn record_enumeration_failure(
+        &mut self,
+        _root_port_id: u8,
+        _port_id: u8,
+        _slot_id: Option<u8>,
+        _stage: &'static str,
+        _reason: &dyn core::fmt::Display,
+    ) {
+    }
+
     fn xhci_direct<'a>(
         &'a mut self,
         request: XhciDirectRequest,
@@ -47,11 +57,49 @@ pub trait CoreOp: Send + 'static {
     }
 }
 
+/// Keeps an admitted slot's owner alive until ownership is transferred.
+///
+/// Dropping an enumeration future is not a Disable Slot completion. In
+/// particular, input/output contexts and endpoint rings can still be referenced
+/// by the controller after a failed command or control transfer. Until explicit
+/// teardown is implemented, cancellation and quarantined owners retain those
+/// allocations rather than returning them to the DMA allocator.
+pub(crate) struct EnumerationOwner<T> {
+    value: Option<T>,
+}
+
+impl<T> EnumerationOwner<T> {
+    pub(crate) fn new(value: T) -> Self {
+        Self { value: Some(value) }
+    }
+
+    pub(crate) fn get_mut(&mut self) -> &mut T {
+        self.value
+            .as_mut()
+            .expect("enumeration owner was transferred")
+    }
+
+    pub(crate) fn into_inner(mut self) -> T {
+        self.value
+            .take()
+            .expect("enumeration owner was transferred")
+    }
+}
+
+impl<T> Drop for EnumerationOwner<T> {
+    fn drop(&mut self) {
+        if let Some(value) = self.value.take() {
+            core::mem::forget(value);
+        }
+    }
+}
+
 pub struct Core {
     pub(crate) backend: Box<dyn CoreOp>,
     hubs: Arena<Hub>,
     root_hub: Option<Id<Hub>>,
     inited_devices: BTreeMap<usize, Box<dyn DeviceOp>>,
+    quarantined_hubs: Vec<EnumerationOwner<Hub>>,
 }
 
 impl Core {
@@ -61,6 +109,7 @@ impl Core {
             backend: Box::new(backend),
             hubs: Arena::new(),
             inited_devices: BTreeMap::new(),
+            quarantined_hubs: Vec::new(),
         }
     }
 
@@ -80,7 +129,24 @@ impl Core {
         let hub_ids: Vec<Id<Hub>> = self.hubs.iter().map(|(id, _)| id).collect();
 
         for id in hub_ids {
-            let addr_infos = self.hub_changed_ports(id).await?;
+            let addr_infos = match self.hub_changed_ports(id).await {
+                Ok(ports) => ports,
+                Err(error) => {
+                    let slot_id = self.hubs.get(id).unwrap().backend.slot_id();
+                    self.backend.record_enumeration_failure(
+                        0,
+                        0,
+                        (slot_id != 0).then_some(slot_id),
+                        "hub-port-scan",
+                        &error,
+                    );
+                    warn!(
+                        "USB hub scan failed hub={:?} error={}; continuing other hubs",
+                        id, error
+                    );
+                    continue;
+                }
+            };
             let parent_hub_id = self.hubs.get(id).unwrap().backend.slot_id();
             for addr_info in addr_infos {
                 let info = DeviceAddressInfo {
@@ -119,7 +185,20 @@ impl Core {
                     parent_hub_slot_id: (parent_hub_id != 0).then_some(parent_hub_id),
                     path,
                 };
-                let device = self.backend.new_addressed_device(info).await?;
+                let device = match self.backend.new_addressed_device(info).await {
+                    Ok(device) => device,
+                    Err(error) => {
+                        warn!(
+                            "USB enumeration failed root_port={} port={} parent_slot={} route={:#x} error={}; continuing other ports",
+                            addr_info.root_port_id,
+                            addr_info.port_id,
+                            parent_hub_id,
+                            route_string,
+                            error
+                        );
+                        continue;
+                    }
+                };
 
                 let device_id = device.id();
 
@@ -136,19 +215,36 @@ impl Core {
                         addr_info.root_port_id,
                         parent_hub_id,
                         self.backend.kernel(),
-                    )
-                    .await?;
-                    let mut hub = Hub::new(
+                    );
+                    let mut hub = EnumerationOwner::new(Hub::new(
                         Box::new(hub_device),
                         &self.hub_infos(),
                         addr_info.port_id,
                         Some(id),
-                    );
-                    let info = hub.backend.init(hub.info.clone()).await?;
-                    hub.info = info;
-                    topology.hub_ports = hub.backend.num_ports();
+                    ));
+                    let hub_info = hub.get_mut().info.clone();
+                    let info = match hub.get_mut().backend.init(hub_info).await {
+                        Ok(info) => info,
+                        Err(error) => {
+                            self.backend.record_enumeration_failure(
+                                addr_info.root_port_id,
+                                addr_info.port_id,
+                                u8::try_from(device_id).ok(),
+                                "configure-hub",
+                                &error,
+                            );
+                            self.quarantined_hubs.push(hub);
+                            warn!(
+                                "USB hub init failed root_port={} port={} slot={} error={}; owner retained, continuing other ports",
+                                addr_info.root_port_id, addr_info.port_id, device_id, error
+                            );
+                            continue;
+                        }
+                    };
+                    hub.get_mut().info = info;
+                    topology.hub_ports = hub.get_mut().backend.num_ports();
 
-                    let hub_id = self.hubs.alloc(hub);
+                    let hub_id = self.hubs.alloc(hub.into_inner());
                     is_have_new_hub = true;
 
                     let hub_info = Box::new(DeviceInfo::new(device_id, desc, &configs, topology))

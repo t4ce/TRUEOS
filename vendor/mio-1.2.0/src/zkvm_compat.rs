@@ -1,3 +1,4 @@
+#[cfg(not(feature = "std-compat"))]
 use ::core::fmt;
 use crate::io;
 
@@ -10,7 +11,7 @@ pub(crate) fn unsupported_io_error(detail: &'static str) -> io::Error {
     io::Error::new(kind, detail)
 }
 
-#[cfg(feature = "log")]
+#[cfg(all(feature = "log", not(feature = "std-compat")))]
 pub(crate) fn log(level: &'static str, args: fmt::Arguments<'_>) {
     match level {
         "trace" => ::log::trace!("mio.zkvm: {}", args),
@@ -20,6 +21,6 @@ pub(crate) fn log(level: &'static str, args: fmt::Arguments<'_>) {
     }
 }
 
-#[cfg(not(feature = "log"))]
+#[cfg(all(not(feature = "log"), not(feature = "std-compat")))]
 #[allow(dead_code)]
 pub(crate) fn log(_: &'static str, _: fmt::Arguments<'_>) {}

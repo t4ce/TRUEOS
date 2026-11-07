@@ -235,18 +235,18 @@ impl Drop for PendingProof {
     }
 }
 
-pub(crate) async fn login_for_scope(scope: u8, code: &str) -> Result<String, String> {
+pub(crate) async fn login_for_scope(scope: u8, code: &str) -> Result<(String, trueos_crypto::AccountId), String> {
     let proof = crypt::prepare_login(code, scope).map_err(error_text)?;
     let _pending = PendingProof(proof.challenge_sequence);
     let plan = crypt::prepare_persistence(proof.challenge_sequence).map_err(error_text)?;
     write_persistence(&plan).await?;
     let report = crypt::complete_persisted_login(plan).map_err(error_text)?;
-    Ok(if report.enrollment_activated {
+    let message = if report.enrollment_activated {
         "2FA confirmed; account saved and signed in."
     } else {
         "Signed in; account saved."
-    }
-    .into())
+    };
+    Ok((message.into(), report.account))
 }
 
 pub(crate) async fn change_ssh_key(

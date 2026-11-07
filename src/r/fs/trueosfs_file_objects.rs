@@ -59,6 +59,14 @@ impl Command {
                 }
                 core::str::from_utf8(&command.payload).map_err(|_| FS_ERR_BAD_UTF8)?;
             }
+            14 if command.object == 0
+                && command.arg == 0
+                && command.flags == 0
+                && !command.payload.is_empty()
+                && command.payload.len() <= BLUEPRINT_ASYNC_FS_MAX_PATH =>
+            {
+                core::str::from_utf8(&command.payload).map_err(|_| FS_ERR_BAD_UTF8)?;
+            }
             2 if command.object != 0
                 && command.flags == 0
                 && command.arg <= MAX_TRANSFER as u64
@@ -200,6 +208,7 @@ fn epoch(disk: block::DeviceHandle) -> Result<u32, i32> {
 }
 fn error(error: block::Error) -> i32 {
     match error {
+        block::Error::PermissionDenied => ERR_PERMISSION,
         block::Error::NotReady => FS_ERR_NOT_FOUND,
         block::Error::InvalidParam | block::Error::OutOfBounds => FS_ERR_BAD_PARAM,
         block::Error::NotSupported => ERR_UNSUPPORTED,
@@ -207,9 +216,13 @@ fn error(error: block::Error) -> i32 {
     }
 }
 fn authorize_keys(owner: u32, keys: &[RecordKey]) -> Result<(), i32> {
-    if owner & 0x8000_0000 == 0 { return Ok(()); }
+    if owner & 0x8000_0000 == 0 {
+        return Ok(());
+    }
     let vm = owner & !0x8000_0000;
-    if vm > u8::MAX as u32 { return Err(ERR_PERMISSION); }
+    if vm > u8::MAX as u32 {
+        return Err(ERR_PERMISSION);
+    }
     for key in keys {
         crate::access_key_db::authorize_record(vm as u8, *key).map_err(|_| ERR_PERMISSION)?;
     }
@@ -224,14 +237,28 @@ async fn authorization_keys_under_lease(
     path: &str,
 ) -> Result<Vec<RecordKey>, i32> {
     let mut keys = Vec::new();
-    for end in path.bytes().enumerate().filter_map(|(index,byte)| if byte == b'/' { Some(index) } else { None }).chain(core::iter::once(path.len())) {
-        if end == 0 { continue; }
-        match node_record_under_lease(disk, params, &path[..end]).await.map_err(error)? {
+    for end in path
+        .bytes()
+        .enumerate()
+        .filter_map(|(index, byte)| if byte == b'/' { Some(index) } else { None })
+        .chain(core::iter::once(path.len()))
+    {
+        if end == 0 {
+            continue;
+        }
+        match node_record_under_lease(disk, params, &path[..end])
+            .await
+            .map_err(error)?
+        {
             Some(node) => {
-                if end != path.len() && node.kind != NodeKind::Directory { return Err(FS_ERR_BAD_PARAM); }
-                if node.record_key != RecordKey::Ffa && !keys.contains(&node.record_key) { keys.push(node.record_key); }
+                if end != path.len() && node.kind != NodeKind::Directory {
+                    return Err(FS_ERR_BAD_PARAM);
+                }
+                if node.record_key != RecordKey::Ffa && !keys.contains(&node.record_key) {
+                    keys.push(node.record_key);
+                }
             }
-            None if end == path.len() => {},
+            None if end == path.len() => {}
             None => return Err(FS_ERR_NOT_FOUND),
         }
     }
@@ -306,7 +333,13 @@ async fn publish(
     bytes: &[u8],
 ) -> Result<trueos_fs::FileRecordRef, i32> {
     let io = KernelBlockIo::new(disk);
-    let inherited_key = if old.is_none() { inherited_record_key_under_lease(disk, params, path).await.map_err(error)? } else { RecordKey::Ffa };
+    let inherited_key = if old.is_none() {
+        inherited_record_key_under_lease(disk, params, path)
+            .await
+            .map_err(error)?
+    } else {
+        RecordKey::Ffa
+    };
     let metadata = old.map_or(
         trueos_fs::FileWriteMetadata {
             file_id: 0,
@@ -386,7 +419,9 @@ pub async fn prepare_orphans(
         } else {
             Vec::new()
         };
-        let keys = authorization_keys_under_lease(disk, params, &path).await.map_err(|_| block::Error::Io)?;
+        let keys = authorization_keys_under_lease(disk, params, &path)
+            .await
+            .map_err(|_| block::Error::Io)?;
         output.push((identity, bytes, node.entry_lba, keys));
     }
     Ok(PreparedOrphans(output))
@@ -441,6 +476,14 @@ pub async fn open(
         }
         drop(lease);
     };
+    authorized::check_path_under_lease(
+        authorized::actor_from_owner(owner).map_err(error)?,
+        disk,
+        &params,
+        path,
+    )
+    .await
+    .map_err(error)?;
     let authorization_keys = authorization_keys_under_lease(disk, &params, path).await?;
     authorize_keys(owner, &authorization_keys)?;
     // An open directory is useful for metadata and sync, never byte I/O.
@@ -580,8 +623,27 @@ pub async fn operate(owner: u32, command: &Command) -> Result<Vec<u8>, i32> {
             .ok_or(FS_ERR_NOT_FOUND)?;
         (file.path.clone(), file.orphan.is_some())
     };
-    let keys = if orphan { OBJECTS.lock().files.get(&description.identity).ok_or(FS_ERR_NOT_FOUND)?.authorization_keys.clone() }
-        else { authorization_keys_under_lease(disk, &params, &path).await? };
+    if !orphan {
+        authorized::check_path_under_lease(
+            authorized::actor_from_owner(owner).map_err(error)?,
+            disk,
+            &params,
+            &path,
+        )
+        .await
+        .map_err(error)?;
+    }
+    let keys = if orphan {
+        OBJECTS
+            .lock()
+            .files
+            .get(&description.identity)
+            .ok_or(FS_ERR_NOT_FOUND)?
+            .authorization_keys
+            .clone()
+    } else {
+        authorization_keys_under_lease(disk, &params, &path).await?
+    };
     authorize_keys(owner, &keys)?;
     let node = if orphan || path.is_empty() {
         None
@@ -612,8 +674,21 @@ pub async fn operate(owner: u32, command: &Command) -> Result<Vec<u8>, i32> {
     match command.op {
         9 | 10 => {
             let mut state = OBJECTS.lock();
-            if command.op == 9 && state.descriptions.iter().any(|(id,d)| *id != description_id && d.identity == description.identity && d.lock != 0 && (command.flags == 2 || d.lock == 2)) { return Err(ERR_WOULD_BLOCK); }
-            state.descriptions.get_mut(&description_id).ok_or(FS_ERR_NOT_FOUND)?.lock = if command.op == 10 { 0 } else { command.flags };
+            if command.op == 9
+                && state.descriptions.iter().any(|(id, d)| {
+                    *id != description_id
+                        && d.identity == description.identity
+                        && d.lock != 0
+                        && (command.flags == 2 || d.lock == 2)
+                })
+            {
+                return Err(ERR_WOULD_BLOCK);
+            }
+            state
+                .descriptions
+                .get_mut(&description_id)
+                .ok_or(FS_ERR_NOT_FOUND)?
+                .lock = if command.op == 10 { 0 } else { command.flags };
             Ok(Vec::new())
         }
         5 => {

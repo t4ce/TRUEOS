@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use spin::Mutex;
+use crate::r::fs::trueosfs::authorized::{self, Actor};
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
 const CODEC_IDLE_MS: u64 = 25;
@@ -500,16 +501,17 @@ fn checked_file_size(size: u64, total: &mut usize) -> Result<usize, CodecError> 
 }
 
 async fn read_source_file(
+    actor: Actor,
     disk: crate::disc::block::DeviceHandle,
     path: &str,
     archive_name: String,
     total: &mut usize,
 ) -> Result<OwnedSourceEntry, CodecError> {
-    let info = crate::r::fs::trueosfs::file_info_async(disk, path)
+    let info = authorized::node_info(actor, disk, path)
         .await?
         .ok_or(CodecError::NotFound)?;
     let expected = checked_file_size(info.data_len, total)?;
-    let bytes = crate::r::fs::trueosfs::file_out_async(disk, path)
+    let bytes = authorized::read(actor, disk, path, MAX_SOURCE_FILE_BYTES as u64)
         .await?
         .ok_or(CodecError::ReadFailed)?;
     if bytes.len() != expected {
@@ -584,17 +586,19 @@ fn restored_content_types(
 }
 
 async fn collect_source_entries(
+    actor: Actor,
     disk: crate::disc::block::DeviceHandle,
     source_path: &str,
     excluded_path: &str,
 ) -> Result<Vec<OwnedSourceEntry>, CodecError> {
     let mut total = 0usize;
-    if crate::r::fs::trueosfs::file_info_async(disk, source_path)
+    if authorized::node_info(actor, disk, source_path)
         .await?
-        .is_some()
+        .is_some_and(|info| info.kind == crate::r::fs::trueosfs::NodeKind::File)
     {
         return Ok(alloc::vec![
             read_source_file(
+                actor,
                 disk,
                 source_path,
                 validate_archive_entry_name(basename(source_path))?,
@@ -603,7 +607,8 @@ async fn collect_source_entries(
             .await?
         ]);
     }
-    if !crate::r::fs::trueosfs::dir_exists_async(disk, source_path).await? {
+    if !authorized::node_info(actor, disk, source_path).await?
+        .is_some_and(|info| info.kind == crate::r::fs::trueosfs::NodeKind::Directory) {
         return Err(CodecError::NotFound);
     }
 
@@ -612,7 +617,7 @@ async fn collect_source_entries(
     let mut discovered_directories = 1usize;
     let mut entries = Vec::new();
     while let Some(directory) = directories.pop_front() {
-        let listing = crate::r::fs::trueosfs::list_dir_async(disk, directory.as_str())
+        let listing = authorized::list(actor, disk, directory.as_str(), MAX_ARCHIVE_ENTRIES)
             .await?
             .ok_or(CodecError::NoRoot)?;
         if listing.truncated {
@@ -637,7 +642,7 @@ async fn collect_source_entries(
                         return Err(CodecError::LimitExceeded);
                     }
                     entries.push(
-                        read_source_file(disk, full_path.as_str(), relative, &mut total).await?,
+                        read_source_file(actor, disk, full_path.as_str(), relative, &mut total).await?,
                     );
                 }
                 crate::r::fs::trueosfs::NodeKind::Directory => {
@@ -682,9 +687,10 @@ async fn compress_entries(entries: Vec<OwnedSourceEntry>) -> Result<Vec<u8>, Cod
     Ok(out)
 }
 
-async fn pack_path_job(source_path: &str, archive_path: &str) -> Result<CodecReport, CodecError> {
+async fn pack_path_job(owner: u32, source_path: &str, archive_path: &str) -> Result<CodecReport, CodecError> {
+    let actor = authorized::actor_from_owner(owner)?;
     let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
-    let entries = collect_source_entries(disk, source_path, archive_path).await?;
+    let entries = collect_source_entries(actor, disk, source_path, archive_path).await?;
     let source_bytes = entries.iter().try_fold(0u64, |total, entry| {
         total
             .checked_add(entry.bytes.len() as u64)
@@ -696,15 +702,17 @@ async fn pack_path_job(source_path: &str, archive_path: &str) -> Result<CodecRep
         return Err(CodecError::LimitExceeded);
     }
     if let Some(parent) = parent_path(archive_path)
-        && !crate::r::fs::trueosfs::dir_create_all_async(disk, parent).await?
+        && !authorized::create_dir_all(actor, disk, parent).await?
     {
         return Err(CodecError::WriteFailed);
     }
-    if !crate::r::fs::trueosfs::write_file_typed_async(
+    if !authorized::write(
+        actor,
         disk,
         archive_path,
         archive.as_slice(),
         ARCHIVE_CONTENT_TYPE,
+        false,
     )
     .await?
     {
@@ -718,9 +726,11 @@ async fn pack_path_job(source_path: &str, archive_path: &str) -> Result<CodecRep
 }
 
 async fn pack_paths_job(
+    owner: u32,
     source_paths: &[String],
     archive_path: &str,
 ) -> Result<CodecReport, CodecError> {
+    let actor = authorized::actor_from_owner(owner)?;
     let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
     let mut total = 0usize;
     let mut names = BTreeSet::new();
@@ -733,7 +743,7 @@ async fn pack_paths_job(
         if !names.insert(name.clone()) {
             return Err(CodecError::PathConflict);
         }
-        entries.push(read_source_file(disk, source_path.as_str(), name, &mut total).await?);
+        entries.push(read_source_file(actor, disk, source_path.as_str(), name, &mut total).await?);
     }
     entries.sort_by(|left, right| left.name.cmp(&right.name));
     let source_bytes = entries.iter().try_fold(0u64, |total, entry| {
@@ -747,15 +757,17 @@ async fn pack_paths_job(
         return Err(CodecError::LimitExceeded);
     }
     if let Some(parent) = parent_path(archive_path)
-        && !crate::r::fs::trueosfs::dir_create_all_async(disk, parent).await?
+        && !authorized::create_dir_all(actor, disk, parent).await?
     {
         return Err(CodecError::WriteFailed);
     }
-    if !crate::r::fs::trueosfs::write_file_typed_async(
+    if !authorized::write(
+        actor,
         disk,
         archive_path,
         archive.as_slice(),
         ARCHIVE_CONTENT_TYPE,
+        false,
     )
     .await?
     {
@@ -802,16 +814,17 @@ async fn unpack_path_job(
     archive_path: &str,
     output_path: &str,
 ) -> Result<CodecReport, CodecError> {
+    let actor = authorized::actor_from_owner(owner)?;
     let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
     crate::log_info!(target: "storage"; "codec/archive: phase=read-begin source={:?} destination={:?} root={:?}\n", archive_path, output_path, disk);
-    let info = crate::r::fs::trueosfs::file_info_async(disk, archive_path)
+    let info = authorized::node_info(actor, disk, archive_path)
         .await?
         .ok_or(CodecError::NotFound)?;
     if info.data_len > MAX_ARCHIVE_BYTES as u64 {
         crate::log_warn!(target: "storage"; "codec/archive: phase=limit kind=archive-bytes source={:?} actual={} maximum={}\n", archive_path, info.data_len, MAX_ARCHIVE_BYTES);
         return Err(CodecError::LimitExceeded);
     }
-    let archive = crate::r::fs::trueosfs::file_out_async(disk, archive_path)
+    let archive = authorized::read(actor, disk, archive_path, MAX_ARCHIVE_BYTES as u64)
         .await?
         .ok_or(CodecError::ReadFailed)?;
     if archive.len() > MAX_ARCHIVE_BYTES {
@@ -883,7 +896,7 @@ async fn unpack_path_job(
     // the preflight keeps one later legacy conflict from leaving earlier files
     // or directories behind.
     for (destination, disposition) in destinations.iter().zip(restore_dispositions.iter()) {
-        let existing = crate::r::fs::trueosfs::file_info_async(disk, destination.as_str())
+        let existing = authorized::node_info(actor, disk, destination.as_str())
             .await?
             .map(|info| info.content_type);
         if legacy_destination_would_downgrade(*disposition, existing) {
@@ -893,7 +906,7 @@ async fn unpack_path_job(
         }
     }
 
-    if !crate::r::fs::trueosfs::dir_create_all_async(disk, output_path).await? {
+    if !authorized::create_dir_all(actor, disk, output_path).await? {
         return Err(CodecError::WriteFailed);
     }
     crate::log_info!(target: "storage"; "codec/archive: phase=restore-begin destination={:?} files={}\n", output_path, entries.len());
@@ -911,25 +924,30 @@ async fn unpack_path_job(
             crate::log_info!(target: "storage"; "codec/archive: phase=restore-progress files_done={} files_total={} output_bytes={} next={:?}\n", index, entries.len(), output_bytes, destination);
         }
         if let Some(parent) = parent_path(destination.as_str())
-            && !crate::r::fs::trueosfs::dir_create_all_async(disk, parent).await?
+            && !authorized::create_dir_all(actor, disk, parent).await?
         {
             return Err(CodecError::WriteFailed);
         }
         let written = match disposition {
             RestoreDisposition::LegacyBlob => {
-                crate::r::fs::trueosfs::file_write_all_async(
+                authorized::write(
+                    actor,
                     disk,
                     destination.as_str(),
                     entry.bytes.as_slice(),
+                    crate::r::fs::trueosfs::ContentTypeId::BLOB,
+                    true,
                 )
                 .await?
             }
             RestoreDisposition::Typed(content_type) => {
-                crate::r::fs::trueosfs::write_file_typed_async(
+                authorized::write(
+                    actor,
                     disk,
                     destination.as_str(),
                     entry.bytes.as_slice(),
                     content_type,
+                    false,
                 )
                 .await?
             }
@@ -979,12 +997,12 @@ async fn execute_request(request: CodecRequest) {
             source_path,
             archive_path,
             ..
-        } => pack_path_job(source_path.as_str(), archive_path.as_str()).await,
+        } => pack_path_job(owner, source_path.as_str(), archive_path.as_str()).await,
         CodecRequest::PackPaths {
             source_paths,
             archive_path,
             ..
-        } => pack_paths_job(source_paths.as_slice(), archive_path.as_str()).await,
+        } => pack_paths_job(owner, source_paths.as_slice(), archive_path.as_str()).await,
         CodecRequest::UnpackPath {
             archive_path,
             output_path,
@@ -1017,15 +1035,16 @@ async fn decode_lz4_path_job(
     path: &str,
 ) -> Result<(CodecReport, Vec<u8>), CodecError> {
     let started = codec_now_ms();
+    let actor = authorized::actor_from_owner(owner)?;
     let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
     crate::log_info!(target: "storage"; "codec/archive: phase=ram-read source={:?}\n", path);
-    let info = crate::r::fs::trueosfs::file_info_async(disk, path)
+    let info = authorized::node_info(actor, disk, path)
         .await?
         .ok_or(CodecError::NotFound)?;
     if info.data_len > MAX_ARCHIVE_BYTES as u64 {
         return Err(CodecError::LimitExceeded);
     }
-    let input = crate::r::fs::trueosfs::file_out_async(disk, path)
+    let input = authorized::read(actor, disk, path, MAX_ARCHIVE_BYTES as u64)
         .await?
         .ok_or(CodecError::ReadFailed)?;
     if input.len() != info.data_len as usize || input.len() > MAX_ARCHIVE_BYTES {

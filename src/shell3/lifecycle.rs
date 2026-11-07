@@ -18,6 +18,9 @@ pub(super) fn control(action: &str, lease: &MatrixSlotLease, actor: Option<trueo
     let Some(vm) = crate::hv::matrix::vm_for_lease(lease) else {
         return format!("{action}: selected VM slot is no longer active");
     };
+    if let Err(reason) = crate::access_key_db::authorize_vm_control(vm, actor) {
+        return format!("{action}: permission denied ({reason:?})");
+    }
     let result = match action {
         "stop" => crate::hv::stop_for_matrix_slot(vm, lease).map_err(|error| format!("{error:?}")),
         "pause" => {

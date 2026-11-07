@@ -37,6 +37,7 @@ fn incoming_auth(interactive: bool, allow: bool) {
     let (mut challenge, mut client_authed, mut server_authed) =
         (false, false, false);
     let (mut offered, mut rejected) = (false, false);
+    let (mut key_probes, mut verified_keys) = (0, 0);
     assert!(!client.initial_kex_complete());
     for _ in 0..30000 {
         if deferred {
@@ -57,6 +58,8 @@ fn incoming_auth(interactive: bool, allow: bool) {
                 }
                 Event::Serv(ServEvent::PubkeyAuth(event)) => {
                     assert_eq!(event.pubkey().unwrap(), identity.pubkey());
+                    if event.signature_verified() { verified_keys += 1; } else { key_probes += 1; }
+                    assert!(!server_authed, "a probe alone must not authenticate");
                     if allow {
                         event.allow().unwrap();
                     } else {
@@ -119,6 +122,7 @@ fn incoming_auth(interactive: bool, allow: bool) {
         if allow && client_authed && server_authed {
             assert!(client.initial_kex_complete());
             assert_eq!(challenge, interactive);
+            if !interactive { assert_eq!(key_probes, 1); assert_eq!(verified_keys, 1); }
             return;
         }
         if !allow && rejected {

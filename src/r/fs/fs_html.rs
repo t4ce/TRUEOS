@@ -30,7 +30,7 @@ pub async fn html_tree_async(
     disk: block::DeviceHandle,
     max_entries: usize,
 ) -> Result<Option<String>, block::Error> {
-    html_tree_impl(disk, max_entries, None).await
+    html_tree_impl(super::trueosfs::authorized::Actor::Host, disk, max_entries, None).await
 }
 
 /// The HTTP page supplies native disclosures and controls before scripts run.
@@ -39,10 +39,19 @@ pub async fn html_browser_tree_async(
     max_entries: usize,
     root_id: u32,
 ) -> Result<Option<String>, block::Error> {
-    html_tree_impl(disk, max_entries, Some(root_id)).await
+    html_tree_impl(super::trueosfs::authorized::Actor::Public, disk, max_entries, Some(root_id)).await
+}
+
+pub(crate) async fn html_tree_for_actor_async(
+    actor: super::trueosfs::authorized::Actor,
+    disk: block::DeviceHandle,
+    max_entries: usize,
+) -> Result<Option<String>, block::Error> {
+    html_tree_impl(actor, disk, max_entries, None).await
 }
 
 async fn html_tree_impl(
+    actor: super::trueosfs::authorized::Actor,
     disk: block::DeviceHandle,
     max_entries: usize,
     browser_root: Option<u32>,
@@ -53,7 +62,7 @@ async fn html_tree_impl(
         return Ok(Some(String::from("<ul></ul>")));
     }
 
-    let Some(nodes) = super::trueosfs::index_path_snapshot_async(disk).await? else {
+    let Some(nodes) = super::trueosfs::authorized::index_snapshot(actor, disk).await? else {
         return Ok(None);
     };
 

@@ -27,12 +27,16 @@ use super::{
 use crate::{
     DeviceAddressInfo, KernelOp, Mmio, XhciConstructionPolicy, XhciRootHubInitPolicy,
     backend::{
-        kmod::{hub::HubOp, kcore::CoreOp, xhci::reg::SlotBell},
+        kmod::{
+            hub::HubOp,
+            kcore::{CoreOp, EnumerationOwner},
+            xhci::reg::SlotBell,
+        },
         ty::{DeviceOp, Event, EventHandlerOp},
     },
     diag::{
-        XhciControllerSnapshot, XhciDirectRequest, XhciDirectResponse, XhciPortSnapshot,
-        XhciProtocolSnapshot, XhciWrite64Result, XhciWriteResult,
+        XhciControllerSnapshot, XhciDirectRequest, XhciDirectResponse, XhciEnumerationDiagnostics,
+        XhciPortSnapshot, XhciProtocolSnapshot, XhciWrite64Result, XhciWriteResult,
     },
     err::Result,
     osal::Kernel,
@@ -67,6 +71,8 @@ pub struct Xhci {
     recovery_stage: XhciRecoveryStage,
     dma_bits: u8,
     max_slots_enabled: u8,
+    quarantined_devices: Vec<EnumerationOwner<Device>>,
+    enumeration: XhciEnumerationDiagnostics,
 }
 
 unsafe impl Send for Xhci {}
@@ -102,6 +108,18 @@ impl CoreOp for Xhci {
 
     fn kernel(&self) -> &Kernel {
         &self.kernel
+    }
+
+    fn record_enumeration_failure(
+        &mut self,
+        root_port_id: u8,
+        port_id: u8,
+        slot_id: Option<u8>,
+        stage: &'static str,
+        reason: &dyn core::fmt::Display,
+    ) {
+        self.enumeration
+            .record_failure(root_port_id, port_id, slot_id, stage, reason);
     }
 
     fn xhci_direct<'a>(
@@ -205,6 +223,8 @@ impl Xhci {
             recovery_stage: XhciRecoveryStage::Constructed,
             dma_bits,
             max_slots_enabled: 0,
+            quarantined_devices: Vec::new(),
+            enumeration: XhciEnumerationDiagnostics::default(),
         })
     }
 
@@ -340,6 +360,7 @@ impl Xhci {
             erdp: read64(runtime + 0x38)?,
             protocols,
             ports,
+            enumeration: self.enumeration.clone(),
         })
     }
 
@@ -611,10 +632,44 @@ impl Xhci {
     }
 
     async fn new_device(&mut self, info: DeviceAddressInfo) -> Result<Box<dyn DeviceOp>> {
-        let mut device = Device::new(self).await?;
-        device.init(self, &info).await?;
+        let device = Device::new(self).await.map_err(|error| {
+            self.enumeration.record_failure(
+                info.root_port_id,
+                info.port_id,
+                None,
+                "enable-slot-or-context",
+                format_args!("{error:?}"),
+            );
+            USBError::Other(anyhow::anyhow!(
+                "xHCI enumeration root_port={} port={} stage=enable-slot-or-context error={}",
+                info.root_port_id,
+                info.port_id,
+                error
+            ))
+        })?;
+        let mut device = EnumerationOwner::new(device);
+        if let Err(error) = device.get_mut().init(self, &info).await {
+            let slot = device.get_mut().id();
+            let stage = device.get_mut().enumeration_stage();
+            self.enumeration.record_failure(
+                info.root_port_id,
+                info.port_id,
+                u8::try_from(slot).ok(),
+                stage,
+                format_args!("{error:?}"),
+            );
+            self.quarantined_devices.push(device);
+            return Err(USBError::Other(anyhow::anyhow!(
+                "xHCI enumeration root_port={} port={} slot={} stage={} error={}; slot/DMA retained",
+                info.root_port_id,
+                info.port_id,
+                slot,
+                stage,
+                error
+            )));
+        }
 
-        Ok(Box::new(device))
+        Ok(Box::new(device.into_inner()))
     }
 
     async fn init_ext_caps(&mut self) -> Result {

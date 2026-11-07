@@ -246,6 +246,34 @@ fn messages() -> Vec<String> { WARNINGS.lock().unwrap().clone() }
     assert_eq!(messages().len(), 33);
 }
 
+#[test] fn persisted_owner_grants_are_reused_by_two_instances_and_never_by_another_account() {
+    reset();
+    let root = "apps/owned-first";
+    access_key_db::grant_owned_workspace("owned-first.bp", root, ALICE, key(8)).unwrap();
+    access_key_db::grant_owned_workspace("owned-first.bp", root, ALICE, key(8)).unwrap();
+    access_key_db::bind_launch(0, "owned-first.bp", root, Some(ALICE));
+    access_key_db::bind_launch(1, "owned-first.bp", root, Some(ALICE));
+    access_key_db::bind_launch(2, "owned-first.bp", root, Some(BOB));
+    for vm in [0, 1] {
+        assert_eq!(access_key_db::authorize_record(vm, key(8)), Ok(()));
+        assert_eq!(access_key_db::authorize_protected_workspace(vm, key(8)), Ok(()));
+        assert_eq!(access_key_db::workspace_for_vm(vm).as_deref(), Some(root));
+        assert!(access_key_db::authorize_protected_workspace(vm, RecordKey::Ffa).is_err());
+        assert!(access_key_db::authorize_protected_workspace(vm, key(9)).is_err());
+    }
+    assert!(access_key_db::authorize_record(2, key(8)).is_err());
+    assert!(access_key_db::authorize_protected_workspace(2, key(8)).is_err());
+    assert!(access_key_db::grant_owned_workspace("owned-first.bp", root, BOB, key(8)).is_err());
+    assert!(access_key_db::grant_owned_workspace("owned-first.bp", root, ALICE, key(9)).is_err());
+    assert!(access_key_db::grant_owned_workspace("owned-first.bp", root, ALICE, RecordKey::Ffa).is_err());
+    assert_eq!(access_key_db::authorize_vm_control(0, Some(ALICE)), Ok(()));
+    assert!(access_key_db::authorize_vm_control(0, Some(BOB)).is_err());
+    assert!(access_key_db::authorize_vm_control(0, None).is_err());
+    assert_eq!(access_key_db::authorize_record(3, RecordKey::Ffa), Ok(()));
+    access_key_db::clear_vm(0);
+    assert!(access_key_db::authorize_record(0, key(8)).is_err());
+}
+
 #[test] fn awaiting_old_metadata_cannot_attribute_a_warning_to_a_new_principal() {
     reset(); register();
     access_key_db::bind_launch(0, "notes.bp", "apps/notes_team", Some(ALICE));

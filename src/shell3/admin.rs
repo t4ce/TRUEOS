@@ -260,9 +260,7 @@ impl Request {
             },
             Self::Enrollment => enrollment(),
             Self::Login { frontend, scope, code } => {
-                let message = cry::login_for_scope(scope, &code).await?;
-                let account = crypt::authenticated_access_account(scope)
-                    .ok_or("Sign-in identity was not committed.")?;
+                let (message, account) = cry::login_for_scope(scope, &code).await?;
                 if !tui::bind_authenticated_frontend(frontend, Some(account)) {
                     return Err("The signing-in frontend closed or belongs to a guest.".into());
                 }

@@ -56,6 +56,7 @@ impl HvStreamError {
             crate::disc::block::Error::Timeout => 7,
             crate::disc::block::Error::Io => 8,
             crate::disc::block::Error::Corrupted => 9,
+            crate::disc::block::Error::PermissionDenied => 10,
         }
     }
 }

@@ -193,6 +193,7 @@ struct FileWriteStream {
     params: trueos_fs::FsParams,
     stream: trueos_fs::PutWriteStream,
     legacy_blob: bool,
+    actor: authorized::Actor,
 }
 
 #[path = "trueosfs_write_gate.rs"]
@@ -200,6 +201,9 @@ mod write_gate;
 
 #[path = "trueosfs_file_objects.rs"]
 pub(crate) mod file_objects;
+
+#[path = "trueosfs_authorized.rs"]
+pub(crate) mod authorized;
 
 #[derive(Clone, Copy, Debug)]
 pub struct FileReadHandle {
@@ -1389,18 +1393,22 @@ pub(crate) async fn node_record_under_lease(
     }
 }
 
-/// Resolve creation identity from the committed direct parent. The caller holds
-/// RootWriteLease and has already built and validated the mounted index.
+/// Resolve creation identity from the nearest committed keyed ancestor. Legacy
+/// FFA directories do not erase an app-root key. The caller holds RootWriteLease.
 pub(crate) async fn inherited_record_key_under_lease(
     disk: block::DeviceHandle,
     params: &trueos_fs::FsParams,
     path: &str,
 ) -> Result<RecordKey, block::Error> {
-    let Some((parent, _)) = path.rsplit_once('/') else { return Ok(RecordKey::Ffa); };
-    if parent.is_empty() { return Ok(RecordKey::Ffa); }
-    let node = node_record_under_lease(disk, params, parent).await?.ok_or(block::Error::InvalidParam)?;
-    if node.kind != NodeKind::Directory { return Err(block::Error::InvalidParam); }
-    Ok(node.record_key)
+    let mut remaining = path;
+    while let Some((parent, _)) = remaining.rsplit_once('/') {
+        if parent.is_empty() { break; }
+        let node = node_record_under_lease(disk, params, parent).await?.ok_or(block::Error::InvalidParam)?;
+        if node.kind != NodeKind::Directory { return Err(block::Error::InvalidParam); }
+        if node.record_key != RecordKey::Ffa { return Ok(node.record_key); }
+        remaining = parent;
+    }
+    Ok(RecordKey::Ffa)
 }
 
 /// Preserve existing identities. An explicit key used for a new imported file
@@ -1477,7 +1485,7 @@ pub async fn file_in_typed_checked_async(
 ) -> Result<bool, CheckedWriteError> {
     file_in_checked_with_type_policy_async(
         disk, name, bytes, new_content_type, create_new, expected_sha256,
-        if infer_blob { CheckedWriteTypePolicy::InferBlob } else { CheckedWriteTypePolicy::Retain },
+        if infer_blob { CheckedWriteTypePolicy::InferBlob } else { CheckedWriteTypePolicy::Retain }, authorized::Actor::Host,
     ).await
 }
 
@@ -1490,7 +1498,7 @@ pub async fn reset_blob_checked_async(
 ) -> Result<bool, CheckedWriteError> {
     file_in_checked_with_type_policy_async(
         disk, name, &[], ContentTypeId::BLOB, false, Some(expected_sha256),
-        CheckedWriteTypePolicy::ResetBlob,
+        CheckedWriteTypePolicy::ResetBlob, authorized::Actor::Host,
     ).await
 }
 
@@ -1505,6 +1513,7 @@ async fn file_in_checked_with_type_policy_async(
     create_new: bool,
     expected_sha256: Option<[u8; 32]>,
     type_policy: CheckedWriteTypePolicy,
+    actor: authorized::Actor,
 ) -> Result<bool, CheckedWriteError> {
     use sha2::{Digest, Sha256};
     let _activity = crate::disc::access::Activity::begin(disk)?;
@@ -1532,6 +1541,7 @@ async fn file_in_checked_with_type_policy_async(
         }
         break (lease, indexed_removal_entry(disk.id(), name)?);
     };
+    authorized::check_path_under_lease(actor, disk, &params, name).await?;
     if create_new && indexed.is_some() { return Err(CheckedWriteError::AlreadyExists); }
     let existing = if let Some(entry) = indexed {
         let record = trueos_fs::get_node_record_by_lba(&io, &params, entry.entry_lba)
@@ -1622,6 +1632,18 @@ async fn file_in_with_metadata_async(
     record_key: RecordKey,
     legacy_blob: bool,
 ) -> Result<bool, block::Error> {
+    file_in_with_metadata_async_for_actor(disk, name, bytes, content_type, record_key, legacy_blob, authorized::Actor::Host).await
+}
+
+async fn file_in_with_metadata_async_for_actor(
+    disk: block::DeviceHandle,
+    name: &str,
+    bytes: &[u8],
+    content_type: ContentTypeId,
+    record_key: RecordKey,
+    legacy_blob: bool,
+    actor: authorized::Actor,
+) -> Result<bool, block::Error> {
     let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
@@ -1635,14 +1657,17 @@ async fn file_in_with_metadata_async(
         return Err(block::Error::InvalidParam);
     }
     if legacy_blob
-        && file_info_async(disk, name)
+        && authorized::node_info(actor, disk, name)
             .await?
             .is_some_and(|info| info.content_type != ContentTypeId::BLOB)
     {
         record_type_reject(ContentIdentityRejectReason::LegacyDowngrade);
         return Err(block::Error::InvalidParam);
     }
-    prepare_file_target_async(disk, name).await?;
+    if let Some((parent, _)) = name.rsplit_once('/') {
+        if !authorized::create_dir_all(actor, disk, parent).await? { return Err(block::Error::Io); }
+    }
+    ensure_index_async(disk, &placement_for_io_async(disk).await?.ok_or(block::Error::NotReady)?).await?;
     let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
     };
@@ -1653,12 +1678,13 @@ async fn file_in_with_metadata_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
+    let (_index_activity, _write_lease, _) = authorized::lease(disk).await?;
+    authorized::check_path_under_lease(actor, disk, &params, name).await?;
     // Recheck the namespace under the write lease. Never rebuild an index here:
     // rebuilding can checkpoint and would recursively acquire this same lease.
     let indexed = validate_indexed_file_target(disk.id(), name, legacy_blob)?;
     let existing_id = if indexed {
-        lookup_file_record_async(disk, name).await?.map_or(0, |record| record.file_id)
+        node_record_under_lease(disk, &params, name).await?.map_or(0, |record| record.file_id)
     } else { 0 };
     let record_key = record_key_for_write_under_lease(disk, &params, name, record_key).await?;
     let begun = if indexed {
@@ -1789,6 +1815,18 @@ pub(crate) async fn file_write_begin_with_metadata_async(
     record_key: RecordKey,
     legacy_blob: bool,
 ) -> Result<Option<u32>, block::Error> {
+    file_write_begin_with_metadata_async_for_actor(disk, name, total_len, content_type, record_key, legacy_blob, authorized::Actor::Host).await
+}
+
+pub(crate) async fn file_write_begin_with_metadata_async_for_actor(
+    disk: block::DeviceHandle,
+    name: &str,
+    total_len: u64,
+    content_type: ContentTypeId,
+    record_key: RecordKey,
+    legacy_blob: bool,
+    actor: authorized::Actor,
+) -> Result<Option<u32>, block::Error> {
     let _activity = crate::disc::access::Activity::begin(disk)?;
     crate::log!(
         "trueosfs: file-write-begin stage=start disk={} path={} bytes={}\n",
@@ -1812,14 +1850,17 @@ pub(crate) async fn file_write_begin_with_metadata_async(
         return Err(block::Error::InvalidParam);
     }
     if legacy_blob
-        && file_info_async(disk, name)
+        && authorized::node_info(actor, disk, name)
             .await?
             .is_some_and(|info| info.content_type != ContentTypeId::BLOB)
     {
         record_type_reject(ContentIdentityRejectReason::LegacyDowngrade);
         return Err(block::Error::InvalidParam);
     }
-    prepare_file_target_async(disk, name).await?;
+    if let Some((parent, _)) = name.rsplit_once('/') {
+        if !authorized::create_dir_all(actor, disk, parent).await? { return Err(block::Error::Io); }
+    }
+    ensure_index_async(disk, &placement_for_io_async(disk).await?.ok_or(block::Error::NotReady)?).await?;
     crate::log!("trueosfs: file-write-begin stage=locate disk={}\n", disk.id().raw());
     let Some(placement) = placement_for_io_async(disk).await? else {
         crate::log!(
@@ -1842,12 +1883,13 @@ pub(crate) async fn file_write_begin_with_metadata_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
+    let (_index_activity, _write_lease, _) = authorized::lease(disk).await?;
+    authorized::check_path_under_lease(actor, disk, &params, name).await?;
     // Recheck the namespace under the write lease. Never rebuild an index here:
     // rebuilding can checkpoint and would recursively acquire this same lease.
     let indexed = validate_indexed_file_target(disk.id(), name, legacy_blob)?;
     let existing_id = if indexed {
-        lookup_file_record_async(disk, name).await?.map_or(0, |record| record.file_id)
+        node_record_under_lease(disk, &params, name).await?.map_or(0, |record| record.file_id)
     } else { 0 };
     let record_key = record_key_for_write_under_lease(disk, &params, name, record_key).await?;
     let begun = if indexed {
@@ -1894,6 +1936,7 @@ pub(crate) async fn file_write_begin_with_metadata_async(
         params,
         stream,
         legacy_blob,
+        actor,
     };
     FILE_WRITE_STREAMS.lock().insert(handle, entry);
     crate::log!(
@@ -1915,6 +1958,7 @@ pub async fn file_write_chunk_async(stream_handle: u32, bytes: &[u8]) -> Result<
             .ok_or(block::Error::InvalidParam)?
     };
 
+    authorized::check_path_under_lease(entry.actor, entry.disk, &entry.params, &entry.path).await?;
     let io = KernelBlockIo::new(entry.disk);
     let res = trueos_fs::write_file_stream_chunk(&io, &mut entry.stream, bytes)
         .await
@@ -1941,6 +1985,7 @@ pub async fn file_write_finish_async(stream_handle: u32) -> Result<(), block::Er
             .ok_or(block::Error::InvalidParam)?
     };
 
+    authorized::check_path_under_lease(entry.actor, entry.disk, &entry.params, &entry.path).await?;
     let io = KernelBlockIo::new(entry.disk);
     let record = trueos_fs::write_stream_record_ref(&entry.stream);
     trueos_fs::finish_write_file_stream(&io, &entry.params, entry.stream)
@@ -2285,7 +2330,7 @@ pub async fn create_directory_async(
     path: &str,
 ) -> Result<bool, block::Error> {
     if path.is_empty() || path == "/" { return Ok(true); }
-    create_directory_with_policy_async(disk, path, false).await.map_err(|error| match error {
+    create_directory_with_policy_async(disk, path, false, authorized::Actor::Host).await.map_err(|error| match error {
         CreateDirectoryError::Device(error) => error, _ => block::Error::InvalidParam,
     })
 }
@@ -2308,13 +2353,14 @@ pub async fn create_directory_new_async(
     disk: block::DeviceHandle,
     path: &str,
 ) -> Result<bool, CreateDirectoryError> {
-    create_directory_with_policy_async(disk, path, true).await
+    create_directory_with_policy_async(disk, path, true, authorized::Actor::Host).await
 }
 
 async fn create_directory_with_policy_async(
     disk: block::DeviceHandle,
     path: &str,
     exclusive: bool,
+    actor: authorized::Actor,
 ) -> Result<bool, CreateDirectoryError> {
     let _activity = crate::disc::access::Activity::begin(disk)?;
     if path.is_empty() || path == "/" {
@@ -2324,10 +2370,16 @@ async fn create_directory_with_policy_async(
         return Err(block::Error::InvalidParam.into());
     }
     let Some(placement) = placement_for_io_async(disk).await? else { return Ok(false); };
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
     let _write_lease = loop {
         // Index construction can checkpoint, so it must precede this lease.
         ensure_index_async(disk, &placement).await?;
         let lease = write_gate::RootWriteLease::acquire(disk.id()).await;
+        authorized::check_path_under_lease(actor, disk, &params, path).await?;
         if !exclusive {
             match indexed_removal_entry(disk.id(), path) {
                 Ok(Some(entry)) if entry.kind == trueos_fs::LogKind::Directory => return Ok(true),
@@ -2342,11 +2394,6 @@ async fn create_directory_with_policy_async(
             continue;
         }
         break lease;
-    };
-    let params = trueos_fs::FsParams {
-        super_lba: placement.super_lba,
-        data_lba: placement.data_lba,
-        data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let metadata = trueos_fs::DirectoryWriteMetadata { file_id: 0, record_key: inherited_record_key_under_lease(disk, &params, path).await? };
     let Some(record) = trueos_fs::append_directory_with_metadata_prevalidated(
@@ -2684,7 +2731,7 @@ pub async fn remove_recursive_async(
     disk: block::DeviceHandle,
     name: &str,
 ) -> Result<bool, block::Error> {
-    remove_node_with_policy_async(disk, name, None).await.map_err(|error| match error {
+    remove_node_with_policy_async(disk, name, None, authorized::Actor::Host).await.map_err(|error| match error {
         RemoveNodeError::Device(error) => error,
         _ => block::Error::InvalidParam,
     })
@@ -2697,7 +2744,7 @@ pub async fn remove_leaf_async(
     name: &str,
     kind: NodeKind,
 ) -> Result<bool, RemoveNodeError> {
-    remove_node_with_policy_async(disk, name, Some(kind)).await
+    remove_node_with_policy_async(disk, name, Some(kind), authorized::Actor::Host).await
 }
 
 fn indexed_directory_is_empty(disk_id: block::DiscId, path: &str) -> Result<bool, block::Error> {
@@ -2713,6 +2760,7 @@ async fn remove_node_with_policy_async(
     disk: block::DeviceHandle,
     name: &str,
     leaf_kind: Option<NodeKind>,
+    actor: authorized::Actor,
 ) -> Result<bool, RemoveNodeError> {
     let _activity = crate::disc::access::Activity::begin(disk)?;
     if name.is_empty() || name == "/" || disk.parent().is_some() {
@@ -2733,6 +2781,7 @@ async fn remove_node_with_policy_async(
     let (_write_lease, entry) = loop {
         ensure_index_async(disk, &placement).await?;
         let lease = write_gate::RootWriteLease::acquire(disk.id()).await;
+        authorized::check_tree_under_lease(actor, disk, &params, name).await?;
         match indexed_removal_entry(disk.id(), name) {
             Ok(Some(entry)) => break (lease, entry),
             Ok(None) => return Ok(false),
@@ -2840,7 +2889,7 @@ pub async fn file_rename_async(
     src: &str,
     dst: &str,
 ) -> Result<bool, block::Error> {
-    file_rename_with_policy_async(disk, src, dst, false).await
+    file_rename_with_policy_async(disk, src, dst, false, authorized::Actor::Host).await
 }
 
 /// Atomically move a file, replacing an existing file at the destination.
@@ -2852,7 +2901,7 @@ pub async fn file_rename_replace_async(
     src: &str,
     dst: &str,
 ) -> Result<bool, block::Error> {
-    file_rename_with_policy_async(disk, src, dst, true).await
+    file_rename_with_policy_async(disk, src, dst, true, authorized::Actor::Host).await
 }
 
 async fn file_rename_with_policy_async(
@@ -2860,9 +2909,10 @@ async fn file_rename_with_policy_async(
     src: &str,
     dst: &str,
     replace_existing: bool,
+    actor: authorized::Actor,
 ) -> Result<bool, block::Error> {
     let _activity = crate::disc::access::Activity::begin(disk)?;
-    if src == dst && !replace_existing {
+    if actor == authorized::Actor::Host && src == dst && !replace_existing {
         return Ok(true);
     }
 
@@ -2883,6 +2933,10 @@ async fn file_rename_with_policy_async(
     let (_write_lease, entry) = loop {
         ensure_index_async(disk, &placement).await?;
         let lease = write_gate::RootWriteLease::acquire(disk.id()).await;
+        authorized::check_tree_under_lease(actor, disk, &params, src).await?;
+        authorized::check_tree_under_lease(actor, disk, &params, dst).await?;
+        authorized::check_move_protection_under_lease(actor, disk, &params, src, dst).await?;
+        if src == dst { return Ok(node_record_under_lease(disk, &params, src).await?.is_some()); }
         match indexed_move_entry_with_policy(
             disk.id(), src, dst, trueos_fs::LogKind::Put, replace_existing,
         ) {
@@ -3006,6 +3060,13 @@ pub async fn dir_rename_async(
     disk: block::DeviceHandle,
     src_dir: &str,
     dst_dir: &str,
+) -> Result<bool, block::Error> { dir_rename_for_actor_async(disk, src_dir, dst_dir, authorized::Actor::Host).await }
+
+async fn dir_rename_for_actor_async(
+    disk: block::DeviceHandle,
+    src_dir: &str,
+    dst_dir: &str,
+    actor: authorized::Actor,
 ) -> Result<bool, block::Error> {
     let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
@@ -3020,10 +3081,18 @@ pub async fn dir_rename_async(
     let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
     };
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
     let disk_id = disk.id();
     let (_write_lease, entry) = loop {
         ensure_index_async(disk, &placement).await?;
         let lease = write_gate::RootWriteLease::acquire(disk_id).await;
+        authorized::check_tree_under_lease(actor, disk, &params, &src).await?;
+        authorized::check_tree_under_lease(actor, disk, &params, &dst).await?;
+        authorized::check_move_protection_under_lease(actor, disk, &params, &src, &dst).await?;
         match indexed_move_entry(disk_id, &src, &dst, trueos_fs::LogKind::Directory) {
             Ok(Some(entry)) => break (lease, entry),
             Ok(None) => return Ok(false),
@@ -3042,11 +3111,6 @@ pub async fn dir_rename_async(
         return Ok(false);
     }
 
-    let params = trueos_fs::FsParams {
-        super_lba: placement.super_lba,
-        data_lba: placement.data_lba,
-        data_end_lba_exclusive: placement.data_end_lba_exclusive,
-    };
     let io = KernelBlockIo::new(disk);
     let Some(source) = trueos_fs::get_node_record_by_lba(&io, &params, entry.entry_lba)
         .await.map_err(map_engine_err)?

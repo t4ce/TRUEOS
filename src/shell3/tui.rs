@@ -12,6 +12,7 @@ use spin::Mutex;
 use trueos_terminal::program_status::{ProgramStatus, ProgramStatusParser};
 use trueos_terminal::{Terminal, TerminalColor};
 mod remote;
+mod accounts;
 pub(crate) use remote::Drain as RemoteDrain;
 
 #[derive(Clone, Copy)]
@@ -65,8 +66,7 @@ struct Registry {
     revisions: Vec<(u64, u64)>,
     next_revision: u64,
     remote_frontends: Vec<(u64, remote::Output)>,
-    authenticated_frontend_accounts: Vec<(u64, trueos_crypto::AccountId)>,
-    guest_frontend_accounts: Vec<(u64, Option<trueos_crypto::AccountId>)>,
+    accounts: accounts::Bindings,
     pending_launches: Vec<(u64, QueuedBlueprint)>,
     navigation_holds: Vec<u64>,
 }
@@ -78,8 +78,7 @@ impl Registry {
             revisions: Vec::new(),
             next_revision: 0,
             remote_frontends: Vec::new(),
-            authenticated_frontend_accounts: Vec::new(),
-            guest_frontend_accounts: Vec::new(),
+            accounts: accounts::Bindings::new(),
             pending_launches: Vec::new(),
             navigation_holds: Vec::new(),
         }
@@ -415,6 +414,12 @@ pub(crate) fn claim(target: &MatrixTarget, vm: u8) -> Option<bool> {
         return None;
     };
     let frontend = routes.routes[index].frontend;
+    let actor = frontend.and_then(|frontend| routes.accounts.account(frontend));
+    if crate::access_key_db::authorize_vm_control(vm, actor).is_err() {
+        drop(routes);
+        log_claim_rejection(vm, run, frontend, "account-permission-denied");
+        return Some(false);
+    }
     let owner = Owner { vm, run };
     let rejection = if !live {
         Some("dead-slot")
@@ -704,12 +709,7 @@ pub(super) fn native_transport_scope(target: &MatrixTarget) -> Option<u8> {
 /// Resolve the exact frontend before queuing a launch. A transport-wide Cry
 /// session must never lend identity to another SSH connection or UI window.
 pub(super) fn frontend_access_account(frontend: Frontend) -> Option<trueos_crypto::AccountId> {
-    let routes = ROUTES.lock();
-    if let Some((_, account)) = routes.guest_frontend_accounts.iter().find(|entry| entry.0 == frontend.id) {
-        return *account;
-    }
-    routes.authenticated_frontend_accounts.iter()
-        .find(|entry| entry.0 == frontend.id).map(|entry| entry.1)
+    ROUTES.lock().accounts.account(frontend.id)
 }
 
 /// Capture the frontend which owns this exact live native menu lease.
@@ -723,23 +723,19 @@ pub(super) fn native_frontend_id(target: &MatrixTarget) -> Option<u64> {
 /// terminals retain their launch principal, including an anonymous principal.
 pub(super) fn bind_authenticated_frontend(frontend: u64, account: Option<trueos_crypto::AccountId>) -> bool {
     let mut routes = ROUTES.lock();
-    if routes.guest_frontend_accounts.iter().any(|entry| entry.0 == frontend)
+    if routes.accounts.is_guest(frontend)
         || !routes.routes.iter().any(|route| route.frontend == Some(frontend))
             && !routes.remote_frontends.iter().any(|entry| entry.0 == frontend)
     {
         return false;
     }
-    routes.authenticated_frontend_accounts.retain(|entry| entry.0 != frontend);
-    if let Some(account) = account {
-        routes.authenticated_frontend_accounts.push((frontend, account));
-    }
-    true
+    routes.accounts.bind_human(frontend, account)
 }
 
 /// A guest-owned terminal keeps the originating VM's principal even when a
 /// different account later signs in through a human terminal.
 pub(super) fn bind_guest_frontend_account(frontend: Frontend, account: Option<trueos_crypto::AccountId>) {
-    ROUTES.lock().guest_frontend_accounts.push((frontend.id, account));
+    ROUTES.lock().accounts.bind_guest(frontend.id, account);
 }
 pub(super) fn native_read(target: &MatrixTarget) -> Option<(Vec<u8>, Vec<String>)> {
     let lease = crate::shell3::matrix_target_slot_lease(target);
@@ -919,7 +915,25 @@ pub(super) fn park(frontend: u64) -> bool {
     }
     parked
 }
+/// Check the requesting frontend before changing a protected run's terminal.
+/// Unbound development runs retain the kernel policy's existing behavior.
+fn authorize_route(frontend: Frontend, name: &str) -> Result<(), &'static str> {
+    let (vm, actor) = {
+        let routes = ROUTES.lock();
+        let vm = routes.routes.iter().find(|route| route.lease.name() == name).and_then(|route| route.vm);
+        (vm, routes.accounts.account(frontend.id))
+    };
+    if let Some(vm) = vm {
+        crate::access_key_db::authorize_vm_control(vm, actor)
+            .map_err(|_| "tui: permission denied for this app's signed-in account")?;
+    }
+    Ok(())
+}
+
 pub(super) fn select(frontend: Frontend, name: Option<&str>) -> bool {
+    if name.is_some_and(|name| authorize_route(frontend, name).is_err()) {
+        return false;
+    }
     // A helper has one input owner. A parked helper may move to another shell.
     {
         let mut routes = ROUTES.lock();
@@ -990,6 +1004,7 @@ pub(super) fn select_for_navigation(frontend: Frontend, _name: &str) -> bool {
 /// Explicit `tui` releases the previous attachment before requesting reentry.
 /// Ordinary slot navigation continues to respect a live terminal owner.
 pub(super) fn request_takeover(frontend: Frontend, name: &str) -> Result<(), &'static str> {
+    authorize_route(frontend, name)?;
     let previous = {
         let routes = ROUTES.lock();
         routes
@@ -1024,6 +1039,7 @@ pub(super) fn request_takeover(frontend: Frontend, name: &str) -> Result<(), &'s
 }
 
 pub(super) fn request(frontend: Frontend, name: &str) -> Result<(), &'static str> {
+    authorize_route(frontend, name)?;
     if native_slot(name) {
         {
             let routes = ROUTES.lock();
@@ -1081,8 +1097,7 @@ pub(super) fn request(frontend: Frontend, name: &str) -> Result<(), &'static str
     crate::hv::blueprint_terminal_request_reentry(vm)
 }
 pub(super) fn detach(frontend: u64) {
-    ROUTES.lock().authenticated_frontend_accounts.retain(|entry| entry.0 != frontend);
-    ROUTES.lock().guest_frontend_accounts.retain(|entry| entry.0 != frontend);
+    ROUTES.lock().accounts.remove(frontend);
     hold_navigation(frontend, false);
     ROUTES
         .lock()

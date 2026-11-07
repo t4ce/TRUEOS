@@ -13,6 +13,7 @@ pub extern crate alloc;
 mod ai;
 mod access_key_db;
 mod access_key_store;
+mod access_key_workspace;
 mod allcaps;
 mod allocators;
 pub mod allports;

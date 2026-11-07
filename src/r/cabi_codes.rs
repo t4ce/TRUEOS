@@ -10,6 +10,7 @@ pub const FS_ERR_TIMEOUT: i32 = -14;
 pub const FS_ERR_TYPE_REQUIRED: i32 = -15;
 pub const FS_ERR_TYPE_MISMATCH: i32 = -16;
 pub const FS_ERR_WRITE_CONFLICT: i32 = -17;
+pub const FS_ERR_PERMISSION_DENIED: i32 = -19;
 
 // Contract limit for C ABI FS path parameters used by kernel + QJS.
 pub const BLUEPRINT_ASYNC_FS_MAX_PATH: usize = 1024;
@@ -44,6 +45,7 @@ pub fn cabi_rc_name(rc: i32) -> &'static [u8] {
         FS_ERR_TYPE_REQUIRED => b"FS_ERR_TYPE_REQUIRED",
         FS_ERR_TYPE_MISMATCH => b"FS_ERR_TYPE_MISMATCH",
         FS_ERR_WRITE_CONFLICT => b"FS_ERR_WRITE_CONFLICT",
+        FS_ERR_PERMISSION_DENIED => b"FS_ERR_PERMISSION_DENIED",
         NET_PENDING => b"NET_PENDING",
         NET_ERR_BAD_URL => b"NET_ERR_BAD_URL",
         NET_ERR_TIMEOUT => b"NET_ERR_TIMEOUT",
