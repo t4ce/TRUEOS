@@ -34,6 +34,10 @@ struct SocketAddrRaw {
 const _: () = assert!(core::mem::size_of::<SocketAddrRaw>() == 20);
 
 unsafe extern "C" {
+    fn trueos_mio_tcp_socket_create(family: u32, out_socket_id: *mut u32) -> i32;
+    fn trueos_mio_tcp_socket_bind(socket_id: u32, addr: SocketAddrRaw) -> i32;
+    fn trueos_mio_tcp_socket_connect(socket_id: u32, addr: SocketAddrRaw) -> i32;
+    fn trueos_mio_tcp_socket_listen(socket_id: u32, backlog: u32) -> i32;
     fn trueos_mio_tcp_listener_bind(addr: SocketAddrRaw, out_socket_id: *mut u32) -> i32;
     fn trueos_mio_tcp_stream_connect(addr: SocketAddrRaw, out_socket_id: *mut u32) -> i32;
     fn trueos_mio_udp_socket_bind(addr: SocketAddrRaw, out_socket_id: *mut u32) -> i32;
@@ -89,23 +93,45 @@ impl Drop for Socket {
 }
 
 impl Socket {
+    pub(crate) fn tcp_socket(family: u32) -> io::Result<Self> {
+        let mut id = 0;
+        let status = unsafe { trueos_mio_tcp_socket_create(family, &mut id) };
+        status_to_result(status, "native TCP socket creation failed")?;
+        Ok(Self { id, registration: None })
+    }
+
+    pub(crate) fn bind(&self, addr: SocketAddr) -> io::Result<()> {
+        let status = unsafe { trueos_mio_tcp_socket_bind(self.id, socket_addr_to_raw(addr)?) };
+        status_to_result(status, "native TCP endpoint reservation failed")
+    }
+
+    pub(crate) fn connect(&self, addr: SocketAddr) -> io::Result<()> {
+        let status = unsafe { trueos_mio_tcp_socket_connect(self.id, socket_addr_to_raw(addr)?) };
+        status_to_result(status, "native TCP socket connect failed")
+    }
+
+    pub(crate) fn listen(&self, backlog: u32) -> io::Result<()> {
+        let status = unsafe { trueos_mio_tcp_socket_listen(self.id, backlog) };
+        status_to_result(status, "native TCP socket listen failed")
+    }
+
     pub(crate) fn tcp_listener_bind(addr: SocketAddr) -> io::Result<Self> {
         let mut id = 0u32;
-        let status = unsafe { trueos_mio_tcp_listener_bind(socket_addr_to_raw(addr), &mut id) };
+        let status = unsafe { trueos_mio_tcp_listener_bind(socket_addr_to_raw(addr)?, &mut id) };
         status_to_result(status, "mio zkvm TCP listener bind failed")?;
         Ok(Self { id, registration: None })
     }
 
     pub(crate) fn tcp_stream_connect(addr: SocketAddr) -> io::Result<Self> {
         let mut id = 0u32;
-        let status = unsafe { trueos_mio_tcp_stream_connect(socket_addr_to_raw(addr), &mut id) };
+        let status = unsafe { trueos_mio_tcp_stream_connect(socket_addr_to_raw(addr)?, &mut id) };
         status_to_result(status, "mio zkvm TCP stream connect failed")?;
         Ok(Self { id, registration: None })
     }
 
     pub(crate) fn udp_bind(addr: SocketAddr) -> io::Result<Self> {
         let mut id = 0u32;
-        let status = unsafe { trueos_mio_udp_socket_bind(socket_addr_to_raw(addr), &mut id) };
+        let status = unsafe { trueos_mio_udp_socket_bind(socket_addr_to_raw(addr)?, &mut id) };
         status_to_result(status, "mio zkvm UDP bind failed")?;
         Ok(Self { id, registration: None })
     }
@@ -179,7 +205,7 @@ impl Socket {
     }
 
     pub(crate) fn udp_connect(&self, addr: SocketAddr) -> io::Result<()> {
-        let status = unsafe { trueos_mio_udp_socket_connect(self.id, socket_addr_to_raw(addr)) };
+        let status = unsafe { trueos_mio_udp_socket_connect(self.id, socket_addr_to_raw(addr)?) };
         status_to_result(status, "mio zkvm udp connect failed")?;
         // Replacing a peer also replaces the kernel's queued receive set.
         if let Some(registration) = &self.registration { registration.rearm(READY_READABLE); }
@@ -190,7 +216,7 @@ impl Socket {
         let status = unsafe {
             trueos_mio_udp_socket_send_to(
                 self.id,
-                socket_addr_to_raw(addr),
+                socket_addr_to_raw(addr)?,
                 buf.as_ptr(),
                 buf.len(),
             )
@@ -262,7 +288,7 @@ pub(crate) fn socket_ready(socket_id: u32, interests: Interest) -> io::Result<u8
     }
 }
 
-fn socket_addr_to_raw(addr: SocketAddr) -> SocketAddrRaw {
+fn socket_addr_to_raw(addr: SocketAddr) -> io::Result<SocketAddrRaw> {
     match addr {
         SocketAddr::V4(addr) => {
             let mut raw = SocketAddrRaw {
@@ -272,14 +298,19 @@ fn socket_addr_to_raw(addr: SocketAddr) -> SocketAddrRaw {
                 addr: [0; 16],
             };
             raw.addr[..4].copy_from_slice(&addr.ip().octets());
-            raw
+            Ok(raw)
         }
-        SocketAddr::V6(addr) => SocketAddrRaw {
+        // The native address record has no scope or flow fields. Preserve the
+        // caller's meaning by refusing values the service cannot represent.
+        SocketAddr::V6(addr) if addr.scope_id() != 0 || addr.flowinfo() != 0 => {
+            Err(io::ErrorKind::InvalidInput.into())
+        }
+        SocketAddr::V6(addr) => Ok(SocketAddrRaw {
             family: 6,
             reserved: 0,
             port: addr.port(),
             addr: addr.ip().octets(),
-        },
+        }),
     }
 }
 

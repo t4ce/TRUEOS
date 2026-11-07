@@ -204,6 +204,12 @@ impl VNet {
         self.submit_kernel(cmd)
     }
 
+    pub(crate) fn submit_tcp_connect_from(
+        &self, local: core::net::SocketAddr, remote: core::net::SocketAddr,
+    ) -> Result<(), ()> {
+        self.submit_kernel(NetCommand::OpenTcpConnectFrom { local, remote })
+    }
+
     fn submit_kernel(&self, mut cmd: NetCommand) -> Result<(), ()> {
         // Under bursty load, the per-owner command queue can be briefly full.
         // Retry a few times to avoid silently dropping critical commands like

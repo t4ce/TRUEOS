@@ -45,6 +45,17 @@ impl VNetBridge {
         }
     }
 
+    /// Native Mio hooks cross into the host before entering this broker. Keep
+    /// local-endpoint submission on the same ordered queue as its other I/O.
+    pub(crate) fn submit_tcp_connect_from(
+        &self, local: core::net::SocketAddr, remote: core::net::SocketAddr,
+    ) -> Result<(), ()> {
+        match &self.backend {
+            VNetBridgeBackend::LocalVnet(vnet) => vnet.submit_tcp_connect_from(local, remote),
+            VNetBridgeBackend::Vmx(_) => Err(()),
+        }
+    }
+
     pub(crate) fn pop_event(&self) -> Option<api::Event> {
         match &self.backend {
             VNetBridgeBackend::Vmx(vmx) => vmx.pop_event(),

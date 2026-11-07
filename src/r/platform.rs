@@ -10,6 +10,19 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 static TOKIO_CPU_COUNT_LOGGED: AtomicU64 = AtomicU64::new(0);
 
+/// Civil-time policy without a POSIX `tm` object or C errno bookkeeping.
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_time_timezone_offset_seconds(utc_seconds: i64) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, offset) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_TIMEZONE_OFFSET_SECONDS, utc_seconds as u64, 0,
+        );
+        if status == trueos_vm::vmcall::STATUS_OK { return offset as i64 as i32; }
+        return 0;
+    }
+    crate::locale::utc_offset_seconds(utc_seconds.max(0) as u64)
+}
+
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_platform_monotonic_nanos() -> u64 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {

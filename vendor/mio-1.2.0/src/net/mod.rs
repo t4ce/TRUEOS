@@ -30,6 +30,8 @@ pub use core::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 mod tcp;
 pub use self::tcp::{TcpListener, TcpStream};
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
+pub use self::tcp::TcpSocket;
 
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 #[cfg_attr(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")), path = "udp_zkvm.rs")]

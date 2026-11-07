@@ -6,7 +6,7 @@ const IO_KEY:u64=0x4250_494f_0000_0001;
 #[derive(Clone,Copy,Debug)]#[repr(C)]pub struct Raw{family:u8,reserved:u8,port:u16,addr:[u8;16]}
 fn address(raw:Raw)->SocketAddr{assert_eq!(raw.family,4);SocketAddr::new(IpAddr::V4(Ipv4Addr::new(raw.addr[0],raw.addr[1],raw.addr[2],raw.addr[3])),raw.port)}
 fn raw(addr:SocketAddr)->Raw{let IpAddr::V4(ip)=addr.ip()else{panic!("simulator IPv4 transport only")};let mut bytes=[0;16];bytes[..4].copy_from_slice(&ip.octets());Raw{family:4,reserved:0,port:addr.port(),addr:bytes}}
-enum Kind{Listener{pending:VecDeque<u32>},Tcp{peer_id:u32,rx:VecDeque<u8>,peer_eof:bool,read_closed:bool,write_closed:bool},Udp{packets:VecDeque<(SocketAddr,Vec<u8>)>}}
+enum Kind{Unconnected{bound:bool},Listener{pending:VecDeque<u32>,backlog:u32},Tcp{peer_id:u32,rx:VecDeque<u8>,peer_eof:bool,read_closed:bool,write_closed:bool},Udp{packets:VecDeque<(SocketAddr,Vec<u8>)>}}
 struct Socket{local:SocketAddr,peer:Option<SocketAddr>,kind:Kind,nodelay:bool,ttl:u32}
 static SOCKETS:OnceLock<Mutex<HashMap<u32,Socket>>>=OnceLock::new();
 static NEXT:AtomicU32=AtomicU32::new(1);
@@ -17,28 +17,49 @@ fn local(mut addr:SocketAddr)->SocketAddr{if addr.port()==0{addr.set_port(PORT.f
 fn socket(local:SocketAddr,peer:Option<SocketAddr>,kind:Kind)->Socket{Socket{local,peer,kind,nodelay:false,ttl:64}}
 fn wake(){crate::boundary::trueos_tokio_platform_wake_all(IO_KEY);}
 pub fn live_sockets()->usize{sockets().lock().unwrap().len()}
+#[unsafe(no_mangle)]pub unsafe extern "C" fn trueos_mio_tcp_socket_create(family:u32,out:*mut u32)->i32{
+ if family!=4{return -1;}let id=id();sockets().lock().unwrap().insert(id,socket(SocketAddr::from(([0,0,0,0],0)),None,Kind::Unconnected{bound:false}));unsafe{out.write(id);}0
+}
+#[unsafe(no_mangle)]pub extern "C" fn trueos_mio_tcp_socket_bind(id:u32,addr:Raw)->i32{
+ if addr.family!=4{return -4;}let mut map=sockets().lock().unwrap();let Some(s)=map.get(&id)else{return -5;};if !matches!(s.kind,Kind::Unconnected{bound:false}){return -4;}
+ let addr=local(address(addr));if map.iter().any(|(&other,s)|other!=id&&s.local==addr&&!matches!(s.kind,Kind::Udp{..})){return -6;}
+ let s=map.get_mut(&id).unwrap();s.local=addr;s.kind=Kind::Unconnected{bound:true};0
+}
+#[unsafe(no_mangle)]pub extern "C" fn trueos_mio_tcp_socket_connect(client:u32,addr:Raw)->i32{
+ if addr.family!=4{return -4;}let peer=address(addr);let mut map=sockets().lock().unwrap();let Some(s)=map.get(&client)else{return -5;};let Kind::Unconnected{bound}=s.kind else{return -4;};
+ let mine=if bound{s.local}else{local(SocketAddr::from(([127,0,0,1],0)))};
+ let listener=map.iter().find(|(_,s)|matches!(s.kind,Kind::Listener{..})&&s.local==peer).map(|(&id,_)|id);let Some(listener)=listener else{return -3;};
+ if let Kind::Listener{pending,backlog}=&map[&listener].kind{if pending.len()>=*backlog as usize{return -9;}}
+ let server=id();let mut accepted=socket(peer,Some(mine),Kind::Tcp{peer_id:client,rx:VecDeque::new(),peer_eof:false,read_closed:false,write_closed:false});accepted.nodelay=map[&listener].nodelay;map.insert(server,accepted);
+ let s=map.get_mut(&client).unwrap();s.local=mine;s.peer=Some(peer);s.kind=Kind::Tcp{peer_id:server,rx:VecDeque::new(),peer_eof:false,read_closed:false,write_closed:false};
+ if let Kind::Listener{pending,..}=&mut map.get_mut(&listener).unwrap().kind{pending.push_back(server);}drop(map);wake();0
+}
+#[unsafe(no_mangle)]pub extern "C" fn trueos_mio_tcp_socket_listen(id:u32,backlog:u32)->i32{
+ if backlog>32{return -4;}let backlog=backlog.max(1);let mut map=sockets().lock().unwrap();let Some(s)=map.get_mut(&id)else{return -5;};if !matches!(s.kind,Kind::Unconnected{bound:true}){return -4;}s.kind=Kind::Listener{pending:VecDeque::new(),backlog};drop(map);wake();0
+}
 #[unsafe(no_mangle)]pub unsafe extern "C" fn trueos_mio_tcp_listener_bind(addr:Raw,out:*mut u32)->i32{
  if addr.family!=4{return -4;}let addr=local(address(addr));let mut map=sockets().lock().unwrap();
  if map.values().any(|s|s.local==addr&&matches!(s.kind,Kind::Listener{..})){return -6;}
- let id=id();map.insert(id,socket(addr,None,Kind::Listener{pending:VecDeque::new()}));unsafe{out.write(id);}drop(map);wake();0
+ let id=id();map.insert(id,socket(addr,None,Kind::Listener{pending:VecDeque::new(),backlog:128}));unsafe{out.write(id);}drop(map);wake();0
 }
 #[unsafe(no_mangle)]pub unsafe extern "C" fn trueos_mio_tcp_stream_connect(addr:Raw,out:*mut u32)->i32{
  if addr.family!=4{return -4;}let peer=address(addr);let mut map=sockets().lock().unwrap();
  let listener=map.iter().find(|(_,s)|matches!(s.kind,Kind::Listener{..})&&s.local==peer).map(|(&id,_)|id);
  let Some(listener)=listener else{return -3;};
+ if let Kind::Listener{pending,backlog}=&map[&listener].kind{if pending.len()>=*backlog as usize{return -9;}}
  let client=id();let server=id();let mine=local(SocketAddr::from(([127,0,0,1],0)));
  map.insert(client,socket(mine,Some(peer),Kind::Tcp{peer_id:server,rx:VecDeque::new(),peer_eof:false,read_closed:false,write_closed:false}));
- map.insert(server,socket(peer,Some(mine),Kind::Tcp{peer_id:client,rx:VecDeque::new(),peer_eof:false,read_closed:false,write_closed:false}));
- if let Kind::Listener{pending}= &mut map.get_mut(&listener).unwrap().kind{pending.push_back(server);}
+ let mut accepted=socket(peer,Some(mine),Kind::Tcp{peer_id:client,rx:VecDeque::new(),peer_eof:false,read_closed:false,write_closed:false});accepted.nodelay=map[&listener].nodelay;map.insert(server,accepted);
+ if let Kind::Listener{pending,..}= &mut map.get_mut(&listener).unwrap().kind{pending.push_back(server);}
  unsafe{out.write(client);}drop(map);wake();0
 }
 #[unsafe(no_mangle)]pub unsafe extern "C" fn trueos_mio_tcp_listener_accept(id:u32,out:*mut u32,addr:*mut Raw)->i32{
- let mut map=sockets().lock().unwrap();let Some(s)=map.get_mut(&id)else{return -5;};let Kind::Listener{pending}=&mut s.kind else{return -4;};let Some(child)=pending.pop_front()else{return -2;};let peer=map[&child].peer.unwrap();unsafe{out.write(child);addr.write(raw(peer));}0
+ let mut map=sockets().lock().unwrap();let Some(s)=map.get_mut(&id)else{return -5;};let Kind::Listener{pending,..}=&mut s.kind else{return -4;};let Some(child)=pending.pop_front()else{return -2;};let peer=map[&child].peer.unwrap();unsafe{out.write(child);addr.write(raw(peer));}0
 }
 #[unsafe(no_mangle)]pub extern "C" fn trueos_mio_socket_close(id:u32)->i32{
  let mut map=sockets().lock().unwrap();let Some(s)=map.remove(&id)else{return -5;};
  if let Kind::Tcp{peer_id,..}=s.kind{if let Some(Socket{kind:Kind::Tcp{peer_eof,..},..})=map.get_mut(&peer_id){*peer_eof=true;}}
- else if let Kind::Listener{pending}=s.kind{for child in pending{map.remove(&child);}}
+ else if let Kind::Listener{pending,..}=s.kind{for child in pending{map.remove(&child);}}
  drop(map);wake();0
 }
 #[unsafe(no_mangle)]pub extern "C" fn trueos_mio_socket_shutdown(id:u32,how:u32)->i32{
@@ -59,7 +80,8 @@ unsafe fn read(id:u32,out:*mut u8,cap:usize,peek:bool)->isize{
 }
 #[unsafe(no_mangle)]pub extern "C" fn trueos_mio_socket_poll_ready(id:u32,interests:u8)->i32{
  let map=sockets().lock().unwrap();let Some(s)=map.get(&id)else{return -5;};let bits=match &s.kind{
- Kind::Listener{pending}=>u8::from(!pending.is_empty()),
+ Kind::Unconnected{..}=>0,
+ Kind::Listener{pending,..}=>u8::from(!pending.is_empty()),
  Kind::Tcp{rx,peer_eof,read_closed,write_closed,..}=>u8::from(!rx.is_empty()||*peer_eof||*read_closed)|if !*write_closed{2}else{16}|if *peer_eof||*read_closed{8}else{0},
  Kind::Udp{packets}=>2|u8::from(!packets.is_empty()),};i32::from(bits&(interests|28))
 }

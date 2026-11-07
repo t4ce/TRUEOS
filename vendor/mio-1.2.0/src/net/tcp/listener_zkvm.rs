@@ -13,6 +13,10 @@ pub struct TcpListener {
 }
 
 impl TcpListener {
+    pub(crate) fn from_zkvm_socket(inner: Socket) -> Self {
+        Self { inner }
+    }
+
     pub fn bind(addr: SocketAddr) -> io::Result<TcpListener> {
         Ok(TcpListener {
             inner: Socket::tcp_listener_bind(addr)?,

@@ -7,6 +7,11 @@ use v::vnet as api;
 use crate::blueprint_net_broker::VNetBridge;
 
 mod progress;
+mod tcp_socket;
+pub use tcp_socket::{trueos_mio_tcp_socket_bind, trueos_mio_tcp_socket_connect,
+    trueos_mio_tcp_socket_create, trueos_mio_tcp_socket_listen};
+pub(crate) use tcp_socket::{mio_tcp_socket_bind_host, mio_tcp_socket_connect_host,
+    mio_tcp_socket_create_host, mio_tcp_socket_listen_host};
 
 const STATUS_OK: i32 = 0;
 const STATUS_UNSUPPORTED: i32 = -1;
@@ -309,6 +314,7 @@ fn should_log_tcp_read_would_block() -> bool {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MioSocketKind {
+    TcpSocket,
     TcpStream,
     TcpListener,
     Udp,
@@ -316,10 +322,19 @@ enum MioSocketKind {
 
 fn mio_socket_kind_label(kind: MioSocketKind) -> &'static str {
     match kind {
+        MioSocketKind::TcpSocket => "tcp-socket",
         MioSocketKind::TcpStream => "tcp-stream",
         MioSocketKind::TcpListener => "tcp-listener",
         MioSocketKind::Udp => "udp",
     }
+}
+
+#[derive(Clone, Copy)]
+struct TcpSocketSetup {
+    family: u32,
+    bound: bool,
+    backlog: usize,
+    nodelay: bool,
 }
 
 struct MioSocketState {
@@ -327,6 +342,7 @@ struct MioSocketState {
     owner_vm: Option<u8>,
     progress_generation: u64,
     kind: MioSocketKind,
+    setup: Option<TcpSocketSetup>,
     handle: Option<api::NetHandle>,
     listen_handles: Vec<api::NetHandle>,
     local: Option<CompatAddr>,
@@ -609,6 +625,8 @@ fn guest_mio_socket_out(op: u32, addr: TrueosMioSocketAddr, out_socket_id: *mut 
         if copy_u32_to_active_guest(vm_id, out_socket_id, rc as u32) {
             STATUS_OK
         } else {
+            // A failed result copy must release the newly created owned ID.
+            let _ = unsafe { trueos_mio_socket_close(rc as u32) };
             STATUS_INVALID_INPUT
         }
     } else {
@@ -695,7 +713,7 @@ impl MioCompat {
 
     fn tcp_listener_address_in_use(&self, local: CompatAddr) -> bool {
         self.sockets.iter().any(|socket| {
-            if socket.kind != MioSocketKind::TcpListener || socket.closed {
+            if (socket.kind != MioSocketKind::TcpListener && !socket.setup.is_some_and(|setup| setup.bound)) || socket.closed {
                 return false;
             }
             match (socket.local, local) {
@@ -720,9 +738,9 @@ impl MioCompat {
 
     fn tcp_listener_port_in_use(&self, port: u16) -> bool {
         self.sockets.iter().any(|socket| {
-            socket.kind == MioSocketKind::TcpListener
-                && !socket.closed
-                && socket.listen_port == Some(port)
+            !socket.closed
+                && (socket.kind == MioSocketKind::TcpListener || socket.setup.is_some_and(|setup| setup.bound))
+                && socket.local.is_some_and(|local| match local { CompatAddr::V4 { port: bound, .. } | CompatAddr::V6 { port: bound, .. } => bound == port })
         })
     }
 
@@ -809,8 +827,12 @@ impl MioCompat {
     }
 
     fn drop_pending_open(&mut self, socket_id: u32) {
-        self.pending_opens
-            .retain(|pending| pending.socket_id != socket_id);
+        // Commands already accepted by the adapter still produce one ordered
+        // completion. Keep their place until that completion is consumed, so
+        // cancellation cannot give a later socket somebody else's transport.
+        for pending in &mut self.pending_opens {
+            if pending.socket_id == socket_id { pending.socket_id = 0; }
+        }
     }
 
     fn pending_opens_for_socket(&self, socket_id: u32, kind: api::SocketKind) -> usize {
@@ -826,7 +848,7 @@ impl MioCompat {
             kind: api::SocketKind::Tcp,
         });
         let Some(local) = self.socket(socket_id).and_then(|socket| socket.local) else {
-            self.drop_pending_open(socket_id);
+            self.pending_opens.pop_back();
             return Err(STATUS_INVALID_INPUT);
         };
         let local = match local {
@@ -838,7 +860,7 @@ impl MioCompat {
             }
         };
         if let Err(status) = self.submit(api::Command::OpenTcpListenAt { local }) {
-            self.drop_pending_open(socket_id);
+            self.pending_opens.pop_back();
             return Err(status);
         }
         Ok(())
@@ -861,7 +883,11 @@ impl MioCompat {
                 .map(|socket| socket.listen_handles.len())
                 .unwrap_or(0)
                 + self.pending_opens_for_socket(socket_id, api::SocketKind::Tcp);
-            if posted >= TCP_LISTENER_PREPOST {
+            let (limit, queued) = self.socket(socket_id).map(|socket| (
+                socket.setup.map_or(TCP_LISTENER_PREPOST, |setup| setup.backlog),
+                socket.accept_queue.len(),
+            )).unwrap_or((0, 0));
+            if posted.saturating_add(queued) >= limit {
                 break;
             }
             if self.post_tcp_listener_open(socket_id, port).is_err() {
@@ -874,6 +900,8 @@ impl MioCompat {
         let open_error = matches!(
             msg,
             "no sockets available" | "bind failed" | "listen failed" | "connect failed"
+                | "invalid local address" | "no ipv4 configured" | "tcp connect link down"
+                | "tcp listen link down" | "unsupported listen address"
         );
         if !open_error {
             crate::log!(
@@ -894,9 +922,10 @@ impl MioCompat {
                     socket,
                 );
             }
+            let other_opens = self.pending_opens_for_socket(pending.socket_id, api::SocketKind::Tcp);
             if let Some(socket) = self.socket_mut(pending.socket_id)
-                && socket.kind != MioSocketKind::TcpListener
-            {
+                && (socket.kind != MioSocketKind::TcpListener
+                    || (socket.listen_handles.is_empty() && other_opens == 0)) {
                 socket.error = STATUS_IO;
                 socket.closed = true;
             }
@@ -947,6 +976,10 @@ impl MioCompat {
                     && let Some(pending) = self.pending_opens.remove(index)
                 {
                     let pending_open_count = self.pending_opens.len();
+                    if self.socket(pending.socket_id).is_none() {
+                        let _ = self.submit(api::Command::Close { handle });
+                        return;
+                    }
                     let owner_vm = self.socket(pending.socket_id).and_then(|socket| socket.owner_vm);
                     if kind == api::SocketKind::Tcp && !publish_rx_owner(handle.0, owner_vm) {
                         // Only this new guest socket is refused at capacity;
@@ -961,7 +994,19 @@ impl MioCompat {
                     let Some(socket) = self.socket_mut(pending.socket_id) else {
                         return;
                     };
+                    // Apply options to each actual transport, including every
+                    // replenished listener. Accepted children inherit that transport.
+                    if let Some(setup) = socket.setup {
+                        let device = MIO_RX_DEVICE_INDEX.load(AtomicOrdering::Acquire);
+                        if let Err(status) = crate::net::adapter::socket_option(
+                            device, crate::net::adapter::NetHandle(handle.0), 1,
+                            Some(u32::from(setup.nodelay)),
+                        ) {
+                            socket.error = status;
+                        }
+                    }
                     match socket.kind {
+                        MioSocketKind::TcpSocket => unreachable!("unconnected socket has no pending open"),
                         MioSocketKind::Udp => {
                             socket.handle = Some(handle);
                             socket.connected = true;
@@ -1048,6 +1093,7 @@ impl MioCompat {
                         owner_vm,
                         progress_generation,
                         kind: MioSocketKind::TcpStream,
+            setup: None,
                         handle: Some(handle),
                         listen_handles: Vec::new(),
                         local,
@@ -1278,6 +1324,7 @@ impl MioCompat {
         }
 
         match socket.kind {
+            MioSocketKind::TcpSocket => {}
             MioSocketKind::TcpStream => {
                 if want_read && (!socket.rx_stream.is_empty() || socket.closed || socket.read_shutdown || socket.peer_eof) {
                     ready |= READY_READABLE;
@@ -1444,6 +1491,7 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
             owner_vm,
             progress_generation: owner_vm.and_then(crate::hv::vm_run_generation).unwrap_or(0),
             kind: MioSocketKind::TcpListener,
+            setup: None,
             handle: None,
             listen_handles: Vec::new(),
             local: Some(local),
@@ -1572,6 +1620,7 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
             owner_vm,
             progress_generation: owner_vm.and_then(crate::hv::vm_run_generation).unwrap_or(0),
             kind: MioSocketKind::TcpStream,
+            setup: None,
             handle: None,
             listen_handles: Vec::new(),
             local: None,
@@ -1608,7 +1657,7 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
         let status = match status {
             Ok(()) => STATUS_OK,
             Err(status) => {
-                compat.drop_pending_open(socket_id);
+                compat.pending_opens.pop_back();
                 status
             }
         };
@@ -1703,6 +1752,7 @@ pub(crate) unsafe fn mio_udp_socket_bind_host(
             owner_vm,
             progress_generation: owner_vm.and_then(crate::hv::vm_run_generation).unwrap_or(0),
             kind: MioSocketKind::Udp,
+            setup: None,
             handle: None,
             listen_handles: Vec::new(),
             local: Some(local),
@@ -1732,7 +1782,7 @@ pub(crate) unsafe fn mio_udp_socket_bind_host(
         let status = match compat.submit(api::Command::OpenUdp { port }) {
             Ok(()) => STATUS_OK,
             Err(status) => {
-                compat.drop_pending_open(socket_id);
+                compat.pending_opens.pop_back();
                 status
             }
         };
@@ -1783,21 +1833,29 @@ pub(crate) unsafe fn mio_socket_close_host(socket_id: u32) -> i32 {
         };
 
         let mut handles = Vec::new();
+        let mut socket = compat.sockets.remove(socket_index);
         {
-            let socket = &mut compat.sockets[socket_index];
             if let Some(handle) = socket.handle.take() {
                 handles.push(handle);
             }
             handles.extend(socket.listen_handles.drain(..));
-            socket.closed = true;
         }
-
+        // Unaccepted streams still belong to their listener. Accepted streams
+        // have left this queue and retain independent ownership.
+        for child in socket.accept_queue {
+            if let Some(index) = compat.sockets.iter().position(|socket|
+                socket.id == child && owner_matches(socket.owner_vm, owner_vm)) {
+                let mut socket = compat.sockets.remove(index);
+                handles.extend(socket.handle.take());
+                handles.extend(socket.listen_handles.drain(..));
+                compat.drop_pending_open(child);
+            }
+        }
         compat.drop_pending_open(socket_id);
         for handle in handles {
             publish_rx_owner(handle.0, None);
             let _ = compat.submit(api::Command::Close { handle });
         }
-        compat.sockets.remove(socket_index);
         STATUS_OK
     })
 }
@@ -1874,11 +1932,27 @@ pub(crate) fn mio_socket_option_host(socket_id: u32, option: u32, value: i32) ->
     let owner = current_owner_vm();
     with_compat(|compat| {
         compat.kick_net();
-        let Some(socket) = compat.socket(socket_id).filter(|socket| socket.owner_vm == owner) else {
+        let Some(socket) = compat.socket_mut(socket_id).filter(|socket| socket.owner_vm == owner) else {
             return STATUS_NOT_FOUND;
         };
         if socket.closed { return STATUS_NOT_CONNECTED; }
         if socket.error != STATUS_OK { return socket.error; }
+        if let Some(setup) = socket.setup.as_mut().filter(|_| option == 1) {
+            if !(-1..=1).contains(&value) { return STATUS_INVALID_INPUT; }
+            if value == -1 { return i32::from(setup.nodelay); }
+            let handles = if socket.kind == MioSocketKind::TcpListener {
+                socket.listen_handles.as_slice()
+            } else { socket.handle.as_slice() };
+            for handle in handles {
+                if let Err(status) = crate::net::adapter::socket_option(
+                    MIO_RX_DEVICE_INDEX.load(AtomicOrdering::Acquire),
+                    crate::net::adapter::NetHandle(handle.0), 1, Some(value as u32),
+                ) { return status; }
+            }
+            setup.nodelay = value != 0;
+            return value;
+        }
+        if socket.kind == MioSocketKind::TcpSocket { return STATUS_UNSUPPORTED; }
         // A listener owns a replenished pool of transport sockets. Its options
         // need an inheritance policy, not a one-time change to one pool entry.
         if socket.kind == MioSocketKind::TcpListener { return STATUS_UNSUPPORTED; }

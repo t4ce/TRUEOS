@@ -650,6 +650,11 @@ pub enum NetCommand {
     OpenTcpConnectV6 {
         remote: NetEndpointV6,
     },
+    /// Native socket connect with a previously reserved local endpoint.
+    OpenTcpConnectFrom {
+        local: core::net::SocketAddr,
+        remote: core::net::SocketAddr,
+    },
     SendUdp {
         handle: NetHandle,
         remote: NetEndpoint,
@@ -2680,6 +2685,7 @@ impl NetService {
         &mut self,
         owner: &'static str,
         remote: NetEndpoint,
+        bound: Option<core::net::SocketAddrV4>,
     ) -> Result<(NetHandle, NetHandle, &'static str), &'static str> {
         if self.records.len().saturating_add(1) > SOCKET_SOFT_CAP {
             return Err("no sockets available");
@@ -2708,9 +2714,19 @@ impl NetService {
             })
             .ok_or("connect failed")?;
 
-        let local_port = self.tcp_next_ephemeral;
-        self.tcp_next_ephemeral = self.tcp_next_ephemeral.wrapping_add(1).max(49152);
+        let local_port = if let Some(bound) = bound {
+            bound.port()
+        } else {
+            let port = self.tcp_next_ephemeral;
+            self.tcp_next_ephemeral = self.tcp_next_ephemeral.wrapping_add(1).max(49152);
+            port
+        };
 
+        let local_addr = match bound.map(|local| local.ip().octets()) {
+            None | Some([0, 0, 0, 0]) => remote.addr,
+            Some(addr) if is_ipv4_loopback(addr) || self.local_ipv4.is_some_and(|local| local.octets() == addr) => addr,
+            Some(_) => return Err("invalid local address"),
+        };
         let client_handle = self.alloc_handle();
         // Match a network accept: establish the known listening handle. A new,
         // unrelated handle is invisible to the server's accept queue, especially
@@ -2724,7 +2740,7 @@ impl NetService {
         let listener = &mut self.records[listener_index];
         listener.tcp_loopback_peer = Some(client_handle);
         listener.tcp_remote_v4 = Some(NetEndpoint {
-            addr: remote.addr,
+            addr: local_addr,
             port: local_port,
         });
         listener.established = true;
@@ -2765,10 +2781,84 @@ impl NetService {
         Ok((client_handle, server_handle, listener_owner))
     }
 
+    fn process_tcp_connect_v4(&mut self, owner: &'static str, remote: NetEndpoint, bound: Option<core::net::SocketAddrV4>) {
+                // Connections to this interface itself must not depend on NIC
+                // hairpin forwarding. Use the same in-kernel path as localhost.
+                if is_ipv4_loopback(remote.addr)
+                    || self
+                        .local_ipv4
+                        .is_some_and(|addr| addr.octets() == remote.addr)
+                {
+                    match self.open_loopback_tcp_connect(owner, remote, bound) {
+                        Ok((client_handle, server_handle, server_owner)) => {
+                            let _ = push_event(
+                                owner,
+                                NetEvent::Opened {
+                                    handle: client_handle,
+                                    kind: SocketKind::Tcp,
+                                },
+                            );
+                            let _ = push_event(
+                                owner,
+                                NetEvent::TcpEstablished {
+                                    handle: client_handle,
+                                    peer: Some(remote),
+                                    peer6: None,
+                                },
+                            );
+                            let _ = push_event(
+                                server_owner,
+                                NetEvent::TcpEstablished {
+                                    handle: server_handle,
+                                    peer: Some(NetEndpoint {
+                                        addr: bound.filter(|local| !local.ip().is_unspecified()).map(|local| local.ip().octets()).unwrap_or(remote.addr),
+                                        port: bound.map(|local| local.port()).unwrap_or(self.tcp_next_ephemeral.wrapping_sub(1)),
+                                    }),
+                                    peer6: None,
+                                },
+                            );
+                        }
+                        Err(msg) => {
+                            let msg = if msg == "link down" { "tcp connect link down" } else { msg };
+                            let _ = push_event(owner, NetEvent::Error { msg });
+                        }
+                    }
+                } else {
+                    match self.open_tcp_connect(owner, remote, bound) {
+                        Ok(handle) => {
+                            if crate::log_os::flags::NET_LOG_TCP_FLOW {
+                                crate::log_info!(target: "net";
+                                    "net: open-tcp cmd owner={} remote={}.{}.{}.{}:{} handle={}\n",
+                                    owner,
+                                    remote.addr[0],
+                                    remote.addr[1],
+                                    remote.addr[2],
+                                    remote.addr[3],
+                                    remote.port,
+                                    handle.0
+                                );
+                            }
+                            let _ = push_event(
+                                owner,
+                                NetEvent::Opened {
+                                    handle,
+                                    kind: SocketKind::Tcp,
+                                },
+                            );
+                        }
+                        Err(msg) => {
+                            let msg = if msg == "link down" { "tcp connect link down" } else { msg };
+                            let _ = push_event(owner, NetEvent::Error { msg });
+                        }
+                    }
+                }
+    }
+
     fn open_tcp_connect(
         &mut self,
         owner: &'static str,
         remote: NetEndpoint,
+        bound: Option<core::net::SocketAddrV4>,
     ) -> Result<NetHandle, &'static str> {
         self.require_link_up()?;
         if self.records.len() >= SOCKET_SOFT_CAP {
@@ -2780,10 +2870,21 @@ impl NetService {
         let mut socket = tcp::Socket::new(rx, tx);
         socket.set_keep_alive(Some(SmolDuration::from_secs(30)));
 
-        let local_port = self.tcp_next_ephemeral;
-        self.tcp_next_ephemeral = self.tcp_next_ephemeral.wrapping_add(1).max(49152);
+        let local_port = if let Some(bound) = bound {
+            bound.port()
+        } else {
+            let port = self.tcp_next_ephemeral;
+            self.tcp_next_ephemeral = self.tcp_next_ephemeral.wrapping_add(1).max(49152);
+            port
+        };
 
-        let local_ip = self.local_ipv4.ok_or("no ipv4 configured")?;
+        let configured = self.local_ipv4.ok_or("no ipv4 configured")?;
+        let local_ip = match bound.map(|local| *local.ip()) {
+            None => configured,
+            Some(ip) if ip.is_unspecified() => configured,
+            Some(ip) if ip.octets() == configured.octets() => configured,
+            Some(_) => return Err("invalid local address"),
+        };
 
         let local = IpEndpoint::new(IpAddress::Ipv4(local_ip), local_port);
         let remote_addr = remote.addr;
@@ -2859,6 +2960,7 @@ impl NetService {
         &mut self,
         owner: &'static str,
         remote: NetEndpointV6,
+        bound: Option<core::net::SocketAddrV6>,
     ) -> Result<NetHandle, &'static str> {
         self.require_link_up()?;
         if self.records.len() >= SOCKET_SOFT_CAP {
@@ -2870,10 +2972,23 @@ impl NetService {
         let mut socket = tcp::Socket::new(rx, tx);
         socket.set_keep_alive(Some(SmolDuration::from_secs(30)));
 
-        let local_port = self.tcp_next_ephemeral;
-        self.tcp_next_ephemeral = self.tcp_next_ephemeral.wrapping_add(1).max(49152);
+        let local_port = if let Some(bound) = bound {
+            bound.port()
+        } else {
+            let port = self.tcp_next_ephemeral;
+            self.tcp_next_ephemeral = self.tcp_next_ephemeral.wrapping_add(1).max(49152);
+            port
+        };
 
-        let local_ip = self.local_ipv6_global.unwrap_or(self.local_ipv6_ll);
+        let preferred = self.local_ipv6_global.unwrap_or(self.local_ipv6_ll);
+        let local_ip = match bound.map(|local| *local.ip()) {
+            None => preferred,
+            Some(ip) if ip.is_unspecified() => preferred,
+            Some(ip) if ip.octets() == self.local_ipv6_ll.octets() => self.local_ipv6_ll,
+            Some(ip) if self.local_ipv6_global.is_some_and(|local| ip.octets() == local.octets()) =>
+                self.local_ipv6_global.unwrap(),
+            Some(_) => return Err("invalid local address"),
+        };
         let local = IpEndpoint::new(IpAddress::Ipv6(local_ip), local_port);
 
         let remote_ip = Ipv6Address::from_octets(remote.addr);
@@ -4187,78 +4302,23 @@ impl NetService {
                     }
                 }
             }
-            NetCommand::OpenTcpConnect { remote } => {
-                // Connections to this interface itself must not depend on NIC
-                // hairpin forwarding. Use the same in-kernel path as localhost.
-                if is_ipv4_loopback(remote.addr)
-                    || self
-                        .local_ipv4
-                        .is_some_and(|addr| addr.octets() == remote.addr)
-                {
-                    match self.open_loopback_tcp_connect(owner, remote) {
-                        Ok((client_handle, server_handle, server_owner)) => {
-                            let _ = push_event(
-                                owner,
-                                NetEvent::Opened {
-                                    handle: client_handle,
-                                    kind: SocketKind::Tcp,
-                                },
-                            );
-                            let _ = push_event(
-                                owner,
-                                NetEvent::TcpEstablished {
-                                    handle: client_handle,
-                                    peer: Some(remote),
-                                    peer6: None,
-                                },
-                            );
-                            let _ = push_event(
-                                server_owner,
-                                NetEvent::TcpEstablished {
-                                    handle: server_handle,
-                                    peer: Some(NetEndpoint {
-                                        addr: remote.addr,
-                                        port: self.tcp_next_ephemeral.wrapping_sub(1),
-                                    }),
-                                    peer6: None,
-                                },
-                            );
-                        }
+            NetCommand::OpenTcpConnect { remote } => self.process_tcp_connect_v4(owner, remote, None),
+            NetCommand::OpenTcpConnectFrom { local, remote } => match (local, remote) {
+                (core::net::SocketAddr::V4(local), core::net::SocketAddr::V4(remote)) =>
+                    self.process_tcp_connect_v4(owner, NetEndpoint { addr: remote.ip().octets(), port: remote.port() }, Some(local)),
+                (core::net::SocketAddr::V6(local), core::net::SocketAddr::V6(remote)) => {
+                    match self.open_tcp_connect_v6(owner, NetEndpointV6 { addr: remote.ip().octets(), port: remote.port() }, Some(local)) {
+                        Ok(handle) => { let _ = push_event(owner, NetEvent::Opened { handle, kind: SocketKind::Tcp }); }
                         Err(msg) => {
-                            let _ = push_event(owner, NetEvent::Error { msg });
-                        }
-                    }
-                } else {
-                    match self.open_tcp_connect(owner, remote) {
-                        Ok(handle) => {
-                            if crate::log_os::flags::NET_LOG_TCP_FLOW {
-                                crate::log_info!(target: "net";
-                                    "net: open-tcp cmd owner={} remote={}.{}.{}.{}:{} handle={}\n",
-                                    owner,
-                                    remote.addr[0],
-                                    remote.addr[1],
-                                    remote.addr[2],
-                                    remote.addr[3],
-                                    remote.port,
-                                    handle.0
-                                );
-                            }
-                            let _ = push_event(
-                                owner,
-                                NetEvent::Opened {
-                                    handle,
-                                    kind: SocketKind::Tcp,
-                                },
-                            );
-                        }
-                        Err(msg) => {
+                            let msg = if msg == "link down" { "tcp connect link down" } else { msg };
                             let _ = push_event(owner, NetEvent::Error { msg });
                         }
                     }
                 }
-            }
+                _ => { let _ = push_event(owner, NetEvent::Error { msg: "invalid local address" }); }
+            },
             NetCommand::OpenTcpConnectV6 { remote } => {
-                match self.open_tcp_connect_v6(owner, remote) {
+                match self.open_tcp_connect_v6(owner, remote, None) {
                     Ok(handle) => {
                         let _ = push_event(
                             owner,
@@ -4269,6 +4329,7 @@ impl NetService {
                         );
                     }
                     Err(msg) => {
+                        let msg = if msg == "link down" { "tcp connect link down" } else { msg };
                         let _ = push_event(owner, NetEvent::Error { msg });
                     }
                 }

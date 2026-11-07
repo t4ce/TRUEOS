@@ -121,6 +121,11 @@ pub const OP_BP_INPUT_KEYBOARD_OUTPUT_SINCE: u32 = 0xCD; // arg0 read seq,arg1 c
 pub const OP_BP_INPUT_MIDI_READ_V1: u32 = 0x200; // arg0 read seq,arg1 cap -> MIDI edge payload
 pub const OP_BP_MIO_SOCKET_POLL_READY: u32 = 0x201; // arg0 native socket,arg1 interests -> readiness/status
 pub const OP_BP_MIO_SOCKET_OPTION: u32 = 0x247; // arg0 socket,arg1 option:u32/value:i32; -1 reads
+pub const OP_BP_MIO_TCP_SOCKET_CREATE: u32 = 0x248; // arg0 family -> owned socket/status
+pub const OP_BP_MIO_TCP_SOCKET_BIND: u32 = 0x249; // arg0 socket,payload local address
+pub const OP_BP_MIO_TCP_SOCKET_CONNECT: u32 = 0x24a; // arg0 socket,payload peer address
+pub const OP_BP_MIO_TCP_SOCKET_LISTEN: u32 = 0x24b; // arg0 socket,arg1 backlog
+pub const OP_BP_TIMEZONE_OFFSET_SECONDS: u32 = 0x24c; // arg0 signed UTC seconds -> signed offset
 pub const OP_BP_PLATFORM_WAIT_OBSERVE: u32 = 0x202; // arg0 VM-local key -> generation
 pub const OP_BP_PLATFORM_WAIT_AFTER: u32 = 0x203; // arg0 key,arg1 observed:timeout -> notified
 pub const OP_BP_ASYNC_FS_READ_START: u32 = 0xCE; // payload resolved path -> operation id/rc
@@ -5902,7 +5907,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
             DispatchOutcome::Resume
         }
-        OP_BP_MIO_TCP_LISTENER_BIND | OP_BP_MIO_TCP_STREAM_CONNECT | OP_BP_MIO_UDP_SOCKET_BIND => {
+        OP_BP_MIO_TCP_SOCKET_CREATE | OP_BP_MIO_TCP_LISTENER_BIND | OP_BP_MIO_TCP_STREAM_CONNECT | OP_BP_MIO_UDP_SOCKET_BIND => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -5915,6 +5920,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let mut socket_id = 0u32;
             let status = crate::hv::with_guest_broker_context(vm_id, || match op {
+                OP_BP_MIO_TCP_SOCKET_CREATE => unsafe {
+                    crate::mio_compat::mio_tcp_socket_create_host(u32::from(addr.family), &mut socket_id)
+                },
                 OP_BP_MIO_TCP_LISTENER_BIND => unsafe {
                     crate::mio_compat::mio_tcp_listener_bind_host(addr, &mut socket_id)
                 },
@@ -5928,6 +5936,34 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 write_response(vm_id, seq, STATUS_OK, (status as i64) as u64, 0);
             }
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_TCP_SOCKET_BIND | OP_BP_MIO_TCP_SOCKET_CONNECT => {
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let addr = read_mio_addr(unsafe { &(&(*p).payload)[..n] });
+            let rc = crate::hv::with_guest_broker_context(vm_id, || {
+                match (u32::try_from(arg0), addr) {
+                    (Ok(id), Some(addr)) if op == OP_BP_MIO_TCP_SOCKET_BIND =>
+                        crate::mio_compat::mio_tcp_socket_bind_host(id, addr),
+                    (Ok(id), Some(addr)) => crate::mio_compat::mio_tcp_socket_connect_host(id, addr),
+                    _ => -4,
+                }
+            });
+            write_response(vm_id, seq, STATUS_OK, rc as i64 as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_MIO_TCP_SOCKET_LISTEN => {
+            let rc = crate::hv::with_guest_broker_context(vm_id, || {
+                match (u32::try_from(arg0), u32::try_from(arg1)) {
+                    (Ok(id), Ok(backlog)) => crate::mio_compat::mio_tcp_socket_listen_host(id, backlog),
+                    _ => -4,
+                }
+            });
+            write_response(vm_id, seq, STATUS_OK, rc as i64 as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_MIO_SOCKET_CLOSE => {
@@ -5945,6 +5981,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 }
             });
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_TIMEZONE_OFFSET_SECONDS => {
+            let offset = crate::locale::utc_offset_seconds((arg0 as i64).max(0) as u64);
+            write_response(vm_id, seq, STATUS_OK, offset as i64 as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_MIO_SOCKET_OPTION => {

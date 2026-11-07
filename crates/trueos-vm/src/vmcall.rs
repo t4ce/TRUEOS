@@ -430,6 +430,11 @@ pub const OP_BP_MIO_TCP_LISTENER_ACCEPT: u32 = 0x5C;
 pub const OP_BP_MIO_SOCKET_SHUTDOWN: u32 = 0x5D;
 /// arg0 socket; arg1 option:u32/value:i32; -1 reads, otherwise applies.
 pub const OP_BP_MIO_SOCKET_OPTION: u32 = 0x247;
+pub const OP_BP_MIO_TCP_SOCKET_CREATE: u32 = 0x248;
+pub const OP_BP_MIO_TCP_SOCKET_BIND: u32 = 0x249;
+pub const OP_BP_MIO_TCP_SOCKET_CONNECT: u32 = 0x24a;
+pub const OP_BP_MIO_TCP_SOCKET_LISTEN: u32 = 0x24b;
+pub const OP_BP_TIMEZONE_OFFSET_SECONDS: u32 = 0x24c;
 
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_BAD_ARG: u32 = 2;

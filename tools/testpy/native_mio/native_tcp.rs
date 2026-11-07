@@ -15,6 +15,8 @@ struct State {
 }
 static SOCKETS: OnceLock<Mutex<HashMap<u32, State>>> = OnceLock::new();
 static NEXT: AtomicU32 = AtomicU32::new(100);
+static ADDRESSES:OnceLock<Mutex<Vec<SocketAddrRaw>>>=OnceLock::new();
+fn record_address(addr:SocketAddrRaw){ADDRESSES.get_or_init(Default::default).lock().unwrap().push(addr);}
 fn state<R>(id: u32, f: impl FnOnce(&mut State) -> R) -> R {
     let mut sockets = SOCKETS.get_or_init(Default::default).lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     f(sockets.get_mut(&id).expect("owned test socket"))
@@ -30,7 +32,8 @@ fn connect() -> (u32, TcpStream) {
 pub struct SocketAddrRaw { family:u8, reserved:u8, port:u16, addr:[u8;16] }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_mio_tcp_stream_connect(addr:SocketAddrRaw, out:*mut u32)->i32 {
-    assert_eq!(addr.family,4); assert_eq!(&addr.addr[..4], &[127,0,0,1]);
+    record_address(addr);
+    if addr.family==4{assert_eq!(&addr.addr[..4], &[127,0,0,1]);}else{assert_eq!(addr.family,6);}
     let id=u32::from(addr.port); state(id, |_| ());
     unsafe {out.write(id)}; 0
 }
@@ -311,7 +314,9 @@ pub unsafe extern "C" fn trueos_mio_tcp_listener_bind(addr:SocketAddrRaw,out:*mu
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_mio_tcp_listener_accept(_id:u32,_out:*mut u32,_addr:*mut SocketAddrRaw)->i32{-2}
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_udp_socket_send_to(id:u32,_addr:SocketAddrRaw,input:*const u8,len:usize)->isize{unsafe{trueos_mio_tcp_stream_write(id,input,len)}}
+pub unsafe extern "C" fn trueos_mio_udp_socket_send_to(id:u32,addr:SocketAddrRaw,input:*const u8,len:usize)->isize{record_address(addr);unsafe{trueos_mio_tcp_stream_write(id,input,len)}}
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_mio_udp_socket_connect(_id:u32,addr:SocketAddrRaw)->i32{record_address(addr);0}
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_mio_udp_socket_recv_from(id:u32,addr:*mut SocketAddrRaw,out:*mut u8,cap:usize)->isize{
  unsafe{addr.write(SocketAddrRaw{family:4,reserved:0,port:99,addr:[127,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0]});trueos_mio_tcp_stream_read(id,out,cap)}
@@ -368,4 +373,27 @@ fn udp_peek_preserves_data_source_and_rearms_read_interest(){
 fn native_udp_ttl_is_applied_and_unimplemented_options_do_not_report_success(){
  let id=new_socket_id();let udp=mio::net::UdpSocket::bind(core::net::SocketAddr::from(([127,0,0,1],id as u16))).unwrap();udp.set_ttl(23).unwrap();assert_eq!(udp.ttl().unwrap(),23);
  assert!(udp.set_broadcast(true).is_err());assert!(udp.broadcast().is_err());assert!(udp.set_multicast_loop_v4(true).is_err());assert!(udp.multicast_loop_v4().is_err());assert!(udp.set_multicast_ttl_v4(4).is_err());assert!(udp.multicast_ttl_v4().is_err());assert!(udp.set_multicast_loop_v6(true).is_err());assert!(udp.multicast_loop_v6().is_err());
+}
+#[test]
+fn ipv6_scope_and_flow_fields_are_rejected_before_any_native_address_call(){
+ use core::net::{Ipv6Addr,SocketAddr,SocketAddrV6};
+ let id=new_socket_id();let udp=mio::net::UdpSocket::bind(SocketAddr::from(([127,0,0,1],id as u16))).unwrap();
+ ADDRESSES.get_or_init(Default::default).lock().unwrap().clear();
+ for(flow,scope)in[(0,1),(1,0),(42,3)]{
+  let addr=SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST,80,flow,scope));
+  assert_eq!(TcpStream::connect(addr).unwrap_err().kind(),ErrorKind::InvalidInput);
+  assert_eq!(mio::net::TcpListener::bind(addr).unwrap_err().kind(),ErrorKind::InvalidInput);
+  assert_eq!(mio::net::UdpSocket::bind(addr).unwrap_err().kind(),ErrorKind::InvalidInput);
+  assert_eq!(udp.connect(addr).unwrap_err().kind(),ErrorKind::InvalidInput);
+  assert_eq!(udp.send_to(b"scope",addr).unwrap_err().kind(),ErrorKind::InvalidInput);
+  assert!(ADDRESSES.get().unwrap().lock().unwrap().is_empty());
+ }
+}
+#[test]
+fn unscoped_ipv6_preserves_all_address_octets_and_port_at_native_boundary(){
+ use core::net::{Ipv6Addr,SocketAddr,SocketAddrV6};
+ let id=new_socket_id();let ip=Ipv6Addr::new(0x2001,0xdb8,0xabcd,0x1234,1,2,3,4);let addr=SocketAddr::V6(SocketAddrV6::new(ip,id as u16,0,0));
+ ADDRESSES.get_or_init(Default::default).lock().unwrap().clear();
+ let stream=TcpStream::connect(addr).unwrap();drop(stream);let udp_id=new_socket_id();let udp_addr=SocketAddr::V6(SocketAddrV6::new(ip,udp_id as u16,0,0));let udp=mio::net::UdpSocket::bind(udp_addr).unwrap();udp.connect(addr).unwrap();udp.send_to(b"v6",addr).unwrap();
+ let addresses=ADDRESSES.get().unwrap().lock().unwrap();assert_eq!(addresses.len(),4);for(index,raw)in addresses.iter().enumerate(){assert_eq!(raw.family,6);assert_eq!(raw.port,if index==1{udp_id as u16}else{id as u16});assert_eq!(raw.addr,ip.octets());}
 }

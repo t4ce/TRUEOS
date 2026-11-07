@@ -5,3 +5,9 @@ pub use self::listener::TcpListener;
 #[cfg_attr(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")), path = "stream_zkvm.rs")]
 mod stream;
 pub use self::stream::TcpStream;
+
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
+#[path = "socket_zkvm.rs"]
+mod socket;
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
+pub use self::socket::TcpSocket;

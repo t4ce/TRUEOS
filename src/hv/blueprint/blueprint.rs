@@ -1342,6 +1342,21 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_tokio_platform_wake_all" => {
             Some(crate::r::platform::trueos_tokio_platform_wake_all as *const () as usize)
         }
+        "trueos_time_timezone_offset_seconds" => {
+            Some(crate::r::platform::trueos_time_timezone_offset_seconds as *const () as usize)
+        }
+        "trueos_mio_tcp_socket_create" => {
+            Some(crate::mio_compat::trueos_mio_tcp_socket_create as *const () as usize)
+        }
+        "trueos_mio_tcp_socket_bind" => {
+            Some(crate::mio_compat::trueos_mio_tcp_socket_bind as *const () as usize)
+        }
+        "trueos_mio_tcp_socket_connect" => {
+            Some(crate::mio_compat::trueos_mio_tcp_socket_connect as *const () as usize)
+        }
+        "trueos_mio_tcp_socket_listen" => {
+            Some(crate::mio_compat::trueos_mio_tcp_socket_listen as *const () as usize)
+        }
         "trueos_mio_tcp_listener_bind" => {
             Some(crate::mio_compat::trueos_mio_tcp_listener_bind as *const () as usize)
         }

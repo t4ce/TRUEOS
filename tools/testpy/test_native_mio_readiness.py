@@ -111,6 +111,8 @@ mod mio {
     @SOCKET_KIND@
     #[derive(Clone, Copy)]
     @COMPAT_ADDR@
+    #[derive(Clone, Copy)]
+    @SOCKET_SETUP@
     @SOCKET_STATE@
     struct MioCompat {
         sockets: Vec<MioSocketState>,
@@ -133,7 +135,7 @@ mod mio {
 
     fn socket(id: u32, owner_vm: Option<u8>, kind: MioSocketKind) -> MioSocketState {
         MioSocketState {
-            id, owner_vm, progress_generation: 7, kind, handle: Some(api::NetHandle(id)),
+            id, owner_vm, progress_generation: 7, kind, setup: None, handle: Some(api::NetHandle(id)),
             listen_handles: Vec::new(), local: None, peer: None, listen_port: None,
             connected: true, closed: false, read_shutdown: false, write_shutdown: false,
             peer_eof: false, error: STATUS_OK, tx_in_flight: 0, rx_stream: VecDeque::new(),
@@ -420,6 +422,7 @@ def main() -> None:
         "@SOCKET_KIND@": keep("MioSocketKind", item(sources["mio"], "enum MioSocketKind")),
         "@COMPAT_ADDR@": keep("CompatAddr", item(sources["mio"], "enum CompatAddr")),
         "@SOCKET_STATE@": keep("MioSocketState", item(sources["mio"], "struct MioSocketState")),
+        "@SOCKET_SETUP@": keep("TcpSocketSetup", item(sources["mio"], "struct TcpSocketSetup")),
         "@SOCKET_LOOKUP@": keep("socket", function(sources["mio"], "socket")),
         "@READY_MASK@": keep("ready_mask", function(sources["mio"], "ready_mask")),
         "@MIO_FUNCTIONS@": "\n".join(keep(name, function(sources["mio"], name)) for name in (
