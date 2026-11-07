@@ -3475,6 +3475,37 @@ pub(crate) fn blueprint_console_target(vm_id: u8) -> Option<crate::shell3::Matri
     context.as_ref()?.console_target.clone()
 }
 
+/// Classify existing standard-stream routes without claiming terminal input.
+/// Child stdin/stdout are explicit pipes; stderr keeps its console route.
+pub(crate) fn blueprint_stdio_is_terminal(vm_id: u8, stream: u32) -> bool {
+    if stream > 2 { return false; }
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else { return false; };
+    let context = slot.lock();
+    let Some(context) = context.as_ref() else { return false; };
+    context.console_attached
+        && context.console_target.is_some()
+        && !matches!(context.terminal_lease, BlueprintTerminalLeaseState::Unsupported)
+        && !(stream < 2 && context.vars.get("TRUEOS_MCP_STDIO").is_some_and(|value| value == "1"))
+}
+
+/// Small native process IDs are the actual live VM owner plus one. The parent
+/// comes from the existing generation-checked child relationship, never a
+/// thread ID or an invented process tree.
+pub(crate) fn blueprint_native_process_identity(vm_id: u8, which: u32) -> u32 {
+    if which == 0 { return u32::from(vm_id) + 1; }
+    if which != 1 { return 0; }
+    let Some(slot) = BLUEPRINT_CHILD_LINKS.get(vm_id as usize) else { return 0; };
+    let link = slot.lock();
+    let Some(link) = link.as_ref() else { return 0; };
+    if vm_run_generation(vm_id) != Some(link.child_generation)
+        || vm_run_generation(link.parent_vm_id) != Some(link.parent_generation) {
+        return 0;
+    }
+    let Some(parent) = vm_slot(link.parent_vm_id) else { return 0; };
+    if !parent.running.load(Ordering::Acquire) { return 0; }
+    u32::from(link.parent_vm_id) + 1
+}
+
 pub(crate) fn blueprint_process_env_var(vm_id: u8, key: &str) -> Option<AllocString> {
     if key.starts_with("TRUEOS_") {
         // Authorization consumes the kernel-owned launch map, never mutable

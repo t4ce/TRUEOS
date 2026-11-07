@@ -339,6 +339,11 @@ pub const OP_BP_HTTP_REQUEST_START_V1: u32 = 0x250;
 pub const OP_BP_HTTP_REQUEST_HEAD_V1: u32 = 0x251;
 pub const OP_BP_HTTP_REQUEST_READ_V1: u32 = 0x252;
 pub const OP_BP_HTTP_REQUEST_DISCARD_V1: u32 = 0x253;
+/// Read-only standard-stream terminal classification; arg0 is 0, 1, or 2.
+pub const OP_BP_STDIO_IS_TERMINAL_V1: u32 = 0x254;
+pub const OP_BP_ASYNC_FS_OBJECT_START_V1: u32 = 0x255;
+/// Native execution identity; arg0 0=self VM owner, 1=live native parent.
+pub const OP_BP_PROCESS_IDENTITY_V1: u32 = 0x256;
 pub const OP_BP_FETCH_BYTES_RESULT_LEN: u32 = 0x24;
 pub const OP_BP_FETCH_BYTES_READ: u32 = 0x25;
 pub const OP_BP_FETCH_BYTES_FINAL_URL_V1: u32 = 0x246;

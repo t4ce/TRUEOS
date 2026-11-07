@@ -10,7 +10,7 @@ use core::time::Duration;
 use spin::Mutex;
 #[cfg(all(unix, not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))))]
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
-use trueos_io as io;
+use crate::io;
 
 use crate::{Interest, Token};
 
@@ -36,7 +36,7 @@ struct Ready {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum RegistrationKey {
-    #[cfg(any(feature = "net", all(unix, feature = "os-ext")))]
+    #[cfg(all(not(feature = "std-compat"), any(feature = "net", all(unix, feature = "os-ext"))))]
     Source(usize),
     Socket(u32),
 }
@@ -217,7 +217,7 @@ impl Selector {
         Ok(SocketRegistration { state: Arc::downgrade(&self.state), key, version })
     }
 
-    #[cfg(any(feature = "net", all(unix, feature = "os-ext")))]
+    #[cfg(all(not(feature = "std-compat"), any(feature = "net", all(unix, feature = "os-ext"))))]
     pub(crate) fn register_source(&self, source_id: usize, token: Token, interests: Interest) -> io::Result<()> {
         {
             let mut registrations = self.state.registrations.lock();
@@ -228,12 +228,12 @@ impl Selector {
         Ok(())
     }
 
-    #[cfg(any(feature = "net", all(unix, feature = "os-ext")))]
+    #[cfg(all(not(feature = "std-compat"), any(feature = "net", all(unix, feature = "os-ext"))))]
     pub(crate) fn reregister_source(&self, source_id: usize, token: Token, interests: Interest) -> io::Result<()> {
         self.register_source(source_id, token, interests)
     }
 
-    #[cfg(any(feature = "net", all(unix, feature = "os-ext")))]
+    #[cfg(all(not(feature = "std-compat"), any(feature = "net", all(unix, feature = "os-ext"))))]
     pub(crate) fn deregister_source(&self, source_id: usize) -> io::Result<()> {
         self.state.registrations.lock().entries.remove(&RegistrationKey::Source(source_id));
         crate::platform::wake_io();
@@ -269,7 +269,7 @@ impl Selector {
             let Some((key, entry)) = self.state.registrations.lock().next() else { break; };
             let socket_id = match key {
                 RegistrationKey::Socket(socket_id) => socket_id,
-                #[cfg(any(feature = "net", all(unix, feature = "os-ext")))]
+                #[cfg(all(not(feature = "std-compat"), any(feature = "net", all(unix, feature = "os-ext"))))]
                 RegistrationKey::Source(_) => continue,
             };
             // A VM call may suspend; never hold the userspace registration lock
@@ -296,7 +296,7 @@ impl Selector {
     }
 }
 
-#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), any(not(feature = "std-compat"), feature = "native-net")))]
 impl Ready {
     fn from_zkvm_bits(bits: u8) -> Self {
         Self {

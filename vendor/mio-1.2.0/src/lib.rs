@@ -45,7 +45,7 @@
 #[cfg(all(target_family = "wasm", not(target_os = "wasi")))]
 compile_error!("This wasm target is unsupported by mio. If using Tokio, disable the net feature.");
 
-#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), any(not(feature = "std-compat"), feature = "native-net")))]
 extern crate alloc;
 
 // The crate remains no_std; legacy consumers explicitly opt into std contracts.
@@ -69,16 +69,16 @@ pub mod io {
 mod macros;
 
 mod interest;
-#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), any(not(feature = "std-compat"), feature = "native-net")))]
 mod platform;
 mod poll;
 mod sys;
 mod token;
 #[cfg(not(target_os = "wasi"))]
 mod waker;
-#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), any(not(feature = "std-compat"), feature = "native-net")))]
 mod zkvm_compat;
-#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), any(not(feature = "std-compat"), feature = "native-net")))]
 mod zkvm_net;
 
 pub mod event;
@@ -108,7 +108,7 @@ pub use waker::Waker;
     docsrs,
     doc(cfg(all(
         unix,
-        not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat"))),
+        not(all(any(target_os = "trueos", target_os = "zkvm"), any(not(feature = "std-compat"), feature = "native-net"))),
         feature = "os-ext"
     )))
 )]

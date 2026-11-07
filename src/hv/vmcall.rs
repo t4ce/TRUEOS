@@ -331,6 +331,8 @@ pub const OP_BP_HTTP_REQUEST_START_V1: u32 = 0x250;
 pub const OP_BP_HTTP_REQUEST_HEAD_V1: u32 = 0x251;
 pub const OP_BP_HTTP_REQUEST_READ_V1: u32 = 0x252;
 pub const OP_BP_HTTP_REQUEST_DISCARD_V1: u32 = 0x253;
+pub const OP_BP_STDIO_IS_TERMINAL_V1: u32 = trueos_vm::vmcall::OP_BP_STDIO_IS_TERMINAL_V1;
+pub const OP_BP_PROCESS_IDENTITY_V1: u32 = trueos_vm::vmcall::OP_BP_PROCESS_IDENTITY_V1;
 pub const OP_BP_FETCH_BYTES_RESULT_LEN: u32 = 0x24; // arg0 is op id, response is signed len/rc
 pub const OP_BP_FETCH_BYTES_READ: u32 = 0x25; // arg0 op id,arg1 offset:cap,response payload bytes
 pub const OP_BP_FETCH_BYTES_FINAL_URL_V1: u32 = 0x246; // arg0 op id,arg1 zero=>len or offset:cap=>non-consuming URL bytes
@@ -4380,6 +4382,18 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_PROCESS_IDENTITY_V1 => {
+            let identity = u32::try_from(arg0).ok()
+                .map(|which| crate::hv::blueprint_native_process_identity(vm_id, which)).unwrap_or(0);
+            write_response(vm_id, seq, STATUS_OK, u64::from(identity), 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_STDIO_IS_TERMINAL_V1 => {
+            let terminal = u32::try_from(arg0).ok()
+                .is_some_and(|stream| crate::hv::blueprint_stdio_is_terminal(vm_id, stream));
+            write_response(vm_id, seq, STATUS_OK, terminal as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_ENV_ARGS_COUNT => {
             let count = crate::hv::blueprint_process_arg_count(vm_id)
                 .unwrap_or_else(crate::r::io::env::arg_count);
@@ -4398,9 +4412,17 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let bytes = arg.as_bytes();
-            let n = core::cmp::min(bytes.len(), PAYLOAD_CAP);
+            let Ok(offset) = usize::try_from(arg1) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Some(chunk) = bytes.get(offset..) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let n = core::cmp::min(chunk.len(), PAYLOAD_CAP);
             unsafe {
-                (&mut (&mut (*p).payload)[..n]).copy_from_slice(&bytes[..n]);
+                (&mut (&mut (*p).payload)[..n]).copy_from_slice(&chunk[..n]);
             }
             write_response(vm_id, seq, STATUS_OK, bytes.len() as u64, n as u32);
             DispatchOutcome::Resume
@@ -5308,6 +5330,37 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg0 as usize,
                 id,
             );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        trueos_vm::vmcall::OP_BP_ASYNC_FS_OBJECT_START_V1 => {
+            let rc = (|| -> i32 {
+                if arg0 != 0 || arg1 != 0 || req_len < 24 || req_len as usize > PAYLOAD_CAP {
+                    return crate::r::io::cabi::FS_ERR_BAD_PARAM;
+                }
+                let Some(p) = host_ptr(vm_id) else { return crate::r::io::cabi::FS_ERR_BAD_PARAM; };
+                let bytes = unsafe { &(&(*p).payload)[..req_len as usize] };
+                if u32::from_le_bytes(bytes[..4].try_into().unwrap()) == 1 {
+                    let Ok(raw_path) = core::str::from_utf8(&bytes[24..]) else {
+                        return crate::r::io::cabi::FS_ERR_BAD_UTF8;
+                    };
+                    let Ok(path) = crate::r::path::FsPath::parse(raw_path, false) else {
+                        return crate::r::io::cabi::FS_ERR_BAD_PATH;
+                    };
+                    let path = path.to_relative_string();
+                    if !vm_mount_selector_allowed(vm_id, &path) {
+                        return crate::r::io::cabi::FS_ERR_BAD_PATH;
+                    }
+                    let mut resolved = alloc::vec::Vec::from(&bytes[..24]);
+                    resolved.extend_from_slice(path.as_bytes());
+                    return crate::r::io::async_fs_cabi::start_object(
+                        crate::r::io::async_fs_cabi::owner_for_vm(vm_id), &resolved,
+                    );
+                }
+                crate::r::io::async_fs_cabi::start_object(
+                    crate::r::io::async_fs_cabi::owner_for_vm(vm_id), bytes,
+                )
+            })();
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

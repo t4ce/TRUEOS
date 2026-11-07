@@ -78,6 +78,8 @@ features = [
 [features]
 # Legacy consumers; native kernel builds leave this disabled.
 std-compat = ["dep:libc"]
+# Native socket IDs/reactor with the caller-selected I/O trait contract.
+native-net = []
 default = ["log"]
 net = []
 os-ext = [

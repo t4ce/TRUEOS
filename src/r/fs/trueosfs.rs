@@ -198,6 +198,9 @@ struct FileWriteStream {
 #[path = "trueosfs_write_gate.rs"]
 mod write_gate;
 
+#[path = "trueosfs_file_objects.rs"]
+pub(crate) mod file_objects;
+
 #[derive(Clone, Copy, Debug)]
 pub struct FileReadHandle {
     disk: block::DeviceHandle,
@@ -2571,10 +2574,12 @@ pub async fn file_delete_async(
     if record.kind != NodeKind::File || record.content_type != entry.content_type {
         return Err(block::Error::Corrupted);
     }
+    let retained = file_objects::prepare_orphans(disk, &params, name, false).await?;
     let ok = trueos_fs::delete_node_at_record(&io, &params, name, &record)
         .await
         .map_err(map_engine_err)?;
     if ok {
+        file_objects::commit_orphans(retained);
         bump_root_cache_gen(disk_id);
         file_record_cache_invalidate_path(disk_id, name);
         if !update_root_index_delete(disk_id, name) {
@@ -2677,6 +2682,7 @@ async fn remove_node_with_policy_async(
     if record.kind != expected_kind || record.content_type != entry.content_type {
         return Err(block::Error::Corrupted.into());
     }
+    let retained = file_objects::prepare_orphans(disk, &params, name, record.kind == NodeKind::Directory).await?;
     let ok = match record.kind {
         NodeKind::File => trueos_fs::delete_node_at_record(&io, &params, name, &record).await,
         NodeKind::Directory if leaf_kind.is_some() => {
@@ -2691,6 +2697,7 @@ async fn remove_node_with_policy_async(
     .map_err(map_engine_err)?;
     if !ok && leaf_kind.is_some() { return Err(RemoveNodeError::NotCommitted); }
     if ok {
+        file_objects::commit_orphans(retained);
         bump_root_cache_gen(disk.id());
         file_record_cache_invalidate_prefix(disk.id(), normalized_dir_prefix(name).as_str());
         file_record_cache_invalidate_path(disk.id(), name);
@@ -2824,12 +2831,15 @@ async fn file_rename_with_policy_async(
         file_id: source.file_id, entry_lba: source.entry_lba, data_lba: source.data_lba,
         data_len: source.data_len, content_type: source.content_type, record_key: source.record_key,
     };
+    let retained = file_objects::prepare_orphans(disk, &params, dst, false).await?;
     let renamed = trueos_fs::rename_file_at_record(&io, &params, src, dst, &source_record)
         .await
         .map_err(map_engine_err)?;
     if !renamed {
         return Ok(false);
     }
+    file_objects::commit_orphans(retained);
+    file_objects::renamed(disk, src, dst);
     bump_root_cache_gen(disk.id());
     file_record_cache_invalidate_path(disk.id(), src);
     file_record_cache_invalidate_path(disk.id(), dst);
@@ -2976,6 +2986,7 @@ pub async fn dir_rename_async(
         return Ok(false);
     }
 
+    file_objects::renamed(disk, &src, &dst);
     bump_root_cache_gen(disk_id);
     file_record_cache_invalidate_prefix(disk_id, normalized_dir_prefix(src.as_str()).as_str());
     file_record_cache_invalidate_prefix(disk_id, normalized_dir_prefix(dst.as_str()).as_str());
@@ -3623,6 +3634,8 @@ pub async fn file_append_async(
     };
     let io = KernelBlockIo::new(disk);
 
+    ensure_index_async(disk, &placement).await?;
+    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
     let disk_id = disk.id();
     let record = match file_record_cache_lookup(disk_id, name) {
         Some(record) => Some(record),
@@ -3649,7 +3662,6 @@ pub async fn file_append_async(
     };
     bytes.extend_from_slice(append_bytes);
 
-    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
     let Some(mut stream) = trueos_fs::begin_write_file_stream_with_metadata(
         &io,
         &params,

@@ -90,6 +90,7 @@ pub(crate) fn decode_checked_write_payload(
 
 #[derive(Debug)]
 enum RequestKind {
+    FileObject(crate::r::fs::trueosfs::file_objects::Command),
     Read {
         path: String,
     },
@@ -141,6 +142,7 @@ enum RequestKind {
 impl RequestKind {
     fn access_operation(&self) -> (&'static str, bool) {
         match self {
+            Self::FileObject(_) => ("file-object", false),
             Self::Read { .. } => ("read", false),
             Self::Write { .. } => ("write", true),
             Self::CreateDirAll { .. } => ("create-dir-all", true),
@@ -161,6 +163,7 @@ impl RequestKind {
     // Stable numeric classes; never export paths or request payloads.
     fn progress_class(&self) -> u32 {
         match self {
+            Self::FileObject(_) => 17,
             Self::Read { .. } => 1,
             Self::Write { .. } => 2,
             Self::CreateDirAll { .. } => 3,
@@ -314,7 +317,9 @@ pub(crate) fn release_owner(owner: u32) -> Result<usize, usize> {
     }
     let before = operations.len();
     operations.retain(|id, operation| { if operation.owner == owner {PROGRESS.release(owner,*id);false} else {true} });
-    Ok(before - operations.len())
+    let count = before - operations.len();
+    drop(operations); drop(active); drop(requests);
+    Ok(count + crate::r::fs::trueosfs::file_objects::release_owner(owner))
 }
 
 fn take_request() -> Option<Request> {
@@ -577,6 +582,47 @@ fn start_codex_input_read(owner: u32, path: &str) -> i32 {
             }
         }
     })
+}
+
+pub(crate) fn start_object(owner: u32, bytes: &[u8]) -> i32 {
+    match crate::r::fs::trueosfs::file_objects::Command::decode(bytes) {
+        Ok(command) => start(owner, RequestKind::FileObject(command)),
+        Err(code) => code,
+    }
+}
+
+/// Native open-file objects share the filesystem job authority. The byte header
+/// describes the operation; its opaque object token never enters a Unix FD table.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_object_start_v1(
+    request_ptr: *const u8,
+    request_len: usize,
+) -> i32 {
+    if request_len < 24 || request_len > trueos_vm::vmcall::PAYLOAD_CAP {
+        return FS_ERR_BAD_PARAM;
+    }
+    let Some(bytes) = crate::native_abi::abi_read_bytes(request_ptr, request_len) else {
+        return FS_ERR_BAD_PARAM;
+    };
+    let mut request = Vec::from(bytes);
+    if u32::from_le_bytes(request[..4].try_into().unwrap()) == 1 {
+        let path = match parse_path(request[24..].as_ptr(), request.len() - 24, false) {
+            Ok(path) => path,
+            Err(code) => return code,
+        };
+        request.truncate(24);
+        request.extend_from_slice(path.as_bytes());
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, value) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_ASYNC_FS_OBJECT_START_V1,
+            0, 0, &request, &mut [],
+        );
+        if status == trueos_vm::vmcall::STATUS_OK { (value as i64) as i32 }
+        else { FS_ERR_BAD_PARAM }
+    } else {
+        start_object(direct_owner(), &request)
+    }
 }
 
 pub(crate) fn start_read(owner: u32, path: String) -> i32 {
@@ -1081,6 +1127,17 @@ fn mounted_roots_text() -> String {
 }
 
 async fn process(request: &Request) -> OperationState {
+    if let RequestKind::FileObject(command) = &request.kind {
+        let result = if command.op == 1 {
+            let path = match core::str::from_utf8(&command.payload) { Ok(path) => path, Err(_) => return OperationState::Failed(FS_ERR_BAD_UTF8) };
+            let (disk,path) = match selected_disk(path) { Ok(selected) => selected, Err(code) => return OperationState::Failed(code) };
+            if let Some(vm) = vm_for_owner(request.owner) {
+                crate::access_key_db::audit_path(vm, disk, path, "file-open", command.flags & 48 != 0).await;
+            }
+            crate::r::fs::trueosfs::file_objects::open(request.owner, disk, path, command.flags).await
+        } else { crate::r::fs::trueosfs::file_objects::operate(request.owner, command).await };
+        return match result { Ok(bytes) => OperationState::Read(bytes), Err(code) => OperationState::Failed(code) };
+    }
     if let RequestKind::Read { path } = &request.kind {
         if path.starts_with(crate::r::services::hull_download_service::PREFIX) {
             return match crate::r::services::hull_download_service::read_for_owner(request.owner, path) {
@@ -1263,7 +1320,7 @@ async fn process(request: &Request) -> OperationState {
         | RequestKind::SelectFiles { path, .. }
         | RequestKind::Remove { path }
         | RequestKind::RemoveLeaf { path, .. } => path.as_str(),
-        RequestKind::ListMounts | RequestKind::Rename { .. } => unreachable!(),
+        RequestKind::ListMounts | RequestKind::Rename { .. } | RequestKind::FileObject(_) => unreachable!(),
     };
     let (disk, selected_path) = match selected_disk(path) {
         Ok(selected) => selected,
@@ -1551,6 +1608,7 @@ async fn process(request: &Request) -> OperationState {
                 Err(RemoveNodeError::Device(error)) => OperationState::Failed(map_block_error(error)),
             }
         }
+        RequestKind::FileObject(_) => unreachable!(),
         RequestKind::ListMounts => unreachable!(),
         RequestKind::Rename { .. } => unreachable!(),
     }
@@ -2087,6 +2145,18 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_rename_start(
     unsafe {
         rename_start_with_policy(source_ptr, source_len, destination_ptr, destination_len, false)
     }
+}
+
+/// Native namespace rename policy: bit 0 permits replacing an existing file.
+/// Namespace checks and publication remain under the filesystem write lease.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_rename_start_v2(
+    source_ptr: *const u8, source_len: usize,
+    destination_ptr: *const u8, destination_len: usize,
+    flags: u32,
+) -> i32 {
+    if flags > 1 { return FS_ERR_BAD_PARAM; }
+    unsafe { rename_start_with_policy(source_ptr, source_len, destination_ptr, destination_len, flags == 1) }
 }
 
 /// POSIX file replacement uses the same operation and ownership transport as

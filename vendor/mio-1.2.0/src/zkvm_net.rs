@@ -3,7 +3,7 @@
 use crate::{Interest, Registry, Token};
 
 use core::net::SocketAddr;
-use trueos_io as io;
+use crate::io;
 
 const STATUS_UNSUPPORTED: i32 = -1;
 const STATUS_WOULD_BLOCK: i32 = -2;

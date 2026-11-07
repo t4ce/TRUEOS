@@ -1,9 +1,13 @@
 use ::core::fmt;
-use trueos_io as io;
+use crate::io;
 
 #[allow(dead_code)]
 pub(crate) fn unsupported_io_error(detail: &'static str) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, detail)
+    #[cfg(feature = "std-compat")]
+    let kind = io::ErrorKind::Unsupported;
+    #[cfg(not(feature = "std-compat"))]
+    let kind = io::ErrorKind::Other;
+    io::Error::new(kind, detail)
 }
 
 #[cfg(feature = "log")]

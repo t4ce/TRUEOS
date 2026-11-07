@@ -73,6 +73,9 @@ mod shell3;
 mod smp;
 mod spirit;
 mod native_abi;
+mod native_environment;
+mod native_process_api;
+mod native_stdio;
 mod surfer;
 mod turbo;
 #[allow(non_snake_case)]

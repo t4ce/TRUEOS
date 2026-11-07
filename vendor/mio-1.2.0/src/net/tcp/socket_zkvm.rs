@@ -1,6 +1,6 @@
 //! Initially unconnected TCP socket owned by the native network service.
 use core::net::SocketAddr;
-use trueos_io as io;
+use crate::io;
 
 use crate::zkvm_net::Socket;
 use crate::net::{TcpListener, TcpStream};

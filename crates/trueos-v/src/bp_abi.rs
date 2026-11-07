@@ -1196,6 +1196,13 @@ unsafe extern "C" {
     ) -> i32;
     pub fn trueos_cabi_async_fs_list_mounts_start() -> i32;
     pub fn trueos_cabi_async_fs_remove_start(path_ptr: *const u8, path_len: usize) -> i32;
+    /// Native file-object operations use ordinary owner-scoped async FS jobs.
+    pub fn trueos_cabi_async_fs_object_start_v1(request_ptr: *const u8, request_len: usize) -> i32;
+    /// flags bit 0 permits replacement of an existing file.
+    pub fn trueos_cabi_async_fs_rename_start_v2(
+        source_ptr: *const u8, source_len: usize,
+        destination_ptr: *const u8, destination_len: usize, flags: u32,
+    ) -> i32;
     pub fn trueos_cabi_async_fs_rename_start(
         source_ptr: *const u8,
         source_len: usize,
@@ -1746,6 +1753,23 @@ unsafe extern "C" {
     ) -> u32;
     pub fn trueos_cabi_mouse_poll(out: *mut TrueosMouseState) -> i32;
 
+    /// Native byte-pair environment. Null/short output queries required bytes;
+    /// get returns -2 when absent. Other errors are negative native codes.
+    pub fn trueos_cabi_env_get_v1(
+        key: *const u8, key_len: usize, out: *mut u8, capacity: usize,
+    ) -> isize;
+    /// Consistent LE u32 pair count, then key/value lengths and raw bytes.
+    pub fn trueos_cabi_env_snapshot_v1(out: *mut u8, capacity: usize) -> isize;
+    pub fn trueos_cabi_env_set_v1(
+        key: *const u8, key_len: usize, value: *const u8, value_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_env_remove_v1(key: *const u8, key_len: usize) -> i32;
+    /// Read-only native stream classification; stream 0/1/2 means stdin/out/err.
+    /// Returns 1 for a terminal route, 0 otherwise, without claiming its lease.
+    pub fn trueos_cabi_stdio_is_terminal_v1(stream: u32) -> i32;
+    /// Native VM owner ID (which=0) or generation-checked parent (which=1).
+    /// IDs are VM slot + 1; zero means no such execution owner.
+    pub fn trueos_cabi_process_identity_v1(which: u32) -> u32;
     pub safe fn trueos_cabi_env_args_count() -> usize;
     pub fn trueos_cabi_env_arg(index: usize, out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_env_var(

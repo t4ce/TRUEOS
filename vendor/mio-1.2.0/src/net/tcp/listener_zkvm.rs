@@ -2,7 +2,7 @@
 
 use ::core::fmt;
 use core::net::SocketAddr;
-use trueos_io as io;
+use crate::io;
 
 use crate::zkvm_net::Socket;
 use crate::{event, Interest, Registry, Token};

@@ -5,6 +5,12 @@
 use std::io;
 use std::os::fd::RawFd;
 
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), feature = "native-net"))]
+pub(crate) fn new_raw() -> io::Result<[RawFd; 2]> {
+    Err(io::Error::new(io::ErrorKind::Unsupported, "native sockets do not provide Unix pipes"))
+}
+
+#[cfg(not(all(any(target_os = "trueos", target_os = "zkvm"), feature = "native-net")))]
 pub(crate) fn new_raw() -> io::Result<[RawFd; 2]> {
     let mut fds: [RawFd; 2] = [-1, -1];
 

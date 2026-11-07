@@ -1705,14 +1705,30 @@ pub unsafe extern "C" fn trueos_cabi_env_arg(
 ) -> isize {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
-        let (status, len) = trueos_vm::vmcall::call_with_payload(
+        let (status, length, copied) = trueos_vm::vmcall::call_with_payload_reported_len(
             trueos_vm::vmcall::OP_BP_ENV_ARG,
             index as u64,
             0,
             &[],
             &mut bytes,
         );
-        return copy_guest_text_response(status, len, &bytes, out_ptr, out_cap);
+        let Ok(length) = usize::try_from(length) else { return -1; };
+        if status != trueos_vm::vmcall::STATUS_OK || length > isize::MAX as usize { return -1; }
+        if out_ptr.is_null() || out_cap == 0 || out_cap < length { return length as isize; }
+        let Some(output) = crate::native_abi::abi_write_bytes(out_ptr, length) else { return -1; };
+        let mut offset = 0;
+        let mut copied = copied;
+        loop {
+            if copied > bytes.len() || copied > length - offset || (copied == 0 && offset < length) { return -1; }
+            output[offset..offset + copied].copy_from_slice(&bytes[..copied]);
+            offset += copied;
+            if offset == length { return length as isize; }
+            let (status, observed_length, next) = trueos_vm::vmcall::call_with_payload_reported_len(
+                trueos_vm::vmcall::OP_BP_ENV_ARG, index as u64, offset as u64, &[], &mut bytes,
+            );
+            if status != trueos_vm::vmcall::STATUS_OK || observed_length != length as u64 { return -1; }
+            copied = next;
+        }
     }
     let Some(arg) = super::env::arg(index) else {
         return -1;

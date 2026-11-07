@@ -30,11 +30,11 @@ pub use core::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 mod tcp;
 pub use self::tcp::{TcpListener, TcpStream};
-#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))]
+#[cfg(all(any(target_os = "trueos", target_os = "zkvm"), any(not(feature = "std-compat"), feature = "native-net")))]
 pub use self::tcp::TcpSocket;
 
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
-#[cfg_attr(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")), path = "udp_zkvm.rs")]
+#[cfg_attr(all(any(target_os = "trueos", target_os = "zkvm"), any(not(feature = "std-compat"), feature = "native-net")), path = "udp_zkvm.rs")]
 mod udp;
 #[cfg(not(all(target_os = "wasi", target_env = "p1")))]
 pub use self::udp::UdpSocket;
@@ -55,3 +55,6 @@ pub enum Shutdown {
 mod uds;
 #[cfg(all(unix, not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))))]
 pub use self::uds::{UnixDatagram, UnixListener, UnixStream};
+
+#[cfg(all(all(any(target_os = "trueos", target_os = "zkvm"), feature = "native-net"), feature = "std-compat"))]
+pub use std::net::Shutdown;
