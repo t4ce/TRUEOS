@@ -30,6 +30,23 @@ pub(crate) struct Channels {
 }
 
 impl Channels {
+    pub(crate) fn send_eof(&mut self, handle: &ChanHandle, sender: &mut TrafSend) -> Result<()> {
+        let channel = self.get_mut(handle.0)?;
+        if !channel.sent_eof && !channel.sent_close && !channel.is_closed() {
+            sender.send(packets::ChannelEof { num: channel.send_num()? })?;
+            channel.sent_eof = true;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn send_close(&mut self, handle: &ChanHandle, sender: &mut TrafSend) -> Result<()> {
+        let channel = self.get_mut(handle.0)?;
+        if !channel.sent_close && !channel.is_closed() {
+            sender.send(packets::ChannelClose { num: channel.send_num()? })?;
+            channel.sent_close = true;
+        }
+        Ok(())
+    }
     pub fn new(is_client: bool) -> Self {
         Channels { ch: Default::default(), is_client }
     }
@@ -653,18 +670,23 @@ pub enum Req<'a> {
 impl Req<'_> {
     pub(crate) fn send(self, ch: &Channel, s: &mut TrafSend) -> Result<()> {
         let t;
+        let mut modes = [0u8; termmodes::NUM_MODES * 5 + 1];
         let req = match self {
             Req::Shell => ChannelReqType::Shell,
             Req::Pty(pty) => {
-                debug!("TODO implement pty modes");
                 t = pty.term;
+                for (index, mode) in pty.modes.iter().enumerate() {
+                    if mode.opcode == 0 || mode.opcode >= 160 { return error::BadUsage.fail(); }
+                    modes[index * 5] = mode.opcode;
+                    modes[index * 5 + 1..index * 5 + 5].copy_from_slice(&mode.arg.to_be_bytes());
+                }
                 ChannelReqType::Pty(packets::PtyReq {
                     term: TextString(t.as_bytes()),
                     cols: pty.cols,
                     rows: pty.rows,
                     width: pty.width,
                     height: pty.height,
-                    modes: BinString(&[]),
+                    modes: BinString(&modes[..pty.modes.len() * 5 + 1]),
                 })
             }
             Req::Exec(cmd) => {
@@ -1031,6 +1053,7 @@ impl Channel {
 
     // None on close
     fn send_allowed(&self) -> Option<usize> {
+        if self.sent_eof || self.sent_close || self.is_closed() { return None; }
         let r = self.send.as_ref().map(|s| usize::min(s.window, s.max_packet));
         trace!("send_allowed {r:?}");
         r

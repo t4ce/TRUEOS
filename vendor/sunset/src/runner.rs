@@ -117,10 +117,8 @@ impl<'a> Runner<'a, client::Client> {
     ) -> Result<()> {
         let mut s = self.traf_out.sender(&mut self.keys);
         let (cliauth, ctx) = self.conn.mut_cliauth()?;
-        cliauth.resume_password(&mut s, password, ctx)?;
-        // assert that resume_password() returns error with none password.
-        // otherwise we might need to handle other events like with clipubkey
-        debug_assert!(password.is_some(), "no password");
+        let event = cliauth.resume_password(&mut s, password, ctx)?;
+        self.set_extra_resume(event);
         self.resume(&DispatchEvent::CliEvent(CliEventId::Password));
         Ok(())
     }
@@ -131,6 +129,24 @@ impl<'a> Runner<'a, client::Client> {
         let ev = cliauth.resume_pubkey(&mut s, key, ctx)?;
         self.set_extra_resume(ev);
         self.resume(&DispatchEvent::CliEvent(CliEventId::Pubkey));
+        Ok(())
+    }
+
+    pub(crate) fn fetch_cli_interactive(&self) -> Result<packets::UserauthInfoRequest<'_>> {
+        self.check_resume(&DispatchEvent::CliEvent(CliEventId::KeyboardInteractive));
+        let (payload, _) = self.traf_in.payload().trap()?;
+        match self.conn.packet(payload)? {
+            packets::Packet::Userauth60(packets::Userauth60::InfoRequest(info)) => Ok(info),
+            _ => error::BadUsage.fail(),
+        }
+    }
+
+    pub(crate) fn resume_cli_interactive(&mut self, answers: &[&str]) -> Result<()> {
+        self.check_resume(&DispatchEvent::CliEvent(CliEventId::KeyboardInteractive));
+        let mut sender = self.traf_out.sender(&mut self.keys);
+        let (auth, _) = self.conn.mut_cliauth()?;
+        auth.resume_interactive(&mut sender, answers)?;
+        self.resume(&DispatchEvent::CliEvent(CliEventId::KeyboardInteractive));
         Ok(())
     }
 
@@ -304,6 +320,29 @@ impl Runner<'static, server::Server> {
 }
 
 impl<'a, CS: CliServ> Runner<'a, CS> {
+    /// The first encrypted key exchange has completed. Rekeying keeps this true.
+    pub fn initial_kex_complete(&self) -> bool {
+        !self.conn.is_first_kex()
+    }
+
+    /// Half-close local channel data after queued application bytes are sent.
+    pub fn send_channel_eof(&mut self, channel: &ChanHandle) -> Result<()> {
+        let mut sender = self.traf_out.sender(&mut self.keys);
+        self.conn.channels.send_eof(channel, &mut sender)
+    }
+
+    /// Close a channel after the application has drained its incoming data.
+    pub fn close_channel(&mut self, channel: &ChanHandle) -> Result<()> {
+        let mut sender = self.traf_out.sender(&mut self.keys);
+        self.conn.channels.send_close(channel, &mut sender)
+    }
+
+    /// Queue a normal application disconnect; drain wire output before TCP close.
+    pub fn disconnect(&mut self) -> Result<()> {
+        self.traf_out.sender(&mut self.keys).send(packets::Disconnect {
+            reason: 11, desc: "Application closed the connection".into(), lang: "",
+        })
+    }
     pub fn new(inbuf: &'a mut [u8], outbuf: &'a mut [u8]) -> Runner<'a, CS> {
         Self::new_traf(TrafIn::new(inbuf), TrafOut::new(outbuf))
     }

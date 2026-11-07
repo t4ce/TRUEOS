@@ -58,6 +58,12 @@ const marker_only_kexs: &[&str] = &[
 
 const fixed_options_hostsig: &[&str] = &[
     SSH_NAME_ED25519,
+    #[cfg(feature = "ecdsa256")]
+    SSH_NAME_ECDSA256,
+    #[cfg(feature = "ecdsa384")]
+    SSH_NAME_ECDSA384,
+    #[cfg(feature = "ecdsa521")]
+    SSH_NAME_ECDSA521,
     #[cfg(feature = "rsa")]
     SSH_NAME_RSA_SHA256,
 ];

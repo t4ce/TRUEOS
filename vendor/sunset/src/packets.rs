@@ -18,6 +18,10 @@ use arbitrary::Arbitrary;
 
 #[cfg(feature = "ecdsa256")]
 use p256::NistP256;
+#[cfg(feature = "ecdsa384")]
+use p384::NistP384;
+#[cfg(feature = "ecdsa521")]
+use p521::NistP521;
 
 use sunset_sshwire_derive::*;
 
@@ -215,6 +219,7 @@ impl<'de: 'a, 'a> SSHDecode<'de> for Userauth60<'a> {
                 Ok(Self::PwChangeReq(SSHDecode::dec(s)?))
             }
             Some(auth::AuthType::PubKey) => Ok(Self::PkOk(SSHDecode::dec(s)?)),
+            Some(auth::AuthType::KeyboardInteractive) => Ok(Self::InfoRequest(SSHDecode::dec(s)?)),
             _ => {
                 trace!("Wrong packet state for userauth60");
                 Err(WireError::PacketWrong)
@@ -223,7 +228,42 @@ impl<'de: 'a, 'a> SSHDecode<'de> for Userauth60<'a> {
     }
 }
 
-// RFC 4256: this server requests exactly one non-echoed authenticator code.
+// RFC 4256. Bound metadata independently of packet size and without allocation.
+pub const MAX_KBI_PROMPTS: usize = 32;
+
+/// Fallible metadata storage. Allocating users are bounded by the packet's
+/// remaining bytes; allocation-free embedded users retain a fixed capacity.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct KbiList<T> {
+    #[cfg(feature = "alloc")]
+    values: alloc::vec::Vec<T>,
+    #[cfg(not(feature = "alloc"))]
+    values: heapless::Vec<T, MAX_KBI_PROMPTS>,
+}
+impl<T> KbiList<T> {
+    pub fn new() -> Self { Self { values: Default::default() } }
+    pub fn push(&mut self, value: T) -> WireResult<()> {
+        #[cfg(feature = "alloc")]
+        {
+            self.values.try_reserve(1).map_err(|_| WireError::NoRoom)?;
+            self.values.push(value);
+            Ok(())
+        }
+        #[cfg(not(feature = "alloc"))]
+        { self.values.push(value).map_err(|_| WireError::NoRoom) }
+    }
+}
+impl<T> core::ops::Deref for KbiList<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] { &self.values }
+}
+impl<'b, T> IntoIterator for &'b KbiList<T> {
+    type Item = &'b T;
+    type IntoIter = core::slice::Iter<'b, T>;
+    fn into_iter(self) -> Self::IntoIter { self.values.iter() }
+}
+
 #[derive(Debug, SSHEncode, SSHDecode, Clone)]
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
 pub struct MethodKeyboardInteractive<'a> {
@@ -231,22 +271,55 @@ pub struct MethodKeyboardInteractive<'a> {
     pub submethods: &'a str,
 }
 
-#[derive(Debug, SSHEncode)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
 pub struct UserauthInfoRequest<'a> {
-    pub name: &'a str,
-    pub instruction: &'a str,
-    pub language: &'a str,
-    pub count: u32,
-    pub prompt: &'a str,
+    pub name: TextString<'a>,
+    pub instruction: TextString<'a>,
+    pub language: TextString<'a>,
+    pub prompts: KbiList<KeyboardPrompt<'a>>,
+}
+
+#[derive(Debug, Clone, SSHEncode, SSHDecode)]
+#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
+pub struct KeyboardPrompt<'a> {
+    pub prompt: TextString<'a>,
     pub echo: bool,
 }
 
-#[derive(SSHEncode)]
+impl SSHEncode for UserauthInfoRequest<'_> {
+    fn enc(&self, s: &mut dyn SSHSink) -> WireResult<()> {
+        self.name.enc(s)?;
+        self.instruction.enc(s)?;
+        self.language.enc(s)?;
+        (self.prompts.len() as u32).enc(s)?;
+        for prompt in &self.prompts { prompt.enc(s)?; }
+        Ok(())
+    }
+}
+impl<'de: 'a, 'a> SSHDecode<'de> for UserauthInfoRequest<'a> {
+    fn dec<S: SSHSource<'de>>(s: &mut S) -> WireResult<Self> {
+        let name = TextString::dec(s)?;
+        let instruction = TextString::dec(s)?;
+        let language = TextString::dec(s)?;
+        let count = u32::dec(s)? as usize;
+        if count > s.remaining() / 5 { return Err(WireError::PacketWrong); }
+        let mut prompts = KbiList::new();
+        for _ in 0..count { prompts.push(KeyboardPrompt::dec(s)?).map_err(|_| WireError::NoRoom)?; }
+        Ok(Self { name, instruction, language, prompts })
+    }
+}
+
 #[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
 pub struct UserauthInfoResponse<'a> {
-    pub count: u32,
-    pub response: TextString<'a>,
+    pub responses: KbiList<TextString<'a>>,
+}
+impl SSHEncode for UserauthInfoResponse<'_> {
+    fn enc(&self, s: &mut dyn SSHSink) -> WireResult<()> {
+        (self.responses.len() as u32).enc(s)?;
+        for response in &self.responses { response.enc(s)?; }
+        Ok(())
+    }
 }
 impl core::fmt::Debug for UserauthInfoResponse<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -256,8 +329,10 @@ impl core::fmt::Debug for UserauthInfoResponse<'_> {
 impl<'de: 'a, 'a> SSHDecode<'de> for UserauthInfoResponse<'a> {
     fn dec<S: SSHSource<'de>>(s: &mut S) -> WireResult<Self> {
         let count = u32::dec(s)?;
-        if count != 1 { return Err(WireError::PacketWrong); }
-        Ok(Self { count, response: SSHDecode::dec(s)? })
+        if count as usize > s.remaining() / 4 { return Err(WireError::PacketWrong); }
+        let mut responses = KbiList::new();
+        for _ in 0..count { responses.push(TextString::dec(s)?).map_err(|_| WireError::NoRoom)?; }
+        Ok(Self { responses })
     }
 }
 
@@ -377,6 +452,12 @@ pub enum PubKey<'a> {
     #[cfg(feature = "ecdsa256")]
     #[sshwire(variant = SSH_NAME_ECDSA256)]
     ECDSA256(ECDSAPubKey<p256::NistP256>),
+    #[cfg(feature = "ecdsa384")]
+    #[sshwire(variant = SSH_NAME_ECDSA384)]
+    ECDSA384(ECDSAPubKey<p384::NistP384>),
+    #[cfg(feature = "ecdsa521")]
+    #[sshwire(variant = SSH_NAME_ECDSA521)]
+    ECDSA521(ECDSAPubKey<p521::NistP521>),
 
     #[sshwire(unknown)]
     Unknown(Unknown<'a>),
@@ -391,6 +472,10 @@ impl PubKey<'_> {
             PubKey::RSA(_) => Ok(SSH_NAME_RSA),
             #[cfg(feature = "ecdsa256")]
             PubKey::ECDSA256(_) => Ok(SSH_NAME_ECDSA256),
+            #[cfg(feature = "ecdsa384")]
+            PubKey::ECDSA384(_) => Ok(SSH_NAME_ECDSA384),
+            #[cfg(feature = "ecdsa521")]
+            PubKey::ECDSA521(_) => Ok(SSH_NAME_ECDSA521),
             PubKey::Unknown(u) => Err(u),
         }
     }
@@ -400,13 +485,9 @@ impl PubKey<'_> {
         let k = ssh_key::PublicKey::from_openssh(k)
             .map_err(|_| Error::msg("Unsupported OpenSSH key"))?;
 
-        let m = match (k.key_data(), self) {
-            (ssh_key::public::KeyData::Ed25519(kssh), PubKey::Ed25519(kself)) => {
-                kssh.0 == kself.key.0
-            }
-            _ => false,
-        };
-        Ok(m)
+        // Compare canonical key data for every enabled curve, not just Ed25519.
+        let presented: ssh_key::PublicKey = self.try_into()?;
+        Ok(presented == k)
     }
 
     #[cfg(feature = "openssh-key")]
@@ -444,7 +525,31 @@ impl TryFrom<&PubKey<'_>> for ssh_key::PublicKey {
                 // TODO can simplify once ecdsa crate isn't rc
                 let k = ssh_key::public::EcdsaPublicKey::NistP256(
                     k.key
-                        .to_sec1_point(false)
+                        .to_encoded_point(false)
+                        .as_bytes()
+                        .try_into()
+                        .map_err(|_| Error::BadKex)?,
+                );
+                Ok(k.into())
+            }
+            #[cfg(feature = "ecdsa384")]
+            PubKey::ECDSA384(k) => {
+                // TODO can simplify once ecdsa crate isn't rc
+                let k = ssh_key::public::EcdsaPublicKey::NistP384(
+                    k.key
+                        .to_encoded_point(false)
+                        .as_bytes()
+                        .try_into()
+                        .map_err(|_| Error::BadKex)?,
+                );
+                Ok(k.into())
+            }
+            #[cfg(feature = "ecdsa521")]
+            PubKey::ECDSA521(k) => {
+                // TODO can simplify once ecdsa crate isn't rc
+                let k = ssh_key::public::EcdsaPublicKey::NistP521(
+                    k.key
+                        .to_encoded_point(false)
                         .as_bytes()
                         .try_into()
                         .map_err(|_| Error::BadKex)?,
@@ -521,19 +626,39 @@ impl Arbitrary<'_> for RSAPubKey {
 
 #[cfg(feature = "_ecdsa")]
 #[derive(Clone, PartialEq)]
-pub struct ECDSAPubKey<C: ecdsa::EcdsaCurve + ecdsa::elliptic_curve::CurveArithmetic>
+pub struct ECDSAPubKey<C: ecdsa::elliptic_curve::PrimeCurve + ecdsa::elliptic_curve::CurveArithmetic>
 {
     pub key: ecdsa::VerifyingKey<C>,
 }
 
-#[cfg(feature = "_ecdsa")]
+#[cfg(feature = "ecdsa256")]
 const ECDSA_ID_NISTP256: &str = "nistp256";
+#[cfg(feature = "ecdsa384")]
+const ECDSA_ID_NISTP384: &str = "nistp384";
+#[cfg(feature = "ecdsa521")]
+const ECDSA_ID_NISTP521: &str = "nistp521";
 
 #[cfg(feature = "ecdsa256")]
 impl SSHEncode for ECDSAPubKey<NistP256> {
     fn enc(&self, s: &mut dyn SSHSink) -> WireResult<()> {
         ECDSA_ID_NISTP256.enc(s)?;
-        let pt = self.key.to_sec1_point(false);
+        let pt = self.key.to_encoded_point(false);
+        BinString(pt.as_bytes()).enc(s)
+    }
+}
+#[cfg(feature = "ecdsa384")]
+impl SSHEncode for ECDSAPubKey<NistP384> {
+    fn enc(&self, s: &mut dyn SSHSink) -> WireResult<()> {
+        ECDSA_ID_NISTP384.enc(s)?;
+        let pt = self.key.to_encoded_point(false);
+        BinString(pt.as_bytes()).enc(s)
+    }
+}
+#[cfg(feature = "ecdsa521")]
+impl SSHEncode for ECDSAPubKey<NistP521> {
+    fn enc(&self, s: &mut dyn SSHSink) -> WireResult<()> {
+        ECDSA_ID_NISTP521.enc(s)?;
+        let pt = self.key.to_encoded_point(false);
         BinString(pt.as_bytes()).enc(s)
     }
 }
@@ -558,6 +683,46 @@ impl<'de> SSHDecode<'de> for ECDSAPubKey<NistP256> {
         Ok(Self { key })
     }
 }
+#[cfg(feature = "ecdsa384")]
+impl<'de> SSHDecode<'de> for ECDSAPubKey<NistP384> {
+    fn dec<S>(s: &mut S) -> WireResult<Self>
+    where
+        S: SSHSource<'de>,
+    {
+        let name: &str = SSHDecode::dec(s)?;
+        if name != ECDSA_ID_NISTP384 {
+            trace!("Wrong ecdsa name {name}");
+            return Err(WireError::BadKey);
+        }
+
+        let key = BinString::dec(s)?;
+        let key = ecdsa::VerifyingKey::from_sec1_bytes(key.0).map_err(|_| {
+            trace!("Bad ecdsa key");
+            WireError::BadKey
+        })?;
+        Ok(Self { key })
+    }
+}
+#[cfg(feature = "ecdsa521")]
+impl<'de> SSHDecode<'de> for ECDSAPubKey<NistP521> {
+    fn dec<S>(s: &mut S) -> WireResult<Self>
+    where
+        S: SSHSource<'de>,
+    {
+        let name: &str = SSHDecode::dec(s)?;
+        if name != ECDSA_ID_NISTP521 {
+            trace!("Wrong ecdsa name {name}");
+            return Err(WireError::BadKey);
+        }
+
+        let key = BinString::dec(s)?;
+        let key = ecdsa::VerifyingKey::from_sec1_bytes(key.0).map_err(|_| {
+            trace!("Bad ecdsa key");
+            WireError::BadKey
+        })?;
+        Ok(Self { key })
+    }
+}
 
 #[cfg(feature = "ecdsa256")]
 impl Debug for ECDSAPubKey<p256::NistP256> {
@@ -565,9 +730,41 @@ impl Debug for ECDSAPubKey<p256::NistP256> {
         f.debug_struct("ECDSAPubKey<p256>").finish_non_exhaustive()
     }
 }
+#[cfg(feature = "ecdsa384")]
+impl Debug for ECDSAPubKey<p384::NistP384> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ECDSAPubKey<p384>").finish_non_exhaustive()
+    }
+}
+#[cfg(feature = "ecdsa521")]
+impl Debug for ECDSAPubKey<p521::NistP521> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ECDSAPubKey<p521>").finish_non_exhaustive()
+    }
+}
 
 #[cfg(all(feature = "arbitrary", feature = "ecdsa256"))]
 impl Arbitrary<'_> for ECDSAPubKey<NistP256> {
+    fn arbitrary(u: &mut arbitrary::Unstructured) -> arbitrary::Result<Self> {
+        let key = ecdsa::VerifyingKey::from_sec1_bytes(
+            arbitrary::Arbitrary::arbitrary(u)?,
+        )
+        .map_err(|_| arbitrary::Error::IncorrectFormat)?;
+        Ok(Self { key })
+    }
+}
+#[cfg(all(feature = "arbitrary", feature = "ecdsa384"))]
+impl Arbitrary<'_> for ECDSAPubKey<NistP384> {
+    fn arbitrary(u: &mut arbitrary::Unstructured) -> arbitrary::Result<Self> {
+        let key = ecdsa::VerifyingKey::from_sec1_bytes(
+            arbitrary::Arbitrary::arbitrary(u)?,
+        )
+        .map_err(|_| arbitrary::Error::IncorrectFormat)?;
+        Ok(Self { key })
+    }
+}
+#[cfg(all(feature = "arbitrary", feature = "ecdsa521"))]
+impl Arbitrary<'_> for ECDSAPubKey<NistP521> {
     fn arbitrary(u: &mut arbitrary::Unstructured) -> arbitrary::Result<Self> {
         let key = ecdsa::VerifyingKey::from_sec1_bytes(
             arbitrary::Arbitrary::arbitrary(u)?,
@@ -591,6 +788,12 @@ pub enum Signature<'a> {
     #[cfg(feature = "ecdsa256")]
     #[sshwire(variant = SSH_NAME_ECDSA256)]
     ECDSA256(Blob<ECDSASig<'a>>),
+    #[cfg(feature = "ecdsa384")]
+    #[sshwire(variant = SSH_NAME_ECDSA384)]
+    ECDSA384(Blob<ECDSASig<'a>>),
+    #[cfg(feature = "ecdsa521")]
+    #[sshwire(variant = SSH_NAME_ECDSA521)]
+    ECDSA521(Blob<ECDSASig<'a>>),
 
     #[sshwire(unknown)]
     Unknown(Unknown<'a>),
@@ -605,6 +808,10 @@ impl<'a> Signature<'a> {
             Signature::RSA(_) => Ok(SSH_NAME_RSA_SHA256),
             #[cfg(feature = "ecdsa256")]
             Signature::ECDSA256(_) => Ok(SSH_NAME_ECDSA256),
+            #[cfg(feature = "ecdsa384")]
+            Signature::ECDSA384(_) => Ok(SSH_NAME_ECDSA384),
+            #[cfg(feature = "ecdsa521")]
+            Signature::ECDSA521(_) => Ok(SSH_NAME_ECDSA521),
             Signature::Unknown(u) => Err(u),
         }
     }
@@ -622,6 +829,10 @@ impl<'a> Signature<'a> {
             PubKey::RSA(_) => Ok(SSH_NAME_RSA_SHA256),
             #[cfg(feature = "ecdsa256")]
             PubKey::ECDSA256(_) => Ok(SSH_NAME_ECDSA256),
+            #[cfg(feature = "ecdsa384")]
+            PubKey::ECDSA384(_) => Ok(SSH_NAME_ECDSA384),
+            #[cfg(feature = "ecdsa521")]
+            PubKey::ECDSA521(_) => Ok(SSH_NAME_ECDSA521),
             PubKey::Unknown(u) => {
                 warn!("Unknown key type \"{}\"", u);
                 Err(Error::UnknownMethod { kind: "key" })
@@ -636,6 +847,10 @@ impl<'a> Signature<'a> {
             Signature::RSA(_) => Ok(SigType::RSA),
             #[cfg(feature = "ecdsa256")]
             Signature::ECDSA256(_) => Ok(SigType::ECDSA256),
+            #[cfg(feature = "ecdsa384")]
+            Signature::ECDSA384(_) => Ok(SigType::ECDSA384),
+            #[cfg(feature = "ecdsa521")]
+            Signature::ECDSA521(_) => Ok(SigType::ECDSA521),
             Signature::Unknown(u) => {
                 warn!("Unknown signature type \"{}\"", u);
                 Err(Error::UnknownMethod { kind: "signature" })
@@ -656,6 +871,16 @@ impl<'a> From<&'a OwnedSig> for Signature<'a> {
             }
             #[cfg(feature = "ecdsa256")]
             OwnedSig::ECDSA256 { r, s } => Signature::ECDSA256(Blob(ECDSASig {
+                r: sshwire::Mpint::new(r),
+                s: sshwire::Mpint::new(s),
+            })),
+            #[cfg(feature = "ecdsa384")]
+            OwnedSig::ECDSA384 { r, s } => Signature::ECDSA384(Blob(ECDSASig {
+                r: sshwire::Mpint::new(r),
+                s: sshwire::Mpint::new(s),
+            })),
+            #[cfg(feature = "ecdsa521")]
+            OwnedSig::ECDSA521 { r, s } => Signature::ECDSA521(Blob(ECDSASig {
                 r: sshwire::Mpint::new(r),
                 s: sshwire::Mpint::new(s),
             })),

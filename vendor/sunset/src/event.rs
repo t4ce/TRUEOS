@@ -41,6 +41,7 @@ pub enum CliEvent<'g, 'a> {
     Banner(Banner<'g>),
     Username(RequestUsername<'g, 'a>),
     Password(RequestPassword<'g, 'a>),
+    KeyboardInteractive(RequestKeyboardInteractive<'g, 'a>),
     Pubkey(RequestPubkey<'g, 'a>),
     AgentSign(RequestSign<'g, 'a>),
     Authenticated,
@@ -67,6 +68,7 @@ impl Debug for CliEvent<'_, '_> {
             Self::Hostkey(_) => "Hostkey",
             Self::Username(_) => "Username",
             Self::Password(_) => "Password",
+            Self::KeyboardInteractive(_) => "KeyboardInteractive",
             Self::Pubkey(_) => "Pubkey",
             Self::Authenticated => "Authenticated",
             Self::SessionOpened(_) => "SessionOpened",
@@ -110,6 +112,20 @@ impl RequestPassword<'_, '_> {
 
 pub struct RequestPubkey<'g, 'a> {
     runner: &'g mut CliRunner<'a>,
+}
+
+/// One RFC4256 round. Only USERAUTH_SUCCESS completes authentication.
+pub struct RequestKeyboardInteractive<'g, 'a> {
+    runner: &'g mut CliRunner<'a>,
+}
+impl RequestKeyboardInteractive<'_, '_> {
+    pub fn info(&self) -> Result<packets::UserauthInfoRequest<'_>> {
+        self.runner.fetch_cli_interactive()
+    }
+    /// Answer exactly the requested number of prompts, including zero prompts.
+    pub fn respond(self, answers: &[&str]) -> Result<()> {
+        self.runner.resume_cli_interactive(answers)
+    }
 }
 
 impl<'g, 'a> RequestPubkey<'g, 'a> {
@@ -182,6 +198,7 @@ pub(crate) enum CliEventId {
     Hostkey,
     Username,
     Password,
+    KeyboardInteractive,
     Pubkey,
     AgentSign,
     Authenticated,
@@ -206,6 +223,7 @@ impl CliEventId {
         match self {
             Self::Username => Ok(CliEvent::Username(RequestUsername { runner })),
             Self::Password => Ok(CliEvent::Password(RequestPassword { runner })),
+            Self::KeyboardInteractive => Ok(CliEvent::KeyboardInteractive(RequestKeyboardInteractive { runner })),
             Self::Pubkey => Ok(CliEvent::Pubkey(RequestPubkey { runner })),
             Self::AgentSign => Ok(CliEvent::AgentSign(RequestSign { runner })),
             Self::Hostkey => {
@@ -242,6 +260,7 @@ impl CliEventId {
             Self::Hostkey
             | Self::Username
             | Self::Password
+            | Self::KeyboardInteractive
             | Self::Pubkey
             | Self::AgentSign => true,
         }

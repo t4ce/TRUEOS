@@ -33,6 +33,10 @@ use ecdsa::VerifyingKey;
 use ecdsa::signature::hazmat::{PrehashSigner as _, PrehashVerifier as _};
 #[cfg(feature = "ecdsa256")]
 use p256::NistP256;
+#[cfg(feature = "ecdsa384")]
+use p384::NistP384;
+#[cfg(feature = "ecdsa521")]
+use p521::NistP521;
 
 // only required for some configurations
 #[allow(unused_imports)]
@@ -40,10 +44,10 @@ use digest::Digest;
 
 // TODO remove once we use byupdate.
 // signatures are for hostkey (32 byte sessiid) or pubkey (auth packet || sessid).
-// we assume a max 40 character username here.
+// Bound the username using the same configuration as the auth parser.
 const MAX_ED25519_SIG_MSG: usize = 1
     + 4
-    + 40
+    + config::MAX_USERNAME
     + 4
     + 14
     + 4
@@ -62,6 +66,10 @@ pub enum SigType {
     RSA,
     #[cfg(feature = "ecdsa256")]
     ECDSA256,
+    #[cfg(feature = "ecdsa384")]
+    ECDSA384,
+    #[cfg(feature = "ecdsa521")]
+    ECDSA521,
 }
 
 #[allow(dead_code)]
@@ -80,6 +88,10 @@ impl SigType {
             SSH_NAME_RSA_SHA256 => Ok(SigType::RSA),
             #[cfg(feature = "ecdsa256")]
             SSH_NAME_ECDSA256 => Ok(SigType::ECDSA256),
+            #[cfg(feature = "ecdsa384")]
+            SSH_NAME_ECDSA384 => Ok(SigType::ECDSA384),
+            #[cfg(feature = "ecdsa521")]
+            SSH_NAME_ECDSA521 => Ok(SigType::ECDSA521),
             _ => Err(Error::bug()),
         }
     }
@@ -92,6 +104,10 @@ impl SigType {
             SigType::RSA => SSH_NAME_RSA_SHA256,
             #[cfg(feature = "ecdsa256")]
             SigType::ECDSA256 => SSH_NAME_ECDSA256,
+            #[cfg(feature = "ecdsa384")]
+            SigType::ECDSA384 => SSH_NAME_ECDSA384,
+            #[cfg(feature = "ecdsa521")]
+            SigType::ECDSA521 => SSH_NAME_ECDSA521,
         }
     }
 
@@ -144,7 +160,19 @@ impl SigType {
                 SigType::ECDSA256,
                 PubKey::ECDSA256(ECDSAPubKey { key }),
                 Signature::ECDSA256(s),
-            ) => Self::verify_ecdsa(key, msg, &s.0),
+            ) => Self::verify_ecdsa::<NistP256, sha2::Sha256>(key, msg, &s.0),
+            #[cfg(feature = "ecdsa384")]
+            (
+                SigType::ECDSA384,
+                PubKey::ECDSA384(ECDSAPubKey { key }),
+                Signature::ECDSA384(s),
+            ) => Self::verify_ecdsa::<NistP384, sha2::Sha384>(key, msg, &s.0),
+            #[cfg(feature = "ecdsa521")]
+            (
+                SigType::ECDSA521,
+                PubKey::ECDSA521(ECDSAPubKey { key }),
+                Signature::ECDSA521(s),
+            ) => Self::verify_ecdsa::<NistP521, sha2::Sha512>(key, msg, &s.0),
 
             _ => {
                 warn!(
@@ -210,13 +238,16 @@ impl SigType {
     }
 
     #[cfg(feature = "_ecdsa")]
-    fn verify_ecdsa<C: ecdsa::EcdsaCurve + ecdsa::elliptic_curve::CurveArithmetic>(
+    fn verify_ecdsa<C, D>(
         k: &VerifyingKey<C>,
         msg: &dyn SSHEncode,
         sig: &packets::ECDSASig,
     ) -> Result<()>
     where
-        ecdsa::SignatureSize<C>: ecdsa::elliptic_curve::array::ArraySize,
+        C: ecdsa::elliptic_curve::PrimeCurve + ecdsa::elliptic_curve::CurveArithmetic,
+        ecdsa::elliptic_curve::AffinePoint<C>: ecdsa::hazmat::VerifyPrimitive<C>,
+        ecdsa::SignatureSize<C>: ecdsa::elliptic_curve::generic_array::ArrayLength<u8>,
+        D: digest::Digest + sshwire::SSHWireDigestUpdate,
     {
         // RFC5656 defined r and s as mpint, so SSH will trim leading zeros.
         // ecdsa crate requires exact sized inputs, so copy them in
@@ -247,7 +278,7 @@ impl SigType {
         //     Error::BadSig
         // })
 
-        let mut h = sha2::Sha256::new();
+        let mut h = D::new();
         sshwire::hash_ser(&mut h, msg)?;
         let h = h.finalize();
 
@@ -267,6 +298,16 @@ pub enum OwnedSig {
     ECDSA256 {
         r: [u8; 32],
         s: [u8; 32],
+    },
+    #[cfg(feature = "ecdsa384")]
+    ECDSA384 {
+        r: [u8; 48],
+        s: [u8; 48],
+    },
+    #[cfg(feature = "ecdsa521")]
+    ECDSA521 {
+        r: [u8; 66],
+        s: [u8; 66],
     },
 }
 
@@ -304,6 +345,36 @@ impl TryFrom<Signature<'_>> for OwnedSig {
                     error::BadSig.build()
                 })?;
                 Ok(OwnedSig::ECDSA256 { r, s })
+            }
+            #[cfg(feature = "ecdsa384")]
+            Signature::ECDSA384(sig) => {
+                let sig = sig.0;
+                let mut r = [0; 48];
+                let mut s = [0; 48];
+                copy_right_aligned(sig.r.as_ref(), &mut r).map_err(|_| {
+                    debug!("Bad signature r");
+                    error::BadSig.build()
+                })?;
+                copy_right_aligned(sig.s.as_ref(), &mut s).map_err(|_| {
+                    debug!("Bad signature s");
+                    error::BadSig.build()
+                })?;
+                Ok(OwnedSig::ECDSA384 { r, s })
+            }
+            #[cfg(feature = "ecdsa521")]
+            Signature::ECDSA521(sig) => {
+                let sig = sig.0;
+                let mut r = [0; 66];
+                let mut s = [0; 66];
+                copy_right_aligned(sig.r.as_ref(), &mut r).map_err(|_| {
+                    debug!("Bad signature r");
+                    error::BadSig.build()
+                })?;
+                copy_right_aligned(sig.s.as_ref(), &mut s).map_err(|_| {
+                    debug!("Bad signature s");
+                    error::BadSig.build()
+                })?;
+                Ok(OwnedSig::ECDSA521 { r, s })
             }
             Signature::Unknown(u) => {
                 debug!("Unknown {u} signature");
@@ -343,10 +414,20 @@ pub enum SignKey {
 
     #[cfg(feature = "ecdsa256")]
     ECDSA256(ecdsa::SigningKey<p256::NistP256>),
+    #[cfg(feature = "ecdsa384")]
+    ECDSA384(ecdsa::SigningKey<p384::NistP384>),
+    #[cfg(feature = "ecdsa521")]
+    ECDSA521(ecdsa::SigningKey<p521::NistP521>),
 
     #[cfg(feature = "ecdsa256")]
     #[zeroize(skip)]
     AgentECDSA256(ecdsa::VerifyingKey<p256::NistP256>),
+    #[cfg(feature = "ecdsa384")]
+    #[zeroize(skip)]
+    AgentECDSA384(ecdsa::VerifyingKey<p384::NistP384>),
+    #[cfg(feature = "ecdsa521")]
+    #[zeroize(skip)]
+    AgentECDSA521(ecdsa::VerifyingKey<p521::NistP521>),
 }
 
 impl SignKey {
@@ -400,10 +481,22 @@ impl SignKey {
 
             #[cfg(feature = "ecdsa256")]
             SignKey::ECDSA256(k) => PubKey::ECDSA256(ECDSAPubKey { key: k.into() }),
+            #[cfg(feature = "ecdsa384")]
+            SignKey::ECDSA384(k) => PubKey::ECDSA384(ECDSAPubKey { key: k.into() }),
+            #[cfg(feature = "ecdsa521")]
+            SignKey::ECDSA521(k) => PubKey::ECDSA521(ECDSAPubKey { key: k.into() }),
 
             #[cfg(feature = "ecdsa256")]
             SignKey::AgentECDSA256(pk) => {
                 PubKey::ECDSA256(ECDSAPubKey { key: pk.clone() })
+            }
+            #[cfg(feature = "ecdsa384")]
+            SignKey::AgentECDSA384(pk) => {
+                PubKey::ECDSA384(ECDSAPubKey { key: pk.clone() })
+            }
+            #[cfg(feature = "ecdsa521")]
+            SignKey::AgentECDSA521(pk) => {
+                PubKey::ECDSA521(ECDSAPubKey { key: pk.clone() })
             }
         }
     }
@@ -428,6 +521,10 @@ impl SignKey {
             PubKey::RSA(k) => Ok(Self::AgentRSA(k.key.clone())),
             #[cfg(feature = "ecdsa256")]
             PubKey::ECDSA256(k) => Ok(Self::AgentECDSA256(k.key.clone())),
+            #[cfg(feature = "ecdsa384")]
+            PubKey::ECDSA384(k) => Ok(Self::AgentECDSA384(k.key.clone())),
+            #[cfg(feature = "ecdsa521")]
+            PubKey::ECDSA521(k) => Ok(Self::AgentECDSA521(k.key.clone())),
 
             PubKey::Unknown(_) => Err(Error::msg("Unsupported agent key")),
         }
@@ -447,6 +544,14 @@ impl SignKey {
             #[cfg(feature = "ecdsa256")]
             SignKey::ECDSA256(_) | SignKey::AgentECDSA256(_) => {
                 matches!(sig_type, SigType::ECDSA256)
+            }
+            #[cfg(feature = "ecdsa384")]
+            SignKey::ECDSA384(_) | SignKey::AgentECDSA384(_) => {
+                matches!(sig_type, SigType::ECDSA384)
+            }
+            #[cfg(feature = "ecdsa521")]
+            SignKey::ECDSA521(_) | SignKey::AgentECDSA521(_) => {
+                matches!(sig_type, SigType::ECDSA521)
             }
         }
     }
@@ -499,6 +604,34 @@ impl SignKey {
                 let (r, s) = sig.split_bytes();
                 OwnedSig::ECDSA256 { r: r.into(), s: s.into() }
             }
+            #[cfg(feature = "ecdsa384")]
+            SignKey::ECDSA384(k) => {
+                let mut h = sha2::Sha384::new();
+                sshwire::hash_ser(&mut h, msg)?;
+                let h = h.finalize();
+                let sig: ecdsa::Signature<NistP384> =
+                    k.sign_prehash(&h).map_err(|_| {
+                        trace!("ECDSA signing failed");
+                        Error::bug()
+                    })?;
+                let (r, s) = sig.split_bytes();
+                OwnedSig::ECDSA384 { r: r.into(), s: s.into() }
+            }
+            #[cfg(feature = "ecdsa521")]
+            SignKey::ECDSA521(k) => {
+                let mut h = sha2::Sha512::new();
+                sshwire::hash_ser(&mut h, msg)?;
+                let h = h.finalize();
+                // Stable P521 exposes randomized prehash signing. Reuse the
+                // existing native secure RNG; do not invent a nonce adapter.
+                use ecdsa::signature::hazmat::RandomizedPrehashSigner;
+                let key = p521::ecdsa::SigningKey::from(k.clone());
+                let sig: p521::ecdsa::Signature = key
+                    .sign_prehash_with_rng(&mut rand_core::OsRng, &h)
+                    .map_err(|_| Error::BadKey)?;
+                let (r, s) = sig.split_bytes();
+                OwnedSig::ECDSA521 { r: r.as_slice().try_into().map_err(|_| Error::BadSig)?, s: s.as_slice().try_into().map_err(|_| Error::BadSig)? }
+            }
 
             // callers should check for agent keys first
             SignKey::AgentEd25519(_) => unreachable!(),
@@ -506,6 +639,10 @@ impl SignKey {
             SignKey::AgentRSA(_) => unreachable!(),
             #[cfg(feature = "ecdsa256")]
             SignKey::AgentECDSA256(_) => unreachable!(),
+            #[cfg(feature = "ecdsa384")]
+            SignKey::AgentECDSA384(_) => unreachable!(),
+            #[cfg(feature = "ecdsa521")]
+            SignKey::AgentECDSA521(_) => unreachable!(),
         };
 
         // {
@@ -527,12 +664,20 @@ impl SignKey {
             SignKey::RSA(_) => false,
             #[cfg(feature = "ecdsa256")]
             SignKey::ECDSA256(_) => false,
+            #[cfg(feature = "ecdsa384")]
+            SignKey::ECDSA384(_) => false,
+            #[cfg(feature = "ecdsa521")]
+            SignKey::ECDSA521(_) => false,
 
             SignKey::AgentEd25519(_) => true,
             #[cfg(feature = "rsa")]
             SignKey::AgentRSA(_) => true,
             #[cfg(feature = "ecdsa256")]
             SignKey::AgentECDSA256(_) => true,
+            #[cfg(feature = "ecdsa384")]
+            SignKey::AgentECDSA384(_) => true,
+            #[cfg(feature = "ecdsa521")]
+            SignKey::AgentECDSA521(_) => true,
         }
     }
 }
@@ -548,8 +693,16 @@ impl core::fmt::Debug for SignKey {
             Self::AgentRSA(_) => "AgentRSA",
             #[cfg(feature = "ecdsa256")]
             Self::ECDSA256(_) => "ECDSA256",
+            #[cfg(feature = "ecdsa384")]
+            Self::ECDSA384(_) => "ECDSA384",
+            #[cfg(feature = "ecdsa521")]
+            Self::ECDSA521(_) => "ECDSA521",
             #[cfg(feature = "ecdsa256")]
             Self::AgentECDSA256(_) => "AgentECDSA256",
+            #[cfg(feature = "ecdsa384")]
+            Self::AgentECDSA384(_) => "AgentECDSA384",
+            #[cfg(feature = "ecdsa521")]
+            Self::AgentECDSA521(_) => "AgentECDSA521",
         };
         write!(f, "SignKey::{s}")
     }
@@ -561,7 +714,9 @@ impl TryFrom<ssh_key::PrivateKey> for SignKey {
     fn try_from(k: ssh_key::PrivateKey) -> Result<Self> {
         match k.key_data() {
             ssh_key::private::KeypairData::Ed25519(k) => {
-                Ok(SignKey::Ed25519(k.private.to_bytes().into()))
+                let key = dalek::SigningKey::from_bytes(&k.private.to_bytes());
+                if key.verifying_key().to_bytes() != k.public.0 { return Err(Error::BadKey); }
+                Ok(SignKey::Ed25519(key))
             }
 
             #[cfg(feature = "rsa")]
@@ -578,6 +733,33 @@ impl TryFrom<ssh_key::PrivateKey> for SignKey {
                 )
                 .map_err(|_| Error::BadKey)?;
                 Ok(SignKey::RSA(key))
+            }
+            #[cfg(feature = "ecdsa256")]
+            ssh_key::private::KeypairData::Ecdsa(ssh_key::private::EcdsaKeypair::NistP256 { public, private }) => {
+                let key = ecdsa::SigningKey::<p256::NistP256>::from_slice(private.as_slice())
+                    .map_err(|_| Error::BadKey)?;
+                if key.verifying_key().to_encoded_point(false).as_bytes() != public.as_bytes() {
+                    return Err(Error::BadKey);
+                }
+                Ok(SignKey::ECDSA256(key))
+            }
+            #[cfg(feature = "ecdsa384")]
+            ssh_key::private::KeypairData::Ecdsa(ssh_key::private::EcdsaKeypair::NistP384 { public, private }) => {
+                let key = ecdsa::SigningKey::<p384::NistP384>::from_slice(private.as_slice())
+                    .map_err(|_| Error::BadKey)?;
+                if key.verifying_key().to_encoded_point(false).as_bytes() != public.as_bytes() {
+                    return Err(Error::BadKey);
+                }
+                Ok(SignKey::ECDSA384(key))
+            }
+            #[cfg(feature = "ecdsa521")]
+            ssh_key::private::KeypairData::Ecdsa(ssh_key::private::EcdsaKeypair::NistP521 { public, private }) => {
+                let key = ecdsa::SigningKey::<p521::NistP521>::from_slice(private.as_slice())
+                    .map_err(|_| Error::BadKey)?;
+                if key.verifying_key().to_encoded_point(false).as_bytes() != public.as_bytes() {
+                    return Err(Error::BadKey);
+                }
+                Ok(SignKey::ECDSA521(key))
             }
             _ => {
                 debug!("Unknown ssh-key algorithm {}", k.algorithm().as_str());

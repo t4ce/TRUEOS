@@ -34,7 +34,7 @@ repository = "https://github.com/mkj/sunset"
 [features]
 _ecdsa = [
     "dep:ecdsa",
-    "ssh-key/ecdsa",
+    "ssh-key?/ecdsa",
 ]
 alloc = ["ssh-key?/alloc"]
 arbitrary = [
@@ -46,8 +46,10 @@ default = ["mlkem"]
 ecdsa256 = [
     "_ecdsa",
     "dep:p256",
-    "ssh-key/p256",
 ]
+ecdsa384 = ["_ecdsa", "dep:p384"]
+ecdsa521 = ["_ecdsa", "dep:p521"]
+ecdsa-all = ["ecdsa256", "ecdsa384", "ecdsa521"]
 embedded-io = ["dep:embedded-io"]
 larger = []
 mlkem = ["dep:ml-kem"]
@@ -102,10 +104,9 @@ default-features = false
 version = "0.10"
 
 [dependencies.ecdsa]
-version = "0.17.0-rc.17"
+version = "0.16.9"
 features = [
     "hazmat",
-    "algorithm",
 ]
 optional = true
 default-features = false
@@ -141,7 +142,19 @@ optional = true
 default-features = false
 
 [dependencies.p256]
-version = "0.14.0-rc.9"
+version = "0.13.2"
+features = ["ecdsa"]
+optional = true
+default-features = false
+
+[dependencies.p384]
+version = "0.13.1"
+features = ["ecdsa"]
+optional = true
+default-features = false
+
+[dependencies.p521]
+version = "0.13.3"
 features = ["ecdsa"]
 optional = true
 default-features = false

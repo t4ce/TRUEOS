@@ -34,8 +34,9 @@ impl<'a> AuthSigMsg<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuthType {
     Password,
     PubKey,
+    KeyboardInteractive,
 }

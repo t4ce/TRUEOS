@@ -34,6 +34,8 @@ pub const SSH_NAME_RSA_SHA256: &str = "rsa-sha2-256";
 pub const SSH_NAME_RSA: &str = "ssh-rsa";
 /// [RFC5656](https://tools.ietf.org/html/rfc5656).
 pub const SSH_NAME_ECDSA256: &str = "ecdsa-sha2-nistp256";
+pub const SSH_NAME_ECDSA384: &str = "ecdsa-sha2-nistp384";
+pub const SSH_NAME_ECDSA521: &str = "ecdsa-sha2-nistp521";
 
 /// [RFC4344](https://tools.ietf.org/html/rfc4344)
 pub const SSH_NAME_AES256_CTR: &str = "aes256-ctr";

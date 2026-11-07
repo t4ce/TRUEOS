@@ -408,7 +408,7 @@ impl<CS: CliServ> Conn<CS> {
         r
     }
 
-    fn is_first_kex(&self) -> bool {
+    pub(crate) fn is_first_kex(&self) -> bool {
         self.sess_id.is_none()
     }
 
@@ -491,8 +491,9 @@ impl<CS: CliServ> Conn<CS> {
                 let sess_id = self.sess_id.as_ref().trap()?;
                 disp.event = serv.auth.request(sess_id, s, p)?;
             }
-            Packet::UserauthInfoResponse(_) => {
+            Packet::UserauthInfoResponse(response) => {
                 if CS::is_client() { return error::SSHProtoUnsupported.fail(); }
+                if response.responses.len() != 1 { return error::SSHProto.fail(); }
                 disp.event = self.mut_server()?.auth.interactive_response()?;
             }
             Packet::UserauthFailure(p) => {
@@ -500,7 +501,7 @@ impl<CS: CliServ> Conn<CS> {
                     debug!("Received UserauthFailure as a server");
                     return error::SSHProto.fail();
                 };
-                disp.event = cli.auth.failure(&p, &mut self.parse_ctx)?;
+                disp.event = cli.auth.failure(&p, &mut self.parse_ctx, s)?;
             }
             Packet::UserauthSuccess(_) => {
                 let Some(cli) = self.cliserv.try_mut_client() else {
@@ -658,7 +659,11 @@ impl Conn<Server> {
         payload: &'f [u8],
     ) -> Result<TextString<'f>> {
         let packet = self.packet(payload)?;
-        if let Packet::UserauthInfoResponse(p) = packet { return Ok(p.response); }
+        if let Packet::UserauthInfoResponse(p) = packet {
+            // Incoming cry policy still asks for exactly one authenticator.
+            if p.responses.len() != 1 { return Err(Error::SSHProto); }
+            return Ok(p.responses[0]);
+        }
         if let Packet::UserauthRequest(UserauthRequest {
             method: AuthMethod::Password(m),
             ..

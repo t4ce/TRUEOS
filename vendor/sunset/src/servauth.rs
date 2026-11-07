@@ -108,9 +108,11 @@ impl ServAuth {
             AuthMethod::KeyboardInteractive(_) if self.method_interactive => {
                 self.interactive_pending = true;
                 self.tried_first = true;
+                let mut prompts = packets::KbiList::new();
+                prompts.push(packets::KeyboardPrompt { prompt: "Authenticator code: ".into(), echo: false }).map_err(|_| Error::bug())?;
                 s.send(Userauth60::InfoRequest(packets::UserauthInfoRequest {
-                    name: "TrueOS", instruction: "Enter your cry authenticator code.",
-                    language: "", count: 1, prompt: "Authenticator code: ", echo: false,
+                    name: "TrueOS".into(), instruction: "Enter your cry authenticator code.".into(),
+                    language: "".into(), prompts,
                 }))?;
                 return Ok(DispatchEvent::None);
             }

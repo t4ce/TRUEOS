@@ -24,6 +24,7 @@ enum AuthState {
     // other request types
     Request,
     RequestKey { key: SignKey },
+    Interactive { pending: Option<usize> },
     Idle,
 }
 
@@ -39,6 +40,11 @@ pub(crate) struct CliAuth {
 
     /// Set to false if hook.next_authkey() returns None.
     try_pubkey: bool,
+    try_interactive: bool,
+    allow_pubkey: bool,
+    allow_password: bool,
+    allow_interactive: bool,
+    last_method: Option<AuthType>,
 
     /// Set once we are OKed from MSG_EXT_INFO
     allow_rsa_sha2: bool,
@@ -51,6 +57,11 @@ impl Default for CliAuth {
             username: String::new(),
             try_password: true,
             try_pubkey: true,
+            try_interactive: true,
+            allow_pubkey: false,
+            allow_password: false,
+            allow_interactive: false,
+            last_method: None,
             allow_rsa_sha2: false,
         }
     }
@@ -94,7 +105,14 @@ impl CliAuth {
         s: &mut TrafSend,
     ) -> Result<DispatchEvent> {
         match auth60 {
-            Userauth60::InfoRequest(_) => error::SSHProtoUnsupported.fail(),
+            Userauth60::InfoRequest(request) => {
+                let AuthState::Interactive { pending } = &mut self.state else {
+                    return error::SSHProto.fail();
+                };
+                if pending.is_some() { return error::SSHProto.fail(); }
+                *pending = Some(request.prompts.len());
+                Ok(DispatchEvent::CliEvent(CliEventId::KeyboardInteractive))
+            }
             Userauth60::PkOk(pkok) => self.auth_pkok(pkok, sess_id, parse_ctx, s),
             Userauth60::PwChangeReq(_req) => {
                 self.change_password()?;
@@ -140,12 +158,13 @@ impl CliAuth {
         let p = req_packet_pubkey(&self.username, key, Some(&sig), true)?;
 
         s.send(p)?;
+        self.last_method = Some(AuthType::PubKey);
         parse_ctx.cli_auth_type = None;
         Ok(DispatchEvent::None)
     }
 
     pub fn resume_agentsign(
-        &self,
+        &mut self,
         sig: Option<&OwnedSig>,
         parse_ctx: &mut ParseContext,
         s: &mut TrafSend,
@@ -163,6 +182,7 @@ impl CliAuth {
 
         let p = req_packet_pubkey(&self.username, key, Some(sig), true)?;
         s.send(p)?;
+        self.last_method = Some(AuthType::PubKey);
         Ok(DispatchEvent::None)
     }
 
@@ -177,19 +197,45 @@ impl CliAuth {
         &mut self,
         failure: &packets::UserauthFailure,
         parse_ctx: &mut ParseContext,
+        s: &mut TrafSend,
     ) -> Result<DispatchEvent> {
         parse_ctx.cli_auth_type = None;
-        // TODO: look at existing self.state, handle the failure.
+        if failure.partial {
+            // A completed factor advances to the server's remaining methods;
+            // it never produces Authenticated or reoffers that factor.
+            match self.last_method {
+                Some(AuthType::PubKey) => self.try_pubkey = false,
+                Some(AuthType::Password) => self.try_password = false,
+                Some(AuthType::KeyboardInteractive) => self.try_interactive = false,
+                None => return error::SSHProto.fail(),
+            }
+        }
         self.state = AuthState::Idle;
+        self.allow_pubkey = failure.methods.has_algo(SSH_AUTHMETHOD_PUBLICKEY)?;
+        self.allow_password = failure.methods.has_algo(SSH_AUTHMETHOD_PASSWORD)?;
+        self.allow_interactive = failure.methods.has_algo("keyboard-interactive")?;
+        self.next_method(s, parse_ctx)
+    }
 
-        if self.try_pubkey && failure.methods.has_algo(SSH_AUTHMETHOD_PUBLICKEY)? {
+    fn next_method(&mut self, s: &mut TrafSend, ctx: &mut ParseContext) -> Result<DispatchEvent> {
+        if self.try_pubkey && self.allow_pubkey {
             return Ok(DispatchEvent::CliEvent(event::CliEventId::Pubkey));
         }
-
-        if matches!(self.state, AuthState::Idle)
-            && self.try_password
-            && failure.methods.has_algo(SSH_AUTHMETHOD_PASSWORD)?
-        {
+        if self.try_interactive && self.allow_interactive {
+            self.try_interactive = false;
+            self.last_method = Some(AuthType::KeyboardInteractive);
+            self.state = AuthState::Interactive { pending: None };
+            ctx.cli_auth_type = Some(AuthType::KeyboardInteractive);
+            s.send(packets::UserauthRequest {
+                username: self.username.as_str().into(),
+                service: SSH_SERVICE_CONNECTION,
+                method: AuthMethod::KeyboardInteractive(packets::MethodKeyboardInteractive {
+                    language: "", submethods: "",
+                }),
+            })?;
+            return Ok(DispatchEvent::None);
+        }
+        if self.try_password && self.allow_password {
             return Ok(DispatchEvent::CliEvent(event::CliEventId::Password));
         }
 
@@ -201,17 +247,18 @@ impl CliAuth {
         s: &mut TrafSend,
         password: Option<&str>,
         parse_ctx: &mut ParseContext,
-    ) -> Result<()> {
+    ) -> Result<DispatchEvent> {
         let Some(password) = password else {
             self.try_password = false;
-            return error::NoAuthMethods.fail();
+            return self.next_method(s, parse_ctx);
         };
 
         let p = req_packet_password(&self.username, password);
         s.send(p)?;
         parse_ctx.cli_auth_type = Some(AuthType::Password);
         self.state = AuthState::Request;
-        Ok(())
+        self.last_method = Some(AuthType::Password);
+        Ok(DispatchEvent::None)
     }
 
     // May return another event to try, such as password auth
@@ -223,10 +270,7 @@ impl CliAuth {
     ) -> Result<DispatchEvent> {
         let Some(key) = key else {
             self.try_pubkey = false;
-            if self.try_password {
-                return Ok(DispatchEvent::CliEvent(CliEventId::Password));
-            }
-            return error::NoAuthMethods.fail();
+            return self.next_method(s, parse_ctx);
         };
 
         #[cfg(feature = "rsa")]
@@ -245,7 +289,22 @@ impl CliAuth {
         parse_ctx.cli_auth_type = Some(AuthType::PubKey);
         trace!("authtype {:?}", parse_ctx.cli_auth_type);
         self.state = AuthState::RequestKey { key };
+        self.last_method = None; // An unsigned probe cannot complete a factor.
         Ok(DispatchEvent::None)
+    }
+
+    pub fn resume_interactive(&mut self, s: &mut TrafSend, answers: &[&str]) -> Result<()> {
+        let AuthState::Interactive { pending } = &mut self.state else {
+            return error::BadUsage.fail();
+        };
+        if *pending != Some(answers.len()) { return error::BadUsage.fail(); }
+        let mut responses = packets::KbiList::new();
+        for answer in answers {
+            responses.push((*answer).into()).map_err(|_| Error::BadUsage)?;
+        }
+        s.send(packets::UserauthInfoResponse { responses })?;
+        *pending = None;
+        Ok(())
     }
 
     pub fn fetch_agentsign_key(&self) -> Result<&SignKey> {
