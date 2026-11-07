@@ -186,6 +186,7 @@ enum Request {
         code: Zeroizing<String>,
     },
     Login {
+        frontend: u64,
         scope: u8,
         code: Zeroizing<String>,
     },
@@ -258,9 +259,15 @@ impl Request {
                 }
             },
             Self::Enrollment => enrollment(),
-            Self::Login { scope, code } => cry::login_for_scope(scope, &code)
-                .await
-                .map(Outcome::message),
+            Self::Login { frontend, scope, code } => {
+                let message = cry::login_for_scope(scope, &code).await?;
+                let account = crypt::authenticated_access_account(scope)
+                    .ok_or("Sign-in identity was not committed.")?;
+                if !tui::bind_authenticated_frontend(frontend, Some(account)) {
+                    return Err("The signing-in frontend closed or belongs to a guest.".into());
+                }
+                Ok(Outcome::message(message))
+            },
             Self::Unlock { username, key } => cry::unlock_account(&username, &key)
                 .await
                 .map(Outcome::message),
@@ -582,6 +589,9 @@ impl View {
                 6 => self.set_page(Page::SshKeys(crypt::ssh_authorized_keys())),
                 7 => {
                     crypt::logout(scope);
+                    if let Some(frontend) = tui::native_frontend_id(target) {
+                        tui::bind_authenticated_frontend(frontend, None);
+                    }
                     self.result = "Signed out.".into();
                 }
                 8 if self.draft.is_some() => {
@@ -686,7 +696,7 @@ impl View {
                         self.set_page(Page::Enrollment(qr));
                     }
                 } else if valid {
-                    self.submit(target, Request::Login { scope, code: value });
+                    self.submit(target, Request::Login { frontend: tui::native_frontend_id(target).unwrap_or(0), scope, code: value });
                 } else {
                     self.problem("Enter a 6-digit authenticator code.");
                     self.set_page(Page::Enrollment(qr));
@@ -694,7 +704,7 @@ impl View {
             }
             Page::Field(Field::LoginCode) => {
                 if value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_digit()) {
-                    self.submit(target, Request::Login { scope, code: value });
+                    self.submit(target, Request::Login { frontend: tui::native_frontend_id(target).unwrap_or(0), scope, code: value });
                 } else {
                     self.problem("Enter a 6-digit authenticator code.");
                     self.set_page(Page::Field(Field::LoginCode));

@@ -505,6 +505,13 @@ impl<'g, 'a> ServPubkeyAuth<'g, 'a> {
         self.raw_username()?.to_str()
     }
 
+    /// Whether this request contains a signature already verified by Sunset.
+    /// False means only a public-key suitability probe, which cannot establish
+    /// an authenticated account identity.
+    pub fn signature_verified(&self) -> bool {
+        self.real_sig
+    }
+
     /// Retrieve the public key presented by a client.
     pub fn pubkey(&self) -> Result<PubKey<'_>> {
         self.runner.fetch_servpubkey()

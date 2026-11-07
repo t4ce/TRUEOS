@@ -65,6 +65,7 @@ struct Registry {
     revisions: Vec<(u64, u64)>,
     next_revision: u64,
     remote_frontends: Vec<(u64, remote::Output)>,
+    authenticated_frontend_accounts: Vec<(u64, trueos_crypto::AccountId)>,
     guest_frontend_accounts: Vec<(u64, Option<trueos_crypto::AccountId>)>,
     pending_launches: Vec<(u64, QueuedBlueprint)>,
     navigation_holds: Vec<u64>,
@@ -77,6 +78,7 @@ impl Registry {
             revisions: Vec::new(),
             next_revision: 0,
             remote_frontends: Vec::new(),
+            authenticated_frontend_accounts: Vec::new(),
             guest_frontend_accounts: Vec::new(),
             pending_launches: Vec::new(),
             navigation_holds: Vec::new(),
@@ -699,20 +701,39 @@ pub(super) fn native_transport_scope(target: &MatrixTarget) -> Option<u8> {
     )
 }
 
-/// Resolve the transport of this exact frontend before queuing a launch.
+/// Resolve the exact frontend before queuing a launch. A transport-wide Cry
+/// session must never lend identity to another SSH connection or UI window.
 pub(super) fn frontend_access_account(frontend: Frontend) -> Option<trueos_crypto::AccountId> {
-    let scope = {
-        let routes = ROUTES.lock();
-        if let Some((_, account)) = routes.guest_frontend_accounts.iter().find(|entry| entry.0 == frontend.id) {
-            return *account;
-        }
-        if routes.remote_frontends.iter().any(|entry| entry.0 == frontend.id) {
-            TRANSPORT_NET_TCP_SCOPE
-        } else {
-            TRANSPORT_LOCAL_SCOPE
-        }
-    };
-    crate::crypt::authenticated_access_account(scope)
+    let routes = ROUTES.lock();
+    if let Some((_, account)) = routes.guest_frontend_accounts.iter().find(|entry| entry.0 == frontend.id) {
+        return *account;
+    }
+    routes.authenticated_frontend_accounts.iter()
+        .find(|entry| entry.0 == frontend.id).map(|entry| entry.1)
+}
+
+/// Capture the frontend which owns this exact live native menu lease.
+pub(super) fn native_frontend_id(target: &MatrixTarget) -> Option<u64> {
+    let lease = crate::shell3::matrix_target_slot_lease(target);
+    ROUTES.lock().routes.iter()
+        .find(|route| route.lease == lease && route.native.is_some())?.frontend
+}
+
+/// Trusted authentication completion for one live human frontend. Guest-owned
+/// terminals retain their launch principal, including an anonymous principal.
+pub(super) fn bind_authenticated_frontend(frontend: u64, account: Option<trueos_crypto::AccountId>) -> bool {
+    let mut routes = ROUTES.lock();
+    if routes.guest_frontend_accounts.iter().any(|entry| entry.0 == frontend)
+        || !routes.routes.iter().any(|route| route.frontend == Some(frontend))
+            && !routes.remote_frontends.iter().any(|entry| entry.0 == frontend)
+    {
+        return false;
+    }
+    routes.authenticated_frontend_accounts.retain(|entry| entry.0 != frontend);
+    if let Some(account) = account {
+        routes.authenticated_frontend_accounts.push((frontend, account));
+    }
+    true
 }
 
 /// A guest-owned terminal keeps the originating VM's principal even when a
@@ -1060,6 +1081,7 @@ pub(super) fn request(frontend: Frontend, name: &str) -> Result<(), &'static str
     crate::hv::blueprint_terminal_request_reentry(vm)
 }
 pub(super) fn detach(frontend: u64) {
+    ROUTES.lock().authenticated_frontend_accounts.retain(|entry| entry.0 != frontend);
     ROUTES.lock().guest_frontend_accounts.retain(|entry| entry.0 != frontend);
     hold_navigation(frontend, false);
     ROUTES

@@ -104,6 +104,7 @@ struct Description {
     lock: u32,
 }
 struct NativeFile {
+    authorization_keys: Vec<RecordKey>,
     disk: block::DeviceHandle,
     path: String,
     kind: NodeKind,
@@ -205,6 +206,38 @@ fn error(error: block::Error) -> i32 {
         _ => FS_ERR_IO,
     }
 }
+fn authorize_keys(owner: u32, keys: &[RecordKey]) -> Result<(), i32> {
+    if owner & 0x8000_0000 == 0 { return Ok(()); }
+    let vm = owner & !0x8000_0000;
+    if vm > u8::MAX as u32 { return Err(ERR_PERMISSION); }
+    for key in keys {
+        crate::access_key_db::authorize_record(vm as u8, *key).map_err(|_| ERR_PERMISSION)?;
+    }
+    Ok(())
+}
+
+/// Read ancestors and the leaf under the same lease used for I/O/publication.
+/// Retained unlinked objects keep these identities, not a reusable pathname.
+async fn authorization_keys_under_lease(
+    disk: block::DeviceHandle,
+    params: &trueos_fs::FsParams,
+    path: &str,
+) -> Result<Vec<RecordKey>, i32> {
+    let mut keys = Vec::new();
+    for end in path.bytes().enumerate().filter_map(|(index,byte)| if byte == b'/' { Some(index) } else { None }).chain(core::iter::once(path.len())) {
+        if end == 0 { continue; }
+        match node_record_under_lease(disk, params, &path[..end]).await.map_err(error)? {
+            Some(node) => {
+                if end != path.len() && node.kind != NodeKind::Directory { return Err(FS_ERR_BAD_PARAM); }
+                if node.record_key != RecordKey::Ffa && !keys.contains(&node.record_key) { keys.push(node.record_key); }
+            }
+            None if end == path.len() => {},
+            None => return Err(FS_ERR_NOT_FOUND),
+        }
+    }
+    Ok(keys)
+}
+
 fn record_from_node(record: trueos_fs::NodeRecordRef) -> trueos_fs::FileRecordRef {
     trueos_fs::FileRecordRef {
         file_id: record.file_id,
@@ -273,11 +306,12 @@ async fn publish(
     bytes: &[u8],
 ) -> Result<trueos_fs::FileRecordRef, i32> {
     let io = KernelBlockIo::new(disk);
+    let inherited_key = if old.is_none() { inherited_record_key_under_lease(disk, params, path).await.map_err(error)? } else { RecordKey::Ffa };
     let metadata = old.map_or(
         trueos_fs::FileWriteMetadata {
             file_id: 0,
             content_type: ContentTypeId::BLOB,
-            record_key: RecordKey::Ffa,
+            record_key: inherited_key,
         },
         |r| trueos_fs::FileWriteMetadata {
             file_id: r.file_id,
@@ -317,7 +351,7 @@ async fn publish(
 
 /// Capture live objects while the caller holds RootWriteLease and before it
 /// removes their namespace entries. Nothing changes if the disk commit fails.
-pub struct PreparedOrphans(Vec<(Identity, Vec<u8>, u64)>);
+pub struct PreparedOrphans(Vec<(Identity, Vec<u8>, u64, Vec<RecordKey>)>);
 pub async fn prepare_orphans(
     disk: block::DeviceHandle,
     params: &trueos_fs::FsParams,
@@ -352,16 +386,18 @@ pub async fn prepare_orphans(
         } else {
             Vec::new()
         };
-        output.push((identity, bytes, node.entry_lba));
+        let keys = authorization_keys_under_lease(disk, params, &path).await.map_err(|_| block::Error::Io)?;
+        output.push((identity, bytes, node.entry_lba, keys));
     }
     Ok(PreparedOrphans(output))
 }
 pub fn commit_orphans(prepared: PreparedOrphans) {
     let mut state = OBJECTS.lock();
-    for (identity, bytes, revision) in prepared.0 {
+    for (identity, bytes, revision, keys) in prepared.0 {
         if let Some(file) = state.files.get_mut(&identity) {
             file.orphan = Some(bytes);
             file.revision = revision;
+            file.authorization_keys = keys;
         }
     }
 }
@@ -405,6 +441,8 @@ pub async fn open(
         }
         drop(lease);
     };
+    let authorization_keys = authorization_keys_under_lease(disk, &params, path).await?;
+    authorize_keys(owner, &authorization_keys)?;
     // An open directory is useful for metadata and sync, never byte I/O.
     let node = if path.is_empty() {
         Some(trueos_fs::NodeRecordRef {
@@ -466,6 +504,7 @@ pub async fn open(
     let mut state = OBJECTS.lock();
     let handle = state.allocate(owner)?;
     state.files.entry(identity).or_insert_with(|| NativeFile {
+        authorization_keys,
         disk,
         path: String::from(path),
         kind: node.kind,
@@ -502,25 +541,6 @@ pub async fn operate(owner: u32, command: &Command) -> Result<Vec<u8>, i32> {
     }
     if command.op == 8 {
         OBJECTS.lock().close(owner, command.object)?;
-        return Ok(Vec::new());
-    }
-    if command.op == 9 || command.op == 10 {
-        let mut state = OBJECTS.lock();
-        if command.op == 9
-            && state.descriptions.iter().any(|(id, d)| {
-                *id != description_id
-                    && d.identity == description.identity
-                    && d.lock != 0
-                    && (command.flags == 2 || d.lock == 2)
-            })
-        {
-            return Err(ERR_WOULD_BLOCK);
-        }
-        state
-            .descriptions
-            .get_mut(&description_id)
-            .ok_or(FS_ERR_NOT_FOUND)?
-            .lock = if command.op == 10 { 0 } else { command.flags };
         return Ok(Vec::new());
     }
     let (disk, kind) = {
@@ -560,6 +580,9 @@ pub async fn operate(owner: u32, command: &Command) -> Result<Vec<u8>, i32> {
             .ok_or(FS_ERR_NOT_FOUND)?;
         (file.path.clone(), file.orphan.is_some())
     };
+    let keys = if orphan { OBJECTS.lock().files.get(&description.identity).ok_or(FS_ERR_NOT_FOUND)?.authorization_keys.clone() }
+        else { authorization_keys_under_lease(disk, &params, &path).await? };
+    authorize_keys(owner, &keys)?;
     let node = if orphan || path.is_empty() {
         None
     } else {
@@ -587,6 +610,12 @@ pub async fn operate(owner: u32, command: &Command) -> Result<Vec<u8>, i32> {
         node.as_ref().map_or(0, |n| n.data_len)
     };
     match command.op {
+        9 | 10 => {
+            let mut state = OBJECTS.lock();
+            if command.op == 9 && state.descriptions.iter().any(|(id,d)| *id != description_id && d.identity == description.identity && d.lock != 0 && (command.flags == 2 || d.lock == 2)) { return Err(ERR_WOULD_BLOCK); }
+            state.descriptions.get_mut(&description_id).ok_or(FS_ERR_NOT_FOUND)?.lock = if command.op == 10 { 0 } else { command.flags };
+            Ok(Vec::new())
+        }
         5 => {
             let mut bytes = Vec::with_capacity(32);
             bytes

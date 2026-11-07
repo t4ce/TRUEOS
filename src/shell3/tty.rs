@@ -28,8 +28,11 @@ pub(super) struct Terminal {
 }
 
 impl Terminal {
-    pub fn new_ssh(shell: Shell3) -> Self {
-        Self::start(shell, true)
+    pub fn new_ssh(shell: Shell3, account: Option<trueos_crypto::AccountId>) -> Self {
+        let frontend = shell.tui_frontend;
+        let terminal = Self::start(shell, true);
+        super::tui::bind_authenticated_frontend(frontend, account);
+        terminal
     }
 
     fn start(mut shell: Shell3, controls: bool) -> Self {

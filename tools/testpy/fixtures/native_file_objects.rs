@@ -25,6 +25,7 @@ mod r{
    static DISK:Mutex<Vec<u8>>=Mutex::new(Vec::new());
    static FAIL_WRITE:core::sync::atomic::AtomicBool=core::sync::atomic::AtomicBool::new(false);
    static WRITER:core::sync::atomic::AtomicBool=core::sync::atomic::AtomicBool::new(false);
+   std::thread_local!{static THIS_WRITER:core::cell::Cell<bool>=const{core::cell::Cell::new(false)};}
    #[derive(Clone,Copy)]struct Placement{super_lba:u64,data_lba:u64,data_end_lba_exclusive:Option<u64>}
    struct KernelBlockIo;impl KernelBlockIo{fn new(_:block::DeviceHandle)->Self{Self}}
    impl trueos_fs::BlockIo for KernelBlockIo{
@@ -35,8 +36,8 @@ mod r{
    }
    fn map_engine_err(error:trueos_fs::FsError<block::Error>)->block::Error{match error{trueos_fs::FsError::Device(e)=>e,trueos_fs::FsError::InvalidParam=>block::Error::InvalidParam,_=>block::Error::Corrupted}}
    async fn placement_for_io_async(_:block::DeviceHandle)->Result<Option<Placement>,block::Error>{Ok(Some(Placement{super_lba:0,data_lba:1,data_end_lba_exclusive:Some(32768)}))}
-   async fn ensure_index_async(_:block::DeviceHandle,_:&Placement)->Result<(),block::Error>{assert!(!WRITER.load(core::sync::atomic::Ordering::SeqCst));Ok(())}
-   mod write_gate{use super::*;pub struct RootWriteLease;impl RootWriteLease{pub async fn acquire(_:block::DiscId)->Self{core::future::poll_fn(|cx|if WRITER.compare_exchange(false,true,core::sync::atomic::Ordering::SeqCst,core::sync::atomic::Ordering::SeqCst).is_ok(){core::task::Poll::Ready(Self)}else{cx.waker().wake_by_ref();core::task::Poll::Pending}).await}}impl Drop for RootWriteLease{fn drop(&mut self){WRITER.store(false,core::sync::atomic::Ordering::SeqCst);}}}
+   async fn ensure_index_async(_:block::DeviceHandle,_:&Placement)->Result<(),block::Error>{assert!(!THIS_WRITER.get(),"index construction cannot recursively hold its own root lease");Ok(())}
+   mod write_gate{use super::*;pub struct RootWriteLease;impl RootWriteLease{pub async fn acquire(_:block::DiscId)->Self{core::future::poll_fn(|cx|if WRITER.compare_exchange(false,true,core::sync::atomic::Ordering::SeqCst,core::sync::atomic::Ordering::SeqCst).is_ok(){THIS_WRITER.set(true);core::task::Poll::Ready(Self)}else{cx.waker().wake_by_ref();core::task::Poll::Pending}).await}}impl Drop for RootWriteLease{fn drop(&mut self){THIS_WRITER.set(false);WRITER.store(false,core::sync::atomic::Ordering::SeqCst);}}}
    struct IndexRef{entry_lba:u64}
    fn indexed_removal_entry(_:block::DiscId,path:&str)->Result<Option<IndexRef>,block::Error>{assert!(WRITER.load(core::sync::atomic::Ordering::SeqCst));Ok(INDEX.lock().get(path).map(|r|IndexRef{entry_lba:r.entry_lba}))}
    fn validate_indexed_file_target(_:block::DiscId,path:&str,_:bool)->Result<bool,block::Error>{assert!(WRITER.load(core::sync::atomic::Ordering::SeqCst));if path.contains('/') {return Err(block::Error::InvalidParam)}Ok(true)}

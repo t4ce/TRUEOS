@@ -330,6 +330,18 @@ pub(crate) fn setup_root_key(username: &str) -> Result<CrySetupReport, CryError>
     result
 }
 
+/// Enrollment creates a distinct identity from the generated signing key.
+/// The persisted account_id is authoritative on later unlocks, including old
+/// accounts whose stored identity is ROOT (zero).
+fn account_id_for_public_key(public_key: &[u8; 32]) -> AccountId {
+    let mut hasher = Sha256::new();
+    hasher.update(b"TRUEOS/account-id/ed25519/v1");
+    hasher.update(public_key);
+    let digest = hasher.finalize();
+    let raw = u64::from_le_bytes(digest[..8].try_into().expect("fixed SHA256 prefix"));
+    AccountId::new(raw.max(1))
+}
+
 fn setup_root_key_inner(
     state: &mut CryState,
     username: String,
@@ -370,7 +382,7 @@ fn setup_root_key_inner(
         },
         public_key,
         fingerprint,
-        account: AccountId::ROOT,
+        account: account_id_for_public_key(&public_key),
         maximum_role: MachineRole::Root,
     };
 
@@ -809,9 +821,14 @@ pub(crate) fn unlock_persisted(
 
     let opened = open_credential(username.as_str(), recovery_key, envelope)
         .map_err(CryError::Persistence)?;
-    if opened.credential.account_id != AccountId::ROOT.raw()
-        || opened.credential.role != role_raw(MachineRole::Root)
-        || !opened.credential.totp_active
+    let account = AccountId::new(opened.credential.account_id);
+    let role = match opened.credential.role {
+        0 => MachineRole::User,
+        1 => MachineRole::Administrator,
+        2 => MachineRole::Root,
+        _ => return Err(CryError::Persistence(StoreError::InvalidCredential)),
+    };
+    if !opened.credential.totp_active
         || opened.credential.last_accepted_step.is_none()
     {
         return Err(CryError::Persistence(StoreError::InvalidCredential));
@@ -849,8 +866,8 @@ pub(crate) fn unlock_persisted(
         },
         public_key,
         fingerprint,
-        account: AccountId::ROOT,
-        maximum_role: MachineRole::Root,
+        account,
+        maximum_role: role,
     };
     let mut totp_secret = [0u8; TOTP_SECRET_BYTES];
     totp_secret.copy_from_slice(opened.credential.totp_secret.as_slice());
@@ -888,8 +905,8 @@ pub(crate) fn unlock_persisted(
         username,
         key,
         fingerprint,
-        account: AccountId::ROOT,
-        role: MachineRole::Root,
+        account,
+        role,
         generation: opened.generation,
     })
 }
@@ -1150,11 +1167,18 @@ pub(crate) fn ssh_authorized_keys() -> Vec<[u8; 32]> {
     CRY_STATE.lock().ssh_public_keys.clone()
 }
 
-pub(crate) fn ssh_key_allowed(username: &str, key: &[u8; 32]) -> bool {
+/// Return only the persisted account which enrolled this exact SSH key.
+/// The SSH transport must separately verify the request's signature before
+/// binding the account to a session; a suitability probe is not authentication.
+pub(crate) fn ssh_key_account(username: &str, key: &[u8; 32]) -> Option<AccountId> {
     let state = CRY_STATE.lock();
-    state.durable.is_some()
-        && state.username.as_deref() == Some(username)
-        && state.ssh_public_keys.contains(key)
+    if state.durable.is_none()
+        || state.username.as_deref() != Some(username)
+        || !state.ssh_public_keys.contains(key)
+    {
+        return None;
+    }
+    Some(state.credential?.account)
 }
 
 /// A fresh cry code authorizes adding or revoking one client public key.

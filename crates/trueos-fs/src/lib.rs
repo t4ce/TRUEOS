@@ -1676,6 +1676,7 @@ async fn write_empty_node_entry<D: BlockIo>(
     entry_lba: u64,
     name: &str,
     kind: LogKind,
+    directory: Option<DirectoryWriteMetadata>,
 ) -> Result<u64, FsError<D::Error>> {
     debug_assert!(matches!(kind, LogKind::Directory | LogKind::DeleteTree));
     let bs = dev.block_size();
@@ -1688,14 +1689,14 @@ async fn write_empty_node_entry<D: BlockIo>(
 
     let mut hdr0 = vec![0u8; bs];
     LogHeader {
-        file_id: 0,
+        file_id: directory.map_or(0, |metadata| metadata.file_id),
         kind,
         committed: false,
         name_len: name_bytes.len() as u16,
         data_len: 0,
         integrity_tag: ZERO_INTEGRITY_TAG,
         content_type: ContentTypeId::NONE,
-        record_key: RecordKey::Ffa,
+        record_key: directory.map_or(RecordKey::Ffa, |metadata| metadata.record_key),
     }
     .encode_into_block(&mut hdr0);
     dev.write_blocks(entry_lba, &hdr0)
@@ -1713,14 +1714,14 @@ async fn write_empty_node_entry<D: BlockIo>(
 
     let mut hdr1 = vec![0u8; bs];
     LogHeader {
-        file_id: 0,
+        file_id: directory.map_or(0, |metadata| metadata.file_id),
         kind,
         committed: true,
         name_len: name_bytes.len() as u16,
         data_len: 0,
         integrity_tag: ZERO_INTEGRITY_TAG,
         content_type: ContentTypeId::NONE,
-        record_key: RecordKey::Ffa,
+        record_key: directory.map_or(RecordKey::Ffa, |metadata| metadata.record_key),
     }
     .encode_into_block(&mut hdr1);
     dev.write_blocks(entry_lba, &hdr1)
@@ -2301,10 +2302,32 @@ pub async fn create_directory<D: BlockIo>(
 /// been checked against the mounted namespace index. The caller must coordinate
 /// namespace mutations just as for streamed file writes. This does no log replay
 /// and returns the committed record so the caller can update its index in place.
+/// Directory publication metadata. Zero allocates a new root-scoped identity.
+/// A trusted metadata-only update supplies the existing directory's file ID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectoryWriteMetadata {
+    pub file_id: u64,
+    pub record_key: RecordKey,
+}
+
 pub async fn append_directory_prevalidated<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
+) -> Result<Option<NodeRecordRef>, FsError<D::Error>> {
+    append_directory_with_metadata_prevalidated(dev, params, name,
+        DirectoryWriteMetadata { file_id: 0, record_key: RecordKey::Ffa }).await
+}
+
+/// Publish a keyed directory or a metadata-only update to an existing one.
+/// The caller validates absence or the matching existing directory identity,
+/// holds its namespace write lease through commit, and updates its live index.
+/// This never rewrites descendants or file payloads.
+pub async fn append_directory_with_metadata_prevalidated<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    metadata: DirectoryWriteMetadata,
 ) -> Result<Option<NodeRecordRef>, FsError<D::Error>> {
     if !is_normalized_nonempty_path(name) {
         return Ok(None);
@@ -2312,16 +2335,16 @@ pub async fn append_directory_prevalidated<D: BlockIo>(
     let Some((sb, entry_lba, _)) = check_space_for_put(dev, params, name.len(), 0).await? else {
         return Ok(None);
     };
-    let blocks = write_empty_node_entry(dev, entry_lba, name, LogKind::Directory).await?;
+    let blocks = write_empty_node_entry(dev, entry_lba, name, LogKind::Directory, Some(metadata)).await?;
     advance_log_head(dev, params, sb, blocks).await?;
     Ok(Some(NodeRecordRef {
-        file_id: entry_lba,
+        file_id: if metadata.file_id == 0 { entry_lba } else { metadata.file_id },
         entry_lba,
         data_lba: entry_lba + blocks,
         kind: NodeKind::Directory,
         data_len: 0,
         content_type: ContentTypeId::NONE,
-        record_key: RecordKey::Ffa,
+        record_key: metadata.record_key,
     }))
 }
 
@@ -3206,7 +3229,7 @@ pub async fn delete_tree<D: BlockIo>(
     let Some((sb, entry_lba, _)) = check_space_for_put(dev, params, name.len(), 0).await? else {
         return Ok(false);
     };
-    let blocks = write_empty_node_entry(dev, entry_lba, name, LogKind::DeleteTree).await?;
+    let blocks = write_empty_node_entry(dev, entry_lba, name, LogKind::DeleteTree, None).await?;
     advance_log_head(dev, params, sb, blocks).await?;
     Ok(true)
 }
@@ -3236,7 +3259,7 @@ pub async fn delete_tree_at_record<D: BlockIo>(
     else {
         return Ok(false);
     };
-    let blocks = write_empty_node_entry(dev, entry_lba, logical_name, LogKind::DeleteTree).await?;
+    let blocks = write_empty_node_entry(dev, entry_lba, logical_name, LogKind::DeleteTree, None).await?;
     advance_log_head(dev, params, sb, blocks).await?;
     Ok(true)
 }

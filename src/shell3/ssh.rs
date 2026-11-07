@@ -49,6 +49,7 @@ pub(super) struct Session {
     auth: Option<Arc<AuthCompletion>>,
     deadline: trueos_time::Instant,
     authenticated: bool,
+    access_account: Option<trueos_crypto::AccountId>,
     shell_requested: bool,
     size: Option<(usize, usize)>,
     pub finished: bool,
@@ -74,6 +75,7 @@ impl Session {
             deadline: trueos_time::Instant::now()
                 + trueos_time::Duration::from_millis(AUTH_TIMEOUT_MS),
             authenticated: false,
+            access_account: None,
             shell_requested: false,
             size: None,
             closed: false,
@@ -87,6 +89,12 @@ impl Session {
         } else {
             self.received.extend_from_slice(bytes);
         }
+    }
+
+    /// A verified enrolled SSH key may establish an account. Development
+    /// none-auth grants terminal access with no account identity.
+    pub fn access_account(&self) -> Option<trueos_crypto::AccountId> {
+        self.authenticated.then_some(self.access_account).flatten()
     }
 
     pub fn wants_shell(&self) -> bool {
@@ -132,6 +140,7 @@ impl Session {
                     match event {
                         ServEvent::Hostkeys(h) => h.hostkeys(&[&self.host_key])?,
                         ServEvent::FirstAuth(mut h) => {
+                            self.access_account = None;
                             if super::ssh_boot::allow_none() {
                                 h.allow()?;
                             } else {
@@ -160,15 +169,20 @@ impl Session {
                             h.reject()?;
                         }
                         ServEvent::PubkeyAuth(h) => {
-                            let accepted = match h.pubkey()? {
+                            let account = match h.pubkey()? {
                                 sunset::PubKey::Ed25519(key) => {
-                                    crate::crypt::ssh_key_allowed(h.username()?, &key.key.0)
+                                    crate::crypt::ssh_key_account(h.username()?, &key.key.0)
                                 }
-                                _ => false,
+                                _ => None,
                             };
-                            if accepted {
+                            if let Some(account) = account {
+                                let verified = h.signature_verified();
                                 h.allow()?;
+                                // A public-key probe can receive PK_OK but
+                                // cannot bind an account without its signature.
+                                self.access_account = verified.then_some(account);
                             } else {
+                                self.access_account = None;
                                 h.reject()?;
                             }
                         }

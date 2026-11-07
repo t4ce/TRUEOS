@@ -63,7 +63,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--mio', type=Path, default=ROOT / 'vendor/mio-1.2.0')
     parser.add_argument('--tokio', type=Path, default=BUILDINS / 'vendor/tokio-1.54.1')
-    parser.add_argument('--full', action='store_true', help='Also exercise runtime startup with all Tokio features')
+    parser.add_argument('--full', action='store_true', help='Also exercise runtime startup with process and signal features')
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -117,7 +117,7 @@ version="0.0.0"
 edition="2024"
 [workspace]
 [features]
-full-signal-check=["tokio/full"]
+full-signal-check=["tokio/process","tokio/signal"]
 native-fd-check=[]
 [dependencies]
 mio={{path="mio",default-features=false,features=["std-compat","native-net","os-poll","os-ext","net"]}}
@@ -158,6 +158,9 @@ panic="abort"
  #[cfg(feature="full-signal-check")]
  test("full runtime starts and rejects Unix signal subscriptions explicitly",||{current().block_on(async{
   use tokio::signal::unix::{signal,SignalKind};
+  assert_eq!(tokio::process::Command::new("/bin/echo").arg("must-not-run").spawn().unwrap_err().kind(),std::io::ErrorKind::Unsupported);
+  assert_eq!(tokio::net::unix::pipe::pipe().unwrap_err().kind(),std::io::ErrorKind::Unsupported);
+  assert_eq!(tokio::net::unix::pipe::OpenOptions::new().open_sender("/must-not-touch").unwrap_err().kind(),std::io::ErrorKind::Unsupported);
   for kind in [SignalKind::interrupt(),SignalKind::child(),SignalKind::terminate(),SignalKind::window_change()] {
    assert_eq!(signal(kind).unwrap_err().kind(),std::io::ErrorKind::Unsupported);
   }
@@ -219,7 +222,8 @@ path={json.dumps(str(FIXTURES / 'std_behavior.rs'))}
         sources.append({'root': str(source_root), 'files': len(files), 'sha256': digest.hexdigest()})
     receipt = {'scope': __doc__, 'checks': checks, 'behavior_cases': counts, 'sources': sources,
                'limits': ['Socket service and native waits are simulated. No live packets, VM or rig reset.',
-                          'Ordinary host control uses real Linux TCP/filesystem/process behavior.']}
+                          'Ordinary host control uses real Linux TCP/filesystem/process behavior.',
+                          'Synthetic native process/signal fixture excludes Tokio fs; native std Metadata methods need the actual TRUEOS sysroot.']}
     (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
     print(json.dumps(counts))
     print(output / 'receipt.json')

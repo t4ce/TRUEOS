@@ -270,7 +270,7 @@ impl Worker {
                 let own_slot = shell
                     .active_matrix_lease()
                     .expect("fresh terminal owns a Matrix slot");
-                (Some(own_slot), Frontend::Terminal(Terminal::new_ssh(shell)))
+                (Some(own_slot), Frontend::Terminal(Terminal::new_ssh(shell, None)))
             };
             self.sessions.push(Owned {
                 id,

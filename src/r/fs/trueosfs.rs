@@ -1373,6 +1373,97 @@ impl From<block::Error> for CheckedWriteError {
     fn from(error: block::Error) -> Self { Self::Device(error) }
 }
 
+/// Inspect the current node while the caller holds RootWriteLease. If another
+/// operation invalidated the mounted index before lease acquisition, replay the
+/// engine namespace directly; never rebuild/checkpoint recursively under a lease.
+pub(crate) async fn node_record_under_lease(
+    disk: block::DeviceHandle,
+    params: &trueos_fs::FsParams,
+    path: &str,
+) -> Result<Option<trueos_fs::NodeRecordRef>, block::Error> {
+    match indexed_removal_entry(disk.id(), path) {
+        Ok(Some(entry)) => trueos_fs::get_node_record_by_lba(&KernelBlockIo::new(disk), params, entry.entry_lba).await.map_err(map_engine_err),
+        Ok(None) => Ok(None),
+        Err(block::Error::NotReady) => trueos_fs::lookup_node_record(&KernelBlockIo::new(disk), params, path).await.map_err(map_engine_err),
+        Err(error) => Err(error),
+    }
+}
+
+/// Resolve creation identity from the committed direct parent. The caller holds
+/// RootWriteLease and has already built and validated the mounted index.
+pub(crate) async fn inherited_record_key_under_lease(
+    disk: block::DeviceHandle,
+    params: &trueos_fs::FsParams,
+    path: &str,
+) -> Result<RecordKey, block::Error> {
+    let Some((parent, _)) = path.rsplit_once('/') else { return Ok(RecordKey::Ffa); };
+    if parent.is_empty() { return Ok(RecordKey::Ffa); }
+    let node = node_record_under_lease(disk, params, parent).await?.ok_or(block::Error::InvalidParam)?;
+    if node.kind != NodeKind::Directory { return Err(block::Error::InvalidParam); }
+    Ok(node.record_key)
+}
+
+/// Preserve existing identities. An explicit key used for a new imported file
+/// is retained; otherwise a new file inherits its parent's committed key.
+async fn record_key_for_write_under_lease(
+    disk: block::DeviceHandle,
+    params: &trueos_fs::FsParams,
+    path: &str,
+    supplied: RecordKey,
+) -> Result<RecordKey, block::Error> {
+    if let Some(node) = node_record_under_lease(disk, params, path).await? {
+        if node.kind != NodeKind::File { return Err(block::Error::InvalidParam); }
+        return Ok(node.record_key);
+    }
+    if matches!(supplied, RecordKey::Key(_)) { return Ok(supplied); }
+    inherited_record_key_under_lease(disk, params, path).await
+}
+
+/// Trusted host bootstrap: stamp only one app/container root, never descendants.
+/// Foreign keyed roots cannot be adopted or downgraded through this operation.
+/// The directory's existing file ID survives metadata-only publication.
+pub(crate) async fn stamp_directory_key_async(
+    disk: block::DeviceHandle,
+    path: &str,
+    key: RecordKey,
+) -> Result<bool, block::Error> {
+    let component = path.strip_prefix("apps/").ok_or(block::Error::InvalidParam)?;
+    if component.is_empty() || matches!(component, "common" | "." | "..") || component.contains('/')
+        || !matches!(key, RecordKey::Key(_)) || disk.parent().is_some()
+    { return Err(block::Error::InvalidParam); }
+    let _activity = crate::disc::access::Activity::begin(disk)?;
+    let Some(placement) = placement_for_io_async(disk).await? else { return Ok(false); };
+    let params = trueos_fs::FsParams { super_lba: placement.super_lba, data_lba: placement.data_lba, data_end_lba_exclusive: placement.data_end_lba_exclusive };
+    let (_lease, entry) = loop {
+        ensure_index_async(disk, &placement).await?;
+        let lease = write_gate::RootWriteLease::acquire(disk.id()).await;
+        match indexed_removal_entry(disk.id(), path) {
+            Ok(entry) => break (lease,entry),
+            Err(block::Error::NotReady) => drop(lease),
+            Err(error) => return Err(error),
+        }
+    };
+    let existing = match entry {
+        Some(entry) => Some(trueos_fs::get_node_record_by_lba(&KernelBlockIo::new(disk), &params, entry.entry_lba)
+            .await.map_err(map_engine_err)?.ok_or(block::Error::Corrupted)?),
+        None => None,
+    };
+    if let Some(node) = existing {
+        if node.kind != NodeKind::Directory { return Err(block::Error::InvalidParam); }
+        if node.record_key == key { return Ok(true); }
+        if node.record_key != RecordKey::Ffa { return Err(block::Error::NotSupported); }
+    } else if !validate_indexed_directory_target(disk.id(), path).map_err(|error| match error {
+        CreateDirectoryError::Device(error) => error, _ => block::Error::InvalidParam,
+    })? { return Err(block::Error::NotReady); }
+    let metadata = trueos_fs::DirectoryWriteMetadata { file_id: existing.map_or(0, |node| node.file_id), record_key: key };
+    let Some(record) = trueos_fs::append_directory_with_metadata_prevalidated(&KernelBlockIo::new(disk), &params, path, metadata)
+        .await.map_err(map_engine_err)? else { return Ok(false); };
+    bump_root_cache_gen(disk.id());
+    if !update_root_index_node(disk.id(), path, record) { invalidate_root_index(disk.id()); }
+    super::file_watch::changed(disk.id(), path);
+    Ok(true)
+}
+
 /// Conditional complete-file write. Check the current destination and preserve
 /// its identity and access key while holding the same lease as publication.
 pub async fn file_in_typed_checked_async(
@@ -1493,11 +1584,12 @@ async fn file_in_checked_with_type_policy_async(
             return Err(CheckedWriteError::Conflict);
         }
     }
+    let inherited_key = if existing.is_none() { inherited_record_key_under_lease(disk, &params, name).await? } else { RecordKey::Ffa };
     let metadata = existing.as_ref().map_or(
         trueos_fs::FileWriteMetadata {
             file_id: 0,
             content_type: new_content_type,
-            record_key: RecordKey::Ffa,
+            record_key: inherited_key,
         },
         |record| trueos_fs::FileWriteMetadata {
             file_id: record.file_id,
@@ -1568,6 +1660,7 @@ async fn file_in_with_metadata_async(
     let existing_id = if indexed {
         lookup_file_record_async(disk, name).await?.map_or(0, |record| record.file_id)
     } else { 0 };
+    let record_key = record_key_for_write_under_lease(disk, &params, name, record_key).await?;
     let begun = if indexed {
         trueos_fs::begin_write_file_stream_prevalidated(
             &io,
@@ -1756,6 +1849,7 @@ pub(crate) async fn file_write_begin_with_metadata_async(
     let existing_id = if indexed {
         lookup_file_record_async(disk, name).await?.map_or(0, |record| record.file_id)
     } else { 0 };
+    let record_key = record_key_for_write_under_lease(disk, &params, name, record_key).await?;
     let begun = if indexed {
         trueos_fs::begin_write_file_stream_prevalidated(
             &io,
@@ -2190,45 +2284,10 @@ pub async fn create_directory_async(
     disk: block::DeviceHandle,
     path: &str,
 ) -> Result<bool, block::Error> {
-    let _activity = crate::disc::access::Activity::begin(disk)?;
-    if path.is_empty() || path == "/" {
-        return Ok(true);
-    }
-    if disk.parent().is_some() {
-        return Err(block::Error::InvalidParam);
-    }
-    let Some(placement) = placement_for_io_async(disk).await? else {
-        return Ok(false);
-    };
-    if let Some((parent, _)) = path.rsplit_once('/')
-        && !parent.is_empty()
-        && !dir_exists_async(disk, parent).await?
-    {
-        return Err(block::Error::InvalidParam);
-    }
-    match node_info_async(disk, path).await? {
-        Some(info) if info.kind == NodeKind::Directory => return Ok(true),
-        Some(_) => return Err(block::Error::InvalidParam),
-        None => {}
-    }
-    let params = trueos_fs::FsParams {
-        super_lba: placement.super_lba,
-        data_lba: placement.data_lba,
-        data_end_lba_exclusive: placement.data_end_lba_exclusive,
-    };
-    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
-    let Some(record) =
-        trueos_fs::append_directory_prevalidated(&KernelBlockIo::new(disk), &params, path)
-            .await
-            .map_err(map_engine_err)?
-    else {
-        return Ok(false);
-    };
-    bump_root_cache_gen(disk.id());
-    if !update_root_index_node(disk.id(), path, record) {
-        invalidate_root_index(disk.id());
-    }
-    Ok(true)
+    if path.is_empty() || path == "/" { return Ok(true); }
+    create_directory_with_policy_async(disk, path, false).await.map_err(|error| match error {
+        CreateDirectoryError::Device(error) => error, _ => block::Error::InvalidParam,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2249,6 +2308,14 @@ pub async fn create_directory_new_async(
     disk: block::DeviceHandle,
     path: &str,
 ) -> Result<bool, CreateDirectoryError> {
+    create_directory_with_policy_async(disk, path, true).await
+}
+
+async fn create_directory_with_policy_async(
+    disk: block::DeviceHandle,
+    path: &str,
+    exclusive: bool,
+) -> Result<bool, CreateDirectoryError> {
     let _activity = crate::disc::access::Activity::begin(disk)?;
     if path.is_empty() || path == "/" {
         return Err(CreateDirectoryError::AlreadyExists);
@@ -2261,6 +2328,15 @@ pub async fn create_directory_new_async(
         // Index construction can checkpoint, so it must precede this lease.
         ensure_index_async(disk, &placement).await?;
         let lease = write_gate::RootWriteLease::acquire(disk.id()).await;
+        if !exclusive {
+            match indexed_removal_entry(disk.id(), path) {
+                Ok(Some(entry)) if entry.kind == trueos_fs::LogKind::Directory => return Ok(true),
+                Ok(Some(_)) => return Err(CreateDirectoryError::ParentNotDirectory),
+                Ok(None) => {},
+                Err(block::Error::NotReady) => { drop(lease); continue; },
+                Err(error) => return Err(error.into()),
+            }
+        }
         if !validate_indexed_directory_target(disk.id(), path)? {
             drop(lease);
             continue;
@@ -2272,8 +2348,9 @@ pub async fn create_directory_new_async(
         data_lba: placement.data_lba,
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
-    let Some(record) = trueos_fs::append_directory_prevalidated(
-        &KernelBlockIo::new(disk), &params, path,
+    let metadata = trueos_fs::DirectoryWriteMetadata { file_id: 0, record_key: inherited_record_key_under_lease(disk, &params, path).await? };
+    let Some(record) = trueos_fs::append_directory_with_metadata_prevalidated(
+        &KernelBlockIo::new(disk), &params, path, metadata,
     ).await.map_err(map_engine_err)? else { return Ok(false); };
     bump_root_cache_gen(disk.id());
     if !update_root_index_node(disk.id(), path, record) {
@@ -3665,7 +3742,7 @@ pub async fn file_append_async(
             };
             (existing, record.record_key)
         }
-        None => (Vec::new(), RecordKey::Ffa),
+        None => (Vec::new(), inherited_record_key_under_lease(disk, &params, name).await?),
     };
     bytes.extend_from_slice(append_bytes);
 

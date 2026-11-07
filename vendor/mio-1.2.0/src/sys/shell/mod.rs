@@ -158,5 +158,4 @@ mod sourcefd;
 #[cfg(all(all(any(target_os = "trueos", target_os = "zkvm"), feature = "native-net"), feature = "std-compat", unix, feature = "os-ext"))]
 pub use self::sourcefd::SourceFd;
 #[cfg(all(all(any(target_os = "trueos", target_os = "zkvm"), feature = "native-net"), feature = "std-compat", unix, feature = "os-ext"))]
-#[path = "../unix/pipe.rs"]
 pub mod pipe;

@@ -6,20 +6,88 @@
 //! deliberately no guest ABI for choosing an account or changing this database.
 
 use alloc::vec::Vec;
+use alloc::string::String;
 use spin::Mutex;
 use trueos_crypto::AccountId;
 use trueos_fs::{
     RecordKey,
-    access::{AccessDenied, AccessKeyDb, AppId, ContainerId},
+    access::{AccessDenied, AccessKeyDb, AppId, ContainerId, ContainerPolicy, GrantScope},
 };
 
 static ACCESS_KEY_DB: Mutex<AccessKeyDb> = Mutex::new(AccessKeyDb::new());
+static WORKSPACE_PREPARE: embassy_sync::mutex::Mutex<crate::wait::EmbassySpinRawMutex, ()> =
+    embassy_sync::mutex::Mutex::new(());
 const MAX_WARNINGS_PER_VM: usize = 32;
 /// Reserved shared configuration image beside Cry's `users/<name>` profiles.
 /// AccessKeyDB belongs in that Redb image, separately from volatile `app.db`.
 /// Storage and account-profile migration are intentionally not activated yet.
 #[allow(dead_code)]
 pub(crate) const CONFIGURATION_DB_PATH: &str = "users/configuration.redb";
+
+/// FFA is the public/default namespace. A keyed record requires the captured
+/// launch account's grant; a different frontend's current login is irrelevant.
+pub(crate) fn authorize_record(vm_id: u8, key: RecordKey) -> Result<(), AccessDenied> {
+    if key == RecordKey::Ffa { return Ok(()); }
+    let subject = principal(vm_id).ok_or(AccessDenied::MissingIdentity)?;
+    ACCESS_KEY_DB.lock().check_file(subject.account, &subject.container, key)
+}
+
+/// Trusted host provisioning, before Codex executes. Persist ownership before
+/// granting access; a failed write never manufactures a boot-local permission.
+pub(crate) async fn prepare_owned_workspace(
+    archive: &str,
+    workspace: &str,
+    account: Option<AccountId>,
+) -> Result<RecordKey, crate::r::io::kfs::FsError> {
+    use crate::r::io::kfs::FsError;
+    use crate::r::fs::trueosfs as fs;
+    use sha2::{Digest, Sha256};
+    let account = account.ok_or(FsError::PermissionDenied)?;
+    let container = container_for_workspace(archive, workspace).ok_or(FsError::BadPath)?;
+    let _prepare = WORKSPACE_PREPARE.lock().await;
+    let disk = fs::primary_root_handle().ok_or(FsError::NoRoot)?;
+    let image = fs::file_out_async(disk, CONFIGURATION_DB_PATH).await
+        .map_err(|_| FsError::Io)?;
+    let mut handle = [0u8; 32];
+    crate::crypt::fill_access_key_handle(&mut handle).map_err(|_| FsError::Io)?;
+    let candidate = crate::access_key_store::software_key(handle).map_err(|_| FsError::Io)?;
+    let update = crate::access_key_store::ensure_workspace(
+        image.as_deref().unwrap_or_default(), workspace, account, candidate,
+    ).map_err(|error| match error {
+        crate::access_key_store::StoreError::ForeignOwner => FsError::PermissionDenied,
+        _ => FsError::Io,
+    })?;
+    if let Some(next) = update.image {
+        if !fs::dir_create_all_async(disk, "users").await.map_err(|_| FsError::Io)? {
+            return Err(FsError::NoSpace);
+        }
+        let digest = image.as_ref().map(|bytes| <[u8;32]>::from(Sha256::digest(bytes)));
+        fs::file_in_typed_checked_async(
+            disk, CONFIGURATION_DB_PATH, &next, fs::ContentTypeId::BLOB,
+            image.is_none(), digest, false,
+        ).await.map_err(|_| FsError::Io)?.then_some(()).ok_or(FsError::NoSpace)?;
+        let saved = fs::file_out_async(disk, CONFIGURATION_DB_PATH).await.map_err(|_| FsError::Io)?;
+        if saved.as_deref() != Some(next.as_slice()) { return Err(FsError::Io); }
+    }
+    let key = update.record.key;
+    if !fs::dir_create_all_async(disk, workspace).await.map_err(|_| FsError::Io)?
+        || !fs::stamp_directory_key_async(disk, workspace, key).await.map_err(|_| FsError::PermissionDenied)? {
+        return Err(FsError::NoSpace);
+    }
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let mut database = ACCESS_KEY_DB.lock();
+        match database.register_container(container.clone(), ContainerPolicy::Private { owner: account }) {
+            Ok(()) | Err(trueos_fs::access::PolicyError::ContainerAlreadyRegistered) => {}
+            Err(_) => return Err(FsError::PermissionDenied),
+        }
+        database.add_member(&container, account).map_err(|_| FsError::PermissionDenied)?;
+        database.register_key(key);
+        database.grant(account, GrantScope::App(container.app().clone()), key)
+            .map_err(|_| FsError::PermissionDenied)?;
+        Ok(())
+    })?;
+    Ok(key)
+}
 
 #[derive(Clone)]
 struct Principal {
