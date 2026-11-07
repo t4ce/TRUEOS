@@ -72,14 +72,13 @@ mod runtime;
 mod shell3;
 mod smp;
 mod spirit;
-mod std_abi_shim;
+mod native_abi;
 mod surfer;
 mod turbo;
 #[allow(non_snake_case)]
 mod tyche;
 mod uart1_com1;
 mod ui4;
-mod unix_abi_shim;
 mod unix_compat;
 mod update_bundle;
 #[path = "usb3/mod.rs"]

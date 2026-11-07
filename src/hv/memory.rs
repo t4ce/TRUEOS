@@ -861,20 +861,6 @@ fn patch_guest_hull_rw_dynamic_state(vm_id: u8, arena_virt: usize, guest_start: 
             patch_guest_hull_rw_u8(arena_virt, guest_start, bytes, ready_addr, ready);
         }
     }
-    if let Some((guest_addr, len)) = crate::std_abi_shim::blueprint_process_state_span(vm_id) {
-        hvlogf(format_args!(
-            "hv: vm{} reporting: hull rw shared blueprint-process-state guest=0x{:016X} bytes={}",
-            vm_id, guest_addr, len
-        ));
-        // The state slot shares the host's backing, but its publication byte
-        // is in Hull-private BSS. A fresh template must observe the canonical
-        // initialized slot instead of clearing it on the first libc call.
-        if let Some((ready_addr, ready)) =
-            crate::std_abi_shim::blueprint_process_state_ready_flag(vm_id)
-        {
-            patch_guest_hull_rw_u8(arena_virt, guest_start, bytes, ready_addr, ready);
-        }
-    }
 
     if crate::hv::blueprint_launch_active(vm_id) {
         let (guest_addr, len) = crate::hv::blueprint_launch_states_span();
@@ -943,7 +929,6 @@ fn guest_hull_rw_page_uses_kernel_backing(vm_id: u8, page_va: u64) -> bool {
     [
         crate::allocators::hv_guest_allocator_state_span(vm_id),
         crate::r::native_process::span(vm_id),
-        crate::std_abi_shim::blueprint_process_state_span(vm_id),
     ]
     .into_iter()
     .flatten()

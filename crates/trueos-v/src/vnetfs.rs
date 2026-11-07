@@ -31,6 +31,20 @@ pub fn fetch_bytes(url: &[u8]) -> Result<u32, i32> {
     Ok(op_id)
 }
 
+/// Start a finite native GET. The deadline includes service readiness, DNS,
+/// redirects and body reception; the decoded body is bounded before publishing.
+pub fn fetch_bytes_with_options(url: &[u8], timeout_ms: u32, max_bytes: usize) -> Result<u32, i32> {
+    if timeout_ms == 0 || timeout_ms > 90_000 || max_bytes == 0 || max_bytes > 512 * 1024 * 1024 {
+        return Err(-4);
+    }
+    let id = unsafe {
+        vcabi::trueos_cabi_net_fetch_bytes_start_with_options_v1(
+            url.as_ptr(), url.len(), timeout_ms, max_bytes as u64,
+        )
+    };
+    if id == 0 { Err(-4) } else { Ok(id) }
+}
+
 /// Fetch a browser subdocument with explicit, bounded Referer context.
 #[inline]
 pub fn fetch_bytes_with_referrer(url: &[u8], referrer: &[u8]) -> Result<u32, i32> {
@@ -169,6 +183,26 @@ pub fn fetch_bytes_final_url(op_id: u32) -> Result<String, i32> {
 }
 
 #[inline]
+/// Consume one completed body with a caller-owned size limit. Any failure
+/// discards the operation; short reads are errors rather than truncated success.
+pub fn fetch_bytes_read_bounded(op_id: u32, max_bytes: usize) -> Result<Vec<u8>, i32> {
+    struct Operation(u32);
+    impl Drop for Operation {
+        fn drop(&mut self) { let _ = fetch_bytes_discard(self.0); }
+    }
+    let _operation = Operation(op_id);
+    if op_id == 0 || max_bytes == 0 || max_bytes > 512 * 1024 * 1024 { return Err(-4); }
+    let len = fetch_bytes_result_len(op_id)?;
+    if len > max_bytes { return Err(-7); }
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(len).map_err(|_| -5)?;
+    bytes.resize(len, 0);
+    let got = unsafe { vcabi::trueos_cabi_net_fetch_bytes_read(op_id, bytes.as_mut_ptr(), bytes.len()) };
+    if got < 0 { return Err(got as i32); }
+    if got as usize != len { return Err(-2); }
+    Ok(bytes)
+}
+
 pub fn fetch_bytes_read(op_id: u32) -> Result<Vec<u8>, i32> {
     let len = fetch_bytes_result_len(op_id)?;
     let mut bytes = vec![0u8; len];

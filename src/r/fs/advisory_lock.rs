@@ -1,9 +1,5 @@
-//! Host-owned advisory locks for the POSIX file compatibility namespace.
-//!
-//! TRUEOSFS has no hard links and its rename compatibility operation copies
-//! then deletes. Use the canonical root/path namespace, including unpublished
-//! O_CREAT files, so two processes cannot bypass coordination by opening a
-//! file before its buffered creation has reached disk.
+//! Native host-owned root/path leases, shared by backend coordination.
+//! Compatibility file-descriptor and flock providers have been removed.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;

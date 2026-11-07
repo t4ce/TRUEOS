@@ -16,7 +16,7 @@ pub unsafe extern "C" fn trueos_cabi_shell3_session_open_v1(script_ptr: *const u
         return if status == trueos_vm::vmcall::STATUS_OK { rc as i64 } else { -3 };
     }
     let Some(vm) = crate::hv::current_guest_execution_context_vm_id() else { return -3; };
-    let Some(script) = crate::std_abi_shim::abi_read_bytes(script_ptr, script_len) else { return -1; };
+    let Some(script) = crate::native_abi::abi_read_bytes(script_ptr, script_len) else { return -1; };
     crate::shell3::sessions::open(vm, script, cols as usize, rows as usize, stdin_open != 0)
 }
 
@@ -32,7 +32,7 @@ pub unsafe extern "C" fn trueos_cabi_shell3_session_read_v1(session: u64, out_pt
         return if rc > cap as isize { -1 } else { rc };
     }
     let Some(vm) = crate::hv::current_guest_execution_context_vm_id() else { return -3; };
-    let Some(out) = crate::std_abi_shim::abi_write_bytes(out_ptr, cap) else { return -1; };
+    let Some(out) = crate::native_abi::abi_write_bytes(out_ptr, cap) else { return -1; };
     crate::shell3::sessions::read(vm, session, out)
 }
 
@@ -47,7 +47,7 @@ pub unsafe extern "C" fn trueos_cabi_shell3_session_write_v1(session: u64, bytes
         return if status == trueos_vm::vmcall::STATUS_OK { rc as isize } else { -3 };
     }
     let Some(vm) = crate::hv::current_guest_execution_context_vm_id() else { return -3; };
-    let Some(bytes) = crate::std_abi_shim::abi_read_bytes(bytes_ptr, len) else { return -1; };
+    let Some(bytes) = crate::native_abi::abi_read_bytes(bytes_ptr, len) else { return -1; };
     crate::shell3::sessions::write(vm, session, bytes)
 }
 

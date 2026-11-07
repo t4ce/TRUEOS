@@ -1,3 +1,4 @@
+# Intentional breaking removal of the five C pointer-allocation aliases; all surviving contracts unchanged.
 # Additive batched native terminal input/generation waits and filesystem scope; all prior signatures verified unchanged.
 # Additive headless bounded Odin matrix compute/capacity v1; every previous signature verified unchanged.
 # Additive hover-only UI4 outline list v1; all previous contracts verified unchanged.
@@ -44,4 +45,4 @@
 # Additive bounded subdocument fetch with host-applied Referer context; all previous signatures verified unchanged.
 # Additive non-consuming final GET URL metadata; all 369 previous signatures verified unchanged.
 # Intentional retirement of the QJS-only mouse stream; every surviving signature verified unchanged.
-834fd3277df44ef1973ecbe43cec6b353c5b5599be246bf39f5ca4643f537d9e
+d1fe4beb51e84be5dbb1228c2ed1a11187ca70e4c36d0b7cd5958f55e34081e8

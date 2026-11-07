@@ -89,10 +89,6 @@ class NativeStdTls(unittest.TestCase):
             modules += "#[path = " + json.dumps(str(ROOT / "tools/rust-std/trueos_tls_key.rs")) + "] mod native;\npub use native::{Key, LazyKey, get, set};\n}\n"
             modules += "#[path = " + json.dumps(str(storage_path)) + "] mod os;\npub use os::{Storage, value_align};\npub(crate) use os::LocalPointer;\n"
             modules += "#[path = " + json.dumps(str(ROOT / "tools/rust-std/trueos_tls_guard.rs")) + "] pub mod guard;\n}}\n"
-            shim = (ROOT / "src/std_abi_shim.rs").read_text()
-            start = shim.index("pub(crate) fn run_compat_tls_destructor_round(owner: usize)")
-            lifecycle = shim[start:shim.index("\n#[cfg(test)]", start)]
-            modules += lifecycle
             modules += "\nfn run_execution_tls_destructors(owner: usize) { r::native_tls::run_execution_destructors(owner); }\n"
 
             harness = directory / "tls_tests.rs"

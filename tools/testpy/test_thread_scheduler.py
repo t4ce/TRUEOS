@@ -56,12 +56,15 @@ edition = "2024"
 spin = "=0.10.1"
 heapless = "=0.9.1"
 tokio = { path = @TOKIO_PATH@, features = ["rt", "rt-multi-thread", "sync", "time"] }
+[patch.crates-io]
+mio = { path = @MIO_PATH@ }
 [lib]
 path = "lib.rs"
 [lints.rust]
 unexpected_cfgs = { level = "allow" }
 '''
-        (work / "Cargo.toml").write_text(manifest.replace("@TOKIO_PATH@", json.dumps(str(tokio))))
+        (work / "Cargo.toml").write_text(manifest.replace("@TOKIO_PATH@", json.dumps(str(tokio)))
+                                       .replace("@MIO_PATH@", json.dumps(str(ROOT / "vendor/mio-1.2.0"))))
         (work / "Cargo.lock").write_text((FIXTURES / "Cargo.lock").read_text())
         (work / "lib.rs").write_text(harness)
         env = dict(os.environ)

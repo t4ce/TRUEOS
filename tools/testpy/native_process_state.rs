@@ -19,10 +19,7 @@ static ARENA: AtomicBool = AtomicBool::new(true);
 static MUTATIONS: AtomicUsize = AtomicUsize::new(0);
 static SCHEDULER_REJECT: AtomicBool = AtomicBool::new(false);
 static WAIT_HITS: AtomicUsize = AtomicUsize::new(0);
-static COMPAT_INITIALIZATIONS: AtomicUsize = AtomicUsize::new(0);
 static HULL_TAG: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-static COMPAT_FLAGS: [std::sync::atomic::AtomicU8; @VM_LIMIT@] =
-    [const { std::sync::atomic::AtomicU8::new(2) }; @VM_LIMIT@];
 mod allcaps { pub mod hv { pub const VM_ID_LIMIT: usize = @VM_LIMIT@; } }
 mod allocators {
     pub fn hv_guest_allocator_state_span(vm: u8) -> Option<(u64, usize)> { Some((0x800000 + u64::from(vm) * 4096, 4096)) }
@@ -51,14 +48,7 @@ mod wls {
     pub fn current_worker_id() -> Option<usize> { None }
 }
 mod percpu { pub fn current_slot_via_cpuid() -> usize { 0 } }
-mod std_abi_shim {
-    pub(crate) fn blueprint_process_state_span(vm: u8) -> Option<(u64, usize)> { Some((0x900000 + u64::from(vm) * 4096, 4096)) }
-    pub(crate) fn blueprint_process_state_ready_flag(vm: u8) -> Option<(u64, u8)> {
-        Some((crate::COMPAT_FLAGS.get(vm as usize)? as *const _ as u64, 2))
-    }
-    pub(crate) fn run_compat_tls_destructor_round(_: usize) -> bool { false }
-    pub(crate) fn clear_compat_tls_values(_: usize) {}
-}
+
 mod wait {
     use crate::Mutex;
     use core::sync::atomic::{AtomicU32, Ordering};
@@ -135,7 +125,6 @@ fn spawn(arg: usize) -> usize { r::native_thread::spawn(64 * 1024, simple, arg a
 mod cabi {
     use core::ffi::{c_int, c_void};
     const TRUEOS_EINVAL: i32 = 22;
-    fn pthread_create_trace(_: usize, _: usize, _: i32, _: &'static str) {}
     fn copy_usize_to_abi_out(pointer: *mut usize, value: usize) -> bool {
         if pointer.is_null() { return false; }
         unsafe { pointer.write(value) }; true
@@ -182,17 +171,15 @@ fn ept_shares_only_the_selected_native_page_and_patches_its_private_ready_byte()
     assert!(memory::is_shared(vm, page)); assert!(memory::is_shared(vm, page + length as u64 - 1));
     assert!(!memory::is_shared(vm, r::native_process::span(vm + 1).unwrap().0));
     assert!(memory::is_shared(vm, 0x800000 + u64::from(vm) * 4096));
-    assert!(memory::is_shared(vm, 0x900000 + u64::from(vm) * 4096));
+    assert!(!memory::is_shared(vm, 0x900000 + u64::from(vm) * 4096));
     let (ready, value) = r::native_process::ready_flag(vm).unwrap();
-    let (compat_ready, _) = std_abi_shim::blueprint_process_state_ready_flag(vm).unwrap();
     let tag = hv::current_vm_lapic_low_tag_addr();
-    let low = ready.min(compat_ready).min(tag) - 1;
-    let high = ready.max(compat_ready).max(tag) + 2;
+    let low = ready.min(tag) - 1;
+    let high = ready.max(tag) + 2;
     assert!(high - low < 8 * 1024 * 1024);
     let mut private = vec![0; (high - low) as usize];
     memory::patch(vm, &mut private, low);
     assert_eq!(private[(ready - low) as usize], value);
-    assert_eq!(private[(compat_ready - low) as usize], 2);
     assert_eq!(private[(tag - low) as usize], vm + 1);
     assert_eq!(private[(ready - low) as usize + 1], 0, "other VM ready bytes stay private and uninitialized");
 }
@@ -204,7 +191,6 @@ fn environment_native_access_is_realm_owned_and_host_is_separate() {
     assert_eq!(r::native_process::environment_bytes(Some(3), b"HOME"), Some(b"/three".to_vec()));
     assert_eq!(r::native_process::environment_bytes(None, b"HOST"), Some(b"host-only".to_vec()));
     assert_eq!(r::native_process::environment_bytes(Some(2), b"HOST"), None);
-    assert!(r::native_process::for_vm(2).unwrap().environment.lock().environ.is_null());
     r::native_process::reset(2); r::native_process::reset(3);
 }
 #[test]
@@ -216,7 +202,6 @@ fn native_tls_and_thread_completion_force_guest_pointee_ownership() {
     assert!(MUTATIONS.load(Ordering::Relaxed) > before);
     let id = spawn(9); assert_eq!(r::native_thread::join(id), Ok(10));
     assert_eq!(r::native_process::current().threads.live_count(), 0);
-    assert_eq!(COMPAT_INITIALIZATIONS.load(Ordering::Relaxed), 0);
     assert_eq!(DOMAIN.get(), None);
     r::native_process::reset(4);
 }
@@ -290,13 +275,12 @@ fn public_native_ids_match_spawn_handles_and_self_join_is_rejected() {
     r::native_process::reset(14);
 }
 #[test]
-fn pthread_and_native_abis_share_one_native_handle_lifetime() {
+fn native_abi_consumes_each_handle_once() {
     realm(Some(15)); let mut id = 0;
     assert_eq!(unsafe { cabi::trueos_cabi_thread_spawn(0, simple, 20usize as *mut _, &mut id) }, 0);
-    let mut value = std::ptr::null_mut();
-    assert_eq!(unsafe { cabi::pthread_join(id, &mut value) }, 0); assert_eq!(value as usize, 21);
+    assert_eq!(unsafe { cabi::trueos_cabi_thread_join(id) }, 0);
     assert_eq!(unsafe { cabi::trueos_cabi_thread_join(id) }, 3);
-    let id = spawn(1); assert_eq!(unsafe { cabi::pthread_detach(id) }, 0);
+    let id = spawn(1); assert_eq!(unsafe { cabi::trueos_cabi_thread_detach(id) }, 0);
     assert_eq!(unsafe { cabi::trueos_cabi_thread_detach(id) }, 3); run_pending();
     assert_eq!(unsafe { cabi::trueos_cabi_thread_spawn(0, simple, std::ptr::null_mut(), std::ptr::null_mut()) }, 22);
     r::native_process::reset(15);

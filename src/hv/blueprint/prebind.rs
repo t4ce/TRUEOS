@@ -60,6 +60,16 @@ pub(crate) fn retired_import_error(name: &str) -> Option<&'static str> {
         );
     }
     match name {
+        "malloc_usable_size"
+        | "exit"
+        | "_exit"
+        | "trueos_cabi_alloc"
+        | "trueos_cabi_calloc"
+        | "trueos_cabi_free"
+        | "trueos_cabi_realloc"
+        | "trueos_cabi_malloc_usable_size" => Some(
+            "C allocation/process compatibility ABI removed; rebuild against native TRUEOS allocation and execution APIs",
+        ),
         "_Unwind_RaiseException"
         | "sys_alloc_words"
         | "sys_getenv"
@@ -142,7 +152,7 @@ mod tests {
         ] {
             let error = super::prebind_import_error(name)
                 .unwrap_or_else(|| panic!("{name} was accepted as a functional import"));
-            assert!(error.contains("directory-stream"), "unexpected error: {error}");
+            assert!(error.contains("Unix/POSIX"), "unexpected error: {error}");
         }
     }
 }

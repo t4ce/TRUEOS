@@ -4189,7 +4189,6 @@ fn clear_blueprint_process_context(vm_id: u8) -> BlueprintTerminalCleanup {
     }
 
     crate::r::native_process::reset(vm_id);
-    crate::std_abi_shim::reset_blueprint_process_state(vm_id);
     if let Some(slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
         let _ = slot.lock().take();
     }

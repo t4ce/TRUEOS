@@ -1103,15 +1103,10 @@ unsafe extern "C" {
         message_ptr: *const u8,
         message_len: usize,
     ) -> i32;
-    pub fn trueos_cabi_alloc(size: usize) -> *mut u8;
-    pub fn trueos_cabi_calloc(nmemb: usize, size: usize) -> *mut u8;
-    pub fn trueos_cabi_free(ptr: *mut u8);
-    pub fn trueos_cabi_realloc(ptr: *mut u8, size: usize) -> *mut u8;
     pub fn sys_alloc_aligned(size: usize, align: usize) -> *mut u8;
     /// Free a native Rust layout allocation through its address-owned heap.
     pub fn sys_dealloc(ptr: *mut u8);
     pub fn sys_rand(recv_buf: *mut u32, words: usize);
-    pub fn trueos_cabi_malloc_usable_size(ptr: *const u8) -> usize;
     pub fn trueos_cabi_heap_stats(out: *mut TrueosCabiHeapStats) -> i32;
     pub fn trueos_cabi_calculator_evaluate(
         operation: u32,
@@ -1252,6 +1247,12 @@ unsafe extern "C" {
     ) -> u32;
     pub fn trueos_cabi_net_prewarm_url_start(url_ptr: *const u8, url_len: usize) -> i32;
     pub fn trueos_cabi_net_fetch_bytes_start(url_ptr: *const u8, url_len: usize) -> u32;
+    pub fn trueos_cabi_net_fetch_bytes_start_with_options_v1(
+        url_ptr: *const u8,
+        url_len: usize,
+        timeout_ms: u32,
+        max_bytes: u64,
+    ) -> u32;
     pub fn trueos_cabi_net_fetch_bytes_start_with_referrer(
         url_ptr: *const u8,
         url_len: usize,

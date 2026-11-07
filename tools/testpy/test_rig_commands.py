@@ -60,6 +60,7 @@ exec "$@"
         shutil.copy(ROOT / 'tools/rig-build.sh', script)
         self.script(self.root / 'tools/trueos-boot/prepare.sh',
                     'echo "build $1" >> "$TEST_ROOT/trace"\n'
+                    'printf "%s\\0" "$@" > "$TEST_ROOT/prepare-args"\n'
                     'printf "%s\\0" "${CARGO_BUILD_JOBS-unset}" "${RAYON_NUM_THREADS-unset}" '
                     '"${TRUEOS_BUILD_SCOPE-unset}" > "$TEST_ROOT/build-env"\n'
                     'exit "${BUILD_STATUS:-0}"\n')
@@ -118,6 +119,22 @@ exec "$@"
         result, trace = self.workflow('rigreal')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(trace, ['build --release', 'reset'])
+
+    def test_native_only_selection_is_forwarded_before_the_single_reset(self):
+        script = self.setup_workflow()
+        result = subprocess.run(['bash', str(script), 'rigreal', '--native-only'], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / 'prepare-args').read_bytes().split(b'\0')[:-1],
+                         [b'--release', b'--native-only'])
+        self.assertEqual((self.root / 'trace').read_text().splitlines(), ['build --release', 'reset'])
+
+    def test_unknown_selection_stops_before_build_or_reset(self):
+        script = self.setup_workflow()
+        result = subprocess.run(['bash', str(script), 'rigreal', '--native-onyl'], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / 'trace').exists())
 
     def test_failed_build_does_not_touch_server_or_reset(self):
         result, trace = self.workflow('rig', BUILD_STATUS='1')
@@ -202,19 +219,39 @@ fi
 echo buildins >> "$TEST_ROOT/trace"
 test -f "$TEST_ROOT/api-ready"
 test -f "$TEST_ROOT/Cargo.lock"
+if [[ ${TEST_NATIVE_ONLY:-0} = 1 ]]; then
+    test "$TRUEOS_BUILDINS_NATIVE_ONLY" = 1
+    test "${!#}" = --native-only
+    mkdir -p "$TRUEOS_BUILDINS_DIR"
+    echo '{"buildins":["paper"]}' > "$TRUEOS_BUILDINS_DIR/buildins.json"
+    echo '{"native_only":true}' > "$TRUEOS_BUILDINS_DIR/ready.json"
+else
+    test "$TRUEOS_BUILDINS_NATIVE_ONLY" = 0
+fi
 exit "${BUILDINS_STATUS:-0}"
 ''')
         self.script(self.bin / 'cargo', '''
+if [[ ${TEST_NATIVE_ONLY:-0} = 1 ]]; then
+    test "$TRUEOS_BUILDINS_DIR" = "${CARGO_TARGET_DIR%/kernel}/buildins/$TEST_APP_PROFILE"
+    case "$CARGO_TARGET_DIR" in "$TEST_ROOT"/tgt/native-only.*/kernel) ;; *) exit 98 ;; esac
+    printf '%s\\n' "$CARGO_TARGET_DIR" >> "$TEST_ROOT/native-targets"
+    if [[ $1 = rustc ]]; then
+        test "${!#}" = "link-arg=-Map=${CARGO_TARGET_DIR%/kernel}/kernel.map"
+        echo link-map > "${CARGO_TARGET_DIR%/kernel}/kernel.map"
+    fi
+else
 test "$TRUEOS_BUILDINS_DIR" = "$TEST_ROOT/tgt/buildins/$TEST_APP_PROFILE"
+fi
 echo "cargo $*" >> "$TEST_ROOT/trace"
 if [[ $1 == generate-lockfile ]]; then
     if [[ ${LOCK_STATUS:-0} != 0 ]]; then exit "$LOCK_STATUS"; fi
     echo 'generated lock' > "$TEST_ROOT/Cargo.lock"
     exit 0
 fi
-mkdir -p "$TEST_ROOT/tgt/boot/x86_64-unknown-uefi/release" "$TEST_ROOT/tgt/x86_64-unknown-trueos/$TEST_KERNEL_PROFILE"
+test_kernel_target=${CARGO_TARGET_DIR:-"$TEST_ROOT/tgt"}
+mkdir -p "$TEST_ROOT/tgt/boot/x86_64-unknown-uefi/release" "$test_kernel_target/x86_64-unknown-trueos/$TEST_KERNEL_PROFILE"
 echo loader > "$TEST_ROOT/tgt/boot/x86_64-unknown-uefi/release/BOOTX64.efi"
-echo kernel > "$TEST_ROOT/tgt/x86_64-unknown-trueos/$TEST_KERNEL_PROFILE/TRUEOS"
+echo kernel > "$test_kernel_target/x86_64-unknown-trueos/$TEST_KERNEL_PROFILE/TRUEOS"
 ''')
         self.script(self.bin / 'rustc', '''
 test "$*" = "--print sysroot"
@@ -223,7 +260,8 @@ echo "$TEST_ROOT/test sysroot"
         self.script(self.root / 'test sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-objcopy', '''
 test "$LD_LIBRARY_PATH" = "$TEST_ROOT/test sysroot/lib:inherited-libraries"
 test "$1" = --strip-debug
-test "$2" = "tgt/x86_64-unknown-trueos/$TEST_KERNEL_PROFILE/TRUEOS"
+test_kernel_target=${CARGO_TARGET_DIR:-tgt}
+test "$2" = "$test_kernel_target/x86_64-unknown-trueos/$TEST_KERNEL_PROFILE/TRUEOS"
 test "$(cat "$2")" = kernel
 echo strip-debug >> "$TEST_ROOT/trace"
 if [[ ${OBJCOPY_STATUS:-0} != 0 ]]; then exit "$OBJCOPY_STATUS"; fi
@@ -231,6 +269,25 @@ echo runtime > "$3"
 ''')
         self.env['LD_LIBRARY_PATH'] = 'inherited-libraries'
         return script
+
+    def test_native_preparation_uses_fresh_targets_and_records_the_selected_generation(self):
+        script = self.prepare_fixture('release')
+        self.env['TEST_NATIVE_ONLY'] = '1'
+        normal = self.root / 'tgt/x86_64-unknown-trueos/release/TRUEOS'
+        normal.parent.mkdir(parents=True)
+        normal.write_text('previous full kernel')
+        roots = []
+        for _ in range(2):
+            result = subprocess.run(['bash', str(script), '--release', '--native-only'], env=self.env,
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            generation = (self.root / 'tgt/pxe-current').resolve()
+            roots.append((generation / 'native-only-build-root').read_text().strip())
+            self.assertEqual((generation / 'buildins.json').read_text().strip(), '{"buildins":["paper"]}')
+            self.assertEqual((generation / 'TRUEOS.elf').read_text(), 'runtime\n')
+            self.assertEqual((Path(roots[-1]) / 'kernel.map').read_text(), 'link-map\n')
+            self.assertEqual(normal.read_text(), 'previous full kernel')
+        self.assertNotEqual(roots[0], roots[1])
 
     def test_clean_release_creates_kernel_lock_before_building_apps(self):
         script = self.prepare_fixture('release')

@@ -39,6 +39,32 @@ pub struct Metadata {
     pub len: u64,
 }
 
+/// Native record identity and revision, independent of pathname or wall-clock time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MetadataV2 {
+    pub kind: NodeKind,
+    pub len: u64,
+    /// Stable record identity within `root_id`, including across writes and renames.
+    pub file_id: u64,
+    pub root_id: u32,
+    /// Committed record revision; this is not a timestamp.
+    pub revision: u64,
+}
+
+impl MetadataV2 {
+    pub const fn is_file(self) -> bool {
+        matches!(self.kind, NodeKind::File)
+    }
+
+    pub const fn is_dir(self) -> bool {
+        matches!(self.kind, NodeKind::Directory)
+    }
+
+    pub const fn len(self) -> u64 {
+        self.len
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirEntry {
     pub name: String,
@@ -644,6 +670,41 @@ pub async fn metadata(path: &[u8]) -> Result<Metadata, i32> {
     Ok(Metadata {
         kind,
         len: u64::from_le_bytes(result[4..].try_into().map_err(|_| ERR_IO)?),
+    })
+}
+
+/// Read native record metadata, including its durable identity and revision.
+pub async fn metadata_v2(path: &[u8]) -> Result<MetadataV2, i32> {
+    let operation = Operation::from_start(unsafe {
+        vcabi::trueos_cabi_async_fs_metadata_start_v2(path.as_ptr(), path.len())
+    })?;
+    operation.ready().await?;
+
+    let len = vcabi::trueos_cabi_async_fs_result_len(operation.id);
+    if len < 0 {
+        return Err(len as i32);
+    }
+    if len != 32 {
+        return Err(ERR_IO);
+    }
+    let mut result = [0u8; 32];
+    let got = unsafe {
+        vcabi::trueos_cabi_async_fs_result_read(operation.id, 0, result.as_mut_ptr(), result.len())
+    };
+    if got != result.len() as isize {
+        return Err(if got < 0 { got as i32 } else { ERR_IO });
+    }
+    let kind = match u32::from_le_bytes(result[..4].try_into().map_err(|_| ERR_IO)?) {
+        1 => NodeKind::File,
+        2 => NodeKind::Directory,
+        _ => return Err(ERR_IO),
+    };
+    Ok(MetadataV2 {
+        kind,
+        len: u64::from_le_bytes(result[4..12].try_into().map_err(|_| ERR_IO)?),
+        file_id: u64::from_le_bytes(result[12..20].try_into().map_err(|_| ERR_IO)?),
+        root_id: u32::from_le_bytes(result[20..24].try_into().map_err(|_| ERR_IO)?),
+        revision: u64::from_le_bytes(result[24..32].try_into().map_err(|_| ERR_IO)?),
     })
 }
 

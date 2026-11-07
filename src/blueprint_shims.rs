@@ -5,18 +5,14 @@
 //! generic ELF loader depend on an application Blueprint merely for libc-like
 //! import addresses.
 
-use core::ffi::{c_char, c_int, c_long, c_void};
+use alloc::vec::Vec;
+use core::ffi::{c_char, c_double, c_int, c_long, c_void};
+use core::{ptr, slice};
 
 pub(crate) mod ctype;
 
-#[repr(C)]
-pub struct TimeSpec {
-    tv_sec: i64,
-    tv_nsec: i64,
-}
-
 pub unsafe extern "C" fn abort() -> ! {
-    unsafe { crate::std_abi_shim::sys_halt() }
+    unsafe { crate::native_abi::sys_halt() }
 }
 
 pub unsafe extern "C" fn __assert_fail(
@@ -25,11 +21,7 @@ pub unsafe extern "C" fn __assert_fail(
     _line: c_int,
     _function: *const c_char,
 ) -> ! {
-    unsafe { crate::std_abi_shim::sys_halt() }
-}
-
-pub unsafe extern "C" fn malloc_usable_size(ptr: *const c_void) -> usize {
-    unsafe { crate::std_abi_shim::trueos_cabi_malloc_usable_size(ptr.cast()) }
+    unsafe { crate::native_abi::sys_halt() }
 }
 
 pub unsafe extern "C" fn memcpy(dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
@@ -95,19 +87,185 @@ pub unsafe extern "C" fn atanh(value: f64) -> f64 {
     libm::atanh(value)
 }
 
-pub unsafe extern "C" fn clock_gettime(clock: c_int, out: *mut TimeSpec) -> c_int {
-    if out.is_null() {
-        return -1;
+pub unsafe extern "C" fn __memcpy_chk(
+    dest: *mut c_void,
+    src: *const c_void,
+    len: usize,
+    _dest_len: usize,
+) -> *mut c_void {
+    unsafe { ptr::copy_nonoverlapping(src.cast::<u8>(), dest.cast::<u8>(), len) };
+    dest
+}
+
+pub unsafe extern "C" fn __memmove_chk(
+    dest: *mut c_void,
+    src: *const c_void,
+    len: usize,
+    _dest_len: usize,
+) -> *mut c_void {
+    unsafe { ptr::copy(src.cast::<u8>(), dest.cast::<u8>(), len) };
+    dest
+}
+
+pub unsafe extern "C" fn __memset_chk(
+    dest: *mut c_void,
+    value: c_int,
+    len: usize,
+    _dest_len: usize,
+) -> *mut c_void {
+    unsafe { ptr::write_bytes(dest.cast::<u8>(), value as u8, len) };
+    dest
+}
+
+pub unsafe extern "C" fn memchr(ptr: *const c_void, value: c_int, len: usize) -> *mut c_void {
+    if ptr.is_null() {
+        return ptr::null_mut();
     }
-    if !matches!(clock, 0 | 1) {
-        return -1;
+    let bytes = unsafe { slice::from_raw_parts(ptr.cast::<u8>(), len) };
+    let needle = value as u8;
+    bytes
+        .iter()
+        .position(|byte| *byte == needle)
+        .map(|offset| unsafe { ptr.cast::<u8>().add(offset).cast_mut().cast::<c_void>() })
+        .unwrap_or(ptr::null_mut())
+}
+
+pub unsafe extern "C" fn strcmp(left: *const c_char, right: *const c_char) -> c_int {
+    unsafe { strncmp(left, right, usize::MAX) }
+}
+
+pub unsafe extern "C" fn strncmp(left: *const c_char, right: *const c_char, max: usize) -> c_int {
+    if left.is_null() || right.is_null() {
+        return if left == right { 0 } else { -1 };
     }
-    let nanos = crate::std_abi_shim::pthread_clock_nanos(clock);
-    unsafe {
-        out.write(TimeSpec {
-            tv_sec: (nanos / 1_000_000_000) as i64,
-            tv_nsec: (nanos % 1_000_000_000) as i64,
-        });
+    let mut index = 0usize;
+    while index < max {
+        let a = unsafe { *left.cast::<u8>().add(index) };
+        let b = unsafe { *right.cast::<u8>().add(index) };
+        if a != b || a == 0 || b == 0 {
+            return a as c_int - b as c_int;
+        }
+        index = index.saturating_add(1);
     }
     0
+}
+
+pub unsafe extern "C" fn strchr(text: *const c_char, needle: c_int) -> *mut c_char {
+    if text.is_null() {
+        return ptr::null_mut();
+    }
+    let needle = needle as u8;
+    let mut index = 0usize;
+    loop {
+        let byte = unsafe { *text.cast::<u8>().add(index) };
+        if byte == needle {
+            return unsafe { text.add(index).cast_mut() };
+        }
+        if byte == 0 {
+            return ptr::null_mut();
+        }
+        index = index.saturating_add(1);
+    }
+}
+
+pub unsafe extern "C" fn strrchr(text: *const c_char, needle: c_int) -> *mut c_char {
+    if text.is_null() {
+        return ptr::null_mut();
+    }
+    let needle = needle as u8;
+    let mut last = ptr::null_mut();
+    let mut index = 0usize;
+    loop {
+        let byte = unsafe { *text.cast::<u8>().add(index) };
+        if byte == needle {
+            last = unsafe { text.add(index).cast_mut() };
+        }
+        if byte == 0 {
+            return last;
+        }
+        index = index.saturating_add(1);
+    }
+}
+
+pub unsafe extern "C" fn strspn(text: *const c_char, accept: *const c_char) -> usize {
+    unsafe { str_span(text, accept, true) }
+}
+
+pub unsafe extern "C" fn strcspn(text: *const c_char, reject: *const c_char) -> usize {
+    unsafe { str_span(text, reject, false) }
+}
+
+unsafe fn str_span(text: *const c_char, set: *const c_char, accept_mode: bool) -> usize {
+    if text.is_null() || set.is_null() {
+        return 0;
+    }
+    let mut len = 0usize;
+    loop {
+        let byte = unsafe { *text.cast::<u8>().add(len) };
+        if byte == 0 {
+            return len;
+        }
+        let contains = unsafe { cstr_contains_byte(set, byte) };
+        if contains != accept_mode {
+            return len;
+        }
+        len = len.saturating_add(1);
+    }
+}
+
+unsafe fn cstr_contains_byte(text: *const c_char, needle: u8) -> bool {
+    let mut index = 0usize;
+    loop {
+        let byte = unsafe { *text.cast::<u8>().add(index) };
+        if byte == 0 {
+            return false;
+        }
+        if byte == needle {
+            return true;
+        }
+        index = index.saturating_add(1);
+    }
+}
+
+pub unsafe extern "C" fn abs(value: c_int) -> c_int {
+    value.wrapping_abs()
+}
+
+pub unsafe extern "C" fn ldexp(value: c_double, exponent: c_int) -> c_double {
+    libm::ldexp(value, exponent)
+}
+
+pub unsafe extern "C" fn qsort(
+    base: *mut c_void,
+    count: usize,
+    size: usize,
+    compar: Option<unsafe extern "C" fn(*const c_void, *const c_void) -> c_int>,
+) {
+    if base.is_null() || size == 0 || count < 2 {
+        return;
+    }
+    let Some(compare) = compar else {
+        return;
+    };
+    let mut scratch = Vec::new();
+    scratch.resize(size, 0);
+    let base = base.cast::<u8>();
+    for _ in 0..count {
+        let mut swapped = false;
+        for index in 1..count {
+            let left = unsafe { base.add((index - 1).saturating_mul(size)) };
+            let right = unsafe { base.add(index.saturating_mul(size)) };
+            if unsafe { compare(left.cast::<c_void>(), right.cast::<c_void>()) } > 0 {
+                unsafe {
+                    ptr::copy_nonoverlapping(left, scratch.as_mut_ptr(), size);
+                    ptr::copy(right, left, size);
+                    ptr::copy_nonoverlapping(scratch.as_ptr(), right, size);
+                }
+                swapped = true;
+            }
+        }
+        if !swapped {
+            break;
+        }
+    }
 }

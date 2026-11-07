@@ -177,16 +177,12 @@ fn mutate_current_state(f: impl FnOnce(&State) -> i32) -> i32 {
     crate::r::native_process::with_current(|process| f(&process.tls)).unwrap_or_else(|error| error)
 }
 
-/// Native execution owns teardown; the optional POSIX adapter only contributes
-/// values if a compatibility namespace already exists. A pure native thread
-/// never initializes those large fixed tables merely by completing.
+/// Tear down values and registered cleanups in the native execution namespace.
 pub(crate) fn run_execution_destructors(owner: usize) {
     for _ in 0..DESTRUCTOR_ROUNDS {
-        let mut ran = crate::std_abi_shim::run_compat_tls_destructor_round(owner);
-        ran |= crate::r::native_process::current().tls.run_destructor_round(owner);
+        let ran = crate::r::native_process::current().tls.run_destructor_round(owner);
         if !ran { break; }
     }
-    crate::std_abi_shim::clear_compat_tls_values(owner);
     let state = &crate::r::native_process::current().tls;
     state.run_cleanup(owner);
     state.retire_owner(owner);

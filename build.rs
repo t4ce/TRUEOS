@@ -436,6 +436,7 @@ fn manifest_names(text: &str) -> Result<Vec<String>, String> {
 fn generate_app_buildins() {
     println!("cargo:rerun-if-env-changed=TRUEOS_BUILDINS_DIR");
     println!("cargo:rerun-if-env-changed=TRUEOS_BUILDINS_SOURCE");
+    println!("cargo:rerun-if-env-changed=TRUEOS_BUILDINS_NATIVE_ONLY");
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let profile = if env::var("PROFILE").as_deref() == Ok("release") {
         "release"
@@ -448,8 +449,12 @@ fn generate_app_buildins() {
     let source = env::var_os("TRUEOS_BUILDINS_SOURCE")
         .map(PathBuf::from)
         .unwrap_or_else(|| manifest_dir.join("../TRUEOS-Buildins"));
-    let checked = std::process::Command::new("python3")
-        .arg(source.join("tools/build.py"))
+    let mut command = std::process::Command::new("python3");
+    command.arg(source.join("tools/build.py"));
+    if env::var("TRUEOS_BUILDINS_NATIVE_ONLY").as_deref() == Ok("1") {
+        command.arg("--native-only");
+    }
+    let checked = command
         .arg("--check")
         .arg("--kernel")
         .arg(&manifest_dir)

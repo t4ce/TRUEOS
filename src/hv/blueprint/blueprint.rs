@@ -426,7 +426,7 @@ fn portal_alloc_error_handler(layout: Layout) -> ! {
     // This loader ABI is a terminal guest allocation failure. All diagnostic
     // calls above have returned and released their host guards. Retire through
     // the Hull/native terminal path instead of permanently occupying a carrier.
-    unsafe { crate::std_abi_shim::sys_halt() }
+    unsafe { crate::native_abi::sys_halt() }
 }
 
 unsafe extern "C" fn portal_rust_alloc_error_handler(size: usize, align: usize) -> ! {
@@ -445,7 +445,7 @@ fn portal_core_panic_bounds_check(index: usize, len: usize) -> ! {
         "portal: generated Blueprint bounds check failed index={} len={}",
         index, len
     ));
-    unsafe { crate::std_abi_shim::sys_halt() }
+    unsafe { crate::native_abi::sys_halt() }
 }
 
 type PortalUnwindReasonCode = u32;
@@ -1147,9 +1147,6 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         "memcmp" => Some(crate::blueprint_shims::memcmp as *const () as usize),
         "strlen" => Some(crate::blueprint_shims::strlen as *const () as usize),
         "__assert_fail" => Some(crate::blueprint_shims::__assert_fail as *const () as usize),
-        "malloc_usable_size" => {
-            Some(crate::blueprint_shims::malloc_usable_size as *const () as usize)
-        }
         "lrint" => Some(crate::blueprint_shims::lrint as *const () as usize),
         "modf" => Some(crate::blueprint_shims::modf as *const () as usize),
         "sinf" => Some(trueos_math::sinf as *const () as usize),
@@ -1239,16 +1236,15 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         return None;
     }
     match name {
-        "sys_alloc_aligned" => Some(crate::std_abi_shim::sys_alloc_aligned as *const () as usize),
-        "sys_dealloc" => Some(crate::std_abi_shim::sys_dealloc as *const () as usize),
-        "sys_rand" => Some(crate::std_abi_shim::sys_rand as *const () as usize),
-        "sys_write" => Some(crate::std_abi_shim::sys_write as *const () as usize),
-        "sys_read" => Some(crate::std_abi_shim::sys_read as *const () as usize),
-        "sys_halt" => Some(crate::std_abi_shim::sys_halt as *const () as usize),
-        "exit" | "_exit" => Some(crate::std_abi_shim::exit as *const () as usize),
+        "sys_alloc_aligned" => Some(crate::native_abi::sys_alloc_aligned as *const () as usize),
+        "sys_dealloc" => Some(crate::native_abi::sys_dealloc as *const () as usize),
+        "sys_rand" => Some(crate::native_abi::sys_rand as *const () as usize),
+        "sys_write" => Some(crate::native_abi::sys_write as *const () as usize),
+        "sys_read" => Some(crate::native_abi::sys_read as *const () as usize),
+        "sys_halt" => Some(crate::native_abi::sys_halt as *const () as usize),
         "abort" => Some(crate::blueprint_shims::abort as *const () as usize),
         "trueos_cabi_dns_resolve_ipv4" => {
-            Some(crate::std_abi_shim::trueos_cabi_dns_resolve_ipv4 as *const () as usize)
+            Some(crate::native_abi::trueos_cabi_dns_resolve_ipv4 as *const () as usize)
         }
         "trueos_platform_dns_resolve_ipv4" => {
             Some(crate::r::net::vlayer::trueos_platform_dns_resolve_ipv4 as *const () as usize)
@@ -1307,7 +1303,7 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
             crate::r::blocking::trueos_service_lane_cancellation_requested as *const () as usize,
         ),
         "trueos_time_monotonic_nanos" => {
-            Some(crate::std_abi_shim::trueos_time_monotonic_nanos as *const () as usize)
+            Some(crate::native_abi::trueos_time_monotonic_nanos as *const () as usize)
         }
         // `embassy-time-driver` declares this as an extern-Rust symbol. The
         // kernel owns its single global Embassy clock, and Blueprint users
@@ -1316,10 +1312,10 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
             Some(crate::r::time::blueprint_embassy_time_now as *const () as usize)
         }
         "trueos_time_unix_nanos" => {
-            Some(crate::std_abi_shim::trueos_time_unix_nanos as *const () as usize)
+            Some(crate::native_abi::trueos_time_unix_nanos as *const () as usize)
         }
         "trueos_time_unix_seconds" => {
-            Some(crate::std_abi_shim::trueos_time_unix_seconds as *const () as usize)
+            Some(crate::native_abi::trueos_time_unix_seconds as *const () as usize)
         }
         "trueos_tokio_platform_wait_observe" => {
             Some(crate::r::platform::trueos_tokio_platform_wait_observe as *const () as usize)

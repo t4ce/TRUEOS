@@ -29,7 +29,7 @@ def function(source: str, name: str) -> str:
 def main() -> None:
     threads = (ROOT / "src/r/threads.rs").read_text()
     dispatch = (ROOT / "src/hv/vmcall.rs").read_text()
-    cabi = (ROOT / "src/std_abi_shim.rs").read_text()
+    cabi = (ROOT / "src/native_abi.rs").read_text()
     source = (Path(__file__).with_name("thread_control_abi") / "harness.rs").read_text()
     source = source.replace("@POLICY@", json.dumps(str(ROOT / "src/workers/application_policy.rs")))
     source = source.replace("@PLACEMENT@", json.dumps(str(ROOT / "src/r/threads/placement.rs")))

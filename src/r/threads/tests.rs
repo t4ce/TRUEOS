@@ -26,7 +26,6 @@ fn make_thread(id: usize, job: impl FnOnce() + Send + 'static) -> ThreadTask {
         child: 0,
         parent: 0,
         id,
-        errno: AtomicI32::new(0),
         carrier: crate::percpu::current_slot() as u32,
         workload_role: ThreadRole::Unclassified,
         child_role_hint: ThreadRole::Unclassified,
@@ -55,7 +54,6 @@ fn poll_thread(thread: &mut ThreadTask) -> Poll<()> {
     assert_eq!(current_id(), None);
     let result = Pin::new(thread).poll(&mut Context::from_waker(std::task::Waker::noop()));
     assert_eq!(current_id(), None);
-    assert!(current_errno().is_none());
     assert_eq!(realm(), parent, "carrier realm leaked across a suspension");
     result
 }
@@ -367,7 +365,7 @@ fn diagnostics_identify_the_parked_worker_and_retire_on_force_kill() {
 }
 
 #[test]
-fn two_continuations_keep_frames_realm_and_errno_on_one_carrier() {
+fn two_continuations_keep_frames_and_realm_on_one_carrier() {
     let _serial = SERIAL.lock().unwrap();
     kernel_task_domain::replace_context((91, 92));
     crate::allocators::replace_thread_context([1, 2, 3, 4]);
@@ -385,10 +383,6 @@ fn two_continuations_keep_frames_realm_and_errno_on_one_carrier() {
             kernel_task_domain::replace_context((101, id as u8));
             crate::allocators::replace_thread_context([id as u32; 4]);
             crate::wls::replace_thread_context((id as u64 + 100, id as u32, None));
-            let errno = current_errno().unwrap().as_ptr();
-            current_errno()
-                .unwrap()
-                .store(id as i32 + 30, Ordering::Relaxed);
             for stage in 0..3 {
                 events.lock().unwrap().push((id, stage, frame_address));
                 assert!(yield_now());
@@ -397,8 +391,6 @@ fn two_continuations_keep_frames_realm_and_errno_on_one_carrier() {
                     realm(),
                     ((101, id as u8), [id as u32; 4], (id as u64 + 100, id as u32, None))
                 );
-                assert_eq!(current_errno().unwrap().as_ptr(), errno);
-                assert_eq!(current_errno().unwrap().load(Ordering::Relaxed), id as i32 + 30);
                 frame[stage] += 1;
                 assert_eq!(frame[stage], id + 1);
             }

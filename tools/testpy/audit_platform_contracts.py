@@ -109,6 +109,8 @@ def resolver_arms(path):
 
 def function_source(path, name):
     """Top-level Rust item convention used by the audited shim helpers."""
+    if not path.is_file():
+        return None
     source = path.read_text()
     match = re.search(rf'^(?:pub(?:\([^)]*\))? )?(?:unsafe )?'
                       rf'(?:extern "[^"]+" )?fn {re.escape(name)}\(', source, re.M)
@@ -172,7 +174,7 @@ def allocation_evidence(resolvers):
             "adapter_source": file_info(adapter_path), "helper_evidence": proof}
 
 
-def audit(builtins):
+def audit(builtins, kernel_target=None):
     classifier_path = ROOT / "src/unix_compat.rs"
     source = classifier_path.read_text()
     classifier = source.split("pub(crate) fn is_unix_import", 1)[1].split(
@@ -181,8 +183,10 @@ def audit(builtins):
     unsupported = source.split("pub(crate) fn unsupported_unix_import_reason", 1)[1].split(
         "pub(crate) fn is_unix_import", 1)[0]
     unsupported_names = set(re.findall(r'"([A-Za-z_]\w*)"', unsupported))
-    generated = sorted(ROOT.glob(
-        "tgt/x86_64-unknown-trueos/*/build/TRUEOS-*/out/generated_portal_imports.rs"),
+    if "is_unix_import(name) && resolve_import(name).is_none()" in unsupported:
+        unsupported_names = unix_names - resolver_arms(classifier_path).keys()
+    generated = sorted((kernel_target or ROOT / "tgt").glob(
+        "x86_64-unknown-trueos/*/build/TRUEOS-*/out/generated_portal_imports.rs"),
         key=lambda path: path.stat().st_mtime_ns)
     # Use only the newest generated CABI resolver; optional before the first build.
     sources = [classifier_path, *generated[-1:], ROOT / "src/hv/blueprint/blueprint.rs"]
@@ -269,9 +273,10 @@ def main():
     parser.add_argument("--builtins", type=Path, default=ROOT / "tgt/buildins/release",
                         help="Builtin output directory (default: %(default)s)")
     parser.add_argument("--output", type=Path, help="Write JSON here instead of stdout")
+    parser.add_argument("--kernel-target-dir", type=Path, help="Cargo target directory for this generation's resolver evidence")
     args = parser.parse_args()
     try:
-        result = audit(args.builtins.resolve())
+        result = audit(args.builtins.resolve(), args.kernel_target_dir.resolve() if args.kernel_target_dir else None)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"audit_platform_contracts: {error}\n")
     data = json.dumps(result, indent=2) + "\n"

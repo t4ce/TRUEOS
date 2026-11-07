@@ -969,7 +969,7 @@ unsafe fn guest_fs_read_file(path_bytes: &[u8], out_ptr: *mut u8, out_cap: usize
     if out_cap < len {
         return FS_ERR_NO_SPACE as isize;
     }
-    let Some(out) = crate::std_abi_shim::abi_write_bytes(out_ptr, len) else {
+    let Some(out) = crate::native_abi::abi_write_bytes(out_ptr, len) else {
         return FS_ERR_BAD_PARAM as isize;
     };
 
@@ -1186,7 +1186,7 @@ unsafe fn guest_fs_list_dir_with_op(
     if out_cap < len {
         return FS_ERR_NO_SPACE as isize;
     }
-    let Some(out) = crate::std_abi_shim::abi_write_bytes(out_ptr, len) else {
+    let Some(out) = crate::native_abi::abi_write_bytes(out_ptr, len) else {
         return FS_ERR_BAD_PARAM as isize;
     };
 

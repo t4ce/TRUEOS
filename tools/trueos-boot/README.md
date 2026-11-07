@@ -51,7 +51,28 @@ cargo rig   # dev kernel
 cargo rigreal  # release kernel
 ```
 
-Both commands build all apps from the sibling `TRUEOS-Buildins/buildins.json`,
+`cargo rigreal --native-only` builds the audited core/alloc subset: Commander,
+Img, OS, Backup, Termdir, Paper and Edit. Each invocation creates a fresh
+`tgt/native-only.XXXXXX/` directory containing separate builtin and kernel
+targets, a seven-app AppDB, and a kernel link map. No prior Cargo object or AppDB
+is reused in these targets. The normal configuration continues to select all
+apps in `TRUEOS-Buildins/buildins.json`.
+
+The experimental generation is published and resets the rig through the usual
+workflow. Its `native-only-build-root`, `buildins.json` and
+`buildins-ready.json` record the exact inputs outside the three-member boot
+archive. The driver rejects a selected builtin that requires std or imports a
+symbol from the existing Unix classifier. The kernel's libc/POSIX allocation,
+descriptor, process, signal and pthread compatibility providers have been
+removed, including their reexported C allocation aliases. Legacy Blueprint
+imports fail prebind and cannot fall through to loader stubs. Freestanding
+memory, string and math helpers remain available.
+
+Use `--native-only` for the current runnable image. The other five configured
+builtins remain in the ownership manifest, but their compatibility imports
+deliberately fail the build's ABI check until they are ported.
+
+Without `--native-only`, both commands attempt all apps from the sibling `TRUEOS-Buildins/buildins.json`,
 create and compress an app.db redb image containing their normal Blueprint
 packages, embed that image in the kernel, build the release EFI loader, and
 create `TrueOS.tar.lz4` from the prepared native boot files. They publish the

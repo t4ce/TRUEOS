@@ -9,8 +9,6 @@ macro_rules! rtassert { ($condition:expr) => { assert!($condition) }; }
 // @PRODUCTION_MODULES@
 
 use std::cell::Cell;
-use std::collections::BTreeMap;
-use std::ffi::c_void;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use sys::thread_local::Storage;
@@ -49,11 +47,6 @@ mod native_process {
         }
     }
 }
-mod std_abi_shim {
-    pub(crate) fn native_tls_state() -> &'static crate::r::native_tls::State { &crate::native_process::current().tls }
-    pub(crate) fn run_compat_tls_destructor_round(owner: usize) -> bool { crate::run_compat_tls_destructor_round(owner) }
-    pub(crate) fn clear_compat_tls_values(owner: usize) { crate::clear_compat_tls_values(owner); }
-}
 mod hv {
     pub fn current_hull_guest_context_vm_id() -> Option<u8> { None }
     pub fn current_guest_execution_context_vm_id() -> Option<u8> { None }
@@ -90,34 +83,6 @@ fn finish() {
     run_execution_tls_destructors(r::native_tls::current_identity());
 }
 
-// The lifecycle function is the exact production function from std_abi_shim.
-// Only its existing compatibility-table binding is modeled here.
-const PTHREAD_DESTRUCTOR_ITERATIONS: usize = 4;
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct PthreadTlsSlot { owner: usize, key: usize }
-#[derive(Clone, Copy)]
-struct PthreadKeyState { key: usize, destructor: usize }
-#[derive(Clone, Copy)]
-struct PthreadTlsValue { slot: PthreadTlsSlot, value: usize }
-struct CompatMap<K, V>(BTreeMap<K, V>);
-impl<K: Ord, V> CompatMap<K, V> {
-    const fn new() -> Self { Self(BTreeMap::new()) }
-    fn values(&self) -> std::collections::btree_map::Values<'_, K, V> { self.0.values() }
-    fn remove(&mut self, key: K) -> Option<V> { self.0.remove(&key) }
-    fn insert(&mut self, key: K, value: V) { self.0.insert(key, value); }
-}
-static PTHREAD_KEYS: SpinMutex<CompatMap<usize, PthreadKeyState>> = SpinMutex::new(CompatMap::new());
-static PTHREAD_TLS_VALUES: SpinMutex<CompatMap<PthreadTlsSlot, PthreadTlsValue>> = SpinMutex::new(CompatMap::new());
-struct CompatProcessState {
-    pthread_keys: &'static SpinMutex<CompatMap<usize, PthreadKeyState>>,
-    pthread_tls_values: &'static SpinMutex<CompatMap<PthreadTlsSlot, PthreadTlsValue>>,
-}
-static COMPAT_PROCESS_STATE: CompatProcessState = CompatProcessState { pthread_keys: &PTHREAD_KEYS, pthread_tls_values: &PTHREAD_TLS_VALUES };
-static COMPAT_READY: AtomicBool = AtomicBool::new(true);
-fn process_state_if_ready() -> Option<&'static CompatProcessState> {
-    COMPAT_READY.load(Ordering::Acquire).then_some(&COMPAT_PROCESS_STATE)
-}
-
 struct Tracked(usize);
 impl Drop for Tracked {
     fn drop(&mut self) { DROPS.fetch_add(1, Ordering::Relaxed); }
@@ -137,15 +102,12 @@ static NESTED: Storage<Nested, { sys::thread_local::value_align::<Nested>() }> =
 
 #[test]
 fn pure_native_tls_cleanup_does_not_require_a_compatibility_namespace() {
-    COMPAT_READY.store(false, Ordering::Release);
     prepare(0, 11);
     let before = DROPS.load(Ordering::Relaxed);
     TRACKED.get(None, || Tracked(111));
     finish();
     assert_eq!(DROPS.load(Ordering::Relaxed), before + 1);
     assert!(CURRENT.get().is_null());
-    assert!(!COMPAT_READY.load(Ordering::Relaxed));
-    COMPAT_READY.store(true, Ordering::Release);
 }
 
 #[test]
@@ -234,7 +196,7 @@ fn quiescent_reset_removes_old_values_without_calling_retired_code() {
     prepare(2, 7);
     let before = REINSTALLS.load(Ordering::Relaxed);
     unsafe { sys::thread_local::key::set(REINSTALL.force(), 1usize as *mut u8) };
-    std_abi_shim::native_tls_state().reset();
+    (&native_process::current().tls).reset();
     assert!(unsafe { sys::thread_local::key::get(REINSTALL.force()) }.is_null());
     assert_eq!(REINSTALLS.load(Ordering::Relaxed), before);
     prepare(2, 7);
@@ -271,39 +233,6 @@ fn destructor_can_read_another_pending_value_without_reinitializing_it() {
     assert_eq!(CROSS_DROPS.load(Ordering::Relaxed), before + 2);
 }
 
-static MIXED_VISITS: AtomicUsize = AtomicUsize::new(0);
-unsafe extern "C" fn compatibility_destructor(value: *mut c_void) {
-    assert_eq!(CURRENT.get() as usize, EXECUTION.get() + 0x1000,
-        "runtime cleanup ran while compatibility destructors remained");
-    MIXED_VISITS.fetch_add(1, Ordering::Relaxed);
-    if value as usize == 1 {
-        let slot = PthreadTlsSlot { owner: r::native_tls::current_identity(), key: 99 };
-        PTHREAD_TLS_VALUES.lock().insert(slot, PthreadTlsValue { slot, value: 2 });
-    } else {
-        // This is the second compatibility round, after native values from
-        // round one have already been destroyed.
-        TRACKED.get(None, || Tracked(92));
-    }
-}
-
-#[test]
-fn compatibility_destructor_can_initialize_rust_tls_after_a_native_round() {
-    prepare(0, 9);
-    TRACKED.get(None, || Tracked(91));
-    let before = DROPS.load(Ordering::Relaxed);
-    let cleanup_before = CLEANUPS.load(Ordering::Relaxed);
-    let visits_before = MIXED_VISITS.load(Ordering::Relaxed);
-    PTHREAD_KEYS.lock().insert(99, PthreadKeyState { key: 99, destructor: compatibility_destructor as *const () as usize });
-    let slot = PthreadTlsSlot { owner: r::native_tls::current_identity(), key: 99 };
-    PTHREAD_TLS_VALUES.lock().insert(slot, PthreadTlsValue { slot, value: 1 });
-    finish();
-    assert_eq!(DROPS.load(Ordering::Relaxed), before + 2);
-    assert_eq!(MIXED_VISITS.load(Ordering::Relaxed), visits_before + 2);
-    assert_eq!(CLEANUPS.load(Ordering::Relaxed), cleanup_before + 1);
-    assert!(CURRENT.get().is_null());
-    PTHREAD_KEYS.lock().remove(99);
-}
-
 #[test]
 fn host_carrier_mutations_force_the_owning_vm_allocation_domain() {
     REALM.set(2);
@@ -319,7 +248,7 @@ fn host_carrier_mutations_force_the_owning_vm_allocation_domain() {
     assert_eq!(r::native_tls::trueos_platform_thread_local_set(1234, 12usize as *mut u8, None), 12);
     assert_eq!(r::native_tls::trueos_platform_thread_local_get(1234) as usize, 11);
     GUEST_ARENA_AVAILABLE.set(true);
-    std_abi_shim::native_tls_state().reset();
+    (&native_process::current().tls).reset();
 }
 
 // Native runtime metadata must not be an ordinary destructor-owned TLS value:

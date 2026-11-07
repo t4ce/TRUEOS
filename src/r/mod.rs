@@ -1,4 +1,3 @@
-pub mod allocation_registry;
 pub mod archive_cabi;
 mod archive_limits;
 pub mod blocking;

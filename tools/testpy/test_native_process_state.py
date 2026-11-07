@@ -26,10 +26,10 @@ def main():
     wait = (ROOT / "src/wait.rs").read_text()
     completion = wait[wait.index("pub struct CompletionCell<T>"):wait.index("type JobFuture =")]
     source = FIXTURE.read_text().replace("@ROOT@", str(ROOT)).replace("@COMPLETION@", completion)
-    shim = (ROOT / "src/std_abi_shim.rs").read_text()
+    shim = (ROOT / "src/native_abi.rs").read_text()
     source = source.replace("@CABI@", "\n".join(function(shim, name) for name in [
         "trueos_cabi_thread_spawn", "trueos_cabi_thread_join", "trueos_cabi_thread_detach",
-        "trueos_cabi_thread_current_id", "pthread_join", "pthread_detach",
+        "trueos_cabi_thread_current_id",
     ]))
     memory = (ROOT / "src/hv/memory.rs").read_text()
     source = source.replace("@MAPPING@", "\n".join(function(memory, name) for name in [

@@ -9,7 +9,7 @@ use alloc::boxed::Box;
 use core::future::Future;
 use core::mem::ManuallyDrop;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use core::task::{Context, Poll, Waker};
 
 mod context;
@@ -81,7 +81,6 @@ struct Thread {
     child: usize,
     parent: usize,
     id: usize,
-    errno: AtomicI32,
     carrier: u32,
     workload_role: ThreadRole,
     child_role_hint: ThreadRole,
@@ -174,14 +173,6 @@ pub(crate) unsafe fn terminate_current_guest() -> bool {
     unreachable!("terminated guest continuation resumed")
 }
 
-pub(crate) fn current_errno() -> Option<&'static AtomicI32> {
-    let ptr = active();
-    if ptr.is_null() {
-        None
-    } else {
-        Some(unsafe { &(*ptr).errno })
-    }
-}
 
 /// Static operation breadcrumb for timed Codex native continuations only.
 /// No host record is available for Hull-only code; absence is not an ABI fault.
@@ -625,7 +616,6 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize, role: ThreadRole
             child: 0,
             parent: 0,
             id,
-            errno: AtomicI32::new(0),
             carrier: slot,
             workload_role: role,
             child_role_hint: ThreadRole::Unclassified,
