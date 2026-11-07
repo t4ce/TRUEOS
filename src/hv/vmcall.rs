@@ -5321,6 +5321,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_ASYNC_FS_CREATE_DIR_ALL_START
+        | trueos_vm::vmcall::OP_BP_ASYNC_FS_CREATE_DIR_START_V1
+        | trueos_vm::vmcall::OP_BP_ASYNC_FS_REMOVE_LEAF_START_V1
         | OP_BP_ASYNC_FS_STAT_START
         | OP_BP_ASYNC_FS_LIST_DIR_START
         | trueos_vm::vmcall::OP_BP_ASYNC_FS_METADATA_START_V1
@@ -5329,6 +5331,22 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         | OP_BP_ASYNC_FS_TYPED_LIST_DIR_START
         | trueos_vm::vmcall::OP_BP_ASYNC_FS_SELECT_FILES_START_V1
         | OP_BP_ASYNC_FS_RECORD_KEY_START => {
+            if op == trueos_vm::vmcall::OP_BP_ASYNC_FS_CREATE_DIR_START_V1
+                && (arg0 != 0 || arg1 != 0
+                    || req_len as usize > crate::r::cabi_codes::BLUEPRINT_ASYNC_FS_MAX_PATH)
+            {
+                write_response(vm_id, seq, STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PARAM as i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            if op == trueos_vm::vmcall::OP_BP_ASYNC_FS_REMOVE_LEAF_START_V1
+                && (!matches!(arg0, 1 | 2) || arg1 != 0 || req_len == 0
+                    || req_len as usize > crate::r::cabi_codes::BLUEPRINT_ASYNC_FS_MAX_PATH)
+            {
+                write_response(vm_id, seq, STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PARAM as i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -5370,6 +5388,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let rc = match op {
                 OP_BP_ASYNC_FS_CREATE_DIR_ALL_START => {
                     crate::r::io::async_fs_cabi::start_create_dir_all(owner, path)
+                }
+                trueos_vm::vmcall::OP_BP_ASYNC_FS_CREATE_DIR_START_V1 => {
+                    crate::r::io::async_fs_cabi::start_create_dir(owner, path)
+                }
+                trueos_vm::vmcall::OP_BP_ASYNC_FS_REMOVE_LEAF_START_V1 => {
+                    let kind = if arg0 == 1 { crate::r::fs::trueosfs::NodeKind::File }
+                        else { crate::r::fs::trueosfs::NodeKind::Directory };
+                    crate::r::io::async_fs_cabi::start_remove_leaf(owner, path, kind)
                 }
                 OP_BP_ASYNC_FS_STAT_START => crate::r::io::async_fs_cabi::start_stat(owner, path),
                 OP_BP_ASYNC_FS_LIST_DIR_START => {

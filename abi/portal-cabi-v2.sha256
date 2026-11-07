@@ -1,3 +1,4 @@
+# Additive atomic native single-directory create and kind-checked leaf removal v1; all 370 existing contracts verified unchanged.
 # Additive bounded native GET start v1; all 369 existing contracts verified unchanged.
 # Intentional breaking removal of the five C pointer-allocation aliases; all surviving contracts unchanged.
 # Additive batched native terminal input/generation waits and filesystem scope; all prior signatures verified unchanged.
@@ -46,4 +47,4 @@
 # Additive bounded subdocument fetch with host-applied Referer context; all previous signatures verified unchanged.
 # Additive non-consuming final GET URL metadata; all 369 previous signatures verified unchanged.
 # Intentional retirement of the QJS-only mouse stream; every surviving signature verified unchanged.
-9510bbafd6327c562fadea4492fde1601f1df896ba9db285389a2b4543944cd6
+38a79d36e69a8fba636b1d939f8e2607f6ea3931463b2f36e87958353ad4328a

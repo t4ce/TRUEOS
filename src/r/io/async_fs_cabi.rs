@@ -101,6 +101,7 @@ enum RequestKind {
     CreateDirAll {
         path: String,
     },
+    CreateDir { path: String },
     Stat {
         path: String,
     },
@@ -127,6 +128,7 @@ enum RequestKind {
     Remove {
         path: String,
     },
+    RemoveLeaf { path: String, kind: crate::r::fs::trueosfs::NodeKind },
     Rename {
         source: String,
         destination: String,
@@ -140,6 +142,7 @@ impl RequestKind {
             Self::Read { .. } => ("read", false),
             Self::Write { .. } => ("write", true),
             Self::CreateDirAll { .. } => ("create-dir-all", true),
+            Self::CreateDir { .. } => ("create-dir", true),
             Self::Stat { .. } => ("stat", false),
             Self::TypedStat { .. } => ("typed-stat", false),
             Self::Metadata { .. } | Self::MetadataV2 { .. } => ("metadata", false),
@@ -147,6 +150,7 @@ impl RequestKind {
             Self::ListDir { .. } | Self::TypedListDir { .. } => ("list-dir", false),
             Self::SelectFiles { .. } => ("select-files", false),
             Self::Remove { .. } => ("remove", false),
+            Self::RemoveLeaf { .. } => ("remove", false),
             Self::Rename { .. } => ("rename", false),
             Self::ListMounts => ("list-mounts", false),
         }
@@ -158,6 +162,7 @@ impl RequestKind {
             Self::Read { .. } => 1,
             Self::Write { .. } => 2,
             Self::CreateDirAll { .. } => 3,
+            Self::CreateDir { .. } => 15,
             Self::Stat { .. } => 4,
             Self::TypedStat { .. } => 5,
             Self::Metadata { .. } => 6,
@@ -168,6 +173,7 @@ impl RequestKind {
             Self::SelectFiles { .. } => 11,
             Self::ListMounts => 12,
             Self::Remove { .. } => 13,
+            Self::RemoveLeaf { .. } => 16,
             Self::Rename { .. } => 14,
         }
     }
@@ -826,6 +832,16 @@ pub(crate) fn start_create_dir_all(owner: u32, path: String) -> i32 {
     start(owner, RequestKind::CreateDirAll { path })
 }
 
+pub(crate) fn start_create_dir(owner: u32, path: String) -> i32 {
+    start(owner, RequestKind::CreateDir { path })
+}
+
+pub(crate) fn start_remove_leaf(
+    owner: u32, path: String, kind: crate::r::fs::trueosfs::NodeKind,
+) -> i32 {
+    start(owner, RequestKind::RemoveLeaf { path, kind })
+}
+
 pub(crate) fn start_stat(owner: u32, path: String) -> i32 {
     start(owner, RequestKind::Stat { path })
 }
@@ -1231,6 +1247,7 @@ async fn process(request: &Request) -> OperationState {
         RequestKind::Read { path }
         | RequestKind::Write { path, .. }
         | RequestKind::CreateDirAll { path }
+        | RequestKind::CreateDir { path }
         | RequestKind::Stat { path }
         | RequestKind::Metadata { path }
         | RequestKind::MetadataV2 { path }
@@ -1239,7 +1256,8 @@ async fn process(request: &Request) -> OperationState {
         | RequestKind::ListDir { path }
         | RequestKind::TypedListDir { path }
         | RequestKind::SelectFiles { path, .. }
-        | RequestKind::Remove { path } => path.as_str(),
+        | RequestKind::Remove { path }
+        | RequestKind::RemoveLeaf { path, .. } => path.as_str(),
         RequestKind::ListMounts | RequestKind::Rename { .. } => unreachable!(),
     };
     let (disk, selected_path) = match selected_disk(path) {
@@ -1328,6 +1346,17 @@ async fn process(request: &Request) -> OperationState {
                 Ok(true) => OperationState::Unit,
                 Ok(false) => OperationState::Failed(FS_ERR_NO_SPACE),
                 Err(error) => OperationState::Failed(map_block_error(error)),
+            }
+        }
+        RequestKind::CreateDir { .. } => {
+            use crate::r::fs::trueosfs::CreateDirectoryError;
+            match crate::r::fs::trueosfs::create_directory_new_async(disk, selected_path).await {
+                Ok(true) => OperationState::Unit,
+                Ok(false) => OperationState::Failed(FS_ERR_NO_SPACE),
+                Err(CreateDirectoryError::AlreadyExists) => OperationState::Failed(FS_ERR_ALREADY_EXISTS),
+                Err(CreateDirectoryError::MissingParent) => OperationState::Failed(FS_ERR_NOT_FOUND),
+                Err(CreateDirectoryError::ParentNotDirectory) => OperationState::Failed(FS_ERR_BAD_PATH),
+                Err(CreateDirectoryError::Device(error)) => OperationState::Failed(map_block_error(error)),
             }
         }
         RequestKind::Stat { path } => {
@@ -1497,6 +1526,17 @@ async fn process(request: &Request) -> OperationState {
                 Ok(true) => OperationState::Unit,
                 Ok(false) => OperationState::Failed(FS_ERR_NOT_FOUND),
                 Err(error) => OperationState::Failed(map_block_error(error)),
+            }
+        }
+        RequestKind::RemoveLeaf { kind, .. } => {
+            use crate::r::fs::trueosfs::RemoveNodeError;
+            match crate::r::fs::trueosfs::remove_leaf_async(disk, selected_path, *kind).await {
+                Ok(true) => OperationState::Unit,
+                Ok(false) => OperationState::Failed(FS_ERR_NOT_FOUND),
+                Err(RemoveNodeError::KindMismatch) => OperationState::Failed(FS_ERR_BAD_PATH),
+                Err(RemoveNodeError::NotEmpty) => OperationState::Failed(FS_ERR_ALREADY_EXISTS),
+                Err(RemoveNodeError::NotCommitted) => OperationState::Failed(FS_ERR_IO),
+                Err(RemoveNodeError::Device(error)) => OperationState::Failed(map_block_error(error)),
             }
         }
         RequestKind::ListMounts => unreachable!(),
@@ -1845,6 +1885,49 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_create_dir_all_start(
         guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_CREATE_DIR_ALL_START, path.as_str())
     } else {
         start_create_dir_all(direct_owner(), path)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_create_dir_start_v1(
+    path_ptr: *const u8,
+    path_len: usize,
+) -> i32 {
+    let path = match parse_path(path_ptr, path_len, true) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_CREATE_DIR_START_V1, path.as_str())
+    } else {
+        start_create_dir(direct_owner(), path)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_remove_leaf_start_v1(
+    path_ptr: *const u8,
+    path_len: usize,
+    expected_kind: u32,
+) -> i32 {
+    let kind = match expected_kind {
+        1 => crate::r::fs::trueosfs::NodeKind::File,
+        2 => crate::r::fs::trueosfs::NodeKind::Directory,
+        _ => return FS_ERR_BAD_PARAM,
+    };
+    let path = match parse_path(path_ptr, path_len, false) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, value) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_ASYNC_FS_REMOVE_LEAF_START_V1,
+            expected_kind as u64, 0, path.as_bytes(), &mut [],
+        );
+        if status == trueos_vm::vmcall::STATUS_OK { (value as i64) as i32 }
+        else { FS_ERR_BAD_PARAM }
+    } else {
+        start_remove_leaf(direct_owner(), path, kind)
     }
 }
 

@@ -3099,6 +3099,36 @@ pub async fn delete_node_at_record<D: BlockIo>(
     name: &str,
     record: &NodeRecordRef,
 ) -> Result<bool, FsError<D::Error>> {
+    delete_node_at_record_with_policy(dev, params, name, record, false).await
+}
+
+/// Delete a directory already validated as empty by the mounted namespace index.
+///
+/// The caller must hold its namespace write lease, verify that `name` currently
+/// identifies `record` and has no descendants, and retain that lease through
+/// publication and its index update. This checks the directory kind and physical
+/// record, then appends the ordinary single-node tombstone without replaying the
+/// namespace. A renamed directory may have a different current logical name
+/// from the name stored in its unchanged physical record.
+pub async fn delete_empty_directory_at_record_prevalidated<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    record: &NodeRecordRef,
+) -> Result<bool, FsError<D::Error>> {
+    if record.kind != NodeKind::Directory || !is_normalized_nonempty_path(name) {
+        return Ok(false);
+    }
+    delete_node_at_record_with_policy(dev, params, name, record, true).await
+}
+
+async fn delete_node_at_record_with_policy<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    record: &NodeRecordRef,
+    directory_emptiness_prevalidated: bool,
+) -> Result<bool, FsError<D::Error>> {
     if name.is_empty() || name.as_bytes().len() > (u16::MAX as usize) {
         return Ok(false);
     }
@@ -3109,7 +3139,7 @@ pub async fn delete_node_at_record<D: BlockIo>(
     if validated != *record {
         return Ok(false);
     }
-    if validated.kind == NodeKind::Directory {
+    if validated.kind == NodeKind::Directory && !directory_emptiness_prevalidated {
         let prefix = normalized_dir_prefix_str(name);
         if build_live_nodes(dev, params)
             .await?
@@ -4491,6 +4521,143 @@ mod tests {
                 assert_eq!(append_directory_prevalidated(&disk, &params, invalid).await, Ok(None));
                 assert_eq!(disk.read_count(), 0);
             }
+        });
+    }
+
+    #[test]
+    fn indexed_empty_directory_delete_cost_is_independent_of_log_history() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            let mut baseline = None;
+            for history in [0, 128, 512] {
+                for _ in 0..history {
+                    assert_eq!(write_file(&disk, &params, "unrelated", b"stay").await, Ok(true));
+                }
+                let name = alloc::format!("empty-{history}");
+                let record = append_directory_prevalidated(&disk, &params, &name)
+                    .await.unwrap().unwrap();
+                let head = disk.log_head();
+                disk.reset_reads();
+                assert_eq!(
+                    delete_empty_directory_at_record_prevalidated(&disk, &params, &name, &record).await,
+                    Ok(true)
+                );
+                let reads = disk.read_count();
+                std::eprintln!("prevalidated empty directory: history={history} reads={reads}");
+                assert!(reads <= 3, "indexed directory delete read {reads} blocks");
+                if let Some(before) = baseline {
+                    assert_eq!(reads, before, "delete cost grew with unrelated log history");
+                }
+                baseline = Some(reads);
+                assert_eq!(disk.log_head() - head, 3, "single-node delete uses one tombstone");
+                let remounted = MemoryBlockIo {
+                    bytes: Mutex::new(disk.bytes.lock().unwrap().clone()),
+                    reads: AtomicUsize::new(0),
+                };
+                assert_eq!(lookup_node_record(&remounted, &params, &name).await, Ok(None));
+                if history != 0 {
+                    assert_eq!(read_file(&remounted, &params, "unrelated").await, Ok(Some(b"stay".to_vec())));
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn prevalidated_empty_directory_delete_rejects_corrupt_and_stale_records() {
+        block_on(async {
+            for mode in 0..5 {
+                let disk = MemoryBlockIo::new();
+                let params = params();
+                let record = append_directory_prevalidated(&disk, &params, "empty")
+                    .await.unwrap().unwrap();
+                let mut supplied = record;
+                match mode {
+                    0 => supplied.file_id = supplied.file_id.wrapping_add(1),
+                    1 => supplied.record_key = RecordKey::Key(test_key()),
+                    2 => disk.clear_record_key_extension(record.entry_lba),
+                    3 => disk.set_content_type(record.entry_lba, ContentTypeId::BLOB),
+                    _ => {
+                        let mut bytes = disk.bytes.lock().unwrap();
+                        bytes[record.entry_lba as usize * BLOCK_SIZE] = 0;
+                    }
+                }
+                let head = disk.log_head();
+                assert_eq!(
+                    delete_empty_directory_at_record_prevalidated(&disk, &params, "empty", &supplied).await,
+                    Ok(false)
+                );
+                assert_eq!(disk.log_head(), head, "rejected physical record published a tombstone");
+            }
+        });
+    }
+
+    #[test]
+    fn prevalidated_empty_directory_delete_rejects_files_and_bad_paths_before_io() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(write_file(&disk, &params, "file", b"keep").await, Ok(true));
+            let file: NodeRecordRef = lookup_file_record(&disk, &params, "file")
+                .await.unwrap().unwrap().into();
+            let directory = append_directory_prevalidated(&disk, &params, "empty")
+                .await.unwrap().unwrap();
+            let head = disk.log_head();
+            disk.reset_reads();
+            assert_eq!(
+                delete_empty_directory_at_record_prevalidated(&disk, &params, "file", &file).await,
+                Ok(false)
+            );
+            for name in ["", "/empty", "empty/", "a/../empty", "a//empty", "."] {
+                assert_eq!(
+                    delete_empty_directory_at_record_prevalidated(&disk, &params, name, &directory).await,
+                    Ok(false)
+                );
+            }
+            assert_eq!(
+                delete_empty_directory_at_record_prevalidated(&disk, &params, &"x".repeat(u16::MAX as usize + 1), &directory).await,
+                Ok(false)
+            );
+            assert_eq!(disk.read_count(), 0);
+            assert_eq!(disk.log_head(), head);
+            assert_eq!(read_file(&disk, &params, "file").await, Ok(Some(b"keep".to_vec())));
+        });
+    }
+
+    #[test]
+    fn ordinary_directory_delete_still_checks_descendants_on_disk() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(create_directory(&disk, &params, "tree").await, Ok(true));
+            assert_eq!(write_file(&disk, &params, "tree/child", b"keep").await, Ok(true));
+            let directory = lookup_node_record(&disk, &params, "tree").await.unwrap().unwrap();
+            let head = disk.log_head();
+            assert_eq!(delete_node_at_record(&disk, &params, "tree", &directory).await, Ok(false));
+            assert_eq!(disk.log_head(), head);
+            assert_eq!(lookup_node_record(&disk, &params, "tree").await, Ok(Some(directory)));
+            assert_eq!(read_file(&disk, &params, "tree/child").await, Ok(Some(b"keep".to_vec())));
+        });
+    }
+
+    #[test]
+    fn prevalidated_empty_directory_delete_uses_current_renamed_logical_path() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(create_directory(&disk, &params, "before").await, Ok(true));
+            let empty = append_directory_prevalidated(&disk, &params, "before/empty")
+                .await.unwrap().unwrap();
+            let parent = lookup_node_record(&disk, &params, "before").await.unwrap().unwrap();
+            assert_eq!(rename_tree_at_record(&disk, &params, "before", "after", &parent).await, Ok(true));
+            disk.reset_reads();
+            assert_eq!(
+                delete_empty_directory_at_record_prevalidated(&disk, &params, "after/empty", &empty).await,
+                Ok(true)
+            );
+            assert!(disk.read_count() <= 3);
+            assert_eq!(lookup_node_record(&disk, &params, "after/empty").await, Ok(None));
+            assert_eq!(lookup_node_record(&disk, &params, "after").await, Ok(Some(parent)));
         });
     }
 

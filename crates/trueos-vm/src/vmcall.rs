@@ -121,6 +121,10 @@ pub const OP_BP_ASYNC_FS_WRITE_BEGIN: u32 = 0xD5;
 pub const OP_BP_ASYNC_FS_WRITE_CHUNK: u32 = 0xD6;
 pub const OP_BP_ASYNC_FS_WRITE_COMMIT: u32 = 0xD7;
 pub const OP_BP_ASYNC_FS_CREATE_DIR_ALL_START: u32 = 0xD8;
+/// Create one directory; parent must exist and destination must be absent.
+pub const OP_BP_ASYNC_FS_CREATE_DIR_START_V1: u32 = 0x24e;
+/// arg0=expected node kind (1=file, 2=empty directory), payload=path.
+pub const OP_BP_ASYNC_FS_REMOVE_LEAF_START_V1: u32 = 0x24f;
 pub const OP_BP_ASYNC_FS_STAT_START: u32 = 0xD9;
 pub const OP_BP_ASYNC_FS_LIST_DIR_START: u32 = 0xDA;
 pub const OP_BP_ASYNC_FS_LIST_MOUNTS_START: u32 = 0x139;

@@ -631,6 +631,17 @@ pub fn write_file_begin_typed(
 }
 
 /// Materialize a directory and every missing parent directory.
+/// Create exactly one absent directory under an existing directory parent.
+/// Existence and parent checks are atomic with native namespace publication.
+pub async fn create_dir(path: &[u8]) -> Result<(), i32> {
+    let mut operation = Operation::from_start(unsafe {
+        vcabi::trueos_cabi_async_fs_create_dir_start_v1(path.as_ptr(), path.len())
+    })?;
+    operation.ready().await?;
+    operation.discard();
+    Ok(())
+}
+
 pub async fn create_dir_all(path: &[u8]) -> Result<(), i32> {
     let mut operation = Operation::from_start(unsafe {
         vcabi::trueos_cabi_async_fs_create_dir_all_start(path.as_ptr(), path.len())
@@ -813,6 +824,25 @@ pub async fn exists(path: &[u8]) -> Result<bool, i32> {
 }
 
 /// Remove a file through the kernel's native async TRUEOSFS service.
+/// Remove a file, rejecting a directory even if the pathname was replaced.
+pub async fn remove_file(path: &[u8]) -> Result<(), i32> {
+    remove_leaf(path, 1).await
+}
+
+/// Remove one empty directory, never its descendants.
+pub async fn remove_empty_dir(path: &[u8]) -> Result<(), i32> {
+    remove_leaf(path, 2).await
+}
+
+async fn remove_leaf(path: &[u8], expected_kind: u32) -> Result<(), i32> {
+    let mut operation = Operation::from_start(unsafe {
+        vcabi::trueos_cabi_async_fs_remove_leaf_start_v1(path.as_ptr(), path.len(), expected_kind)
+    })?;
+    operation.ready().await?;
+    operation.discard();
+    Ok(())
+}
+
 pub async fn remove(path: &[u8]) -> Result<(), i32> {
     let mut operation = Operation::from_start(unsafe {
         vcabi::trueos_cabi_async_fs_remove_start(path.as_ptr(), path.len())

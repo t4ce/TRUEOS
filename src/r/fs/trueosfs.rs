@@ -2191,6 +2191,81 @@ pub async fn create_directory_async(
     Ok(true)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CreateDirectoryError {
+    Device(block::Error),
+    AlreadyExists,
+    MissingParent,
+    ParentNotDirectory,
+}
+
+impl From<block::Error> for CreateDirectoryError {
+    fn from(error: block::Error) -> Self { Self::Device(error) }
+}
+
+/// Create one absent directory under its existing parent. Both checks and the
+/// namespace publication share a lease; this never creates ancestors.
+pub async fn create_directory_new_async(
+    disk: block::DeviceHandle,
+    path: &str,
+) -> Result<bool, CreateDirectoryError> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
+    if path.is_empty() || path == "/" {
+        return Err(CreateDirectoryError::AlreadyExists);
+    }
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam.into());
+    }
+    let Some(placement) = placement_for_io_async(disk).await? else { return Ok(false); };
+    let _write_lease = loop {
+        // Index construction can checkpoint, so it must precede this lease.
+        ensure_index_async(disk, &placement).await?;
+        let lease = write_gate::RootWriteLease::acquire(disk.id()).await;
+        if !validate_indexed_directory_target(disk.id(), path)? {
+            drop(lease);
+            continue;
+        }
+        break lease;
+    };
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let Some(record) = trueos_fs::append_directory_prevalidated(
+        &KernelBlockIo::new(disk), &params, path,
+    ).await.map_err(map_engine_err)? else { return Ok(false); };
+    bump_root_cache_gen(disk.id());
+    if !update_root_index_node(disk.id(), path, record) {
+        invalidate_root_index(disk.id());
+    }
+    Ok(true)
+}
+
+/// Called under the root write lease. An invalidated index requires a retry
+/// after releasing the lease; no log entry is appended against a stale index.
+fn validate_indexed_directory_target(
+    disk_id: block::DiscId,
+    path: &str,
+) -> Result<bool, CreateDirectoryError> {
+    let roots = ROOTS.lock();
+    let Some(index) = roots.iter().find(|mount| mount.disk_id == disk_id)
+        .and_then(|mount| mount.index.as_ref()) else { return Ok(false); };
+    if index.contains_key(path.as_bytes()) {
+        return Err(CreateDirectoryError::AlreadyExists);
+    }
+    if let Some((parent, _)) = path.rsplit_once('/') {
+        match index.get(parent.as_bytes()) {
+            None => return Err(CreateDirectoryError::MissingParent),
+            Some(entry) if entry.kind != trueos_fs::LogKind::Directory => {
+                return Err(CreateDirectoryError::ParentNotDirectory);
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(true)
+}
+
 /// Called only while holding the root write lease. A missing index selects the
 /// engine's checked fallback, never an unchecked write against a stale namespace.
 fn validate_indexed_file_target(
@@ -2473,14 +2548,56 @@ pub async fn file_delete_async(
     Ok(ok)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RemoveNodeError {
+    Device(block::Error),
+    KindMismatch,
+    NotEmpty,
+    NotCommitted,
+}
+
+impl From<block::Error> for RemoveNodeError {
+    fn from(error: block::Error) -> Self { Self::Device(error) }
+}
+
 /// Remove a file or directory, recursively for directories.
 pub async fn remove_recursive_async(
     disk: block::DeviceHandle,
     name: &str,
 ) -> Result<bool, block::Error> {
+    remove_node_with_policy_async(disk, name, None).await.map_err(|error| match error {
+        RemoveNodeError::Device(error) => error,
+        _ => block::Error::InvalidParam,
+    })
+}
+
+/// Remove one node of the expected kind. A directory must be empty under the
+/// same root lease as the tombstone publication; this never removes children.
+pub async fn remove_leaf_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    kind: NodeKind,
+) -> Result<bool, RemoveNodeError> {
+    remove_node_with_policy_async(disk, name, Some(kind)).await
+}
+
+fn indexed_directory_is_empty(disk_id: block::DiscId, path: &str) -> Result<bool, block::Error> {
+    let roots = ROOTS.lock();
+    let index = roots.iter().find(|mount| mount.disk_id == disk_id)
+        .and_then(|mount| mount.index.as_ref()).ok_or(block::Error::NotReady)?;
+    let prefix = normalized_dir_prefix(path);
+    Ok(!index.range(prefix.as_bytes().to_vec()..).next()
+        .is_some_and(|(key, _)| key.starts_with(prefix.as_bytes())))
+}
+
+async fn remove_node_with_policy_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    leaf_kind: Option<NodeKind>,
+) -> Result<bool, RemoveNodeError> {
     let _activity = crate::disc::access::Activity::begin(disk)?;
     if name.is_empty() || name == "/" || disk.parent().is_some() {
-        return Err(block::Error::InvalidParam);
+        return Err(block::Error::InvalidParam.into());
     }
     let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
@@ -2501,27 +2618,41 @@ pub async fn remove_recursive_async(
             Ok(Some(entry)) => break (lease, entry),
             Ok(None) => return Ok(false),
             Err(block::Error::NotReady) => { drop(lease); }
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.into()),
         }
     };
     let Some(record) = trueos_fs::get_node_record_by_lba(&io, &params, entry.entry_lba)
         .await.map_err(map_engine_err)?
     else {
-        return Err(block::Error::Corrupted);
+        return Err(block::Error::Corrupted.into());
     };
     let expected_kind = match entry.kind {
         trueos_fs::LogKind::Put => NodeKind::File,
         trueos_fs::LogKind::Directory => NodeKind::Directory,
-        _ => return Err(block::Error::Corrupted),
+        _ => return Err(block::Error::Corrupted.into()),
     };
+    if leaf_kind.is_some_and(|kind| kind != expected_kind) {
+        return Err(RemoveNodeError::KindMismatch);
+    }
+    if leaf_kind == Some(NodeKind::Directory) && !indexed_directory_is_empty(disk.id(), name)? {
+        return Err(RemoveNodeError::NotEmpty);
+    }
     if record.kind != expected_kind || record.content_type != entry.content_type {
-        return Err(block::Error::Corrupted);
+        return Err(block::Error::Corrupted.into());
     }
     let ok = match record.kind {
         NodeKind::File => trueos_fs::delete_node_at_record(&io, &params, name, &record).await,
+        NodeKind::Directory if leaf_kind.is_some() => {
+            // The authoritative index proved emptiness above under this same
+            // lease. Replaying the entire log here would duplicate that check.
+            trueos_fs::delete_empty_directory_at_record_prevalidated(
+                &io, &params, name, &record,
+            ).await
+        }
         NodeKind::Directory => trueos_fs::delete_tree_at_record(&io, &params, name, &record).await,
     }
     .map_err(map_engine_err)?;
+    if !ok && leaf_kind.is_some() { return Err(RemoveNodeError::NotCommitted); }
     if ok {
         bump_root_cache_gen(disk.id());
         file_record_cache_invalidate_prefix(disk.id(), normalized_dir_prefix(name).as_str());
