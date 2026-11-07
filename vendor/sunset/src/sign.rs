@@ -724,9 +724,9 @@ impl TryFrom<ssh_key::PrivateKey> for SignKey {
                 let positive = |value: &ssh_key::Mpint| value.as_positive_bytes()
                     .map(rsa::BigUint::from_bytes_be).ok_or(Error::BadKey);
                 let key = rsa::RsaPrivateKey::from_components(
-                    positive(k.public().n())?, positive(k.public().e())?,
-                    positive(k.private().d())?,
-                    vec![positive(k.private().p())?, positive(k.private().q())?],
+                    positive(&k.public.n)?, positive(&k.public.e)?,
+                    positive(&k.private.d)?,
+                    vec![positive(&k.private.p)?, positive(&k.private.q)?],
                 ).map_err(|_| Error::BadKey)?;
                 key.validate().map_err(|_| Error::BadKey)?;
                 Ok(SignKey::RSA(key))

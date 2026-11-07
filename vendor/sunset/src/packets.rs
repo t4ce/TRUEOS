@@ -514,10 +514,10 @@ impl TryFrom<&PubKey<'_>> for ssh_key::PublicKey {
 
             #[cfg(feature = "rsa")]
             PubKey::RSA(r) => {
-                let k = ssh_key::public::RsaPublicKey::new(
-                    ssh_key::Mpint::from_positive_bytes(&r.key.e().to_bytes_be()),
-                    ssh_key::Mpint::from_positive_bytes(&r.key.n().to_bytes_be()),
-                ).map_err(|_| Error::BadKey)?;
+                let k = ssh_key::public::RsaPublicKey {
+                    e: ssh_key::Mpint::from_positive_bytes(&r.key.e().to_bytes_be()),
+                    n: ssh_key::Mpint::from_positive_bytes(&r.key.n().to_bytes_be()),
+                };
                 Ok(k.into())
             }
 
