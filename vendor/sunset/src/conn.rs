@@ -492,8 +492,12 @@ impl<CS: CliServ> Conn<CS> {
                 disp.event = serv.auth.request(sess_id, s, p)?;
             }
             Packet::UserauthInfoResponse(response) => {
-                if CS::is_client() { return error::SSHProtoUnsupported.fail(); }
-                if response.responses.len() != 1 { return error::SSHProto.fail(); }
+                if CS::is_client() {
+                    return error::SSHProtoUnsupported.fail();
+                }
+                if response.responses.len() != 1 {
+                    return error::SSHProto.fail();
+                }
                 disp.event = self.mut_server()?.auth.interactive_response()?;
             }
             Packet::UserauthFailure(p) => {
@@ -661,7 +665,9 @@ impl Conn<Server> {
         let packet = self.packet(payload)?;
         if let Packet::UserauthInfoResponse(p) = packet {
             // Incoming cry policy still asks for exactly one authenticator.
-            if p.responses.len() != 1 { return error::SSHProto.fail(); }
+            if p.responses.len() != 1 {
+                return error::SSHProto.fail();
+            }
             return Ok(p.responses[0]);
         }
         if let Packet::UserauthRequest(UserauthRequest {

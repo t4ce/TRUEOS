@@ -66,7 +66,11 @@ impl<CS: CliServ> core::fmt::Debug for Runner<'_, CS> {
 impl<'a> Runner<'a, client::Client> {
     /// Request a PTY independently of the SessionOpened guard, allowing retries
     /// after wire-output backpressure. Call before request_shell().
-    pub fn request_pty(&mut self, channel: &ChanHandle, pty: crate::Pty) -> Result<()> {
+    pub fn request_pty(
+        &mut self,
+        channel: &ChanHandle,
+        pty: crate::Pty,
+    ) -> Result<()> {
         let mut sender = self.traf_out.sender(&mut self.keys);
         let channel = self.conn.channels.by_handle_mut(channel);
         let result = channel::Req::Pty(pty).send(channel, &mut sender);
@@ -149,11 +153,15 @@ impl<'a> Runner<'a, client::Client> {
         Ok(())
     }
 
-    pub(crate) fn fetch_cli_interactive(&self) -> Result<packets::UserauthInfoRequest<'_>> {
+    pub(crate) fn fetch_cli_interactive(
+        &self,
+    ) -> Result<packets::UserauthInfoRequest<'_>> {
         self.check_resume(&DispatchEvent::CliEvent(CliEventId::KeyboardInteractive));
         let (payload, _) = self.traf_in.payload().trap()?;
         match self.conn.packet(payload)? {
-            packets::Packet::Userauth60(packets::Userauth60::InfoRequest(info)) => Ok(info),
+            packets::Packet::Userauth60(packets::Userauth60::InfoRequest(info)) => {
+                Ok(info)
+            }
             _ => error::BadUsage.fail(),
         }
     }
@@ -305,18 +313,17 @@ impl<'a> Runner<'a, server::Server> {
         let num = self.conn.channels.by_handle_mut(channel).send_num()?;
         let mut sender = self.traf_out.sender(&mut self.keys);
         sender.send(packets::ChannelRequest {
-            num, want_reply: false,
-            req: packets::ChannelReqType::ExitStatus(packets::ExitStatus { status: 0 }),
+            num,
+            want_reply: false,
+            req: packets::ChannelReqType::ExitStatus(packets::ExitStatus {
+                status: 0,
+            }),
         })?;
         self.send_channel_eof(channel)?;
         self.close_channel(channel)
     }
 
-    pub fn set_auth_methods(
-        &mut self,
-        password: bool,
-        pubkey: bool,
-    ) -> Result<()> {
+    pub fn set_auth_methods(&mut self, password: bool, pubkey: bool) -> Result<()> {
         self.conn.set_auth_methods(password, pubkey)
     }
 
@@ -361,7 +368,9 @@ impl<'a, CS: CliServ> Runner<'a, CS> {
     /// Queue a normal application disconnect; drain wire output before TCP close.
     pub fn disconnect(&mut self) -> Result<()> {
         self.traf_out.sender(&mut self.keys).send(packets::Disconnect {
-            reason: 11, desc: "Application closed the connection".into(), lang: "",
+            reason: 11,
+            desc: "Application closed the connection".into(),
+            lang: "",
         })?;
         self.wake();
         Ok(())
@@ -992,6 +1001,57 @@ pub(crate) fn set_waker(store_waker: &mut Option<Waker>, new_waker: &Waker) {
         w.wake()
     }
     *store_waker = Some(new_waker.clone())
+}
+
+#[cfg(test)]
+mod native_output_tests {
+    use super::*;
+
+    #[test]
+    fn output_copies_only_the_available_prefix() {
+        let (mut input, mut output) = ([0u8; 8192], [0u8; 8192]);
+        let mut runner = Runner::new_client(&mut input, &mut output);
+        let _ = runner.progress().unwrap();
+        let expected = runner.output_buf().to_vec();
+        assert!(!expected.is_empty());
+        let mut target = vec![0xa5; expected.len() + 9];
+        assert_eq!(runner.output(&mut target), expected.len());
+        assert_eq!(&target[..expected.len()], expected);
+        assert_eq!(&target[expected.len()..], &[0xa5; 9]);
+        assert_eq!(runner.output(&mut target), 0);
+    }
+
+    #[test]
+    fn unsent_session_open_does_not_leak_channel_slots() {
+        use crate::encrypt::{Cipher, Integ, KeysSend};
+        use crate::kex::{Algos, KexOutput, SessId, SharedSecret};
+        use crate::sshnames::SSH_NAME_CURVE25519;
+        let (mut input, mut tiny, mut output) = ([0u8; 8192], [0u8; 8], [0u8; 8192]);
+        let mut runner = Runner::new_client(&mut input, &mut tiny);
+        let session = SessId::from_slice(&[7; 32]).unwrap();
+        let key = KexOutput::new_test(b"unit-test-only secret", &session);
+        let algorithms = Algos::<Client> {
+            kex: SharedSecret::from_name(SSH_NAME_CURVE25519).unwrap(),
+            hostsig: sign::SigType::Ed25519,
+            cipher_enc: Cipher::ChaPoly,
+            cipher_dec: Cipher::ChaPoly,
+            integ_enc: Integ::ChaPoly,
+            integ_dec: Integ::ChaPoly,
+            discard_next: false,
+            send_ext_info: false,
+            strict_kex: false,
+            _cs: core::marker::PhantomData,
+        };
+        runner.keys.rekey_send(KeysSend::new(&key, &session, &algorithms));
+        for _ in 0..config::MAX_CHANNELS * 2 {
+            assert!(matches!(
+                runner.open_client_session(),
+                Err(Error::BusySend { unsupported: true, .. })
+            ));
+        }
+        runner.traf_out = TrafOut::new(&mut output);
+        assert_eq!(runner.open_client_session().unwrap().num(), ChanNum(0));
+    }
 }
 
 /// Represents an open channel, owned by the application.

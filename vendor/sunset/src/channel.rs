@@ -37,7 +37,11 @@ impl Channels {
         }
         self.remove_any(num)
     }
-    pub(crate) fn send_eof(&mut self, handle: &ChanHandle, sender: &mut TrafSend) -> Result<()> {
+    pub(crate) fn send_eof(
+        &mut self,
+        handle: &ChanHandle,
+        sender: &mut TrafSend,
+    ) -> Result<()> {
         let channel = self.get_mut(handle.0)?;
         if !channel.sent_eof && !channel.sent_close && !channel.is_closed() {
             sender.send(packets::ChannelEof { num: channel.send_num()? })?;
@@ -46,7 +50,11 @@ impl Channels {
         Ok(())
     }
 
-    pub(crate) fn send_close(&mut self, handle: &ChanHandle, sender: &mut TrafSend) -> Result<()> {
+    pub(crate) fn send_close(
+        &mut self,
+        handle: &ChanHandle,
+        sender: &mut TrafSend,
+    ) -> Result<()> {
         let channel = self.get_mut(handle.0)?;
         if !channel.sent_close && !channel.is_closed() {
             sender.send(packets::ChannelClose { num: channel.send_num()? })?;
@@ -683,9 +691,12 @@ impl Req<'_> {
             Req::Pty(pty) => {
                 t = pty.term;
                 for (index, mode) in pty.modes.iter().enumerate() {
-                    if mode.opcode == 0 || mode.opcode >= 160 { return error::BadUsage.fail(); }
+                    if mode.opcode == 0 || mode.opcode >= 160 {
+                        return error::BadUsage.fail();
+                    }
                     modes[index * 5] = mode.opcode;
-                    modes[index * 5 + 1..index * 5 + 5].copy_from_slice(&mode.arg.to_be_bytes());
+                    modes[index * 5 + 1..index * 5 + 5]
+                        .copy_from_slice(&mode.arg.to_be_bytes());
                 }
                 ChannelReqType::Pty(packets::PtyReq {
                     term: TextString(t.as_bytes()),
@@ -1060,7 +1071,9 @@ impl Channel {
 
     // None on close
     fn send_allowed(&self) -> Option<usize> {
-        if self.sent_eof || self.sent_close || self.is_closed() { return None; }
+        if self.sent_eof || self.sent_close || self.is_closed() {
+            return None;
+        }
         let r = self.send.as_ref().map(|s| usize::min(s.window, s.max_packet));
         trace!("send_allowed {r:?}");
         r

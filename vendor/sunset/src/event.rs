@@ -221,11 +221,18 @@ impl CliEventId {
         match self {
             Self::Username => Ok(CliEvent::Username(RequestUsername { runner })),
             Self::Password => Ok(CliEvent::Password(RequestPassword { runner })),
-            Self::KeyboardInteractive => Ok(CliEvent::KeyboardInteractive(RequestKeyboardInteractive { runner })),
+            Self::KeyboardInteractive => {
+                Ok(CliEvent::KeyboardInteractive(RequestKeyboardInteractive {
+                    runner,
+                }))
+            }
             Self::Pubkey => Ok(CliEvent::Pubkey(RequestPubkey { runner })),
             Self::AgentSign => Ok(CliEvent::AgentSign(RequestSign { runner })),
             Self::Hostkey => {
-                debug_assert!(matches!(runner.packet()?, Some(Packet::KexDHReply(_))));
+                debug_assert!(matches!(
+                    runner.packet()?,
+                    Some(Packet::KexDHReply(_))
+                ));
                 Ok(CliEvent::Hostkey(CheckHostkey { runner }))
             }
             Self::Authenticated => Ok(CliEvent::Authenticated),
@@ -416,7 +423,9 @@ impl<'g, 'a> ServPasswordAuth<'g, 'a> {
 
     /// Keep authentication pending while the application durably verifies the response.
     /// The caller must stop progress() until Runner::finish_deferred_auth().
-    pub fn defer(mut self) { self.done = true; }
+    pub fn defer(mut self) {
+        self.done = true;
+    }
 
     /// Accept the presented password.
     pub fn allow(mut self) -> Result<()> {
@@ -822,7 +831,9 @@ impl<'g, 'a> ServPtyRequest<'g, 'a> {
         match self.runner.packet()? {
             Some(Packet::ChannelRequest(request)) => match request.req {
                 packets::ChannelReqType::Pty(pty) => Ok((pty.cols, pty.rows)),
-                packets::ChannelReqType::WinChange(size) => Ok((size.cols, size.rows)),
+                packets::ChannelReqType::WinChange(size) => {
+                    Ok((size.cols, size.rows))
+                }
                 _ => Err(Error::msg("not a PTY size request")),
             },
             _ => Err(Error::msg("missing PTY size request")),
@@ -831,7 +842,9 @@ impl<'g, 'a> ServPtyRequest<'g, 'a> {
 
     pub fn is_initial_request(&self) -> Result<bool> {
         match self.runner.packet()? {
-            Some(Packet::ChannelRequest(request)) => Ok(matches!(request.req, packets::ChannelReqType::Pty(_))),
+            Some(Packet::ChannelRequest(request)) => {
+                Ok(matches!(request.req, packets::ChannelReqType::Pty(_)))
+            }
             _ => Err(Error::msg("missing PTY request")),
         }
     }
@@ -991,7 +1004,11 @@ impl ServEventId {
                 Ok(ServEvent::Hostkeys(ServHostkeys { runner }))
             }
             Self::PasswordAuth => {
-                debug_assert!(matches!(p, Some(Packet::UserauthRequest(_)) | Some(Packet::UserauthInfoResponse(_))));
+                debug_assert!(matches!(
+                    p,
+                    Some(Packet::UserauthRequest(_))
+                        | Some(Packet::UserauthInfoResponse(_))
+                ));
                 Ok(ServEvent::PasswordAuth(ServPasswordAuth::new(runner)))
             }
             Self::PubkeyAuth { real_sig } => {

@@ -2,7 +2,11 @@
 use crate::*;
 use std::collections::VecDeque;
 
-fn transfer<A: CliServ, B: CliServ>(source: &mut Runner<'_, A>, destination: &mut Runner<'_, B>, queued: &mut VecDeque<u8>) {
+fn transfer<A: CliServ, B: CliServ>(
+    source: &mut Runner<'_, A>,
+    destination: &mut Runner<'_, B>,
+    queued: &mut VecDeque<u8>,
+) {
     // Exercise fragmentation and input backpressure: bytes not accepted by the
     // destination remain owned, and output is never consumed twice.
     // Like the native RX queue, this must hold a complete peer KEX packet:
@@ -25,10 +29,13 @@ fn incoming_auth(interactive: bool, allow: bool) {
     let mut client = Runner::new_client_owned();
     let mut server = Runner::new_server_owned();
     server.set_auth_methods(false, !interactive).unwrap();
-    if interactive { server.enable_keyboard_interactive().unwrap(); }
+    if interactive {
+        server.enable_keyboard_interactive().unwrap();
+    }
     let (mut to_server, mut to_client) = (VecDeque::new(), VecDeque::new());
     let (mut deferred, mut defer_ticks) = (false, 0);
-    let (mut challenge, mut client_authed, mut server_authed) = (false, false, false);
+    let (mut challenge, mut client_authed, mut server_authed) =
+        (false, false, false);
     let (mut offered, mut rejected) = (false, false);
     assert!(!client.initial_kex_complete());
     for _ in 0..30000 {
@@ -41,14 +48,20 @@ fn incoming_auth(interactive: bool, allow: bool) {
             }
         } else {
             match server.progress().unwrap() {
-                Event::Serv(ServEvent::Hostkeys(event)) => event.hostkeys(&[&host]).unwrap(),
+                Event::Serv(ServEvent::Hostkeys(event)) => {
+                    event.hostkeys(&[&host]).unwrap()
+                }
                 Event::Serv(ServEvent::FirstAuth(mut event)) => {
                     event.set_auth_methods(false, !interactive).unwrap();
                     event.reject().unwrap();
                 }
                 Event::Serv(ServEvent::PubkeyAuth(event)) => {
                     assert_eq!(event.pubkey().unwrap(), identity.pubkey());
-                    if allow { event.allow().unwrap(); } else { event.reject().unwrap(); }
+                    if allow {
+                        event.allow().unwrap();
+                    } else {
+                        event.reject().unwrap();
+                    }
                 }
                 Event::Serv(ServEvent::PasswordAuth(event)) => {
                     assert!(interactive);
@@ -58,7 +71,7 @@ fn incoming_auth(interactive: bool, allow: bool) {
                     deferred = true;
                 }
                 Event::Serv(ServEvent::Authenticated) => server_authed = true,
-                Event::None | Event::Progressed => {},
+                Event::None | Event::Progressed => {}
                 other => panic!("Unexpected incoming event {other:?}"),
             }
         }
@@ -68,16 +81,25 @@ fn incoming_auth(interactive: bool, allow: bool) {
                     assert_eq!(event.hostkey().unwrap(), host.pubkey());
                     event.accept().unwrap();
                 }
-                CliEvent::Username(event) => event.username("incoming-user").unwrap(),
+                CliEvent::Username(event) => {
+                    event.username("incoming-user").unwrap()
+                }
                 CliEvent::Pubkey(event) => {
-                    if offered { rejected = event.skip().is_err(); }
-                    else { offered = true; event.pubkey(identity.clone()).unwrap(); }
+                    if offered {
+                        rejected = event.skip().is_err();
+                    } else {
+                        offered = true;
+                        event.pubkey(identity.clone()).unwrap();
+                    }
                 }
                 CliEvent::KeyboardInteractive(event) => {
                     let info = event.info().unwrap();
                     assert_eq!(info.prompts.len(), 1);
                     assert_eq!(info.name.to_str().unwrap(), "TrueOS");
-                    assert_eq!(info.instruction.to_str().unwrap(), "Enter your cry authenticator code.");
+                    assert_eq!(
+                        info.instruction.to_str().unwrap(),
+                        "Enter your cry authenticator code."
+                    );
                     assert!(!info.prompts[0].echo);
                     drop(info);
                     challenge = true;
@@ -86,8 +108,10 @@ fn incoming_auth(interactive: bool, allow: bool) {
                 CliEvent::Authenticated => client_authed = true,
                 other => panic!("Unexpected client event {other:?}"),
             },
-            Ok(Event::None | Event::Progressed) => {},
-            Err(Error::NoAuthMethods { .. }) if !allow => { rejected = true; },
+            Ok(Event::None | Event::Progressed) => {}
+            Err(Error::NoAuthMethods { .. }) if !allow => {
+                rejected = true;
+            }
             other => panic!("Unexpected client result {other:?}"),
         }
         transfer(&mut client, &mut server, &mut to_server);
@@ -107,10 +131,18 @@ fn incoming_auth(interactive: bool, allow: bool) {
 }
 
 #[test]
-fn incoming_ed25519_still_authenticates() { incoming_auth(false, true); }
+fn incoming_ed25519_still_authenticates() {
+    incoming_auth(false, true);
+}
 #[test]
-fn incoming_ed25519_rejects_unapproved_identity() { incoming_auth(false, false); }
+fn incoming_ed25519_rejects_unapproved_identity() {
+    incoming_auth(false, false);
+}
 #[test]
-fn incoming_cry_challenge_stays_pending_until_durable_policy_allows() { incoming_auth(true, true); }
+fn incoming_cry_challenge_stays_pending_until_durable_policy_allows() {
+    incoming_auth(true, true);
+}
 #[test]
-fn incoming_cry_challenge_rejection_never_authenticates() { incoming_auth(true, false); }
+fn incoming_cry_challenge_rejection_never_authenticates() {
+    incoming_auth(true, false);
+}

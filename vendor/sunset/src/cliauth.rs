@@ -45,6 +45,7 @@ pub(crate) struct CliAuth {
     allow_password: bool,
     allow_interactive: bool,
     last_method: Option<AuthType>,
+    partial_success: bool,
 
     /// Set once we are OKed from MSG_EXT_INFO
     allow_rsa_sha2: bool,
@@ -62,6 +63,7 @@ impl Default for CliAuth {
             allow_password: false,
             allow_interactive: false,
             last_method: None,
+            partial_success: false,
             allow_rsa_sha2: false,
         }
     }
@@ -109,7 +111,9 @@ impl CliAuth {
                 let AuthState::Interactive { pending } = &mut self.state else {
                     return error::SSHProto.fail();
                 };
-                if pending.is_some() { return error::SSHProto.fail(); }
+                if pending.is_some() {
+                    return error::SSHProto.fail();
+                }
                 *pending = Some(request.prompts.len());
                 Ok(DispatchEvent::CliEvent(CliEventId::KeyboardInteractive))
             }
@@ -200,6 +204,11 @@ impl CliAuth {
         s: &mut TrafSend,
     ) -> Result<DispatchEvent> {
         parse_ctx.cli_auth_type = None;
+        // Preserve an accepted factor across subsequent attempts. A failed MFA
+        // stage must not silently restart independent password authentication.
+        if self.partial_success && !failure.partial {
+            return error::NoAuthMethods.fail();
+        }
         if failure.partial {
             // A completed factor advances to the server's remaining methods;
             // it never produces Authenticated or reoffers that factor.
@@ -209,6 +218,7 @@ impl CliAuth {
                 Some(AuthType::KeyboardInteractive) => self.try_interactive = false,
                 None => return error::SSHProto.fail(),
             }
+            self.partial_success = true;
         }
         self.state = AuthState::Idle;
         self.allow_pubkey = failure.methods.has_algo(SSH_AUTHMETHOD_PUBLICKEY)?;
@@ -217,7 +227,11 @@ impl CliAuth {
         self.next_method(s, parse_ctx)
     }
 
-    fn next_method(&mut self, s: &mut TrafSend, ctx: &mut ParseContext) -> Result<DispatchEvent> {
+    fn next_method(
+        &mut self,
+        s: &mut TrafSend,
+        ctx: &mut ParseContext,
+    ) -> Result<DispatchEvent> {
         if self.try_pubkey && self.allow_pubkey {
             return Ok(DispatchEvent::CliEvent(event::CliEventId::Pubkey));
         }
@@ -229,9 +243,12 @@ impl CliAuth {
             s.send(packets::UserauthRequest {
                 username: self.username.as_str().into(),
                 service: SSH_SERVICE_CONNECTION,
-                method: AuthMethod::KeyboardInteractive(packets::MethodKeyboardInteractive {
-                    language: "", submethods: "",
-                }),
+                method: AuthMethod::KeyboardInteractive(
+                    packets::MethodKeyboardInteractive {
+                        language: "",
+                        submethods: "",
+                    },
+                ),
             })?;
             return Ok(DispatchEvent::None);
         }
@@ -293,11 +310,17 @@ impl CliAuth {
         Ok(DispatchEvent::None)
     }
 
-    pub fn resume_interactive(&mut self, s: &mut TrafSend, answers: &[&str]) -> Result<()> {
+    pub fn resume_interactive(
+        &mut self,
+        s: &mut TrafSend,
+        answers: &[&str],
+    ) -> Result<()> {
         let AuthState::Interactive { pending } = &mut self.state else {
             return error::BadUsage.fail();
         };
-        if *pending != Some(answers.len()) { return error::BadUsage.fail(); }
+        if *pending != Some(answers.len()) {
+            return error::BadUsage.fail();
+        }
         let mut responses = packets::KbiList::new();
         for answer in answers {
             responses.push((*answer).into()).map_err(|_| error::BadUsage.build())?;
@@ -382,13 +405,18 @@ mod native_client_tests {
     fn encrypted_keys() -> KeyState {
         use crate::encrypt::{Cipher, Integ, KeysSend};
         let session = SessId::from_slice(&[7; 32]).unwrap();
-        let output = kex::KexOutput::new_test(b"unit-test-only shared secret", &session);
+        let output =
+            kex::KexOutput::new_test(b"unit-test-only shared secret", &session);
         let algorithms = kex::Algos::<Client> {
             kex: kex::SharedSecret::from_name(SSH_NAME_CURVE25519).unwrap(),
             hostsig: sign::SigType::Ed25519,
-            cipher_enc: Cipher::ChaPoly, cipher_dec: Cipher::ChaPoly,
-            integ_enc: Integ::ChaPoly, integ_dec: Integ::ChaPoly,
-            discard_next: false, send_ext_info: false, strict_kex: false,
+            cipher_enc: Cipher::ChaPoly,
+            cipher_dec: Cipher::ChaPoly,
+            integ_enc: Integ::ChaPoly,
+            integ_dec: Integ::ChaPoly,
+            discard_next: false,
+            send_ext_info: false,
+            strict_kex: false,
             _cs: core::marker::PhantomData,
         };
         let mut keys = KeyState::new_cleartext();
@@ -399,9 +427,16 @@ mod native_client_tests {
     fn challenge(count: usize) -> UserauthInfoRequest<'static> {
         let mut prompts = KbiList::new();
         for i in 0..count {
-            prompts.push(KeyboardPrompt { prompt: "Prompt: ".into(), echo: i % 2 == 0 }).unwrap();
+            prompts
+                .push(KeyboardPrompt { prompt: "Prompt: ".into(), echo: i % 2 == 0 })
+                .unwrap();
         }
-        UserauthInfoRequest { name: "MFA".into(), instruction: "Two rounds".into(), language: "".into(), prompts }
+        UserauthInfoRequest {
+            name: "MFA".into(),
+            instruction: "Two rounds".into(),
+            language: "".into(),
+            prompts,
+        }
     }
 
     #[test]
@@ -413,20 +448,34 @@ mod native_client_tests {
         let mut send = output.sender(&mut keys);
         let mut ctx = ParseContext::new();
         let session = SessId::from_slice(&[3; 32]).unwrap();
-        let failure = packets::UserauthFailure { methods: "keyboard-interactive".try_into().unwrap(), partial: false };
-        assert!(matches!(auth.failure(&failure, &mut ctx, &mut send).unwrap(), DispatchEvent::None));
+        let failure = packets::UserauthFailure {
+            methods: "keyboard-interactive".try_into().unwrap(),
+            partial: false,
+        };
+        assert!(matches!(
+            auth.failure(&failure, &mut ctx, &mut send).unwrap(),
+            DispatchEvent::None
+        ));
         assert_eq!(ctx.cli_auth_type, Some(AuthType::KeyboardInteractive));
         for count in [0, 2, 1] {
             let request = Userauth60::InfoRequest(challenge(count));
-            assert!(matches!(auth.auth60(&request, &session, &mut ctx, &mut send).unwrap(), DispatchEvent::CliEvent(CliEventId::KeyboardInteractive)));
+            assert!(matches!(
+                auth.auth60(&request, &session, &mut ctx, &mut send).unwrap(),
+                DispatchEvent::CliEvent(CliEventId::KeyboardInteractive)
+            ));
             let answers = vec!["answer"; count];
-            assert!(auth.resume_interactive(&mut send, &["wrong count"; 3]).is_err());
+            assert!(
+                auth.resume_interactive(&mut send, &["wrong count"; 3]).is_err()
+            );
             auth.resume_interactive(&mut send, &answers).unwrap();
             assert!(auth.resume_interactive(&mut send, &answers).is_err());
         }
         // Answering a challenge is still awaiting a server decision.
         assert!(matches!(auth.state, AuthState::Interactive { pending: None }));
-        assert!(matches!(auth.success(), DispatchEvent::CliEvent(CliEventId::Authenticated)));
+        assert!(matches!(
+            auth.success(),
+            DispatchEvent::CliEvent(CliEventId::Authenticated)
+        ));
     }
 
     #[test]
@@ -440,17 +489,35 @@ mod native_client_tests {
         let session = SessId::from_slice(&[3; 32]).unwrap();
         let key = SignKey::generate(KeyType::Ed25519, None).unwrap();
         let public = key.pubkey();
-        let failure = packets::UserauthFailure { methods: "publickey,keyboard-interactive,password".try_into().unwrap(), partial: false };
-        assert!(matches!(auth.failure(&failure, &mut ctx, &mut send).unwrap(), DispatchEvent::CliEvent(CliEventId::Pubkey)));
+        let failure = packets::UserauthFailure {
+            methods: "publickey,keyboard-interactive,password".try_into().unwrap(),
+            partial: false,
+        };
+        assert!(matches!(
+            auth.failure(&failure, &mut ctx, &mut send).unwrap(),
+            DispatchEvent::CliEvent(CliEventId::Pubkey)
+        ));
         let _ = auth.resume_pubkey(&mut send, Some(key.clone()), &mut ctx).unwrap();
-        let ok = Userauth60::PkOk(UserauthPkOk { algo: SSH_NAME_ED25519, key: sshwire::Blob(public) });
+        let ok = Userauth60::PkOk(UserauthPkOk {
+            algo: SSH_NAME_ED25519,
+            key: sshwire::Blob(public),
+        });
         let _ = auth.auth60(&ok, &session, &mut ctx, &mut send).unwrap();
-        let partial = packets::UserauthFailure { methods: "publickey,keyboard-interactive".try_into().unwrap(), partial: true };
-        assert!(matches!(auth.failure(&partial, &mut ctx, &mut send).unwrap(), DispatchEvent::None));
+        let partial = packets::UserauthFailure {
+            methods: "publickey,keyboard-interactive".try_into().unwrap(),
+            partial: true,
+        };
+        assert!(matches!(
+            auth.failure(&partial, &mut ctx, &mut send).unwrap(),
+            DispatchEvent::None
+        ));
         assert!(!auth.try_pubkey);
         assert!(matches!(auth.state, AuthState::Interactive { .. }));
         // A failed second factor cannot fall back to an unadvertised password.
-        let failed = packets::UserauthFailure { methods: "keyboard-interactive".try_into().unwrap(), partial: false };
+        let failed = packets::UserauthFailure {
+            methods: "keyboard-interactive,password".try_into().unwrap(),
+            partial: false,
+        };
         assert!(auth.failure(&failed, &mut ctx, &mut send).is_err());
     }
 
@@ -462,8 +529,17 @@ mod native_client_tests {
         let mut keys = encrypted_keys();
         let mut send = output.sender(&mut keys);
         let mut ctx = ParseContext::new();
-        let _ = auth.resume_pubkey(&mut send, Some(SignKey::generate(KeyType::Ed25519, None).unwrap()), &mut ctx).unwrap();
-        let partial = packets::UserauthFailure { methods: "password".try_into().unwrap(), partial: true };
+        let _ = auth
+            .resume_pubkey(
+                &mut send,
+                Some(SignKey::generate(KeyType::Ed25519, None).unwrap()),
+                &mut ctx,
+            )
+            .unwrap();
+        let partial = packets::UserauthFailure {
+            methods: "password".try_into().unwrap(),
+            partial: true,
+        };
         assert!(auth.failure(&partial, &mut ctx, &mut send).is_err());
     }
 
@@ -475,7 +551,10 @@ mod native_client_tests {
         let mut keys = encrypted_keys();
         let mut send = output.sender(&mut keys);
         let mut ctx = ParseContext::new();
-        let failure = packets::UserauthFailure { methods: "publickey".try_into().unwrap(), partial: false };
+        let failure = packets::UserauthFailure {
+            methods: "publickey".try_into().unwrap(),
+            partial: false,
+        };
         let _ = auth.failure(&failure, &mut ctx, &mut send).unwrap();
         assert!(auth.resume_pubkey(&mut send, None, &mut ctx).is_err());
     }
@@ -488,9 +567,15 @@ mod native_client_tests {
         let mut keys = encrypted_keys();
         let mut send = output.sender(&mut keys);
         let mut ctx = ParseContext::new();
-        let failure = packets::UserauthFailure { methods: "keyboard-interactive,password".try_into().unwrap(), partial: false };
+        let failure = packets::UserauthFailure {
+            methods: "keyboard-interactive,password".try_into().unwrap(),
+            partial: false,
+        };
         let _ = auth.failure(&failure, &mut ctx, &mut send).unwrap();
-        assert!(matches!(auth.failure(&failure, &mut ctx, &mut send).unwrap(), DispatchEvent::CliEvent(CliEventId::Password)));
+        assert!(matches!(
+            auth.failure(&failure, &mut ctx, &mut send).unwrap(),
+            DispatchEvent::CliEvent(CliEventId::Password)
+        ));
         let _ = auth.resume_password(&mut send, Some("secret"), &mut ctx).unwrap();
         assert_eq!(ctx.cli_auth_type, Some(AuthType::Password));
     }
@@ -498,14 +583,25 @@ mod native_client_tests {
     #[test]
     fn interactive_wire_roundtrip_preserves_metadata_and_hides_answers() {
         for count in [0, 2, 32, 64] {
-            let request = packets::Packet::Userauth60(Userauth60::InfoRequest(challenge(count)));
+            let request = packets::Packet::Userauth60(Userauth60::InfoRequest(
+                challenge(count),
+            ));
             let mut bytes = [0u8; 8192];
             let len = sshwire::write_ssh(&mut bytes, &request).unwrap();
-            let ctx = ParseContext { cli_auth_type: Some(AuthType::KeyboardInteractive), ..ParseContext::new() };
-            let packets::Packet::Userauth60(Userauth60::InfoRequest(decoded)) = sshwire::packet_from_bytes(&bytes[..len], &ctx).unwrap() else { panic!() };
+            let ctx = ParseContext {
+                cli_auth_type: Some(AuthType::KeyboardInteractive),
+                ..ParseContext::new()
+            };
+            let packets::Packet::Userauth60(Userauth60::InfoRequest(decoded)) =
+                sshwire::packet_from_bytes(&bytes[..len], &ctx).unwrap()
+            else {
+                panic!()
+            };
             assert_eq!(decoded.prompts.len(), count);
             assert_eq!(decoded.instruction.to_str().unwrap(), "Two rounds");
-            for (i, prompt) in decoded.prompts.iter().enumerate() { assert_eq!(prompt.echo, i % 2 == 0); }
+            for (i, prompt) in decoded.prompts.iter().enumerate() {
+                assert_eq!(prompt.echo, i % 2 == 0);
+            }
         }
         let mut responses = KbiList::new();
         responses.push("never print this secret".into()).unwrap();

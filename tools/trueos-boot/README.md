@@ -51,14 +51,15 @@ cargo rig   # dev kernel
 cargo rigreal  # release kernel
 ```
 
-`cargo rigreal --native-only` builds the audited core/alloc subset: Commander,
-Img, OS, Backup, Termdir, Paper, Edit, Apps, Hull, Share and Trauma. Each invocation creates a fresh
+All twelve configured builtins use the audited core/alloc target: Commander,
+Img, OS, Backup, Termdir, Paper, Edit, Apps, Hull, Share, Trauma and SSH.
+`cargo rigreal --native-only` verifies them in isolation. Each invocation creates a fresh
 `tgt/native-only.XXXXXX/` directory containing separate builtin and kernel
-targets, an eleven-app AppDB, and a kernel link map. No prior Cargo object or AppDB
+targets, a twelve-app AppDB, and a kernel link map. No prior Cargo object or AppDB
 is reused in these targets. The normal configuration continues to select all
 apps in `TRUEOS-Buildins/buildins.json`.
 
-The experimental generation is published and resets the rig through the usual
+The isolated generation is published and resets the rig through the usual
 workflow. Its `native-only-build-root`, `buildins.json` and
 `buildins-ready.json` record the exact inputs outside the three-member boot
 archive. The driver rejects a selected builtin that requires std or imports a
@@ -68,7 +69,9 @@ removed, including their reexported C allocation aliases. Legacy Blueprint
 imports fail prebind and cannot fall through to loader stubs. Freestanding
 memory, string and math helpers remain available.
 
-Use `--native-only` for the current runnable image. The remaining configured builtin, SSH, remains in the ownership manifest, but its compatibility imports deliberately fail the build's ABI check until it is ported.
+The normal workflow selects the same twelve builtins. SSH uses the shared
+Sunset source for incoming and outgoing sessions; the outgoing app adds its
+key-file and curve features without enabling them for the incoming kernel.
 
 Without `--native-only`, both commands attempt all apps from the sibling `TRUEOS-Buildins/buildins.json`,
 create and compress an app.db redb image containing their normal Blueprint
