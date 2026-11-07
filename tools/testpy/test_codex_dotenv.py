@@ -182,8 +182,8 @@ mod cabi {
         TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     }
     pub fn snapshot() -> Vec<Vec<u8>> {
-        let env = ENVIRONMENT.lock().unwrap();
-        let mut pointer = env.environ;
+        let mut env = ENVIRONMENT.lock().unwrap();
+        let mut pointer = env.c_environ().unwrap();
         let mut out = Vec::new();
         while !unsafe { *pointer }.is_null() {
             out.push(unsafe { core::ffi::CStr::from_ptr(*pointer) }.to_bytes().to_vec());

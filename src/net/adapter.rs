@@ -5562,6 +5562,46 @@ fn service_for_device(device_index: usize) -> Option<&'static spin::Mutex<NetSer
     services.get(device_index).copied()
 }
 
+/// Apply an option to an existing transport socket synchronously. Callers must
+/// first authorize the opaque handle in their own socket namespace. The adapter
+/// lock serializes configuration with packet processing, so success means the
+/// transport has applied the value, rather than merely queued a request.
+pub(crate) fn socket_option(
+    device_index: usize,
+    handle: NetHandle,
+    option: u32,
+    value: Option<u32>,
+) -> Result<u32, i32> {
+    match (option, value) {
+        (1, Some(value)) if value > 1 => return Err(-4),
+        (2, Some(value)) if value == 0 || value > 255 => return Err(-4),
+        (1 | 2, _) => {}
+        _ => return Err(-1),
+    }
+    let service = service_for_device(device_index).ok_or(-8)?;
+    let mut service = service.lock();
+    let record = service.records.iter().find(|record| record.handle == handle).ok_or(-5)?;
+    let (kind, socket) = (record.kind, record.socket);
+    match (kind, option) {
+        (SocketKind::Tcp, 1) => {
+            let socket = service.sockets.get_mut::<tcp::Socket>(socket);
+            if let Some(value) = value { socket.set_nagle_enabled(value == 0); }
+            Ok(u32::from(!socket.nagle_enabled()))
+        }
+        (SocketKind::Tcp, 2) => {
+            let socket = service.sockets.get_mut::<tcp::Socket>(socket);
+            if let Some(value) = value { socket.set_hop_limit(Some(value as u8)); }
+            Ok(u32::from(socket.hop_limit().unwrap_or(64)))
+        }
+        (SocketKind::Udp, 2) => {
+            let socket = service.sockets.get_mut::<udp::Socket>(socket);
+            if let Some(value) = value { socket.set_hop_limit(Some(value as u8)); }
+            Ok(u32::from(socket.hop_limit().unwrap_or(64)))
+        }
+        _ => Err(-4),
+    }
+}
+
 fn service_tick_once(device_index: usize) -> bool {
     let Some(service) = service_for_device(device_index) else {
         return false;

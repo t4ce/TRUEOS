@@ -43,13 +43,11 @@ impl ProcessErrno {
     }
 }
 // Each process owns its `environ` pointer cell and all C-string payloads.
-#[path = "process_environment.rs"]
-mod process_environment;
+use crate::r::native_process::environment as process_environment;
 static C_ALLOCATIONS: Mutex<AllocationRegistry<AllocationRecord, C_ALLOCATION_CAPACITY>> =
     Mutex::new(AllocationRegistry::new());
 static PTHREAD_KEYS: ProcessPthreadKeys = ProcessPthreadKeys;
 static PTHREAD_TLS_VALUES: ProcessPthreadTlsValues = ProcessPthreadTlsValues;
-static PTHREAD_THREADS: ProcessPthreadThreads = ProcessPthreadThreads;
 static SIGNAL_ACTIONS: ProcessSignalActions = ProcessSignalActions;
 pub(crate) static OPEN_FILES: ProcessOpenFiles = ProcessOpenFiles;
 static REGULAR_FILE_WORLDS: ProcessRegularFileWorlds = ProcessRegularFileWorlds;
@@ -69,8 +67,6 @@ const PTHREAD_MUTEX_SPIN_TRACE_START: usize = 1 << 24;
 const C_ALLOCATION_CAPACITY: usize = 65536;
 const PTHREAD_KEY_CAPACITY: usize = 128;
 const PTHREAD_TLS_VALUE_CAPACITY: usize = 512;
-const PTHREAD_THREAD_CAPACITY: usize = 64;
-const PTHREAD_JOIN_WAIT_KEY_TAG: u64 = 0x5448_5244_0000_0000;
 const SIGNAL_ACTION_CAPACITY: usize = 256;
 // Guest Hull BSS and host-carrier BSS intentionally have independent thread
 // counters. Tag carrier-issued opaque pthread handles inside the u32 range so
@@ -369,11 +365,6 @@ const PTHREAD_DESTRUCTOR_ITERATIONS: usize = 4;
 const _: () = assert!(core::mem::size_of::<PthreadMutexStorage>() <= PTHREAD_MUTEX_ABI_BYTES);
 const _: () = assert!(core::mem::size_of::<PthreadCondStorage>() <= PTHREAD_COND_ABI_BYTES);
 
-struct PthreadThreadState {
-    completion: Arc<crate::wait::CompletionCell<usize>>,
-    joining: bool,
-}
-
 #[derive(Default)]
 pub(crate) struct BytePipe {
     pub(crate) bytes: Vec<u8>,
@@ -519,16 +510,12 @@ enum SocketFd {
 /// VM's pages can be mapped into its otherwise-private Hull RW image.
 #[repr(C, align(4096))]
 struct ProcessSharedState {
-    native_tls: crate::r::native_tls::State,
-    environment: Mutex<process_environment::Environment>,
     errno: [AtomicI32; crate::percpu::CPU_SLOT_LIMIT],
     pthread_keys: Mutex<FixedKeyMap<usize, PthreadKeyState, PTHREAD_KEY_CAPACITY>>,
     pthread_tls_values:
         Mutex<FixedKeyMap<PthreadTlsSlot, PthreadTlsValue, PTHREAD_TLS_VALUE_CAPACITY>>,
-    pthread_threads: Mutex<FixedKeyMap<usize, PthreadThreadState, PTHREAD_THREAD_CAPACITY>>,
     signal_actions: Mutex<FixedKeyMap<SignalActionKey, TrueosSigAction, SIGNAL_ACTION_CAPACITY>>,
     next_pthread_key: AtomicUsize,
-    next_thread_id: AtomicUsize,
     open_files: Mutex<FixedKeyMap<c_int, OpenFile, OPEN_FILE_CAPACITY>>,
     regular_file_worlds: Mutex<RegularFileWorldRegistry>,
     fd_flags: Mutex<FixedKeyMap<c_int, c_int, FD_FLAG_CAPACITY>>,
@@ -540,19 +527,15 @@ struct ProcessSharedState {
 impl ProcessSharedState {
     const fn new() -> Self {
         Self {
-            native_tls: crate::r::native_tls::State::new(),
-            environment: Mutex::new(process_environment::Environment::new()),
             errno: [const { AtomicI32::new(0) }; crate::percpu::CPU_SLOT_LIMIT],
             pthread_keys: Mutex::new(FixedKeyMap::new()),
             pthread_tls_values: Mutex::new(FixedKeyMap::new()),
-            pthread_threads: Mutex::new(FixedKeyMap::new()),
             signal_actions: Mutex::new(FixedKeyMap::new()),
             // Keep the complete fixed-capacity state bitwise-zero so the 64
             // per-Blueprint instances remain NOBITS instead of inflating the
             // runtime ELF's file-backed .data.  The public sequences still
             // begin at their POSIX values through the lazy accessors below.
             next_pthread_key: AtomicUsize::new(0),
-            next_thread_id: AtomicUsize::new(0),
             open_files: Mutex::new(FixedKeyMap::new()),
             regular_file_worlds: Mutex::new(RegularFileWorldRegistry::new()),
             fd_flags: Mutex::new(FixedKeyMap::new()),
@@ -657,8 +640,11 @@ fn process_state() -> &'static ProcessSharedState {
         .unwrap_or(&HOST_PROCESS_STATE)
 }
 
-pub(crate) fn native_tls_state() -> &'static crate::r::native_tls::State {
-    &process_state().native_tls
+fn process_state_if_ready() -> Option<&'static ProcessSharedState> {
+    let Some(vm) = crate::r::native_process::current_vm() else { return Some(&HOST_PROCESS_STATE); };
+    let initialized = BLUEPRINT_PROCESS_STATE_INIT.get(vm as usize)?;
+    if initialized.load(Ordering::Acquire) != PROCESS_STATE_READY { return None; }
+    Some(unsafe { &*BLUEPRINT_PROCESS_STATES.slot_ptr(vm as usize)? })
 }
 
 pub(crate) fn blueprint_process_state_span(vm_id: u8) -> Option<(u64, usize)> {
@@ -698,16 +684,13 @@ pub(crate) fn reset_blueprint_process_state(vm_id: u8) {
         return;
     };
     let state = unsafe { &*slot };
-    state.native_tls.reset();
     for errno in &state.errno {
         errno.store(0, Ordering::Release);
     }
     state.pthread_keys.lock().clear();
     state.pthread_tls_values.lock().clear();
-    state.pthread_threads.lock().clear();
     state.signal_actions.lock().clear();
     state.next_pthread_key.store(0, Ordering::Release);
-    state.next_thread_id.store(0, Ordering::Release);
     state.open_files.lock().clear();
     *state.regular_file_worlds.lock() = RegularFileWorldRegistry::new();
     state.fd_flags.lock().clear();
@@ -716,7 +699,6 @@ pub(crate) fn reset_blueprint_process_state(vm_id: u8) {
     }
     state.socket_fds.lock().clear();
     state.next_file_fd.store(0, Ordering::Release);
-    *state.environment.lock() = process_environment::Environment::new();
 }
 
 fn environment_vm_id() -> Option<u8> {
@@ -724,56 +706,18 @@ fn environment_vm_id() -> Option<u8> {
         .or_else(crate::hv::current_guest_execution_context_vm_id)
 }
 
-pub(crate) fn initialize_blueprint_environment<'a>(vm_id: u8, initial: impl Iterator<Item = (&'a [u8], &'a [u8])>) -> Result<(), c_int> {
-    let state = blueprint_process_state(vm_id).ok_or(TRUEOS_EINVAL)?;
-    let mut env = state.environment.lock();
-    crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
-        let mut next = process_environment::Environment::new();
-        next.initialize(initial)?;
-        *env = next;
-        Ok(())
-    }).ok_or(TRUEOS_ENOMEM)?
-}
-
 fn with_environment<R>(vm_id: Option<u8>, f: impl FnOnce(&mut process_environment::Environment) -> R) -> Result<R, c_int> {
-    let state = match vm_id {
-        Some(vm_id) => blueprint_process_state(vm_id).ok_or(TRUEOS_EINVAL)?,
-        None => &HOST_PROCESS_STATE,
-    };
-    let mut env = state.environment.lock();
-    let initial = if env.initialized() { None } else {
-        // Guest CABI runs inside the guest address space. It must never walk
-        // the host-owned launch context, even before allocating its own copy.
-        if vm_id.is_some() { return Err(TRUEOS_EINVAL); }
-        Some(crate::r::io::env::initial_snapshot())
-    };
-    let operate = || {
-        if let Some(initial) = initial {
-            env.initialize(initial.iter().map(|(key,value)|(key.as_bytes(),value.as_bytes())))?;
-        }
-        Ok(f(&mut env))
-    };
-    // The shared-state page only owns pointer cells. Every pointee must also
-    // live in this VM's EPT-readable arena, including host-carrier mutations.
-    match vm_id {
-        Some(vm_id) => crate::allocators::with_hv_guest_alloc_domain(vm_id, operate).ok_or(TRUEOS_ENOMEM)?,
-        None => crate::allocators::with_host_alloc_domain(operate),
-    }
-}
-
-pub(crate) fn environment_bytes(vm_id: Option<u8>, key: &[u8]) -> Option<Vec<u8>> {
-    with_environment(vm_id, |env| env.get(key).map(<[u8]>::to_vec)).ok().flatten()
-}
-
-pub(crate) fn environment_pairs(vm_id: u8) -> Option<Vec<(Vec<u8>,Vec<u8>)>> {
-    with_environment(Some(vm_id), |env| env.pairs().map(|(key,value)|(key.to_vec(),value.to_vec())).collect()).ok()
+    crate::r::native_process::with_environment(vm_id, f)
 }
 
 pub(crate) fn environ_import_address() -> Option<usize> {
     // The image loader can run before entering the app thread; its explicit
     // current VM is valid for binding data imports, not for runtime C calls.
     let vm_id = environment_vm_id().or_else(crate::hv::current_vm_id);
-    with_environment(vm_id, |env| core::ptr::addr_of_mut!(env.environ) as usize).ok()
+    with_environment(vm_id, |env| {
+        env.c_environ()?;
+        Ok::<usize, c_int>(core::ptr::addr_of_mut!(env.environ) as usize)
+    }).ok()?.ok()
 }
 
 
@@ -842,17 +786,6 @@ impl ProcessPthreadTlsValues {
         FixedKeyMap<PthreadTlsSlot, PthreadTlsValue, PTHREAD_TLS_VALUE_CAPACITY>,
     > {
         process_state().pthread_tls_values.lock()
-    }
-}
-
-struct ProcessPthreadThreads;
-
-impl ProcessPthreadThreads {
-    fn lock(
-        &self,
-    ) -> spin::MutexGuard<'static, FixedKeyMap<usize, PthreadThreadState, PTHREAD_THREAD_CAPACITY>>
-    {
-        process_state().pthread_threads.lock()
     }
 }
 
@@ -1251,7 +1184,7 @@ fn pthread_create_trace(thread_id: usize, stack: usize, rc: c_int, reason: &'sta
     // made std::thread::Scope::spawn panic. Count only scalar registry state;
     // neither the entry routine nor its argument belongs in diagnostics.
     if rc != 0 || seq < PTHREAD_CREATE_TRACE_LIMIT {
-        let join_live = PTHREAD_THREADS.lock().values().count();
+        let join_live = crate::r::native_process::current().threads.live_count();
         let origin = if (thread_id & PTHREAD_THREAD_CARRIER_TAG) != 0 {
             "carrier"
         } else {
@@ -1262,7 +1195,7 @@ fn pthread_create_trace(thread_id: usize, stack: usize, rc: c_int, reason: &'sta
             log_os_core::LogLevel::Info,
             Some("pthread-realm"),
             format_args!(
-                "create seq={} thread={} origin={} local_seq={} rc={} reason={} stack_bytes={} join_live={} join_capacity={} owner={}\n",
+                "create seq={} thread={} origin={} local_seq={} rc={} reason={} stack_bytes={} join_live={} owner={}\n",
                 seq,
                 thread_id,
                 origin,
@@ -1271,43 +1204,9 @@ fn pthread_create_trace(thread_id: usize, stack: usize, rc: c_int, reason: &'sta
                 reason,
                 stack,
                 join_live,
-                PTHREAD_THREAD_CAPACITY,
                 pthread_current_id()
             ),
         );
-    }
-}
-
-fn pthread_next_thread_id() -> usize {
-    let next_thread_id = &process_state().next_thread_id;
-    initialize_usize_sequence(next_thread_id, 1);
-    let sequence = next_thread_id.fetch_add(1, Ordering::AcqRel) & PTHREAD_THREAD_SEQUENCE_MASK;
-    let sequence = sequence.max(1);
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        sequence
-    } else {
-        sequence | PTHREAD_THREAD_CARRIER_TAG
-    }
-}
-
-fn pthread_join_wait_key(thread: usize) -> u64 {
-    PTHREAD_JOIN_WAIT_KEY_TAG | thread as u64
-}
-
-fn pthread_join_completion(
-    thread: usize,
-    completion: &crate::wait::CompletionCell<usize>,
-) -> usize {
-    let key = pthread_join_wait_key(thread);
-    loop {
-        // Hull callers must cross VMX into a platform wait, while carried
-        // logical threads suspend their stack. Observe before testing the
-        // completion so an exit racing the wait cannot lose its wake.
-        let observed = crate::r::platform::trueos_tokio_platform_wait_observe(key);
-        if let Some(result) = completion.try_take() {
-            return result;
-        }
-        crate::r::platform::trueos_tokio_platform_wait_after(key, observed, u64::MAX);
     }
 }
 
@@ -1623,45 +1522,35 @@ fn pthread_cond_wait_key(
     if relock == 0 { result } else { relock }
 }
 
+pub(crate) fn run_compat_tls_destructor_round(owner: usize) -> bool {
+    let Some(state) = process_state_if_ready() else { return false; };
+    let keys = state.pthread_keys.lock().values().copied().collect::<Vec<_>>();
+    let mut ran = false;
+    for key in keys {
+        let slot = PthreadTlsSlot { owner, key: key.key };
+        let value = state.pthread_tls_values.lock().remove(slot);
+        if let Some(value) = value
+            && value.value != 0 && key.destructor != 0
+        {
+            let destructor: unsafe extern "C" fn(*mut c_void) = unsafe { core::mem::transmute(key.destructor) };
+            unsafe { destructor(value.value as *mut c_void) };
+            ran = true;
+        }
+    }
+    ran
+}
+
+pub(crate) fn clear_compat_tls_values(owner: usize) {
+    let Some(state) = process_state_if_ready() else { return; };
+    let mut values = state.pthread_tls_values.lock();
+    let slots = values.values().filter(|value| value.slot.owner == owner)
+        .map(|value| value.slot).collect::<Vec<_>>();
+    for slot in slots { values.remove(slot); }
+}
+
+#[cfg(test)]
 fn run_execution_tls_destructors(owner: usize) {
-    for _ in 0..PTHREAD_DESTRUCTOR_ITERATIONS {
-        let keys = PTHREAD_KEYS.lock().values().copied().collect::<Vec<_>>();
-        let mut ran_destructor = false;
-        for key in keys {
-            let slot = PthreadTlsSlot {
-                owner,
-                key: key.key,
-            };
-            // Remove before calling the destructor, which may install another
-            // value for a subsequent round. Never call user code under a lock.
-            let value = PTHREAD_TLS_VALUES.lock().remove(slot);
-            if let Some(value) = value
-                && value.value != 0
-                && key.destructor != 0
-            {
-                let destructor: unsafe extern "C" fn(*mut c_void) =
-                    unsafe { core::mem::transmute(key.destructor) };
-                unsafe { destructor(value.value as *mut c_void) };
-                ran_destructor = true;
-            }
-        }
-        ran_destructor |= native_tls_state().run_destructor_round(owner);
-        if !ran_destructor {
-            break;
-        }
-    }
-    let mut values = PTHREAD_TLS_VALUES.lock();
-    let slots = values
-        .values()
-        .filter(|value| value.slot.owner == owner)
-        .map(|value| value.slot)
-        .collect::<Vec<_>>();
-    for slot in slots {
-        values.remove(slot);
-    }
-    drop(values);
-    native_tls_state().run_cleanup(owner);
-    native_tls_state().retire_owner(owner);
+    crate::r::native_tls::run_execution_destructors(owner);
 }
 
 #[cfg(test)]
@@ -2912,7 +2801,7 @@ pub extern "C" fn trueos_cabi_boot_timestamp_secs() -> u64 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_thread_current_id() -> usize {
-    pthread_current_id()
+    crate::r::native_thread::current_id()
 }
 
 #[unsafe(no_mangle)]
@@ -7216,7 +7105,7 @@ pub unsafe extern "C" fn pthread_kill(thread: usize, signal: c_int) -> c_int {
     if !valid_signal(signal) && signal != 0 {
         return TRUEOS_EINVAL;
     }
-    if thread != pthread_current_id() && PTHREAD_THREADS.lock().get(thread).is_none() {
+    if thread != pthread_current_id() && !crate::r::native_process::current().threads.contains(thread) {
         return TRUEOS_ESRCH;
     }
     if signal == 0 {
@@ -7575,111 +7464,33 @@ pub unsafe extern "C" fn trueos_cabi_thread_spawn(
     arg: *mut c_void,
     thread: *mut usize,
 ) -> c_int {
-    if thread.is_null() {
-        pthread_create_trace(0, stack, TRUEOS_EINVAL, "invalid_thread_output");
-        return TRUEOS_EINVAL;
-    }
-
-    let thread_id = pthread_next_thread_id();
-    let completion = Arc::new(crate::wait::CompletionCell::new());
-    let state = PthreadThreadState {
-        completion: completion.clone(),
-        joining: false,
-    };
-
-    let registered = PTHREAD_THREADS.lock().insert(thread_id, state).is_ok();
-    if !registered {
-        pthread_create_trace(thread_id, stack, TRUEOS_EAGAIN, "join_registry_full");
-        return TRUEOS_EAGAIN;
-    }
-
-    let id_bytes = thread_id.to_ne_bytes();
-    let Some(out) = abi_write_bytes(thread.cast::<u8>(), core::mem::size_of::<usize>()) else {
-        let _ = PTHREAD_THREADS.lock().remove(thread_id);
-        pthread_create_trace(thread_id, stack, TRUEOS_EINVAL, "invalid_thread_output");
-        return TRUEOS_EINVAL;
-    };
-    out.copy_from_slice(&id_bytes);
-
-    let arg = arg as usize;
-    let job = Box::new(move || {
-        let result = (unsafe { entry(arg as *mut c_void) }) as usize;
-        run_execution_tls_destructors(crate::r::native_tls::current_identity());
-        let _ = completion.complete(result);
-        crate::r::platform::trueos_tokio_platform_wake_all(pthread_join_wait_key(thread_id));
-    });
-
-    let vm_id = crate::r::threads::current_vm_id()
-        .or_else(crate::hv::current_guest_execution_context_vm_id);
-    let rc = match crate::r::threads::spawn(stack, job, vm_id, thread_id) {
-        Ok(()) => 0,
-        Err(error) => error,
-    };
-    if rc == 0 {
-        pthread_create_trace(thread_id, stack, 0, "admitted");
-        0
-    } else {
-        let _ = PTHREAD_THREADS.lock().remove(thread_id);
-        pthread_create_trace(thread_id, stack, rc, "scheduler_rejected");
-        rc
+    if thread.is_null() { return TRUEOS_EINVAL; }
+    match crate::r::native_thread::spawn(stack, entry, arg, |id| copy_usize_to_abi_out(thread, id)) {
+        Ok(id) => { pthread_create_trace(id, stack, 0, "admitted"); 0 }
+        Err(error) => { pthread_create_trace(0, stack, error, "native_admission_rejected"); error }
     }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_join(thread: usize, retval: *mut *mut c_void) -> c_int {
-    if crate::r::threads::current_id() == Some(thread) {
-        return TRUEOS_EDEADLK;
-    }
-    let completion = {
-        let mut table = PTHREAD_THREADS.lock();
-        let Some(state) = table.get_mut(thread) else {
-            return TRUEOS_ESRCH;
-        };
-        if state.joining {
-            return TRUEOS_EINVAL;
-        }
-        state.joining = true;
-        state.completion.clone()
-    };
-
-    let result = pthread_join_completion(thread, &completion);
-    let _ = PTHREAD_THREADS.lock().remove(thread);
-
-    if !retval.is_null() {
-        let bytes = result.to_ne_bytes();
-        let Some(out) = abi_write_bytes(retval.cast::<u8>(), core::mem::size_of::<usize>()) else {
-            return TRUEOS_EINVAL;
-        };
-        out.copy_from_slice(&bytes);
-    }
-
+    let result = match crate::r::native_thread::join(thread) { Ok(result) => result, Err(error) => return error };
+    if !retval.is_null() && !copy_to_abi_out(retval.cast::<u8>(), &result.to_ne_bytes()) { return TRUEOS_EINVAL; }
     0
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_detach(thread: usize) -> c_int {
-    let mut table = PTHREAD_THREADS.lock();
-    if table.get(thread).is_some_and(|state| state.joining) {
-        return TRUEOS_EINVAL;
-    }
-    let Some(_state) = table.remove(thread) else {
-        return TRUEOS_ESRCH;
-    };
-    // The scheduled closure owns a clone of the completion cell, so dropping
-    // the registry entry here is true detach: execution continues without a
-    // join resource. This also avoids asking the host carrier to remove an
-    // entry from the guest-private Hull table when the thread later exits.
-    0
+    crate::r::native_thread::detach(thread).map_or_else(|error| error, |()| 0)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_thread_join(thread: usize) -> c_int {
-    unsafe { pthread_join(thread, ptr::null_mut()) }
+    crate::r::native_thread::join(thread).map_or_else(|error| error, |_| 0)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_thread_detach(thread: usize) -> c_int {
-    unsafe { pthread_detach(thread) }
+    crate::r::native_thread::detach(thread).map_or_else(|error| error, |()| 0)
 }
 
 #[unsafe(no_mangle)]
@@ -7712,15 +7523,4 @@ pub unsafe extern "C" fn trueos_cabi_thread_set_name(name: *const c_char) -> c_i
     };
     crate::r::blocking::set_current_service_lane_pthread_name(name.as_str());
     0
-}
-
-#[cfg(feature = "legacy_vm_checkpoint")]
-pub(crate) fn refresh_reserved_environment(vm_id: u8, key: &str, value: &str) {
-    let Some(state) = blueprint_process_state(vm_id) else {return;};
-    let mut env = state.environment.lock();
-    if !env.initialized() {return;}
-    let result = crate::allocators::with_hv_guest_alloc_domain(vm_id, || env.refresh_reserved(key.as_bytes(),value.as_bytes()));
-    if !matches!(result, Some(Ok(()))) {
-        crate::log_important!(target: "hv"; "std-abi environment reserved refresh failed vm={}\n",vm_id);
-    }
 }

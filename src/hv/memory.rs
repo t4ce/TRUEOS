@@ -850,6 +850,17 @@ fn patch_guest_hull_rw_dynamic_state(vm_id: u8, arena_virt: usize, guest_start: 
             vm_id, guest_addr, len
         ));
     }
+    if let Some((guest_addr, len)) = crate::r::native_process::span(vm_id) {
+        hvlogf(format_args!(
+            "hv: vm{} reporting: hull rw shared blueprint-native-state guest=0x{:016X} bytes={}",
+            vm_id, guest_addr, len
+        ));
+        // The native page is shared while its initialization byte remains in
+        // Hull-private BSS. Publish the canonical ready slot to this copy too.
+        if let Some((ready_addr, ready)) = crate::r::native_process::ready_flag(vm_id) {
+            patch_guest_hull_rw_u8(arena_virt, guest_start, bytes, ready_addr, ready);
+        }
+    }
     if let Some((guest_addr, len)) = crate::std_abi_shim::blueprint_process_state_span(vm_id) {
         hvlogf(format_args!(
             "hv: vm{} reporting: hull rw shared blueprint-process-state guest=0x{:016X} bytes={}",
@@ -931,6 +942,7 @@ fn guest_hull_rw_page_uses_kernel_backing(vm_id: u8, page_va: u64) -> bool {
     let page_end = page_start.saturating_add(PAGE_SIZE_4K as u64);
     [
         crate::allocators::hv_guest_allocator_state_span(vm_id),
+        crate::r::native_process::span(vm_id),
         crate::std_abi_shim::blueprint_process_state_span(vm_id),
     ]
     .into_iter()

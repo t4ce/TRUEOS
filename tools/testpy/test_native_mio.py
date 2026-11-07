@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise complete native Mio sources against an instrumented kernel boundary.
 
-The 25 behavioral cases run in a host process with native kernel ABI stubs;
+The 29 behavioral cases run in a host process with native kernel ABI stubs;
 they do not send packets through TRUEOS. Two separate real-loopback cases use
 Mio's std-compat backend. A real core+alloc, no-Unix target also links a -r probe
 through the native SDK allocator/panic/entry path. No builtin set, AppDB, boot
@@ -132,7 +132,7 @@ def main():
         assert not unknown, unknown
         native_count = int(re.search(r"test result: ok\. (\d+) passed", (output / "native-behavior.log").read_text())[1])
         compat_count = int(re.search(r"test result: ok\. (\d+) passed", (output / "host-compat.log").read_text())[1])
-        assert native_count == 25 and compat_count == 2
+        assert native_count == 29 and compat_count == 2
         receipt = {"scope": __doc__, "toolchain": TOOLCHAIN, "checks": results,
                    "native_tests": native_count, "host_loopback_tests": compat_count,
                    "fixtures": [info(p) for p in sorted(FIXTURES.glob("*.rs"))],

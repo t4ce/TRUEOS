@@ -53,6 +53,15 @@ pub fn resolve_ipv4_for_sync_abi(host: &str) -> Result<[u8; 4], DnsResolveError>
     resolve_ipv4_for_sync_abi_host(host)
 }
 
+/// Native Rust value boundary for the kernel-generation SDK. Both sides use
+/// the pinned compiler. The existing DNS wire error codes are explicit values;
+/// no addrinfo allocation, C string, errno slot or compatibility process table
+/// is involved. Calls that require network work belong on a native worker lane.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn trueos_platform_dns_resolve_ipv4(host: &str) -> Result<[u8; 4], u32> {
+    resolve_ipv4_for_sync_abi(host).map_err(|error| dns_resolve_error_code(error) as u32)
+}
+
 pub fn resolve_ipv4_for_sync_abi_host(host: &str) -> Result<[u8; 4], DnsResolveError> {
     let profile = crate::r::net::NetProfile::default();
     let dev_idx = profile

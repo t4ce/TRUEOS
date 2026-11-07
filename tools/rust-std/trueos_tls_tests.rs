@@ -38,11 +38,21 @@ mod allocators {
         Some(result)
     }
 }
-static STATES: [r::native_tls::State; 3] = [const { r::native_tls::State::new() }; 3];
-mod std_abi_shim {
-    pub(crate) fn native_tls_state() -> &'static crate::r::native_tls::State {
-        &crate::STATES[crate::REALM.get()]
+struct NativeProcessState { tls: r::native_tls::State }
+static STATES: [NativeProcessState; 3] = [const { NativeProcessState { tls: r::native_tls::State::new() } }; 3];
+mod native_process {
+    pub(crate) fn current() -> &'static crate::NativeProcessState { &crate::STATES[crate::REALM.get()] }
+    pub(crate) fn with_current<R>(f: impl FnOnce(&crate::NativeProcessState) -> R) -> Result<R, i32> {
+        match crate::REALM.get().checked_sub(1).map(|v| v as u8) {
+            Some(vm) => crate::allocators::with_hv_guest_alloc_domain(vm, || f(current())).ok_or(12),
+            None => Ok(f(current())),
+        }
     }
+}
+mod std_abi_shim {
+    pub(crate) fn native_tls_state() -> &'static crate::r::native_tls::State { &crate::native_process::current().tls }
+    pub(crate) fn run_compat_tls_destructor_round(owner: usize) -> bool { crate::run_compat_tls_destructor_round(owner) }
+    pub(crate) fn clear_compat_tls_values(owner: usize) { crate::clear_compat_tls_values(owner); }
 }
 mod hv {
     pub fn current_hull_guest_context_vm_id() -> Option<u8> { None }
@@ -98,7 +108,15 @@ impl<K: Ord, V> CompatMap<K, V> {
 }
 static PTHREAD_KEYS: SpinMutex<CompatMap<usize, PthreadKeyState>> = SpinMutex::new(CompatMap::new());
 static PTHREAD_TLS_VALUES: SpinMutex<CompatMap<PthreadTlsSlot, PthreadTlsValue>> = SpinMutex::new(CompatMap::new());
-fn native_tls_state() -> &'static r::native_tls::State { std_abi_shim::native_tls_state() }
+struct CompatProcessState {
+    pthread_keys: &'static SpinMutex<CompatMap<usize, PthreadKeyState>>,
+    pthread_tls_values: &'static SpinMutex<CompatMap<PthreadTlsSlot, PthreadTlsValue>>,
+}
+static COMPAT_PROCESS_STATE: CompatProcessState = CompatProcessState { pthread_keys: &PTHREAD_KEYS, pthread_tls_values: &PTHREAD_TLS_VALUES };
+static COMPAT_READY: AtomicBool = AtomicBool::new(true);
+fn process_state_if_ready() -> Option<&'static CompatProcessState> {
+    COMPAT_READY.load(Ordering::Acquire).then_some(&COMPAT_PROCESS_STATE)
+}
 
 struct Tracked(usize);
 impl Drop for Tracked {
@@ -116,6 +134,19 @@ impl Drop for Nested {
     }
 }
 static NESTED: Storage<Nested, { sys::thread_local::value_align::<Nested>() }> = Storage::new();
+
+#[test]
+fn pure_native_tls_cleanup_does_not_require_a_compatibility_namespace() {
+    COMPAT_READY.store(false, Ordering::Release);
+    prepare(0, 11);
+    let before = DROPS.load(Ordering::Relaxed);
+    TRACKED.get(None, || Tracked(111));
+    finish();
+    assert_eq!(DROPS.load(Ordering::Relaxed), before + 1);
+    assert!(CURRENT.get().is_null());
+    assert!(!COMPAT_READY.load(Ordering::Relaxed));
+    COMPAT_READY.store(true, Ordering::Release);
+}
 
 #[test]
 fn static_keys_distinguish_values_and_reused_execution_drops_old_storage() {
@@ -289,4 +320,48 @@ fn host_carrier_mutations_force_the_owning_vm_allocation_domain() {
     assert_eq!(r::native_tls::trueos_platform_thread_local_get(1234) as usize, 11);
     GUEST_ARENA_AVAILABLE.set(true);
     std_abi_shim::native_tls_state().reset();
+}
+
+// Native runtime metadata must not be an ordinary destructor-owned TLS value:
+// real upstream Storage destructors may still need it after earlier TLS keys.
+static FINAL_METADATA: sys::thread_local::LocalPointer = sys::thread_local::LocalPointer::__new();
+static METADATA_USER_DROPS: AtomicUsize = AtomicUsize::new(0);
+static METADATA_FINAL_CLEANUPS: AtomicUsize = AtomicUsize::new(0);
+struct MetadataUser;
+impl Drop for MetadataUser {
+    fn drop(&mut self) {
+        assert_eq!(FINAL_METADATA.get() as usize, 99);
+        assert!(!CURRENT.get().is_null(), "std's current thread pointer must outlive user TLS");
+        METADATA_USER_DROPS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+static METADATA_USER: Storage<MetadataUser, { sys::thread_local::value_align::<MetadataUser>() }> = Storage::new();
+unsafe extern "C" fn final_native_metadata_cleanup() {
+    assert_eq!(FINAL_METADATA.get() as usize, 99);
+    FINAL_METADATA.set(2usize as *mut ());
+    METADATA_FINAL_CLEANUPS.fetch_add(1, Ordering::Relaxed);
+}
+#[test]
+fn std_guard_and_native_final_metadata_cleanup_coexist_in_both_registration_orders() {
+    let std_before = CLEANUPS.load(Ordering::Relaxed);
+    let user_before = METADATA_USER_DROPS.load(Ordering::Relaxed);
+    let native_before = METADATA_FINAL_CLEANUPS.load(Ordering::Relaxed);
+    for (execution, native_first) in [(12, true), (13, false)] {
+        REALM.set(0); EXECUTION.set(execution);
+        if native_first {
+            assert_eq!(r::native_tls::trueos_platform_thread_local_register_cleanup(final_native_metadata_cleanup), 0);
+        }
+        prepare(0, execution);
+        FINAL_METADATA.set(99usize as *mut ());
+        METADATA_USER.get(None, || MetadataUser);
+        // Duplicate registration (like guard enable) remains idempotent.
+        assert_eq!(r::native_tls::trueos_platform_thread_local_register_cleanup(final_native_metadata_cleanup), 0);
+        assert_eq!(r::native_tls::trueos_platform_thread_local_register_cleanup(final_native_metadata_cleanup), 0);
+        finish();
+        assert!(FINAL_METADATA.get().is_null());
+        assert!(CURRENT.get().is_null());
+    }
+    assert_eq!(CLEANUPS.load(Ordering::Relaxed), std_before + 2);
+    assert_eq!(METADATA_USER_DROPS.load(Ordering::Relaxed), user_before + 2);
+    assert_eq!(METADATA_FINAL_CLEANUPS.load(Ordering::Relaxed), native_before + 2);
 }

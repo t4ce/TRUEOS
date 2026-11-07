@@ -267,6 +267,17 @@ fn socket_has_handle(socket: &MioSocketState, handle: api::NetHandle) -> bool {
     socket.handle == Some(handle) || socket.listen_handles.contains(&handle)
 }
 
+fn udp_peer_matches(peer: Option<CompatAddr>, from: CompatAddr) -> bool {
+    match (peer, from) {
+        (None, _) => true,
+        (Some(CompatAddr::V4 { addr, port }), CompatAddr::V4 { addr: from, port: from_port }) =>
+            addr == from && port == from_port,
+        (Some(CompatAddr::V6 { addr, port }), CompatAddr::V6 { addr: from, port: from_port }) =>
+            addr == from && port == from_port,
+        _ => false,
+    }
+}
+
 fn tcp_flow_logging_enabled(socket: &MioSocketState) -> bool {
     crate::log_os::flags::NET_LOG_TCP_FLOW && socket.kind == MioSocketKind::TcpStream
 }
@@ -1182,6 +1193,9 @@ impl MioCompat {
                     if socket.owner_vm.is_some_and(crate::hv::guest_pause_requested) {
                         return;
                     }
+                    if !udp_peer_matches(socket.peer, CompatAddr::V4 { addr: from.addr, port: from.port }) {
+                        return;
+                    }
                     socket.rx_dgrams.push_back((
                         CompatAddr::V4 {
                             addr: from.addr,
@@ -1194,6 +1208,9 @@ impl MioCompat {
             api::Event::UdpPacketV6 { handle, from, data } => {
                 if let Some(socket) = self.socket_by_handle_mut(handle) {
                     if socket.owner_vm.is_some_and(crate::hv::guest_pause_requested) {
+                        return;
+                    }
+                    if !udp_peer_matches(socket.peer, CompatAddr::V6 { addr: from.addr, port: from.port }) {
                         return;
                     }
                     socket.rx_dgrams.push_back((
@@ -1850,6 +1867,43 @@ pub extern "C" fn trueos_mio_socket_shutdown(socket_id: u32, how: u32) -> i32 {
     mio_socket_shutdown(socket_id, how)
 }
 
+/// Option 1 is TCP_NODELAY; option 2 is the IP hop limit. A value of -1 reads
+/// the option. Nonnegative values apply it and return the effective value.
+pub(crate) fn mio_socket_option_host(socket_id: u32, option: u32, value: i32) -> i32 {
+    if value < -1 { return STATUS_INVALID_INPUT; }
+    let owner = current_owner_vm();
+    with_compat(|compat| {
+        compat.kick_net();
+        let Some(socket) = compat.socket(socket_id).filter(|socket| socket.owner_vm == owner) else {
+            return STATUS_NOT_FOUND;
+        };
+        if socket.closed { return STATUS_NOT_CONNECTED; }
+        if socket.error != STATUS_OK { return socket.error; }
+        // A listener owns a replenished pool of transport sockets. Its options
+        // need an inheritance policy, not a one-time change to one pool entry.
+        if socket.kind == MioSocketKind::TcpListener { return STATUS_UNSUPPORTED; }
+        let Some(handle) = socket.handle else { return STATUS_WOULD_BLOCK; };
+        let device = MIO_RX_DEVICE_INDEX.load(AtomicOrdering::Acquire);
+        crate::net::adapter::socket_option(
+            device, crate::net::adapter::NetHandle(handle.0), option,
+            if value == -1 { None } else { Some(value as u32) },
+        ).map(|value| value as i32).unwrap_or_else(|status| status)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_mio_socket_option(socket_id: u32, option: u32, value: i32) -> i32 {
+    if vm_guest_vmcall_active() {
+        let packed = (u64::from(option) << 32) | u64::from(value as u32);
+        let (status, result) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_MIO_SOCKET_OPTION, u64::from(socket_id), packed,
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK { vmcall_i32(result) }
+            else { STATUS_INVALID_INPUT };
+    }
+    mio_socket_option_host(socket_id, option, value)
+}
+
 pub(crate) fn close_sockets_for_vm(vm_id: u8) -> usize {
     with_compat(|compat| {
         compat.pump();
@@ -2335,13 +2389,18 @@ pub(crate) unsafe fn mio_udp_socket_connect_host(socket_id: u32, addr: TrueosMio
     };
     let owner_vm = current_owner_vm();
     with_compat(|compat| {
+        compat.pump();
         let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND;
         };
         if socket.kind != MioSocketKind::Udp {
             return STATUS_INVALID_INPUT;
         }
+        if socket.closed { return STATUS_NOT_CONNECTED; }
         socket.peer = Some(peer);
+        // Connection changes the receive filter immediately, including packets
+        // queued before this call. New events use the same predicate above.
+        socket.rx_dgrams.retain(|(from, _)| udp_peer_matches(Some(peer), *from));
         STATUS_OK
     })
 }
@@ -2451,11 +2510,12 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_send_to(
     mio_udp_socket_send_to_host(socket_id, addr, data_ptr, data_len)
 }
 
-pub(crate) unsafe fn mio_udp_socket_recv_from_host(
+pub(crate) unsafe fn mio_udp_socket_receive_host(
     socket_id: u32,
     out_addr: *mut TrueosMioSocketAddr,
     out_ptr: *mut u8,
     out_cap: usize,
+    peek: bool,
 ) -> isize {
     if out_addr.is_null() || (out_ptr.is_null() && out_cap != 0) {
         return STATUS_INVALID_INPUT as isize;
@@ -2469,24 +2529,31 @@ pub(crate) unsafe fn mio_udp_socket_recv_from_host(
         if socket.kind != MioSocketKind::Udp {
             return STATUS_INVALID_INPUT as isize;
         }
-        let Some((from, data)) = socket.rx_dgrams.pop_front() else {
+        let Some((from, data)) = socket.rx_dgrams.front() else {
             return STATUS_WOULD_BLOCK as isize;
         };
         unsafe { *out_addr = from.to_raw() };
         let len = out_cap.min(data.len());
-        unsafe {
-            core::ptr::copy_nonoverlapping(data.as_ptr(), out_ptr, len);
+        if len != 0 {
+            unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), out_ptr, len); }
         }
+        if !peek { socket.rx_dgrams.pop_front(); }
         len as isize
     })
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_udp_socket_recv_from(
+pub(crate) unsafe fn mio_udp_socket_recv_from_host(
+    socket_id: u32, out_addr: *mut TrueosMioSocketAddr, out_ptr: *mut u8, out_cap: usize,
+) -> isize {
+    unsafe { mio_udp_socket_receive_host(socket_id, out_addr, out_ptr, out_cap, false) }
+}
+
+unsafe fn mio_udp_socket_receive(
     socket_id: u32,
     out_addr: *mut TrueosMioSocketAddr,
     out_ptr: *mut u8,
     out_cap: usize,
+    peek: bool,
 ) -> isize {
     if vm_guest_vmcall_active() {
         let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() else {
@@ -2500,7 +2567,7 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_recv_from(
         let (status, data) = trueos_vm::vmcall::call_with_payload(
             trueos_vm::vmcall::OP_BP_MIO_UDP_SOCKET_RECV_FROM,
             socket_id as u64,
-            want as u64,
+            (want as u64) | if peek { trueos_vm::vmcall::MIO_UDP_READ_PEEK } else { 0 },
             &[],
             &mut bytes,
         );
@@ -2508,7 +2575,7 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_recv_from(
             return STATUS_INVALID_INPUT as isize;
         }
         let rc = vmcall_isize(data);
-        if rc <= 0 {
+        if rc < 0 {
             return rc;
         }
         let Some(addr) = read_addr(&bytes[..MIO_ADDR_BYTES]) else {
@@ -2523,7 +2590,21 @@ pub unsafe extern "C" fn trueos_mio_udp_socket_recv_from(
         }
         return got as isize;
     }
-    mio_udp_socket_recv_from_host(socket_id, out_addr, out_ptr, out_cap)
+    mio_udp_socket_receive_host(socket_id, out_addr, out_ptr, out_cap, peek)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_udp_socket_recv_from(
+    socket_id: u32, out_addr: *mut TrueosMioSocketAddr, out_ptr: *mut u8, out_cap: usize,
+) -> isize {
+    unsafe { mio_udp_socket_receive(socket_id, out_addr, out_ptr, out_cap, false) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_udp_socket_peek_from(
+    socket_id: u32, out_addr: *mut TrueosMioSocketAddr, out_ptr: *mut u8, out_cap: usize,
+) -> isize {
+    unsafe { mio_udp_socket_receive(socket_id, out_addr, out_ptr, out_cap, true) }
 }
 
 pub(crate) unsafe fn mio_tcp_listener_accept_host(

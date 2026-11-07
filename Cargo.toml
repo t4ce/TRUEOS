@@ -20,6 +20,8 @@ members = [
     "crates/trueos-helio-artifact",
     "crates/trueos-helio-runtime",
     "crates/trueos-io",
+    "crates/trueos-path",
+    "crates/trueos-runtime",
     "crates/trueos-kokoro/aot",
     "crates/trueos-kokoro/audio",
     "crates/trueos-kokoro/conv",

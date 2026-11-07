@@ -120,6 +120,7 @@ pub const OP_BP_INPUT_KEYBOARD_OUTPUT_POP: u32 = 0xCC; // response payload is on
 pub const OP_BP_INPUT_KEYBOARD_OUTPUT_SINCE: u32 = 0xCD; // arg0 read seq,arg1 cap -> payload events
 pub const OP_BP_INPUT_MIDI_READ_V1: u32 = 0x200; // arg0 read seq,arg1 cap -> MIDI edge payload
 pub const OP_BP_MIO_SOCKET_POLL_READY: u32 = 0x201; // arg0 native socket,arg1 interests -> readiness/status
+pub const OP_BP_MIO_SOCKET_OPTION: u32 = 0x247; // arg0 socket,arg1 option:u32/value:i32; -1 reads
 pub const OP_BP_PLATFORM_WAIT_OBSERVE: u32 = 0x202; // arg0 VM-local key -> generation
 pub const OP_BP_PLATFORM_WAIT_AFTER: u32 = 0x203; // arg0 key,arg1 observed:timeout -> notified
 pub const OP_BP_ASYNC_FS_READ_START: u32 = 0xCE; // payload resolved path -> operation id/rc
@@ -4329,7 +4330,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let key_bytes = unsafe { &(&(*p).payload)[..n] };
-            let Some(value) = crate::std_abi_shim::environment_bytes(Some(vm_id), key_bytes)
+            let Some(value) = crate::r::native_process::environment_bytes(Some(vm_id), key_bytes)
             else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
@@ -5946,6 +5947,18 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_MIO_SOCKET_OPTION => {
+            let rc = crate::hv::with_guest_broker_context(vm_id, || {
+                match u32::try_from(arg0) {
+                    Ok(socket) => crate::mio_compat::mio_socket_option_host(
+                        socket, (arg1 >> 32) as u32, arg1 as u32 as i32,
+                    ),
+                    Err(_) => -4,
+                }
+            });
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_MIO_SOCKET_LOCAL_ADDR | OP_BP_MIO_SOCKET_PEER_ADDR => {
             let Some(p) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -6057,7 +6070,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_MIO_UDP_SOCKET_RECV_FROM => {
-            let want = core::cmp::min(arg1 as usize, PAYLOAD_CAP.saturating_sub(MIO_ADDR_BYTES));
+            let peek = arg1 & trueos_vm::vmcall::MIO_UDP_READ_PEEK != 0;
+            let want = core::cmp::min(
+                (arg1 & !trueos_vm::vmcall::MIO_UDP_READ_PEEK) as usize,
+                PAYLOAD_CAP.saturating_sub(MIO_ADDR_BYTES),
+            );
             let Some(p) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
@@ -6065,14 +6082,15 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let payload = unsafe { &mut (*p).payload };
             let mut addr = crate::mio_compat::TrueosMioSocketAddr::default();
             let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
-                crate::mio_compat::mio_udp_socket_recv_from_host(
+                crate::mio_compat::mio_udp_socket_receive_host(
                     arg0 as u32,
                     &mut addr,
                     payload[MIO_ADDR_BYTES..].as_mut_ptr(),
                     want,
+                    peek,
                 )
             });
-            if rc > 0 {
+            if rc >= 0 {
                 let _ = write_mio_addr(&mut payload[..MIO_ADDR_BYTES], addr);
                 write_response(
                     vm_id,

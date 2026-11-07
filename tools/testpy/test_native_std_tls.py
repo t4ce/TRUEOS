@@ -77,7 +77,8 @@ class NativeStdTls(unittest.TestCase):
             storage_path.write_text((tls / "os.rs").read_text().replace(
                 '#[unstable(feature = "thread_local_internals", issue = "none")]\n', ''))
             modules = "mod r {\n#[path = " + json.dumps(str(native_path)) + "] pub mod native_tls;\n"
-            modules += '''mod threads {
+            modules += '''pub(crate) use crate::native_process;
+            mod threads {
                 pub fn current_id() -> Option<usize> { Some(crate::EXECUTION.get()) }
                 pub fn current_vm_id() -> Option<u8> { crate::REALM.get().checked_sub(1).map(|v| v as u8) }
             }}
@@ -89,8 +90,11 @@ class NativeStdTls(unittest.TestCase):
             modules += "#[path = " + json.dumps(str(storage_path)) + "] mod os;\npub use os::{Storage, value_align};\npub(crate) use os::LocalPointer;\n"
             modules += "#[path = " + json.dumps(str(ROOT / "tools/rust-std/trueos_tls_guard.rs")) + "] pub mod guard;\n}}\n"
             shim = (ROOT / "src/std_abi_shim.rs").read_text()
-            lifecycle = shim.split("fn run_execution_tls_destructors(owner: usize) {", 1)[1].split("\n#[cfg(test)]", 1)[0]
-            modules += "fn run_execution_tls_destructors(owner: usize) {" + lifecycle
+            start = shim.index("pub(crate) fn run_compat_tls_destructor_round(owner: usize)")
+            lifecycle = shim[start:shim.index("\n#[cfg(test)]", start)]
+            modules += lifecycle
+            modules += "\nfn run_execution_tls_destructors(owner: usize) { r::native_tls::run_execution_destructors(owner); }\n"
+
             harness = directory / "tls_tests.rs"
             harness.write_text((ROOT / "tools/rust-std/trueos_tls_tests.rs").read_text()
                                .replace("// @PRODUCTION_MODULES@", modules))

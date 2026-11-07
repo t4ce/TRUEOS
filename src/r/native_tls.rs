@@ -10,7 +10,7 @@ use spin::Mutex;
 
 pub(crate) type Destructor = unsafe extern "C" fn(*mut u8);
 pub(crate) type Cleanup = unsafe extern "C" fn();
-const DESTRUCTOR_ROUNDS: usize = 4;
+pub(crate) const DESTRUCTOR_ROUNDS: usize = 4;
 
 #[derive(Clone, Copy)]
 struct Value {
@@ -20,11 +20,18 @@ struct Value {
 
 struct Execution {
     values: BTreeMap<usize, Value>,
-    cleanup: Option<Cleanup>,
+    cleanups: Vec<Cleanup>,
+    cleanups_run: usize,
+    cleanup_running: bool,
 }
 
 impl Execution {
-    fn new() -> Self { Self { values: BTreeMap::new(), cleanup: None } }
+    fn new() -> Self {
+        Self {
+            values: BTreeMap::new(), cleanups: Vec::new(),
+            cleanups_run: 0, cleanup_running: false,
+        }
+    }
 }
 
 pub(crate) struct State {
@@ -55,16 +62,14 @@ impl State {
 
     fn register_cleanup(&self, owner: usize, cleanup: Cleanup) -> i32 {
         if owner == 0 { return 22; }
-        self.executions.lock().entry(owner).or_insert_with(Execution::new).cleanup = Some(cleanup);
-        0
-    }
-
-    pub(crate) fn run_destructors(&self, owner: usize) {
-        for _ in 0..DESTRUCTOR_ROUNDS {
-            if !self.run_destructor_round(owner) { break; }
+        let mut executions = self.executions.lock();
+        let execution = executions.entry(owner).or_insert_with(Execution::new);
+        // std and native runtime metadata can coexist. Repeated guard enable
+        // calls must not schedule the same finalizer more than once.
+        if !execution.cleanups.iter().any(|&registered| core::ptr::fn_addr_eq(registered, cleanup)) {
+            execution.cleanups.push(cleanup);
         }
-        self.run_cleanup(owner);
-        self.retire_owner(owner);
+        0
     }
 
     /// One round so native and compatibility destructors can initialize each
@@ -92,8 +97,31 @@ impl State {
     }
 
     pub(crate) fn run_cleanup(&self, owner: usize) {
-        let cleanup = self.executions.lock().get_mut(&owner).and_then(|e| e.cleanup.take());
-        if let Some(cleanup) = cleanup { unsafe { cleanup() }; }
+        {
+            let mut executions = self.executions.lock();
+            let Some(execution) = executions.get_mut(&owner) else { return; };
+            if execution.cleanup_running { return; }
+            execution.cleanup_running = true;
+        }
+        loop {
+            let cleanup = {
+                let mut executions = self.executions.lock();
+                let Some(execution) = executions.get_mut(&owner) else { return; };
+                let cleanup = execution.cleanups.get(execution.cleanups_run).copied();
+                if cleanup.is_some() {
+                    // Publish consumption before entering guest/runtime code.
+                    // Keep registered addresses for idempotence during teardown.
+                    execution.cleanups_run += 1;
+                } else {
+                    execution.cleanup_running = false;
+                }
+                cleanup
+            };
+            let Some(cleanup) = cleanup else { break; };
+            // Finalizers can read/clear their metadata, register a different
+            // finalizer, or drop owned context without holding the TLS lock.
+            unsafe { cleanup() };
+        }
     }
 
     pub(crate) fn retire_owner(&self, owner: usize) {
@@ -142,20 +170,26 @@ pub(crate) fn current_identity() -> usize {
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_platform_thread_local_get(key: usize) -> *mut u8 {
-    crate::std_abi_shim::native_tls_state().get(current_identity(), key)
+    crate::r::native_process::current().tls.get(current_identity(), key)
 }
 
 fn mutate_current_state(f: impl FnOnce(&State) -> i32) -> i32 {
-    let state = crate::std_abi_shim::native_tls_state();
-    match crate::r::threads::current_vm_id()
-        .or_else(crate::hv::current_guest_execution_context_vm_id)
-    {
-        // Shared map nodes must be visible in both the Hull and its host
-        // carriers. An ambient host allocation would leave an EPT-inaccessible
-        // pointer in this otherwise process-shared state.
-        Some(vm_id) => crate::allocators::with_hv_guest_alloc_domain(vm_id, || f(state)).unwrap_or(12),
-        None => f(state),
+    crate::r::native_process::with_current(|process| f(&process.tls)).unwrap_or_else(|error| error)
+}
+
+/// Native execution owns teardown; the optional POSIX adapter only contributes
+/// values if a compatibility namespace already exists. A pure native thread
+/// never initializes those large fixed tables merely by completing.
+pub(crate) fn run_execution_destructors(owner: usize) {
+    for _ in 0..DESTRUCTOR_ROUNDS {
+        let mut ran = crate::std_abi_shim::run_compat_tls_destructor_round(owner);
+        ran |= crate::r::native_process::current().tls.run_destructor_round(owner);
+        if !ran { break; }
     }
+    crate::std_abi_shim::clear_compat_tls_values(owner);
+    let state = &crate::r::native_process::current().tls;
+    state.run_cleanup(owner);
+    state.retire_owner(owner);
 }
 
 #[unsafe(no_mangle)]
@@ -167,6 +201,9 @@ pub extern "Rust" fn trueos_platform_thread_local_set(
     mutate_current_state(|state| state.set(current_identity(), key, pointer, destructor))
 }
 
+/// Keep runtime metadata alive until all ordinary C/Rust TLS destructor rounds
+/// finish. Each distinct callback runs once per execution, in registration
+/// order, before identity retirement. A finalizer may append another finalizer.
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_platform_thread_local_register_cleanup(cleanup: Cleanup) -> i32 {
     mutate_current_state(|state| state.register_cleanup(current_identity(), cleanup))

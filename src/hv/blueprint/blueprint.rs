@@ -1250,6 +1250,9 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_cabi_dns_resolve_ipv4" => {
             Some(crate::std_abi_shim::trueos_cabi_dns_resolve_ipv4 as *const () as usize)
         }
+        "trueos_platform_dns_resolve_ipv4" => {
+            Some(crate::r::net::vlayer::trueos_platform_dns_resolve_ipv4 as *const () as usize)
+        }
         "trueos_vlayer_rapl_snapshot_read" => {
             Some(crate::r::net::vlayer::trueos_vlayer_rapl_snapshot_read as *const () as usize)
         }
@@ -1354,6 +1357,9 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_mio_socket_shutdown" => {
             Some(crate::mio_compat::trueos_mio_socket_shutdown as *const () as usize)
         }
+        "trueos_mio_socket_option" => {
+            Some(crate::mio_compat::trueos_mio_socket_option as *const () as usize)
+        }
         "trueos_mio_socket_poll_ready" => {
             Some(crate::mio_compat::trueos_mio_socket_poll_ready as *const () as usize)
         }
@@ -1383,6 +1389,9 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         }
         "trueos_mio_udp_socket_recv_from" => {
             Some(crate::mio_compat::trueos_mio_udp_socket_recv_from as *const () as usize)
+        }
+        "trueos_mio_udp_socket_peek_from" => {
+            Some(crate::mio_compat::trueos_mio_udp_socket_peek_from as *const () as usize)
         }
         "trueos_mio_tcp_listener_accept" => {
             Some(crate::mio_compat::trueos_mio_tcp_listener_accept as *const () as usize)

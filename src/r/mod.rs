@@ -18,6 +18,8 @@ pub(crate) mod matrix_cabi;
 pub(crate) mod microfont;
 pub mod net;
 pub(crate) mod native_tls;
+pub(crate) mod native_process;
+pub(crate) mod native_thread;
 pub mod pat;
 pub mod path;
 pub mod platform;

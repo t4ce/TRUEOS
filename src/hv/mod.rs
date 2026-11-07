@@ -3362,9 +3362,9 @@ pub fn stage_blueprint_launch(
             .vars
             .insert(AllocString::from("TRUEOS_MCP_STDIO"), AllocString::from("1"));
     }
-    // Materialize the C environment while host-owned launch map nodes are
-    // readable, before any guest loader or CABI can request getenv/environ.
-    if crate::std_abi_shim::initialize_blueprint_environment(
+    // Snapshot native environment bytes while launch-map nodes are readable.
+    // A C getenv/environ view is materialized only for an actual legacy client.
+    if crate::r::native_process::initialize_environment(
         vm_id,
         process_context
             .vars
@@ -3485,12 +3485,12 @@ pub(crate) fn blueprint_process_env_var(vm_id: u8, key: &str) -> Option<AllocStr
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
         return context.as_ref()?.vars.get(key).cloned();
     }
-    crate::std_abi_shim::environment_bytes(Some(vm_id), key.as_bytes())
+    crate::r::native_process::environment_bytes(Some(vm_id), key.as_bytes())
         .and_then(|value| AllocString::from_utf8(value).ok())
 }
 
 pub(crate) fn blueprint_process_env_text(vm_id: u8) -> Option<AllocString> {
-    let pairs = crate::std_abi_shim::environment_pairs(vm_id)?;
+    let pairs = crate::r::native_process::environment_pairs(vm_id)?;
     let mut out = AllocString::new();
     for (key, value) in pairs.iter() {
         let (Ok(key), Ok(value)) = (core::str::from_utf8(key), core::str::from_utf8(value)) else {
@@ -4188,6 +4188,7 @@ fn clear_blueprint_process_context(vm_id: u8) -> BlueprintTerminalCleanup {
         cleanup.context_present = slot.lock().take().is_some();
     }
 
+    crate::r::native_process::reset(vm_id);
     crate::std_abi_shim::reset_blueprint_process_state(vm_id);
     if let Some(slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
         let _ = slot.lock().take();

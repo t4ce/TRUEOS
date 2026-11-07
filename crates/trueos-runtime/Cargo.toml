@@ -1,0 +1,7 @@
+[package]
+name = "trueos-runtime"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+trueos-io = { path = "../trueos-io" }

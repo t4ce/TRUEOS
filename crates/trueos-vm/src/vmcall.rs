@@ -424,8 +424,12 @@ pub const OP_BP_MIO_TCP_STREAM_WRITE: u32 = 0x58;
 pub const OP_BP_MIO_UDP_SOCKET_CONNECT: u32 = 0x59;
 pub const OP_BP_MIO_UDP_SOCKET_SEND_TO: u32 = 0x5A;
 pub const OP_BP_MIO_UDP_SOCKET_RECV_FROM: u32 = 0x5B;
+/// arg1 high bit requests a nondestructive read; remaining bits are capacity.
+pub const MIO_UDP_READ_PEEK: u64 = 1 << 63;
 pub const OP_BP_MIO_TCP_LISTENER_ACCEPT: u32 = 0x5C;
 pub const OP_BP_MIO_SOCKET_SHUTDOWN: u32 = 0x5D;
+/// arg0 socket; arg1 option:u32/value:i32; -1 reads, otherwise applies.
+pub const OP_BP_MIO_SOCKET_OPTION: u32 = 0x247;
 
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_BAD_ARG: u32 = 2;

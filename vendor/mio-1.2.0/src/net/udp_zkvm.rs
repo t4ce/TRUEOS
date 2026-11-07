@@ -19,10 +19,6 @@ impl UdpSocket {
         })
     }
 
-    pub fn from_std(socket: std::net::UdpSocket) -> UdpSocket {
-        socket
-    }
-
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.inner.local_addr()
     }
@@ -39,11 +35,8 @@ impl UdpSocket {
         self.inner.udp_recv_from(buf)
     }
 
-    pub fn peek_from(&self, _: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            "mio zkvm UdpSocket::peek_from is not wired yet",
-        ))
+    pub fn peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.inner.udp_peek_from(buf)
     }
 
     pub fn send(&self, buf: &[u8]) -> io::Result<usize> {
@@ -55,11 +48,8 @@ impl UdpSocket {
         self.inner.udp_recv_from(buf).map(|(len, _)| len)
     }
 
-    pub fn peek(&self, _: &mut [u8]) -> io::Result<usize> {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            "mio zkvm UdpSocket::peek is not wired yet",
-        ))
+    pub fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.udp_peek_from(buf).map(|(len, _)| len)
     }
 
     pub fn connect(&self, addr: SocketAddr) -> io::Result<()> {
@@ -67,43 +57,43 @@ impl UdpSocket {
     }
 
     pub fn set_broadcast(&self, _: bool) -> io::Result<()> {
-        Ok(())
+        Err(unsupported_option())
     }
 
     pub fn broadcast(&self) -> io::Result<bool> {
-        Ok(false)
+        Err(unsupported_option())
     }
 
     pub fn set_multicast_loop_v4(&self, _: bool) -> io::Result<()> {
-        Ok(())
+        Err(unsupported_option())
     }
 
     pub fn multicast_loop_v4(&self) -> io::Result<bool> {
-        Ok(false)
+        Err(unsupported_option())
     }
 
     pub fn set_multicast_ttl_v4(&self, _: u32) -> io::Result<()> {
-        Ok(())
+        Err(unsupported_option())
     }
 
     pub fn multicast_ttl_v4(&self) -> io::Result<u32> {
-        Ok(1)
+        Err(unsupported_option())
     }
 
     pub fn set_multicast_loop_v6(&self, _: bool) -> io::Result<()> {
-        Ok(())
+        Err(unsupported_option())
     }
 
     pub fn multicast_loop_v6(&self) -> io::Result<bool> {
-        Ok(false)
+        Err(unsupported_option())
     }
 
-    pub fn set_ttl(&self, _: u32) -> io::Result<()> {
-        Ok(())
+    pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
+        self.inner.option(2, Some(ttl)).map(|_| ())
     }
 
     pub fn ttl(&self) -> io::Result<u32> {
-        Ok(64)
+        self.inner.option(2, None)
     }
 
     pub fn join_multicast_v4(&self, _: &Ipv4Addr, _: &Ipv4Addr) -> io::Result<()> {
@@ -164,15 +154,12 @@ impl event::Source for UdpSocket {
     }
 }
 
-#[cfg(not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat"))))]
-impl From<UdpSocket> for std::net::UdpSocket {
-    fn from(_: UdpSocket) -> Self {
-        panic!("mio zkvm backend cannot convert UdpSocket into std yet")
-    }
-}
-
 impl fmt::Display for UdpSocket {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "UdpSocket(..)")
     }
+}
+
+fn unsupported_option() -> io::Error {
+    io::Error::new(io::ErrorKind::Other, "native transport does not support this socket option")
 }

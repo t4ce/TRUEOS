@@ -9,6 +9,7 @@ use trueos_io::{ErrorKind, Read, Write};
 #[derive(Default)]
 struct State {
     next_write_error: Option<isize>, error: i32, readiness: u8, rx: VecDeque<u8>, tx: Vec<u8>, read_shutdown: bool, write_shutdown: bool,
+    nodelay: bool, ttl: u32, next_option_error: Option<i32>,
     peer_eof: bool, closed: bool, closes: usize, reads: usize, peeks: usize,
     shutdowns: Vec<u32>, next_shutdown_error: Option<i32>, next_peek_error: Option<isize>,
 }
@@ -327,4 +328,44 @@ fn udp_would_block_rearms_only_the_affected_direction(){
  assert_eq!(poll_tokens(&mut poll,&mut events),[16]);let event=events.iter().next().unwrap();assert!(event.is_readable()&&event.is_writable());assert!(poll_tokens(&mut poll,&mut events).is_empty());
  let mut buf=[0;3];assert_eq!(udp.recv_from(&mut buf).unwrap_err().kind(),ErrorKind::WouldBlock);state(id,|s|s.rx.extend(b"new"));assert_eq!(poll_tokens(&mut poll,&mut events),[16]);let event=events.iter().next().unwrap();assert!(event.is_readable());assert!(!event.is_writable());assert_eq!(udp.recv_from(&mut buf).unwrap().0,3);
  state(id,|s|s.next_write_error=Some(-2));assert_eq!(udp.send_to(b"out",address).unwrap_err().kind(),ErrorKind::WouldBlock);assert_eq!(poll_tokens(&mut poll,&mut events),[16]);let event=events.iter().next().unwrap();assert!(event.is_writable());assert!(!event.is_readable());
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_mio_socket_option(id:u32,option:u32,value:i32)->i32 {
+ state(id,|s|{
+  if let Some(error)=s.next_option_error.take(){return error;}
+  match option {
+   1=>{if value>=0{s.nodelay=value!=0;} i32::from(s.nodelay)}
+   2=>{if value==0||value>255{return -4;} if value>=0{s.ttl=value as u32;} if s.ttl==0{64}else{s.ttl as i32}}
+   _=>-1
+  }
+ })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_mio_udp_socket_peek_from(id:u32,addr:*mut SocketAddrRaw,out:*mut u8,cap:usize)->isize{
+ unsafe{addr.write(SocketAddrRaw{family:4,reserved:0,port:99,addr:[127,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0]});trueos_mio_tcp_stream_peek(id,out,cap)}
+}
+#[test]
+fn native_socket_options_reach_transport_instead_of_constant_success(){
+ let(id,stream)=connect();assert!(!stream.nodelay().unwrap());stream.set_nodelay(true).unwrap();assert!(stream.nodelay().unwrap());stream.set_nodelay(false).unwrap();assert!(!stream.nodelay().unwrap());
+ assert_eq!(stream.ttl().unwrap(),64);for ttl in [1,42,255]{stream.set_ttl(ttl).unwrap();assert_eq!(stream.ttl().unwrap(),ttl);state(id,|s|assert_eq!(s.ttl,ttl));}
+ for ttl in [0,256,u32::MAX]{assert_eq!(stream.set_ttl(ttl).unwrap_err().kind(),ErrorKind::InvalidInput);}assert_eq!(stream.ttl().unwrap(),255);
+}
+#[test]
+fn failed_options_propagate_and_preserve_owned_socket(){
+ let(id,stream)=connect();state(id,|s|s.next_option_error=Some(-3));assert_eq!(stream.set_nodelay(true).unwrap_err().kind(),ErrorKind::NotConnected);
+ assert!(!stream.nodelay().unwrap());state(id,|s|assert_eq!(s.closes,0));state(id,|s|s.next_option_error=Some(-5));assert_eq!(stream.ttl().unwrap_err().kind(),ErrorKind::NotFound);
+}
+#[test]
+fn udp_peek_preserves_data_source_and_rearms_read_interest(){
+ reset_waits();let mut poll=Poll::new().unwrap();let mut events=Events::with_capacity(2);let id=new_socket_id();let mut udp=mio::net::UdpSocket::bind(core::net::SocketAddr::from(([127,0,0,1],id as u16))).unwrap();
+ state(id,|s|s.readiness=1);poll.registry().register(&mut udp,Token(33),Interest::READABLE).unwrap();assert_eq!(poll_tokens(&mut poll,&mut events),[33]);assert!(poll_tokens(&mut poll,&mut events).is_empty());
+ let mut buf=[0x55;8];assert_eq!(udp.peek_from(&mut buf).unwrap_err().kind(),ErrorKind::WouldBlock);state(id,|s|s.rx.extend(b"packet"));assert_eq!(poll_tokens(&mut poll,&mut events),[33]);
+ let (len,peer)=udp.peek_from(&mut buf[..3]).unwrap();assert_eq!(len,3);assert_eq!(peer,core::net::SocketAddr::from(([127,0,0,1],99)));assert_eq!(&buf[..3],b"pac");assert_eq!(&buf[3..],&[0x55;5]);
+ assert_eq!(udp.peek(&mut buf).unwrap(),6);state(id,|s|assert_eq!(s.rx.len(),6));assert_eq!(udp.recv_from(&mut buf).unwrap().0,6);assert_eq!(&buf[..6],b"packet");
+}
+#[test]
+fn native_udp_ttl_is_applied_and_unimplemented_options_do_not_report_success(){
+ let id=new_socket_id();let udp=mio::net::UdpSocket::bind(core::net::SocketAddr::from(([127,0,0,1],id as u16))).unwrap();udp.set_ttl(23).unwrap();assert_eq!(udp.ttl().unwrap(),23);
+ assert!(udp.set_broadcast(true).is_err());assert!(udp.broadcast().is_err());assert!(udp.set_multicast_loop_v4(true).is_err());assert!(udp.multicast_loop_v4().is_err());assert!(udp.set_multicast_ttl_v4(4).is_err());assert!(udp.multicast_ttl_v4().is_err());assert!(udp.set_multicast_loop_v6(true).is_err());assert!(udp.multicast_loop_v6().is_err());
 }

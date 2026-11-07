@@ -1,0 +1,7 @@
+[package]
+name = "trueos-path"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+typed-path = { version = "=0.13.0", default-features = false }

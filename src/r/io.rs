@@ -374,7 +374,7 @@ pub mod env {
             };
         }
         if let Some(vm_id) = process_vm_id() {
-            return crate::std_abi_shim::environment_bytes(Some(vm_id), key.as_bytes())
+            return crate::r::native_process::environment_bytes(Some(vm_id), key.as_bytes())
                 .and_then(|value| String::from_utf8(value).ok());
         }
         let local = {

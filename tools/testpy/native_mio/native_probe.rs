@@ -7,6 +7,7 @@ use trueos_io::{self as io, Read, Write};
 pub fn native_tcp_probe(addr:SocketAddr, buf:&mut [u8]) -> io::Result<usize> {
  let mut stream=TcpStream::connect(addr)?;
  let peeked=stream.peek(buf)?;
+ stream.set_nodelay(!stream.nodelay()?)?;stream.set_ttl(stream.ttl()?)?;
  stream.shutdown(Shutdown::Write)?;
  let read=stream.read(buf)?;
  stream.shutdown(Shutdown::Read)?;
@@ -22,6 +23,7 @@ pub fn native_reactor_probe(addr:SocketAddr,buf:&mut[u8])->io::Result<usize>{
  poll.registry().register(&mut stream,Token(7),Interest::READABLE|Interest::WRITABLE)?;
  poll.registry().register(&mut listener,Token(8),Interest::READABLE)?;
  poll.registry().register(&mut udp,Token(9),Interest::READABLE)?;
+ udp.set_ttl(udp.ttl()?)?;let _=udp.peek_from(buf)?;
  let wake=Waker::new(poll.registry(),Token(10))?;wake.wake()?;
  let mut events=Events::with_capacity(16);
  poll.poll(&mut events,Some(core::time::Duration::ZERO))?;

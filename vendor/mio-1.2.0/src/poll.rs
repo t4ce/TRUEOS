@@ -22,7 +22,9 @@ use core::time::Duration;
     )),
 ))]
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
-#[cfg(all(debug_assertions, not(target_os = "wasi")))]
+#[cfg(all(debug_assertions, not(target_os = "wasi"), all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat"))))]
+use alloc::sync::Arc;
+#[cfg(all(debug_assertions, not(target_os = "wasi"), not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))))]
 use std::sync::Arc;
 
 use crate::{event, sys, Events, Interest, Token};

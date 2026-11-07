@@ -23,10 +23,6 @@ impl TcpStream {
         TcpStream { inner }
     }
 
-    pub fn from_std(stream: std::net::TcpStream) -> TcpStream {
-        stream
-    }
-
     pub fn peer_addr(&self) -> io::Result<SocketAddr> {
         self.inner.peer_addr()
     }
@@ -44,20 +40,20 @@ impl TcpStream {
         self.inner.shutdown(how)
     }
 
-    pub fn set_nodelay(&self, _: bool) -> io::Result<()> {
-        Ok(())
+    pub fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
+        self.inner.option(1, Some(u32::from(nodelay))).map(|_| ())
     }
 
     pub fn nodelay(&self) -> io::Result<bool> {
-        Ok(true)
+        self.inner.option(1, None).map(|value| value != 0)
     }
 
-    pub fn set_ttl(&self, _: u32) -> io::Result<()> {
-        Ok(())
+    pub fn set_ttl(&self, ttl: u32) -> io::Result<()> {
+        self.inner.option(2, Some(ttl)).map(|_| ())
     }
 
     pub fn ttl(&self) -> io::Result<u32> {
-        Ok(64)
+        self.inner.option(2, None)
     }
 
     pub fn take_error(&self) -> io::Result<Option<io::Error>> {
@@ -133,13 +129,6 @@ impl event::Source for TcpStream {
 
     fn deregister(&mut self, registry: &Registry) -> io::Result<()> {
         self.inner.deregister(registry)
-    }
-}
-
-#[cfg(not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat"))))]
-impl From<TcpStream> for std::net::TcpStream {
-    fn from(_: TcpStream) -> Self {
-        panic!("mio zkvm backend cannot convert TcpStream into std yet")
     }
 }
 

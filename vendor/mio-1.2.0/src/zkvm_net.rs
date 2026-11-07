@@ -39,6 +39,7 @@ unsafe extern "C" {
     fn trueos_mio_udp_socket_bind(addr: SocketAddrRaw, out_socket_id: *mut u32) -> i32;
     fn trueos_mio_socket_close(socket_id: u32) -> i32;
     fn trueos_mio_socket_shutdown(socket_id: u32, how: u32) -> i32;
+    fn trueos_mio_socket_option(socket_id: u32, option: u32, value: i32) -> i32;
     fn trueos_mio_socket_local_addr(socket_id: u32, out_addr: *mut SocketAddrRaw) -> i32;
     fn trueos_mio_socket_peer_addr(socket_id: u32, out_addr: *mut SocketAddrRaw) -> i32;
     fn trueos_mio_socket_take_error(socket_id: u32) -> i32;
@@ -53,6 +54,12 @@ unsafe extern "C" {
         data_len: usize,
     ) -> isize;
     fn trueos_mio_udp_socket_recv_from(
+        socket_id: u32,
+        out_addr: *mut SocketAddrRaw,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
+    fn trueos_mio_udp_socket_peek_from(
         socket_id: u32,
         out_addr: *mut SocketAddrRaw,
         out_ptr: *mut u8,
@@ -143,6 +150,16 @@ impl Socket {
         status_to_result(status, "mio zkvm socket shutdown failed")
     }
 
+    pub(crate) fn option(&self, option: u32, value: Option<u32>) -> io::Result<u32> {
+        let value = match value {
+            Some(value) => i32::try_from(value).map_err(|_| io::ErrorKind::InvalidInput)?,
+            None => -1,
+        };
+        let status = unsafe { trueos_mio_socket_option(self.id, option, value) };
+        if status >= 0 { Ok(status as u32) }
+        else { Err(status_to_error(status, "native socket option failed")) }
+    }
+
     pub(crate) fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
         let status = unsafe { trueos_mio_tcp_stream_read(self.id, buf.as_mut_ptr(), buf.len()) };
         self.rearm_if_blocked(status, READY_READABLE);
@@ -163,7 +180,10 @@ impl Socket {
 
     pub(crate) fn udp_connect(&self, addr: SocketAddr) -> io::Result<()> {
         let status = unsafe { trueos_mio_udp_socket_connect(self.id, socket_addr_to_raw(addr)) };
-        status_to_result(status, "mio zkvm udp connect failed")
+        status_to_result(status, "mio zkvm udp connect failed")?;
+        // Replacing a peer also replaces the kernel's queued receive set.
+        if let Some(registration) = &self.registration { registration.rearm(READY_READABLE); }
+        Ok(())
     }
 
     pub(crate) fn udp_send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<usize> {
@@ -186,6 +206,15 @@ impl Socket {
         };
         self.rearm_if_blocked(status, READY_READABLE);
         Ok((read_write_result(status, "mio zkvm udp recv failed")?, raw_to_socket_addr(addr)?))
+    }
+
+    pub(crate) fn udp_peek_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        let mut addr = SocketAddrRaw::default();
+        let status = unsafe {
+            trueos_mio_udp_socket_peek_from(self.id, &mut addr, buf.as_mut_ptr(), buf.len())
+        };
+        self.rearm_if_blocked(status, READY_READABLE);
+        Ok((read_write_result(status, "native UDP peek failed")?, raw_to_socket_addr(addr)?))
     }
 
     pub(crate) fn register(

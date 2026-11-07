@@ -15,7 +15,11 @@ mod waker;
 pub(crate) use self::waker::Waker;
 
 cfg_net! {
+    // Native sockets use zkvm_net directly; these upstream std wrappers are
+    // relevant only to the unsupported host shell fallback.
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub(crate) mod tcp;
+    #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
     pub(crate) mod udp;
     #[cfg(all(unix, not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat")))))]
     pub(crate) mod uds;

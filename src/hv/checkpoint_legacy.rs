@@ -313,7 +313,7 @@ pub(super) fn prepare_replicatable_resume(vm_id: u8) {
                         generation_text.clone(),
                     );
                 }
-                crate::std_abi_shim::refresh_reserved_environment(vm_id,"TRUEOS_APP_GENERATION",&generation_text);
+                crate::r::native_process::refresh_reserved_environment(vm_id,"TRUEOS_APP_GENERATION",&generation_text);
             }
         }
         resume_blueprint_process_context(vm_id);

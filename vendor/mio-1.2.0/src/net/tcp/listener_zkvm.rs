@@ -19,10 +19,6 @@ impl TcpListener {
         })
     }
 
-    pub fn from_std(listener: std::net::TcpListener) -> TcpListener {
-        listener
-    }
-
     pub fn accept(&self) -> io::Result<(crate::net::TcpStream, SocketAddr)> {
         let (socket, addr) = self.inner.accept()?;
         Ok((crate::net::TcpStream::from_zkvm_socket(socket), addr))
@@ -62,13 +58,6 @@ impl event::Source for TcpListener {
 
     fn deregister(&mut self, registry: &Registry) -> io::Result<()> {
         self.inner.deregister(registry)
-    }
-}
-
-#[cfg(not(all(any(target_os = "trueos", target_os = "zkvm"), not(feature = "std-compat"))))]
-impl From<TcpListener> for std::net::TcpListener {
-    fn from(_: TcpListener) -> Self {
-        panic!("mio zkvm backend cannot convert TcpListener into std yet")
     }
 }
 
