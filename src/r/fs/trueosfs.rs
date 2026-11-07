@@ -1381,6 +1381,37 @@ pub async fn file_in_typed_checked_async(
     expected_sha256: Option<[u8; 32]>,
     infer_blob: bool,
 ) -> Result<bool, CheckedWriteError> {
+    file_in_checked_with_type_policy_async(
+        disk, name, bytes, new_content_type, create_new, expected_sha256,
+        if infer_blob { CheckedWriteTypePolicy::InferBlob } else { CheckedWriteTypePolicy::Retain },
+    ).await
+}
+
+/// Restart an unchanged FFA download as an empty Blob. Key/type
+/// validation and publication share the namespace lease; no unlink/create gap.
+pub async fn reset_blob_checked_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    expected_sha256: [u8; 32],
+) -> Result<bool, CheckedWriteError> {
+    file_in_checked_with_type_policy_async(
+        disk, name, &[], ContentTypeId::BLOB, false, Some(expected_sha256),
+        CheckedWriteTypePolicy::ResetBlob,
+    ).await
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum CheckedWriteTypePolicy { Retain, InferBlob, ResetBlob }
+
+async fn file_in_checked_with_type_policy_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    bytes: &[u8],
+    new_content_type: ContentTypeId,
+    create_new: bool,
+    expected_sha256: Option<[u8; 32]>,
+    type_policy: CheckedWriteTypePolicy,
+) -> Result<bool, CheckedWriteError> {
     use sha2::{Digest, Sha256};
     let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() || (create_new && expected_sha256.is_some())
@@ -1423,6 +1454,12 @@ pub async fn file_in_typed_checked_async(
             record_key: record.record_key,
         })
     } else { None };
+    if type_policy == CheckedWriteTypePolicy::ResetBlob {
+        let record = existing.as_ref().ok_or(CheckedWriteError::Conflict)?;
+        if record.record_key != RecordKey::Ffa {
+            return Err(CheckedWriteError::Conflict);
+        }
+    }
     if let Some(expected) = expected_sha256 {
         let record = existing.as_ref().ok_or(CheckedWriteError::Conflict)?;
         // Hash the immutable current record in bounded chunks. No full-file clone
@@ -1443,7 +1480,7 @@ pub async fn file_in_typed_checked_async(
     }
     // Inference is a conditional promotion of exactly the previewed Blob.
     // Validate under the same lease as publication, preserving its file ID/key.
-    if infer_blob {
+    if type_policy == CheckedWriteTypePolicy::InferBlob {
         let record = existing.as_ref().ok_or(CheckedWriteError::Conflict)?;
         let candidate_hash: [u8; 32] = Sha256::digest(bytes).into();
         if create_new || expected_sha256 != Some(candidate_hash)
@@ -1461,7 +1498,7 @@ pub async fn file_in_typed_checked_async(
         },
         |record| trueos_fs::FileWriteMetadata {
             file_id: record.file_id,
-            content_type: if infer_blob { new_content_type } else { record.content_type },
+            content_type: if type_policy == CheckedWriteTypePolicy::Retain { record.content_type } else { new_content_type },
             record_key: record.record_key,
         },
     );

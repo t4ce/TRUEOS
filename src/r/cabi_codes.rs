@@ -14,6 +14,8 @@ pub const FS_ERR_WRITE_CONFLICT: i32 = -17;
 // Contract limit for C ABI FS path parameters used by kernel + QJS.
 pub const BLUEPRINT_ASYNC_FS_MAX_PATH: usize = 1024;
 
+/// A live nonblocking HTTP request has no data ready yet.
+pub const NET_PENDING: i32 = -116;
 pub const NET_ERR_BAD_URL: i32 = -10;
 pub const NET_ERR_TIMEOUT: i32 = -11;
 pub const NET_ERR_HTTP: i32 = -12;
@@ -42,6 +44,7 @@ pub fn cabi_rc_name(rc: i32) -> &'static [u8] {
         FS_ERR_TYPE_REQUIRED => b"FS_ERR_TYPE_REQUIRED",
         FS_ERR_TYPE_MISMATCH => b"FS_ERR_TYPE_MISMATCH",
         FS_ERR_WRITE_CONFLICT => b"FS_ERR_WRITE_CONFLICT",
+        NET_PENDING => b"NET_PENDING",
         NET_ERR_BAD_URL => b"NET_ERR_BAD_URL",
         NET_ERR_TIMEOUT => b"NET_ERR_TIMEOUT",
         NET_ERR_HTTP => b"NET_ERR_HTTP",

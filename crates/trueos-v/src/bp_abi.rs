@@ -1241,6 +1241,11 @@ unsafe extern "C" {
     pub fn trueos_cabi_archive_report(id: u32, out: *mut TrueosArchiveReport) -> i32;
     pub safe fn trueos_cabi_archive_discard(id: u32) -> i32;
 
+    pub fn trueos_cabi_net_http_request_start_v1(payload: *const u8, len: usize) -> i32;
+    pub fn trueos_cabi_net_http_request_head_v1(id: u32, out: *mut u8, cap: usize) -> isize;
+    pub fn trueos_cabi_net_http_request_read_v1(id: u32, out: *mut u8, cap: usize) -> isize;
+    pub safe fn trueos_cabi_net_http_request_discard_v1(id: u32) -> i32;
+
     pub fn trueos_cabi_net_fetch_start(
         url_ptr: *const u8,
         url_len: usize,

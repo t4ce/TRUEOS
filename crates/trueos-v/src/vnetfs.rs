@@ -221,3 +221,6 @@ pub fn fetch_bytes_read(op_id: u32) -> Result<Vec<u8>, i32> {
 pub fn fetch_bytes_discard(op_id: u32) -> i32 {
     vcabi::trueos_cabi_net_fetch_bytes_discard(op_id)
 }
+
+#[path = "http_request.rs"]
+pub mod http;

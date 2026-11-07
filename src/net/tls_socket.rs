@@ -1,5 +1,9 @@
 extern crate alloc;
 
+#[path = "tls_flow.rs"]
+mod flow;
+use flow::{Delivery, PendingSend};
+
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -81,13 +85,17 @@ fn drain_tls_commands() -> Vec<(&'static str, Vec<TlsCommand>)> {
     out
 }
 
-fn push_tls_event(target: &'static str, event: TlsEvent) -> bool {
+fn try_push_tls_event(target: &'static str, event: TlsEvent) -> Result<(), TlsEvent> {
     let guard = TLS_APP_QUEUES.lock();
     if let Some(entry) = guard.iter().find(|e| e.name == target) {
-        entry.events.push(event).is_ok()
+        entry.events.try_push(event)
     } else {
-        false
+        Err(event)
     }
+}
+
+fn push_tls_event(target: &'static str, event: TlsEvent) -> bool {
+    try_push_tls_event(target, event).is_ok()
 }
 
 fn discard_tls_events(target: &'static str) {
@@ -267,7 +275,14 @@ static KERNEL_TIME: KernelTime = KernelTime;
 
 struct TlsConn {
     user_owner: &'static str,
-    net: VNet,
+    net: Arc<VNet>,
+    delivery: Delivery<TlsEvent>,
+    tx: PendingSend,
+    open_pending: Option<vnet::Command>,
+    close_pending: bool,
+    terminal: bool,
+    explicit_timeouts: bool,
+    tcp_established: bool,
 
     handle: Option<vnet::NetHandle>,
     tls: TlsClient,
@@ -281,6 +296,38 @@ struct TlsConn {
 }
 
 impl TlsConn {
+    fn emit(&mut self, event: TlsEvent) -> bool {
+        if self.cancelled {
+            return false;
+        }
+        let owner = self.user_owner;
+        self.delivery
+            .emit(event, |event| try_push_tls_event(owner, event));
+        true
+    }
+    fn flush_events(&mut self) -> bool {
+        let owner = self.user_owner;
+        self.delivery
+            .flush(|event| try_push_tls_event(owner, event))
+    }
+    fn request_close(&mut self) {
+        self.close_pending = true;
+        self.retry_commands();
+    }
+    fn retry_commands(&mut self) {
+        if let Some(command) = self.open_pending.take() {
+            if self.net.submit(command.clone()).is_err() {
+                self.open_pending = Some(command);
+            }
+        }
+        if self.close_pending {
+            if let Some(handle) = self.handle {
+                if self.net.submit(vnet::Command::Close { handle }).is_ok() {
+                    self.close_pending = false;
+                }
+            }
+        }
+    }
     fn matches_handle(&self, handle: vnet::NetHandle) -> bool {
         self.handle == Some(handle)
     }
@@ -288,40 +335,117 @@ impl TlsConn {
 
 static TLS_CONNS: Mutex<Vec<TlsConn>> = Mutex::new(Vec::new());
 
+/// Open TLS over a fixed request slot's existing VNet owner. Unlike legacy
+/// convenience opens, zero timeouts here explicitly disable their phases.
+pub(crate) fn open_reusable(
+    owner: &'static str,
+    net: Arc<VNet>,
+    remote: core::net::SocketAddr,
+    server_name: &str,
+    timeouts: TlsTimeouts,
+) -> Result<(), TlsError> {
+    let cfg = TlsClientConfig::new().with_alpn_protocols(&[b"http/1.1"]);
+    let tls = TlsClient::new(
+        &cfg,
+        &TlsRoots::mozilla(),
+        server_name,
+        &mut KernelTlsRng::new(),
+        &KERNEL_TIME,
+    )?
+    .with_buffer_limit(512 * 1024);
+    let command = match remote {
+        core::net::SocketAddr::V4(remote) => vnet::Command::OpenTcpConnect {
+            remote: vnet::EndpointV4::new(remote.ip().octets(), remote.port()),
+        },
+        core::net::SocketAddr::V6(remote) => vnet::Command::OpenTcpConnectV6 {
+            remote: vnet::EndpointV6::new(remote.ip().octets(), remote.port()),
+        },
+    };
+    let mut conns = TLS_CONNS.lock();
+    if conns.iter().any(|conn| conn.user_owner == owner) {
+        return Err(TlsError::Io);
+    }
+    let mut conn = TlsConn {
+        user_owner: owner,
+        net,
+        delivery: Delivery::new(),
+        tx: PendingSend::new(),
+        open_pending: Some(command),
+        close_pending: false,
+        terminal: false,
+        explicit_timeouts: true,
+        tcp_established: false,
+        handle: None,
+        tls,
+        connected_notified: false,
+        cancelled: false,
+        closed: false,
+        created_at: Instant::now(),
+        last_activity: Instant::now(),
+        timeouts,
+    };
+    conn.retry_commands();
+    conns.push(conn);
+    Ok(())
+}
+
+pub(crate) fn reusable_tcp_established(owner: &'static str) -> bool {
+    TLS_CONNS
+        .lock()
+        .iter()
+        .any(|conn| conn.user_owner == owner && conn.tcp_established)
+}
+
+/// Stop every TLS producer for a reusable slot before the caller submits and
+/// awaits the lower VNet owner fence. This is not the lower transport ACK.
+pub(crate) fn retire_reusable(owner: &'static str) {
+    let mut conns = TLS_CONNS.lock();
+    conns.retain(|conn| conn.user_owner != owner);
+    let queues = TLS_APP_QUEUES.lock();
+    if let Some(entry) = queues.iter().find(|entry| entry.name == owner) {
+        let _ = entry.cmds.drain(usize::MAX);
+        let _ = entry.events.drain(usize::MAX);
+    }
+}
+
 fn flush_outgoing_tls(conn: &mut TlsConn) {
     if conn.closed {
         return;
     }
-
+    let Some(handle) = conn.handle else {
+        return;
+    };
+    if !conn.tx.flush(vnet::MAX_MSG, |bytes| {
+        conn.net.try_send_tcp_chunk(handle, bytes)
+    }) {
+        return;
+    }
     match conn.tls.take_ciphertext_to_send() {
         Ok(data) => {
-            if !data.is_empty()
-                && let Some(handle) = conn.handle
-            {
-                let _ = conn.net.send_tcp_all(handle, &data);
-            }
+            conn.tx.stage(data);
+            let _ = conn.tx.flush(vnet::MAX_MSG, |bytes| {
+                conn.net.try_send_tcp_chunk(handle, bytes)
+            });
         }
-        Err(e) => {
+        Err(err) => {
             conn.closed = true;
-            let _ = push_tls_event(conn.user_owner, TlsEvent::TlsError { err: e });
-            if let Some(handle) = conn.handle {
-                let _ = conn.net.submit(vnet::Command::Close { handle });
-            }
+            conn.terminal = true;
+            conn.emit(TlsEvent::TlsError { err });
+            conn.request_close();
         }
     }
 }
 
 fn maybe_notify_connected(conn: &mut TlsConn) {
-    if conn.connected_notified {
+    if conn.connected_notified || conn.closed || conn.cancelled {
         return;
     }
     if conn.tls.is_connected()
         && let Some(handle) = conn.handle
     {
         crate::log_info!(target: "net"; "tls-socket: tls connected owner={} handle={}\n", conn.user_owner, handle.0);
-        // Only mark as notified once the event is successfully queued.
-        // Otherwise the app may never observe `Connected` and will stall.
-        if push_tls_event(conn.user_owner, TlsEvent::Connected { handle }) {
+        // Delivery retains ownership if the consumer's queue is full.
+        if conn.emit(TlsEvent::Connected { handle }) {
             conn.connected_notified = true;
         }
     }
@@ -405,9 +529,16 @@ fn tls_socket_tick_once() -> bool {
                         }
                     };
 
-                    let conn = TlsConn {
+                    let mut conn = TlsConn {
                         user_owner: owner,
-                        net,
+                        net: Arc::new(net),
+                        delivery: Delivery::new(),
+                        tx: PendingSend::new(),
+                        open_pending: None,
+                        close_pending: false,
+                        terminal: false,
+                        explicit_timeouts: false,
+                        tcp_established: false,
                         handle: None,
                         tls,
                         connected_notified: false,
@@ -422,24 +553,28 @@ fn tls_socket_tick_once() -> bool {
                         Some(remote) => vnet::Command::OpenTcpConnectV6 { remote },
                         None => vnet::Command::OpenTcpConnect { remote },
                     };
-                    let _ = conn.net.submit(command);
+                    conn.open_pending = Some(command);
+                    conn.retry_commands();
                     conns.push(conn);
                 }
                 TlsCommand::OpenTcpConnectV6 { .. } => unreachable!(),
                 TlsCommand::Send { handle, data } => {
-                    if let Some(conn) = conns.iter_mut().find(|c| c.matches_handle(handle)) {
+                    if let Some(conn) = conns
+                        .iter_mut()
+                        .find(|c| c.user_owner == owner && c.matches_handle(handle))
+                    {
                         conn.last_activity = Instant::now();
                         if conn.closed {
                             if !conn.cancelled {
-                                let _ =
-                                    push_tls_event(conn.user_owner, TlsEvent::Closed { handle });
+                                let _ = conn.emit(TlsEvent::Closed { handle });
                             }
                             continue;
                         }
                         if let Err(e) = conn.tls.write_plaintext(&data) {
                             conn.closed = true;
-                            let _ = push_tls_event(conn.user_owner, TlsEvent::TlsError { err: e });
-                            let _ = conn.net.submit(vnet::Command::Close { handle });
+                            conn.terminal = true;
+                            let _ = conn.emit(TlsEvent::TlsError { err: e });
+                            conn.request_close();
                             continue;
                         }
                         flush_outgoing_tls(conn);
@@ -450,17 +585,21 @@ fn tls_socket_tick_once() -> bool {
                     for conn in conns.iter_mut().filter(|conn| conn.user_owner == owner) {
                         conn.cancelled = true;
                         conn.closed = true;
+                        conn.delivery.clear();
                         if let Some(handle) = conn.handle {
-                            let _ = conn.net.submit(vnet::Command::Close { handle });
+                            conn.request_close();
                         }
                     }
                     discard_tls_events(owner);
                     completion.finish();
                 }
                 TlsCommand::Close { handle } => {
-                    if let Some(conn) = conns.iter_mut().find(|c| c.matches_handle(handle)) {
+                    if let Some(conn) = conns
+                        .iter_mut()
+                        .find(|c| c.user_owner == owner && c.matches_handle(handle))
+                    {
                         conn.closed = true;
-                        let _ = conn.net.submit(vnet::Command::Close { handle });
+                        conn.request_close();
                     }
                 }
             }
@@ -472,7 +611,28 @@ fn tls_socket_tick_once() -> bool {
     let now = Instant::now();
     let mut idx = 0;
     while idx < conns.len() {
-        let t = if conns[idx].timeouts.connect_ms == 0
+        conns[idx].retry_commands();
+        let _ = conns[idx].flush_events();
+        flush_outgoing_tls(&mut conns[idx]);
+        maybe_notify_connected(&mut conns[idx]);
+        if conns[idx].terminal {
+            if !conns[idx].delivery.blocked() && !conns[idx].close_pending {
+                conns.swap_remove(idx);
+                did_work = true;
+            } else {
+                idx += 1;
+            }
+            continue;
+        }
+        // A slow consumer is not remote inactivity. Resume the idle clock when
+        // output capacity returns; TCP retains the unread encrypted prefix.
+        if conns[idx].delivery.blocked() {
+            conns[idx].last_activity = now;
+            idx += 1;
+            continue;
+        }
+        let t = if !conns[idx].explicit_timeouts
+            && conns[idx].timeouts.connect_ms == 0
             && conns[idx].timeouts.tls_ms == 0
             && conns[idx].timeouts.idle_ms == 0
         {
@@ -483,8 +643,8 @@ fn tls_socket_tick_once() -> bool {
 
         let mut remove = false;
 
-        // Connect timeout: never got a TCP handle.
-        if conns[idx].handle.is_none() && t.connect_ms != 0 {
+        // Connect timeout: TCP has not become established.
+        if !conns[idx].tcp_established && t.connect_ms != 0 {
             let elapsed = now
                 .saturating_duration_since(conns[idx].created_at)
                 .as_millis();
@@ -494,28 +654,26 @@ fn tls_socket_tick_once() -> bool {
                         "tls-socket: connect timeout owner={}",
                         conns[idx].user_owner
                     ));
-                    let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                    let _ = conns[idx].emit(TlsEvent::Error { msg });
                 }
                 remove = true;
             }
         }
 
-        // TLS timeout: have a handle but handshake didn't complete.
-        if !remove && conns[idx].handle.is_some() && !conns[idx].tls.is_connected() && t.tls_ms != 0
+        // TLS timeout: TCP established but handshake did not complete.
+        if !remove && conns[idx].tcp_established && !conns[idx].tls.is_connected() && t.tls_ms != 0
         {
             let elapsed = now
                 .saturating_duration_since(conns[idx].last_activity)
                 .as_millis();
             if elapsed >= t.tls_ms as u64 {
-                if let Some(handle) = conns[idx].handle {
-                    let _ = conns[idx].net.submit(vnet::Command::Close { handle });
-                }
+                conns[idx].request_close();
                 if !conns[idx].cancelled {
                     let msg = leak_str(alloc::format!(
                         "tls-socket: tls timeout owner={}",
                         conns[idx].user_owner
                     ));
-                    let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                    let _ = conns[idx].emit(TlsEvent::Error { msg });
                 }
                 remove = true;
             }
@@ -527,35 +685,40 @@ fn tls_socket_tick_once() -> bool {
                 .saturating_duration_since(conns[idx].last_activity)
                 .as_millis();
             if elapsed >= t.idle_ms as u64 {
-                if let Some(handle) = conns[idx].handle {
-                    let _ = conns[idx].net.submit(vnet::Command::Close { handle });
-                }
+                conns[idx].request_close();
                 if !conns[idx].cancelled {
                     let msg = leak_str(alloc::format!(
                         "tls-socket: idle timeout owner={}",
                         conns[idx].user_owner
                     ));
-                    let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                    let _ = conns[idx].emit(TlsEvent::Error { msg });
                 }
                 remove = true;
             }
         }
 
         if remove {
+            conns[idx].terminal = true;
+            conns[idx].closed = true;
             did_work = true;
-            conns.swap_remove(idx);
-        } else {
-            idx += 1;
         }
+        idx += 1;
     }
 
     // Pump underlying TCP events into TLS and emit plaintext TLS events.
     let mut idx = 0;
     while idx < conns.len() {
         let mut remove = false;
+        if conns[idx].terminal || !conns[idx].flush_events() {
+            idx += 1;
+            continue;
+        }
 
         // Drain a bounded number of events per conn per tick.
         for _ in 0..256 {
+            if conns[idx].delivery.blocked() || conns[idx].terminal {
+                break;
+            }
             let Some(ev) = conns[idx].net.pop_event() else {
                 break;
             };
@@ -566,18 +729,18 @@ fn tls_socket_tick_once() -> bool {
                         conns[idx].handle = Some(handle);
                         conns[idx].last_activity = Instant::now();
                         if conns[idx].cancelled {
-                            let _ = conns[idx].net.submit(vnet::Command::Close { handle });
+                            conns[idx].request_close();
                         } else {
-                            let _ =
-                                push_tls_event(conns[idx].user_owner, TlsEvent::Opened { handle });
+                            let _ = conns[idx].emit(TlsEvent::Opened { handle });
                         }
                     }
                 }
                 vnet::Event::TcpEstablished { handle, .. } => {
                     if conns[idx].handle == Some(handle) {
+                        conns[idx].tcp_established = true;
                         conns[idx].last_activity = Instant::now();
                         if conns[idx].cancelled {
-                            let _ = conns[idx].net.submit(vnet::Command::Close { handle });
+                            conns[idx].request_close();
                             continue;
                         }
                         crate::log_info!(target: "net";
@@ -594,33 +757,26 @@ fn tls_socket_tick_once() -> bool {
                         continue;
                     }
                     if conns[idx].cancelled {
-                        let _ = conns[idx].net.submit(vnet::Command::Close { handle });
+                        conns[idx].request_close();
                         continue;
                     }
 
                     conns[idx].last_activity = Instant::now();
 
-                    let produced = match conns[idx].tls.ingest_encrypted(data.as_slice()) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            conns[idx].closed = true;
-                            let _ = push_tls_event(
-                                conns[idx].user_owner,
-                                TlsEvent::TlsError { err: e },
-                            );
-                            let _ = conns[idx].net.submit(vnet::Command::Close { handle });
-                            continue;
-                        }
-                    };
-
+                    let (produced, error) = conns[idx].tls.ingest_stream(data.as_slice());
+                    maybe_notify_connected(&mut conns[idx]);
                     if !produced.is_empty() {
-                        let _ = push_tls_event(
-                            conns[idx].user_owner,
-                            TlsEvent::Data {
-                                handle,
-                                data: produced,
-                            },
-                        );
+                        conns[idx].emit(TlsEvent::Data {
+                            handle,
+                            data: produced,
+                        });
+                    }
+                    if let Some(err) = error {
+                        conns[idx].emit(TlsEvent::TlsError { err });
+                        conns[idx].closed = true;
+                        conns[idx].terminal = true;
+                        conns[idx].request_close();
+                        continue;
                     }
 
                     flush_outgoing_tls(&mut conns[idx]);
@@ -630,8 +786,11 @@ fn tls_socket_tick_once() -> bool {
                     if conns[idx].handle == Some(handle) {
                         conns[idx].closed = true;
                         if !conns[idx].cancelled {
-                            let _ =
-                                push_tls_event(conns[idx].user_owner, TlsEvent::Closed { handle });
+                            if conns[idx].explicit_timeouts && !conns[idx].tls.peer_closed() {
+                                conns[idx].emit(TlsEvent::TlsError { err: TlsError::Io });
+                            } else {
+                                conns[idx].emit(TlsEvent::Closed { handle });
+                            }
                         }
                         remove = true;
                     }
@@ -644,8 +803,11 @@ fn tls_socket_tick_once() -> bool {
                         msg
                     );
                     if !conns[idx].cancelled {
-                        let _ = push_tls_event(conns[idx].user_owner, TlsEvent::Error { msg });
+                        let _ = conns[idx].emit(TlsEvent::Error { msg });
                     }
+                    conns[idx].closed = true;
+                    conns[idx].terminal = true;
+                    conns[idx].request_close();
                 }
                 vnet::Event::TcpSent { .. } => {}
                 vnet::Event::TcpReadClosed { .. } => {}
@@ -658,10 +820,9 @@ fn tls_socket_tick_once() -> bool {
         }
 
         if remove {
-            conns.swap_remove(idx);
-        } else {
-            idx += 1;
+            conns[idx].terminal = true;
         }
+        idx += 1;
     }
 
     did_work

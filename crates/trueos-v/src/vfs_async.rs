@@ -609,6 +609,19 @@ pub async fn infer_blob_checked(
     write.commit().await
 }
 
+/// Atomically restart an unchanged FFA file as an empty Blob, retaining its ID
+/// and key. A missing, modified, or protected destination returns a conflict.
+/// This commits the empty representation before a new download checkpoint.
+pub async fn reset_blob_checked(path: &[u8], expected_sha256: [u8; 32]) -> Result<(), i32> {
+    let operation = Operation::from_start(unsafe {
+        vcabi::trueos_cabi_async_fs_checked_write_begin_v1(
+            path.as_ptr(), path.len(), 0, ContentTypeId::BLOB.raw(), 10,
+            expected_sha256.as_ptr(),
+        )
+    })?;
+    TypedWrite { operation, total_len: 0, next_offset: 0 }.commit().await
+}
+
 /// Admit a streamed typed write before accepting any body chunks.
 pub fn write_file_begin_typed(
     path: &[u8],

@@ -119,6 +119,7 @@ pub struct TlsClient {
     pending_plaintext: Vec<u8>,
     connected: bool,
     closed: bool,
+    buffer_limit: Option<usize>,
 }
 
 static TLS_PROVIDER_ONCE: Once<()> = Once::new();
@@ -137,7 +138,9 @@ impl rustls::time_provider::TimeProvider for TimeProviderAdapter {
     fn current_time(&self) -> Option<rustls::pki_types::UnixTime> {
         let time = unsafe { &*self.time };
         let secs = time.unix_time_seconds()?;
-        Some(rustls::pki_types::UnixTime::since_unix_epoch(core::time::Duration::from_secs(secs)))
+        Some(rustls::pki_types::UnixTime::since_unix_epoch(
+            core::time::Duration::from_secs(secs),
+        ))
     }
 }
 
@@ -154,10 +157,10 @@ fn pump(
     pending_plaintext: &mut Vec<u8>,
     connected: &mut bool,
     closed: &mut bool,
-) -> Result<Vec<u8>, TlsError> {
+    plaintext: &mut Vec<u8>,
+    limit: Option<usize>,
+) -> Result<(), TlsError> {
     use rustls::unbuffered::{ConnectionState, EncodeError, EncryptError};
-
-    let mut plaintext: Vec<u8> = Vec::new();
 
     loop {
         let mut should_break = false;
@@ -175,6 +178,9 @@ fn pump(
                 let chunk = match enc.encode(&mut out) {
                     Ok(n) => out[..n].to_vec(),
                     Err(EncodeError::InsufficientSize(e)) => {
+                        if limit.is_some_and(|limit| e.required_size > limit) {
+                            return Err(TlsError::Io);
+                        }
                         let mut v = vec![0u8; e.required_size];
                         let n = enc.encode(&mut v).map_err(|_| TlsError::HandshakeFailed)?;
                         v.truncate(n);
@@ -182,6 +188,10 @@ fn pump(
                     }
                     Err(_) => return Err(TlsError::HandshakeFailed),
                 };
+                if limit.is_some_and(|limit| outgoing_tls.len().saturating_add(chunk.len()) > limit)
+                {
+                    return Err(TlsError::Io);
+                }
                 outgoing_tls.extend_from_slice(&chunk);
             }
             ConnectionState::TransmitTlsData(tx) => {
@@ -192,6 +202,11 @@ fn pump(
                 while let Some(rec) = rt.next_record() {
                     let rec = rec.map_err(|_| TlsError::HandshakeFailed)?;
                     discard = discard.saturating_add(rec.discard);
+                    if limit.is_some_and(|limit| {
+                        plaintext.len().saturating_add(rec.payload.len()) > limit
+                    }) {
+                        return Err(TlsError::Io);
+                    }
                     plaintext.extend_from_slice(rec.payload);
                 }
             }
@@ -202,6 +217,9 @@ fn pump(
                     let chunk = match wt.encrypt(pending_plaintext.as_slice(), &mut out) {
                         Ok(n) => out[..n].to_vec(),
                         Err(EncryptError::InsufficientSize(e)) => {
+                            if limit.is_some_and(|limit| e.required_size > limit) {
+                                return Err(TlsError::Io);
+                            }
                             let mut v = vec![0u8; e.required_size];
                             let n = wt
                                 .encrypt(pending_plaintext.as_slice(), &mut v)
@@ -211,6 +229,11 @@ fn pump(
                         }
                         Err(_) => return Err(TlsError::HandshakeFailed),
                     };
+                    if limit
+                        .is_some_and(|limit| outgoing_tls.len().saturating_add(chunk.len()) > limit)
+                    {
+                        return Err(TlsError::Io);
+                    }
                     outgoing_tls.extend_from_slice(&chunk);
                     pending_plaintext.clear();
                 } else {
@@ -238,7 +261,7 @@ fn pump(
         }
     }
 
-    Ok(plaintext)
+    Ok(())
 }
 
 impl TlsClient {
@@ -304,6 +327,8 @@ impl TlsClient {
             &mut pending_plaintext,
             &mut connected,
             &mut closed,
+            &mut Vec::new(),
+            None,
         )?;
 
         Ok(Self {
@@ -313,6 +338,7 @@ impl TlsClient {
             pending_plaintext,
             connected,
             closed,
+            buffer_limit: None,
         })
     }
 
@@ -321,21 +347,49 @@ impl TlsClient {
     /// Requirements:
     /// - Must handle partial TLS records.
     /// - Must return decrypted plaintext for the caller to consume.
-    pub fn ingest_encrypted(&mut self, _ciphertext: &[u8]) -> Result<Vec<u8>, TlsError> {
+    pub fn ingest_encrypted(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, TlsError> {
+        let (plaintext, error) = self.ingest_stream(ciphertext);
+        match error {
+            Some(error) => Err(error),
+            None => Ok(plaintext),
+        }
+    }
+
+    pub(crate) fn with_buffer_limit(mut self, limit: usize) -> Self {
+        self.buffer_limit = Some(limit);
+        self
+    }
+
+    pub(crate) fn peer_closed(&self) -> bool {
+        self.closed
+    }
+
+    /// Preserve authenticated plaintext preceding a later bad record in this
+    /// same transport batch. Consumers publish the prefix before its error.
+    pub(crate) fn ingest_stream(&mut self, ciphertext: &[u8]) -> (Vec<u8>, Option<TlsError>) {
         if self.closed {
-            return Ok(Vec::new());
+            return (Vec::new(), None);
         }
-        if !_ciphertext.is_empty() {
-            self.incoming_tls.extend_from_slice(_ciphertext);
+        if self
+            .buffer_limit
+            .is_some_and(|limit| self.incoming_tls.len().saturating_add(ciphertext.len()) > limit)
+        {
+            return (Vec::new(), Some(TlsError::Io));
         }
-        pump(
+        self.incoming_tls.extend_from_slice(ciphertext);
+        let mut plaintext = Vec::new();
+        let error = pump(
             &mut self.conn,
             &mut self.incoming_tls,
             &mut self.outgoing_tls,
             &mut self.pending_plaintext,
             &mut self.connected,
             &mut self.closed,
+            &mut plaintext,
+            self.buffer_limit,
         )
+        .err();
+        (plaintext, error)
     }
 
     /// Provide plaintext to be encrypted and sent.
@@ -350,6 +404,14 @@ impl TlsClient {
             return Ok(());
         }
 
+        if self.buffer_limit.is_some_and(|limit| {
+            self.pending_plaintext
+                .len()
+                .saturating_add(_plaintext.len())
+                > limit
+        }) {
+            return Err(TlsError::Io);
+        }
         self.pending_plaintext.extend_from_slice(_plaintext);
         // Attempt to encrypt immediately if the connection is ready.
         let _ = pump(
@@ -359,6 +421,8 @@ impl TlsClient {
             &mut self.pending_plaintext,
             &mut self.connected,
             &mut self.closed,
+            &mut Vec::new(),
+            self.buffer_limit,
         )?;
         Ok(())
     }

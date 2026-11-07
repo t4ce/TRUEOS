@@ -327,6 +327,10 @@ pub const OP_BP_NET_SUBMIT: u32 = 0x21; // request payload is wire Command
 pub const OP_BP_NET_POLL: u32 = 0x22; // response payload is optional wire Event
 pub const OP_BP_FETCH_BYTES_START: u32 = 0x23; // flags: bit0 Happy Eyeballs, bit1 URL\0Referer; response is op id
 pub const OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1: u32 = trueos_vm::vmcall::OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1;
+pub const OP_BP_HTTP_REQUEST_START_V1: u32 = 0x250;
+pub const OP_BP_HTTP_REQUEST_HEAD_V1: u32 = 0x251;
+pub const OP_BP_HTTP_REQUEST_READ_V1: u32 = 0x252;
+pub const OP_BP_HTTP_REQUEST_DISCARD_V1: u32 = 0x253;
 pub const OP_BP_FETCH_BYTES_RESULT_LEN: u32 = 0x24; // arg0 is op id, response is signed len/rc
 pub const OP_BP_FETCH_BYTES_READ: u32 = 0x25; // arg0 op id,arg1 offset:cap,response payload bytes
 pub const OP_BP_FETCH_BYTES_FINAL_URL_V1: u32 = 0x246; // arg0 op id,arg1 zero=>len or offset:cap=>non-consuming URL bytes
@@ -4154,6 +4158,41 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 write_response(vm_id, seq, STATUS_OK, op_id as u64, 0);
             }
+            DispatchOutcome::Resume
+        }
+        OP_BP_HTTP_REQUEST_START_V1 | OP_BP_HTTP_REQUEST_HEAD_V1
+        | OP_BP_HTTP_REQUEST_READ_V1 | OP_BP_HTTP_REQUEST_DISCARD_V1 => {
+            use crate::r::net::http_request_cabi::{self as http, VmCommand};
+            let Ok(command) = http::decode_vm_command(op, arg0, arg1, req_len as usize) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Some(owner) = http::owner_for_vm(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let (rc, payload_len) = match command {
+                VmCommand::Start => {
+                    let frame = unsafe { &(&(*p).payload)[..req_len as usize] };
+                    (http::start_host(owner, frame) as isize, 0)
+                }
+                VmCommand::Head { id, cap } => {
+                    let out = unsafe { &mut (&mut (*p).payload)[..cap] };
+                    let rc = http::head_host(owner, id, out);
+                    (rc, if cap != 0 && rc > 0 { rc as usize } else { 0 })
+                }
+                VmCommand::Read { id, cap } => {
+                    let out = unsafe { &mut (&mut (*p).payload)[..cap] };
+                    let rc = http::read_host(owner, id, out);
+                    (rc, if rc > 0 { rc as usize } else { 0 })
+                }
+                VmCommand::Discard { id } => (http::discard_host(owner, id) as isize, 0),
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, payload_len as u32);
             DispatchOutcome::Resume
         }
         OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1 => {

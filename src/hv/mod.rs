@@ -4588,6 +4588,12 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     }
 
     teardown_diagnostics::set(vm_id, TeardownStage::Net);
+    let http_requests_closed = crate::r::net::http_request_cabi::discard_for_vm(
+        vm_id, vm.run_generation.load(Ordering::Acquire),
+    );
+    if http_requests_closed != 0 {
+        hvlogf(format_args!("hv: vm{} lifecycle: HTTP request cleanup released={}", vm_id, http_requests_closed));
+    }
     let bounded_fetches_closed = crate::r::net::https::discard_bounded_fetches_for_vm(
         vm_id, vm.run_generation.load(Ordering::Acquire),
     );

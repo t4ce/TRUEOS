@@ -624,6 +624,12 @@ impl fmt::Debug for SharedNetPayload {
 #[derive(Clone, Debug)]
 pub enum NetCommand {
 
+    /// Internal reusable-client fence. Queue ordering ensures all earlier
+    /// commands have run before records/events are retired and acknowledged.
+    ResetOwner {
+        complete: Arc<core::sync::atomic::AtomicBool>,
+    },
+
     OpenTun {
         ipv4: [u8; 4],
         ipv4_prefix_len: u8,
@@ -4574,6 +4580,19 @@ impl NetService {
                     self.remove_record(handle);
                     let _ = push_event(owner, NetEvent::Closed { handle });
                 }
+            }
+            NetCommand::ResetOwner { complete } => {
+                let handles: Vec<_> = self.records.iter()
+                    .filter(|record| record.owner == owner)
+                    .map(|record| record.handle).collect();
+                for handle in handles {
+                    if !self.close_loopback_tcp(handle) { self.remove_record(handle); }
+                }
+                let queues = APP_QUEUES.lock();
+                if let Some(entry) = queues.iter().find(|entry| entry.name == owner) {
+                    let _ = entry.events.drain(usize::MAX);
+                }
+                complete.store(true, Ordering::Release);
             }
             NetCommand::FinishTcp { handle } => {
                 let Some(idx) = self.records.iter().position(|rec| rec.handle == handle) else {

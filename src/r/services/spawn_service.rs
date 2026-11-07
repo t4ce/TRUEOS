@@ -38,6 +38,7 @@ define_started_flags!(
     JOB_RUNNER_STARTED,
     CODEX_PROGRESS_STARTED,
     BLUEPRINT_ASYNC_FS_SERVICE_STARTED,
+    BLUEPRINT_HTTP_REQUEST_SERVICE_STARTED,
     TRUEOSFS_REQUEST_BROKER_STARTED,
     DNS_REQUEST_BROKER_STARTED,
     BLOCKING_JOB_DISPATCHER_STARTED,
@@ -272,6 +273,10 @@ fn spawn_job_runner(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_blueprint_async_fs_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::io::async_fs_cabi::service_task())
+}
+
+fn spawn_blueprint_http_request_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::net::http_request_cabi::service_task())
 }
 
 fn spawn_trueosfs_request_broker(spawner: Spawner) -> SpawnAttempt {
@@ -932,7 +937,7 @@ const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
 // Own the AtomicBool fields in a static array; an interior-mutable temporary
 // cannot be promoted behind a shared slice reference.
-const TASK_COUNT: usize = 62
+const TASK_COUNT: usize = 63
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + 2 * cfg!(feature = "trueos_ttstt") as usize
     + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize;
@@ -951,6 +956,11 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         0,
         &BLUEPRINT_ASYNC_FS_SERVICE_STARTED,
         spawn_blueprint_async_fs_service,
+    ),
+    TaskSpec::enabled(
+        "blueprint-http-request-service", 0,
+        &BLUEPRINT_HTTP_REQUEST_SERVICE_STARTED,
+        spawn_blueprint_http_request_service,
     ),
     // BSP half of the synchronous-kfs compatibility bridge. It must remain a
     // local BSP task because TRUEOSFS/block futures are intentionally non-Send.

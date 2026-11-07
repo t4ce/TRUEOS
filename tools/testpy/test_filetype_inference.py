@@ -56,9 +56,9 @@ mod r { pub mod tar { pub struct Entry { pub name: String, pub bytes: Vec<u8>, p
  for flags in 0u32..16 {
   let mut bytes = flags.to_le_bytes().to_vec(); bytes.extend_from_slice(&[0;32]); bytes.extend_from_slice(b"file.png");
   let parsed = decode_checked_write_payload(&bytes);
-  assert_eq!(parsed.is_ok(), matches!(flags, 0 | 1 | 2 | 6));
+  assert_eq!(parsed.is_ok(), matches!(flags, 0 | 1 | 2 | 6 | 10));
   if let Ok((options, path)) = parsed {
-   assert_eq!(options.infer_blob, flags == 6); assert_eq!(options.expected_sha256.is_some(), flags & 2 != 0); assert_eq!(options.create_new, flags == 1); assert_eq!(path, "file.png");
+   assert_eq!(options.infer_blob, flags == 6); assert_eq!(options.reset_blob, flags == 10); assert_eq!(options.expected_sha256.is_some(), flags & 2 != 0); assert_eq!(options.create_new, flags == 1); assert_eq!(path, "file.png");
   }
  }
 }

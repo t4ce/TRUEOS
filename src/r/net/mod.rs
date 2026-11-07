@@ -6,6 +6,8 @@ pub mod discovery;
 pub mod dns;
 pub mod dns_request_broker;
 pub mod https;
+pub mod http_request_cabi;
+pub mod request_stream;
 pub mod ipp_print;
 pub mod mail_config;
 pub mod midi_udp;
@@ -272,6 +274,33 @@ impl VNet {
             })?;
         }
         Ok(())
+    }
+
+    /// Submit exactly one chunk. Failure consumes zero bytes, so callers can
+    /// retain an exact ciphertext offset without replaying an accepted prefix.
+    pub(crate) fn try_send_tcp_chunk(&self, handle: api::NetHandle, data: &[u8]) -> Result<(), ()> {
+        if data.len() > api::MAX_MSG { return Err(()); }
+        self.submit(api::Command::SendTcp {
+            handle, data: api::ByteBuf::from_slice_trunc(data),
+        })
+    }
+
+    /// Retire this client's old sockets and events before its queue pair is
+    /// reused. The caller must stop producers before starting this fence.
+    pub(crate) async fn reset_for_reuse(&self) {
+        let complete = alloc::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
+        let mut command = NetCommand::ResetOwner { complete: complete.clone() };
+        loop {
+            match self.cmds.try_push(command) {
+                Ok(()) => break,
+                Err(returned) => command = returned,
+            }
+            trueos_time::Timer::after(trueos_time::Duration::from_millis(1)).await;
+        }
+        while !complete.load(core::sync::atomic::Ordering::Acquire) {
+            trueos_time::Timer::after(trueos_time::Duration::from_millis(1)).await;
+        }
+        self.pending.lock().clear();
     }
 
     pub fn pop_event(&self) -> Option<api::Event> {
