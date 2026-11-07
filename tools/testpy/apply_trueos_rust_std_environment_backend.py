@@ -36,6 +36,9 @@ def add_process_and_exit(changes, system):
     # Keep std's public Unix command-configuration surface, but select its
     # existing Unsupported execution backend before descriptors/pre_exec can
     # have effects. Native Shell3 sessions use their own explicit transport.
+    edit("pal/unix/mod.rs",
+         '#[cfg(any(target_os = "espidf", target_os = "horizon", target_os = "vita", target_os = "nuttx"))]\npub mod unsupported {',
+         '#[cfg(any(target_os = "trueos", target_os = "espidf", target_os = "horizon", target_os = "vita", target_os = "nuttx"))]\npub mod unsupported {')
     edit("process/unix/mod.rs",
          'any(target_os = "espidf", target_os = "horizon", target_os = "vita", target_os = "nuttx") => {',
          'any(target_os = "trueos", target_os = "espidf", target_os = "horizon", target_os = "vita", target_os = "nuttx") => {')

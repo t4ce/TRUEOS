@@ -61,6 +61,7 @@ path={json.dumps(str(MIO / 'src/lib.rs'))}
 [features]
 default=[]
 std-compat=["dep:libc"]
+native-net=[]
 log=["dep:log"]
 net=[]
 os-poll=[]

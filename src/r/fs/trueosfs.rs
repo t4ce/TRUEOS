@@ -3634,8 +3634,15 @@ pub async fn file_append_async(
     };
     let io = KernelBlockIo::new(disk);
 
-    ensure_index_async(disk, &placement).await?;
-    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
+    let _write_lease = loop {
+        ensure_index_async(disk, &placement).await?;
+        let lease = write_gate::RootWriteLease::acquire(disk.id()).await;
+        if !validate_indexed_file_target(disk.id(), name, true)? {
+            drop(lease);
+            continue;
+        }
+        break lease;
+    };
     let disk_id = disk.id();
     let record = match file_record_cache_lookup(disk_id, name) {
         Some(record) => Some(record),

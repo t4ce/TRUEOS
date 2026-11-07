@@ -71,7 +71,7 @@ cfg_os_poll! {
 #[cfg(all(any(target_os = "trueos", target_os = "zkvm"), any(not(feature = "std-compat"), feature = "native-net")))]
 cfg_os_poll! {
     mod shell;
-    pub use self::shell::*;
+    pub(crate) use self::shell::*;
 }
 
 #[cfg(all(target_os = "wasi", target_env = "p1"))]
@@ -83,7 +83,7 @@ cfg_os_poll! {
 cfg_not_os_poll! {
     #[cfg_attr(not(all(any(target_os = "trueos", target_os = "zkvm"), any(not(feature = "std-compat"), feature = "native-net"))), path = "shell_fallback/mod.rs")]
     mod shell;
-    pub use self::shell::*;
+    pub(crate) use self::shell::*;
 
     #[cfg(unix)]
     cfg_any_os_ext! {
@@ -92,3 +92,6 @@ cfg_not_os_poll! {
         pub use self::unix::SourceFd;
     }
 }
+
+#[cfg(all(all(any(target_os = "trueos", target_os = "zkvm"), feature = "native-net"), feature = "std-compat", unix, feature = "os-ext"))]
+pub use self::shell::{pipe, SourceFd};

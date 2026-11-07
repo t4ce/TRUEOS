@@ -1,3 +1,4 @@
+# Additive native byte environment, terminal/realm queries and filesystem object/rename policy; all existing signatures unchanged.
 # Additive bounded owner-scoped streaming HTTP exchange v1; all 372 existing contracts verified unchanged.
 # Additive atomic native single-directory create and kind-checked leaf removal v1; all 370 existing contracts verified unchanged.
 # Additive bounded native GET start v1; all 369 existing contracts verified unchanged.
@@ -48,4 +49,4 @@
 # Additive bounded subdocument fetch with host-applied Referer context; all previous signatures verified unchanged.
 # Additive non-consuming final GET URL metadata; all 369 previous signatures verified unchanged.
 # Intentional retirement of the QJS-only mouse stream; every surviving signature verified unchanged.
-586e4e4be430f743ed3d23e3fae27abc5724aba7d6aae087dda1ead633f329fa
+75785368432fe8cee1831ea51c0f4fb8ec1eef14507a87b1cd2d39e170854deb

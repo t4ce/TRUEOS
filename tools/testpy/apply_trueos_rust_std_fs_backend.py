@@ -44,6 +44,14 @@ def installation(root):
         if relative=='os/unix/fs.rs':
             source=replace_once(source,'use super::platform::fs::MetadataExt as _;','#[cfg(not(target_os = "trueos"))]\nuse super::platform::fs::MetadataExt as _;',path)
         changes[path]=source
+    path=library/'os/unix/io/mod.rs';source=path.read_text()
+    source=replace_once(source,'fn null_fd() -> io::Result<OwnedFd> {','''#[cfg(target_os = "trueos")]
+fn null_fd() -> io::Result<OwnedFd> {
+    Err(io::Error::new(io::ErrorKind::Unsupported, "native file objects cannot become Unix descriptors"))
+}
+#[cfg(not(target_os = "trueos"))]
+fn null_fd() -> io::Result<OwnedFd> {''',path)
+    changes[path]=source
     # Native identity is explicit. No libc stat struct or invented timestamp.
     path=library/'fs.rs';source=path.read_text()
     addition='''

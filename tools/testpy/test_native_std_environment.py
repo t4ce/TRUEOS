@@ -37,7 +37,7 @@ def main():
     spec.loader.exec_module(installer)
     with tempfile.TemporaryDirectory(prefix="trueos-native-std-environment-") as temporary:
         directory = Path(temporary)
-        for relative in ["env/mod.rs", "args/mod.rs", "stdio/mod.rs", "io/mod.rs", "paths/mod.rs", "process/mod.rs", "process/unix/mod.rs", "process/unix/common.rs", "exit.rs"]:
+        for relative in ["env/mod.rs", "args/mod.rs", "stdio/mod.rs", "io/mod.rs", "paths/mod.rs", "process/mod.rs", "process/unix/mod.rs", "process/unix/common.rs", "pal/unix/mod.rs", "exit.rs"]:
             target = directory / "library/std/src/sys" / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(library / "std/src/sys" / relative, target)
