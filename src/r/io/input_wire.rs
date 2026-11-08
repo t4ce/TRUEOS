@@ -4,13 +4,19 @@
 use crate::r::keyboard::TrueosKeyboardOutputEvent;
 use crate::usb2::hid::TrueosHidCursorEvent;
 use crate::usb3::hid::midi::MidiInputEventV1;
-use v::vinput::{KeyboardControlCommand, MouseMotionCommand};
+use crate::usb3::hid::hut::TrueosHidHutKeyboardState;
+use v::vinput::{KeyboardControlCommand, MouseMotionCommand, TrueosInputCombo};
 
 pub(crate) const CURSOR_EVENT_LEN: usize = 56;
 pub(crate) const KEYBOARD_OUTPUT_LEN: usize = 44;
 pub(crate) const MIDI_INPUT_V1_LEN: usize = 24;
 pub(crate) const MOUSE_COMMAND_LEN: usize = 44;
 pub(crate) const KEYBOARD_COMMAND_LEN: usize = 16;
+pub(crate) const HUT_KEYBOARD_LEN: usize = 96;
+pub(crate) const INPUT_COMBO_LEN: usize = 88;
+pub(crate) const HUT_SNAPSHOT_LIMIT: u32 = 32;
+pub(crate) const HUT_SNAPSHOT_KEYBOARDS: u32 = 1;
+pub(crate) const HUT_SNAPSHOT_COMBOS: u32 = 2;
 
 macro_rules! field {
     ($ty:ty, $name:ident, $offset:expr, $width:expr, $field_ty:ty) => {
@@ -21,6 +27,39 @@ macro_rules! field {
 }
 
 const _: () = {
+    assert!(core::mem::size_of::<TrueosHidHutKeyboardState>() == HUT_KEYBOARD_LEN);
+    field!(TrueosHidHutKeyboardState, controller_id, 0, 4, u32);
+    field!(TrueosHidHutKeyboardState, slot_id, 4, 4, u32);
+    field!(TrueosHidHutKeyboardState, ep_target, 8, 4, u32);
+    field!(TrueosHidHutKeyboardState, combo_id, 12, 4, u32);
+    field!(TrueosHidHutKeyboardState, modifiers, 16, 1, u8);
+    field!(TrueosHidHutKeyboardState, source_kind, 17, 1, u8);
+    field!(TrueosHidHutKeyboardState, virtual_device, 18, 1, u8);
+    field!(TrueosHidHutKeyboardState, source_tag_len, 19, 1, u8);
+    field!(TrueosHidHutKeyboardState, keys, 20, 6, [u8; 6]);
+    field!(TrueosHidHutKeyboardState, ascii, 26, 6, [u8; 6]);
+    field!(TrueosHidHutKeyboardState, key_down_bits, 32, 32, [u32; 8]);
+    field!(TrueosHidHutKeyboardState, source_tag, 64, 32, [u8; 32]);
+    assert!(core::mem::size_of::<TrueosInputCombo>() == INPUT_COMBO_LEN);
+    field!(TrueosInputCombo, combo_id, 0, 4, u32);
+    field!(TrueosInputCombo, source_kind, 4, 1, u8);
+    field!(TrueosInputCombo, source_tag_len, 5, 1, u8);
+    field!(TrueosInputCombo, color_id, 6, 1, u8);
+    field!(TrueosInputCombo, flags, 7, 1, u8);
+    field!(TrueosInputCombo, source_tag, 8, 32, [u8; 32]);
+    field!(TrueosInputCombo, mouse_controller_id, 40, 4, u32);
+    field!(TrueosInputCombo, mouse_slot_id, 44, 4, u32);
+    field!(TrueosInputCombo, mouse_ep_target, 48, 4, u32);
+    field!(TrueosInputCombo, keyboard_controller_id, 52, 4, u32);
+    field!(TrueosInputCombo, keyboard_slot_id, 56, 4, u32);
+    field!(TrueosInputCombo, keyboard_ep_target, 60, 4, u32);
+    field!(TrueosInputCombo, tablet_controller_id, 64, 4, u32);
+    field!(TrueosInputCombo, tablet_slot_id, 68, 4, u32);
+    field!(TrueosInputCombo, tablet_ep_target, 72, 4, u32);
+    field!(TrueosInputCombo, gamepad_controller_id, 76, 4, u32);
+    field!(TrueosInputCombo, gamepad_slot_id, 80, 4, u32);
+    field!(TrueosInputCombo, gamepad_ep_target, 84, 4, u32);
+
     assert!(core::mem::size_of::<TrueosHidCursorEvent>() == CURSOR_EVENT_LEN);
     field!(TrueosHidCursorEvent, t_ms, 0, 4, u32);
     field!(TrueosHidCursorEvent, seq, 4, 4, u32);
@@ -100,6 +139,91 @@ fn begin(out: &mut [u8], size: usize) -> bool {
 }
 fn put<const N: usize>(out: &mut [u8], at: usize, value: [u8; N]) {
     out[at..at + N].copy_from_slice(&value);
+}
+
+pub(crate) fn hut_snapshot_record_len(kind: u32) -> Option<usize> {
+    match kind {
+        HUT_SNAPSHOT_KEYBOARDS => Some(HUT_KEYBOARD_LEN),
+        HUT_SNAPSHOT_COMBOS => Some(INPUT_COMBO_LEN),
+        _ => None,
+    }
+}
+
+/// Count probes have no payload; reads must contain exactly the admitted count.
+pub(crate) fn hut_snapshot_response_valid(
+    kind: u32,
+    requested_cap: u32,
+    count: u64,
+    reported_len: usize,
+    available_len: usize,
+) -> bool {
+    let Some(record_len) = hut_snapshot_record_len(kind) else { return false };
+    if requested_cap > HUT_SNAPSHOT_LIMIT || count > u64::from(HUT_SNAPSHOT_LIMIT) {
+        return false;
+    }
+    let expected_len = if requested_cap == 0 {
+        0
+    } else {
+        if count > u64::from(requested_cap) { return false; }
+        count as usize * record_len
+    };
+    reported_len == expected_len && reported_len <= available_len
+}
+
+pub(crate) fn hut_keyboard(out: &mut [u8], keyboard: &TrueosHidHutKeyboardState) -> bool {
+    if !begin(out, HUT_KEYBOARD_LEN) { return false; }
+    for (index, value) in [keyboard.controller_id, keyboard.slot_id, keyboard.ep_target, keyboard.combo_id].into_iter().enumerate() {
+        put(out, index * 4, value.to_le_bytes());
+    }
+    out[16..20].copy_from_slice(&[keyboard.modifiers, keyboard.source_kind, keyboard.virtual_device, keyboard.source_tag_len]);
+    put(out, 20, keyboard.keys);
+    put(out, 26, keyboard.ascii);
+    for (index, value) in keyboard.key_down_bits.into_iter().enumerate() {
+        put(out, 32 + index * 4, value.to_le_bytes());
+    }
+    put(out, 64, keyboard.source_tag);
+    true
+}
+
+pub(crate) fn decode_hut_keyboard(bytes: &[u8]) -> Option<TrueosHidHutKeyboardState> {
+    if bytes.len() != HUT_KEYBOARD_LEN { return None; }
+    let word = |at| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    Some(TrueosHidHutKeyboardState {
+        controller_id: word(0), slot_id: word(4), ep_target: word(8), combo_id: word(12),
+        modifiers: bytes[16], source_kind: bytes[17], virtual_device: bytes[18], source_tag_len: bytes[19],
+        keys: bytes[20..26].try_into().unwrap(), ascii: bytes[26..32].try_into().unwrap(),
+        key_down_bits: core::array::from_fn(|index| word(32 + index * 4)),
+        source_tag: bytes[64..96].try_into().unwrap(),
+    })
+}
+
+pub(crate) fn input_combo(out: &mut [u8], combo: &TrueosInputCombo) -> bool {
+    if !begin(out, INPUT_COMBO_LEN) { return false; }
+    put(out, 0, combo.combo_id.to_le_bytes());
+    out[4..8].copy_from_slice(&[combo.source_kind, combo.source_tag_len, combo.color_id, combo.flags]);
+    put(out, 8, combo.source_tag);
+    for (index, value) in [
+        combo.mouse_controller_id, combo.mouse_slot_id, combo.mouse_ep_target,
+        combo.keyboard_controller_id, combo.keyboard_slot_id, combo.keyboard_ep_target,
+        combo.tablet_controller_id, combo.tablet_slot_id, combo.tablet_ep_target,
+        combo.gamepad_controller_id, combo.gamepad_slot_id, combo.gamepad_ep_target,
+    ].into_iter().enumerate() {
+        put(out, 40 + index * 4, value.to_le_bytes());
+    }
+    true
+}
+
+pub(crate) fn decode_input_combo(bytes: &[u8]) -> Option<TrueosInputCombo> {
+    if bytes.len() != INPUT_COMBO_LEN { return None; }
+    let word = |at| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    Some(TrueosInputCombo {
+        combo_id: word(0), source_kind: bytes[4], source_tag_len: bytes[5], color_id: bytes[6], flags: bytes[7],
+        source_tag: bytes[8..40].try_into().unwrap(),
+        mouse_controller_id: word(40), mouse_slot_id: word(44), mouse_ep_target: word(48),
+        keyboard_controller_id: word(52), keyboard_slot_id: word(56), keyboard_ep_target: word(60),
+        tablet_controller_id: word(64), tablet_slot_id: word(68), tablet_ep_target: word(72),
+        gamepad_controller_id: word(76), gamepad_slot_id: word(80), gamepad_ep_target: word(84),
+    })
 }
 
 pub(crate) fn cursor_event(out: &mut [u8], event: &TrueosHidCursorEvent) -> bool {
@@ -205,6 +329,77 @@ pub(crate) fn keyboard_command(out: &mut [u8], command: &KeyboardControlCommand)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hut_snapshot_records_roundtrip_all_fields_in_little_endian() {
+        let keyboard = TrueosHidHutKeyboardState {
+            controller_id: 0x0102_0304, slot_id: 0x1112_1314, ep_target: 0x2122_2324, combo_id: 0x3132_3334,
+            modifiers: 0x41, source_kind: 0x42, virtual_device: 1, source_tag_len: 32,
+            keys: [1, 2, 3, 4, 5, 6], ascii: [11, 12, 13, 14, 15, 16],
+            key_down_bits: core::array::from_fn(|index| 0x5152_5300 + index as u32),
+            source_tag: core::array::from_fn(|index| index as u8),
+        };
+        let mut bytes = [0xaa; HUT_KEYBOARD_LEN + 2];
+        assert!(hut_keyboard(&mut bytes, &keyboard));
+        assert_eq!(&bytes[..4], &[4, 3, 2, 1]);
+        assert_eq!(&bytes[16..32], &[0x41, 0x42, 1, 32, 1, 2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 16]);
+        assert_eq!(&bytes[32..36], &[0, 0x53, 0x52, 0x51]);
+        assert_eq!(&bytes[64..96], &keyboard.source_tag);
+        assert_eq!(&bytes[96..], &[0xaa; 2]);
+        let decoded = decode_hut_keyboard(&bytes[..96]).unwrap();
+        let mut encoded_again = [0; HUT_KEYBOARD_LEN];
+        assert!(hut_keyboard(&mut encoded_again, &decoded));
+        assert_eq!(&encoded_again, &bytes[..96]);
+        assert!(decode_hut_keyboard(&bytes[..95]).is_none());
+        assert!(decode_hut_keyboard(&bytes).is_none());
+        assert_short_buffer_preserved(HUT_KEYBOARD_LEN, |out| hut_keyboard(out, &keyboard));
+
+        let combo = TrueosInputCombo {
+            combo_id: 0x0102_0304, source_kind: 2, source_tag_len: 32, color_id: 15, flags: 0x80,
+            source_tag: core::array::from_fn(|index| 0x80 + index as u8),
+            mouse_controller_id: 0x1112_1314, mouse_slot_id: 0x2122_2324, mouse_ep_target: 0x3132_3334,
+            keyboard_controller_id: 0x4142_4344, keyboard_slot_id: 0x5152_5354, keyboard_ep_target: 0x6162_6364,
+            tablet_controller_id: 0x7172_7374, tablet_slot_id: 0x8182_8384, tablet_ep_target: 0x9192_9394,
+            gamepad_controller_id: 0xa1a2_a3a4, gamepad_slot_id: 0xb1b2_b3b4, gamepad_ep_target: 0xc1c2_c3c4,
+        };
+        let mut bytes = [0xaa; INPUT_COMBO_LEN + 2];
+        assert!(input_combo(&mut bytes, &combo));
+        assert_eq!(&bytes[..8], &[4, 3, 2, 1, 2, 32, 15, 0x80]);
+        assert_eq!(&bytes[8..40], &combo.source_tag);
+        assert_eq!(&bytes[40..44], &[0x14, 0x13, 0x12, 0x11]);
+        assert_eq!(&bytes[84..88], &[0xc4, 0xc3, 0xc2, 0xc1]);
+        assert_eq!(&bytes[88..], &[0xaa; 2]);
+        let decoded = decode_input_combo(&bytes[..88]).unwrap();
+        let mut encoded_again = [0; INPUT_COMBO_LEN];
+        assert!(input_combo(&mut encoded_again, &decoded));
+        assert_eq!(&encoded_again, &bytes[..88]);
+        assert!(decode_input_combo(&bytes[..87]).is_none());
+        assert!(decode_input_combo(&bytes).is_none());
+        assert_short_buffer_preserved(INPUT_COMBO_LEN, |out| input_combo(out, &combo));
+    }
+
+    #[test]
+    fn hut_snapshot_rejects_truncated_oversized_and_inconsistent_responses() {
+        for kind in [HUT_SNAPSHOT_KEYBOARDS, HUT_SNAPSHOT_COMBOS] {
+            let size = hut_snapshot_record_len(kind).unwrap();
+            let bytes = 32 * size;
+            assert!(bytes <= 4040);
+            for count in [0, 1, 32] {
+                assert!(hut_snapshot_response_valid(kind, 0, count, 0, 0));
+                assert!(hut_snapshot_response_valid(kind, 32, count, count as usize * size, bytes));
+            }
+            assert!(!hut_snapshot_response_valid(kind, 0, 1, size, bytes));
+            assert!(!hut_snapshot_response_valid(kind, 0, 33, 0, 0));
+            assert!(!hut_snapshot_response_valid(kind, 1, 2, 2 * size, bytes));
+            assert!(!hut_snapshot_response_valid(kind, 33, 1, size, bytes));
+            assert!(!hut_snapshot_response_valid(kind, 32, 32, bytes - 1, bytes));
+            assert!(!hut_snapshot_response_valid(kind, 32, 32, bytes + 1, bytes + 1));
+            assert!(!hut_snapshot_response_valid(kind, 32, 32, bytes, bytes - 1));
+            assert!(!hut_snapshot_response_valid(kind, 32, u64::MAX, bytes, bytes));
+        }
+        assert!(!hut_snapshot_response_valid(0, 0, 0, 0, 0));
+        assert!(!hut_snapshot_response_valid(3, 32, 0, 0, 0));
+    }
 
     #[test]
     fn records_preserve_fields_and_zero_only_padding() {

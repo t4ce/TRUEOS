@@ -119,6 +119,7 @@ pub const OP_BP_SHELL_ATTACHED_READ: u32 = 0xCB; // arg0 cap -> attached-shell i
 pub const OP_BP_INPUT_KEYBOARD_OUTPUT_POP: u32 = 0xCC; // response payload is one keyboard event
 pub const OP_BP_INPUT_KEYBOARD_OUTPUT_SINCE: u32 = 0xCD; // arg0 read seq,arg1 cap -> payload events
 pub const OP_BP_INPUT_MIDI_READ_V1: u32 = 0x200; // arg0 read seq,arg1 cap -> MIDI edge payload
+pub const OP_BP_INPUT_HUT_SNAPSHOT_V1: u32 = 0x257; // arg0 keyboard(1)/combo(2),arg1 cap(0=count) -> bounded records
 pub const OP_BP_MIO_SOCKET_POLL_READY: u32 = 0x201; // arg0 native socket,arg1 interests -> readiness/status
 pub const OP_BP_MIO_SOCKET_OPTION: u32 = 0x247; // arg0 socket,arg1 option:u32/value:i32; -1 reads
 pub const OP_BP_MIO_TCP_SOCKET_CREATE: u32 = 0x248; // arg0 family -> owned socket/status
@@ -3915,6 +3916,23 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     &mut (*p).payload
                 });
             write_response(vm_id, seq, STATUS_OK, wrote as u64, response_len as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_INPUT_HUT_SNAPSHOT_V1 => {
+            if req_len != 0 || arg0 > u64::from(u32::MAX) || arg1 > 32 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            match crate::r::io::input_cabi::host_input_hut_snapshot_v1(
+                arg0 as u32, arg1 as u32, unsafe { &mut (*p).payload },
+            ) {
+                Ok((count, bytes)) => write_response(vm_id, seq, STATUS_OK, count as u64, bytes as u32),
+                Err(error) => write_response(vm_id, seq, STATUS_BAD_ARG, error as i64 as u64, 0),
+            }
             DispatchOutcome::Resume
         }
         OP_BP_INPUT_MIDI_READ_V1 => {

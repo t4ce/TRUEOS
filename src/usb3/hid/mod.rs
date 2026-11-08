@@ -838,6 +838,9 @@ pub unsafe extern "C" fn trueos_cabi_hid_hut_read_keyboards(
     out: *mut hut::TrueosHidHutKeyboardState,
     out_cap: u32,
 ) -> u32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { crate::r::io::input_cabi::guest_hid_hut_read_keyboards(out, out_cap) };
+    }
     if out_cap == 0 {
         return hut::keyboards_snapshot().len() as u32;
     }

@@ -48,6 +48,89 @@ fn input_combo_info(combo: &crate::usb2::hid::hut::InputCombo) -> v::vinput::Tru
     out
 }
 
+/// Read only the BSP-owned HUT inventory. A zero capacity probes its count.
+/// The bounded response contains typed records, never a guest pointer.
+pub fn host_input_hut_snapshot_v1(
+    kind: u32,
+    out_cap: u32,
+    payload: &mut [u8],
+) -> Result<(usize, usize), i32> {
+    let record_len = input_wire::hut_snapshot_record_len(kind).ok_or(-22)?;
+    if out_cap > input_wire::HUT_SNAPSHOT_LIMIT {
+        return Err(-22);
+    }
+    let cap = core::cmp::min(out_cap as usize, payload.len() / record_len);
+    match kind {
+        input_wire::HUT_SNAPSHOT_KEYBOARDS => {
+            let total = crate::usb2::hid::hut::keyboards_snapshot().len();
+            if out_cap == 0 { return Ok((total, 0)); }
+            let mut keyboards = alloc::vec![crate::usb2::hid::hut::TrueosHidHutKeyboardState::default(); cap];
+            let wrote = crate::usb2::hid::hut::read_keyboards_snapshot(&mut keyboards);
+            for (record, bytes) in keyboards[..wrote].iter().zip(payload.chunks_exact_mut(record_len)) {
+                input_wire::hut_keyboard(bytes, record);
+            }
+            Ok((wrote, wrote * record_len))
+        }
+        input_wire::HUT_SNAPSHOT_COMBOS => {
+            let combos = crate::usb2::hid::hut::combos_snapshot();
+            if out_cap == 0 { return Ok((combos.len(), 0)); }
+            let wrote = combos.len().min(cap);
+            for (combo, bytes) in combos[..wrote].iter().zip(payload.chunks_exact_mut(record_len)) {
+                input_wire::input_combo(bytes, &input_combo_info(combo));
+            }
+            Ok((wrote, wrote * record_len))
+        }
+        _ => Err(-22),
+    }
+}
+
+fn guest_input_hut_snapshot_v1(kind: u32, out_cap: u32, payload: &mut [u8]) -> Option<u32> {
+    let (status, count, reported_len) = trueos_vm::vmcall::call_with_payload_reported_len(
+        trueos_vm::vmcall::OP_BP_INPUT_HUT_SNAPSHOT_V1,
+        u64::from(kind),
+        u64::from(out_cap),
+        &[],
+        payload,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK
+        || !input_wire::hut_snapshot_response_valid(kind, out_cap, count, reported_len, payload.len())
+    {
+        return None;
+    }
+    Some(count as u32)
+}
+
+pub(crate) unsafe fn guest_hid_hut_read_keyboards(
+    out: *mut crate::usb2::hid::hut::TrueosHidHutKeyboardState,
+    out_cap: u32,
+) -> u32 {
+    if out_cap != 0 && out.is_null() { return 0; }
+    let cap = out_cap.min(input_wire::HUT_SNAPSHOT_LIMIT);
+    let mut payload = [0; input_wire::HUT_KEYBOARD_LEN * input_wire::HUT_SNAPSHOT_LIMIT as usize];
+    let Some(count) = guest_input_hut_snapshot_v1(input_wire::HUT_SNAPSHOT_KEYBOARDS, cap, &mut payload) else { return 0; };
+    if cap != 0 {
+        for (index, bytes) in payload[..count as usize * input_wire::HUT_KEYBOARD_LEN].chunks_exact(input_wire::HUT_KEYBOARD_LEN).enumerate() {
+            let Some(record) = input_wire::decode_hut_keyboard(bytes) else { return 0; };
+            unsafe { out.add(index).write(record); }
+        }
+    }
+    count
+}
+
+unsafe fn guest_input_combo_read(out: *mut v::vinput::TrueosInputCombo, out_cap: u32) -> u32 {
+    if out_cap != 0 && out.is_null() { return 0; }
+    let cap = out_cap.min(input_wire::HUT_SNAPSHOT_LIMIT);
+    let mut payload = [0; input_wire::INPUT_COMBO_LEN * input_wire::HUT_SNAPSHOT_LIMIT as usize];
+    let Some(count) = guest_input_hut_snapshot_v1(input_wire::HUT_SNAPSHOT_COMBOS, cap, &mut payload) else { return 0; };
+    if cap != 0 {
+        for (index, bytes) in payload[..count as usize * input_wire::INPUT_COMBO_LEN].chunks_exact(input_wire::INPUT_COMBO_LEN).enumerate() {
+            let Some(record) = input_wire::decode_input_combo(bytes) else { return 0; };
+            unsafe { out.add(index).write(record); }
+        }
+    }
+    count
+}
+
 unsafe fn input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -> i32 {
     if out_buttons_down.is_null() || cursor_id == 0 {
         return -1;
@@ -1148,6 +1231,9 @@ pub unsafe extern "C" fn trueos_cabi_input_combo_read(
     out: *mut v::vinput::TrueosInputCombo,
     out_cap: u32,
 ) -> u32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { guest_input_combo_read(out, out_cap) };
+    }
     let snapshot = crate::usb2::hid::hut::combos_snapshot();
     if out_cap == 0 {
         return snapshot.len() as u32;
