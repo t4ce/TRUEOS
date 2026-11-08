@@ -136,7 +136,7 @@ int main(void) {
   base=out/'host-target/x86_64-unknown-linux-gnu/release/build'
   for pattern in ['zstd-sys-*/out/libzstd.a','onig_sys-*/out/libonig.a','tree-sitter-*/out/libtree-sitter.a','tree-sitter-bash-*/out/libtree-sitter-bash.a','bzip2-sys-*/out/lib/libbz2.a']:
    found=list(base.glob(pattern));assert found,(pattern,found);archive=max(found,key=lambda p:p.stat().st_mtime_ns);text=run('imports-'+archive.stem,['nm','-u',str(archive)])
-   imports={line.split()[-1]for line in text.splitlines()if re.search(r'\sU\s',line)};assert not imports.intersection({'malloc','calloc','realloc','free'}),(archive,imports);assert any(s.startswith('trueos_blueprint_c_')for s in imports);archives.append(archive)
+   imports={line.split()[-1]for line in text.splitlines()if re.search(r'\sU\s',line)};assert not imports.intersection({'malloc','calloc','realloc','free'}),(archive,imports);assert any(s.startswith('trueos_blueprint_c_')for s in imports);assert not re.search(r'\bZSTD_trace_',text),(archive,text);archives.append(archive)
   probe=work/'native';manifest(probe,f'''[package]
 name="native-blueprint-c-alloc-probe"
 version="0.0.0"
@@ -158,6 +158,7 @@ panic="abort"
   text=run('native-c-codecs-imports',['nm','-u',str(linked)]);symbols=sorted({line.split()[-1]for line in text.splitlines()if line.strip()})
   assert not set(symbols).intersection({'malloc','calloc','realloc','free','trueos_cabi_alloc','trueos_cabi_realloc','trueos_cabi_free','clock_gettime','clock'}),symbols
   assert not any(s.startswith('trueos_blueprint_c_')for s in symbols),symbols
+  assert not any(s.startswith('ZSTD_trace_')for s in symbols),symbols
   assert 'sys_alloc_aligned'in symbols and'sys_dealloc'in symbols and'trueos_time_monotonic_nanos'in symbols,symbols
   assert not list((out/'native-target'/TARGET.stem).rglob('libstd-*.rlib'))
  sources=[info(SDK/p)for p in ['src/codex_native_c_overlay.rs','src/tree_sitter_native_clock.h','crates/trueos-v/src/native_c_alloc.rs','crates/trueos-v/src/native_c_clock.rs']]
