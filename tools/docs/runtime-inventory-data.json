@@ -831,11 +831,6 @@
           "spelling": "trueos_executor::task"
         },
         {
-          "file": "src/ui4/start_button.rs",
-          "line": 102,
-          "spelling": "trueos_executor::task"
-        },
-        {
           "file": "src/ui4/video_frame.rs",
           "line": 1054,
           "spelling": "trueos_executor::task"
@@ -2992,22 +2987,6 @@
       "trace_report": "runtime-services.md"
     },
     {
-      "file": "src/ui4/start_button.rs",
-      "line": 102,
-      "symbol": "ui4_start_button_service_task",
-      "pool_size": "1",
-      "context": "source",
-      "call_candidates": [
-        {
-          "file": "src/r/services/spawn_service.rs",
-          "line": 691,
-          "spelling": "crate::ui4::ui4_start_button_service_task"
-        }
-      ],
-      "call_note": "Lexical candidates share the function name; imports, aliases, cfg, and duplicate names require the reviewed traces.",
-      "trace_report": "runtime-services.md"
-    },
-    {
       "file": "src/ui4/video_frame.rs",
       "line": 1054,
       "symbol": "ui4_video_conversion_service_task",
@@ -3587,13 +3566,6 @@
       "name": "ui4-slot4-service",
       "constructor": "enabled_gated",
       "arguments": "\"ui4-slot4-service\", 0, ui4_slot4_service_gate, &UI4_SLOT4_SERVICE_STARTED, spawn_ui4_slot4_service_task,"
-    },
-    {
-      "file": "src/r/services/spawn_service.rs",
-      "line": 1195,
-      "name": "ui4-start-button",
-      "constructor": "enabled_gated",
-      "arguments": "\"ui4-start-button\", 0, ui4_input_gate, &UI4_START_BUTTON_SERVICE_STARTED, spawn_ui4_start_button_service_task,"
     },
     {
       "file": "src/r/services/spawn_service.rs",

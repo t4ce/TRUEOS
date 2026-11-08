@@ -12,6 +12,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 
@@ -57,6 +58,7 @@ fn main(){tokio::runtime::Builder::new_current_thread().enable_all().build().unw
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument("--proxy-reservations", action="store_true")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -69,6 +71,24 @@ def main():
     cargo = ['rustup', 'run', TOOLCHAIN, 'cargo']
     with tempfile.TemporaryDirectory(prefix='trueos-native-rama-') as temporary:
         work = Path(temporary)
+        # Host std lacks native file identity methods. The network-only
+        # fixture must never query them; supply compile-only panic boundaries
+        # in the temporary Tokio copy instead of inventing native identities.
+        tokio = work / "tokio-host-fixture"
+        shutil.copytree(TOKIO, tokio)
+        tokio_manifest = tokio / "Cargo.toml"
+        tokio_manifest.write_text(tokio_manifest.read_text().replace("../../../TRUEOS/crates/", str(ROOT / "crates") + "/"))
+        metadata = tokio / "src/fs/trueos.rs"
+        metadata.write_text(metadata.read_text() + r"""
+#[cfg(all(target_os = "trueos", not(feature = "native")))]
+trait HostNetworkFixtureMetadata {
+ fn revision(&self)->Option<u64>{panic!("native filesystem used by network-only fixture")}
+ fn file_id(&self)->Option<u64>{panic!("native filesystem used by network-only fixture")}
+ fn root_id(&self)->u32{panic!("native filesystem used by network-only fixture")}
+}
+#[cfg(all(target_os = "trueos", not(feature = "native")))]
+impl HostNetworkFixtureMetadata for std::fs::Metadata {}
+""")
 
         def run(label, command, env=None):
             log = output / (label + '.log')
@@ -122,10 +142,11 @@ rama-net="=0.3.0-alpha.4"
 rama-core="=0.3.0-alpha.4"
 rama-error="=0.3.0-alpha.4"
 rama-macros="=0.3.0-alpha.4"
+anyhow="1"
 rama-utils="=0.3.0-alpha.4"
-tokio={{path={json.dumps(str(TOKIO))},features=["native-net","full"]}}
+tokio={{path={json.dumps(str(tokio))},features=["native-net","rt","rt-multi-thread","net","io-util","sync","time","macros","signal","process"]}}
 [patch.crates-io]
-tokio={{path={json.dumps(str(TOKIO))}}}
+tokio={{path={json.dumps(str(tokio))}}}
 mio={{path={json.dumps(str(mio))}}}
 rama-dns={{path={json.dumps(str(SDK / 'vendor/rama-dns-0.3.0-alpha.4-trueos'))}}}
 [[bin]]
@@ -143,13 +164,18 @@ panic="abort"
                 'std::thread::current().name().is_some_and(|name|name.starts_with("tokio-rt-worker"))')
             (app / name).write_text(text)
         behavior = (FIXTURES / 'rama_behavior.rs').read_text().replace('@RAMA_NATIVE@', json.dumps(str(SDK / 'src/rama_tcp_native.rs')))
+        if args.proxy_reservations:
+            from native_codex_proxy_reservations import source as reservation_source
+            proof = reservation_source()
+            behavior = behavior.replace('mod boundary;', proof + '\nmod boundary;', 1)
+            behavior = behavior.replace('});boundary::cleanup_tls();}', 'proxy_reservations::run().await;\n});boundary::cleanup_tls();}')
         (app / 'main.rs').write_text(behavior)
         env = environment(output / 'native-target', native_host=True)
         for mode, flags in [('debug', []), ('release', ['--release'])]:
             text = run('rama-native-' + mode, cargo + ['run', '--offline', *flags, '--manifest-path',
                 str(app / 'Cargo.toml'), '--target', 'x86_64-unknown-linux-gnu'], env)
             counts['native-' + mode] = len(re.findall(r'^ok ', text, re.M))
-            assert counts['native-' + mode] == 14, counts
+            assert counts['native-' + mode] == (18 if args.proxy_reservations else 14), counts
         # The same staged crate's ordinary host branches must still exercise
         # real sockets when the explicit native-net feature is enabled.
         (app / 'main.rs').write_text(HOST)
@@ -161,8 +187,10 @@ panic="abort"
                'production_overlay': info(SDK / 'src/rama_tcp_overlay.rs'),
                'production_provider': info(SDK / 'src/rama_tcp_native.rs'), 'codex_lock': info(lock),
                'fixture': info(FIXTURES / 'rama_behavior.rs'), 'registry_source_unchanged': before == after,
+               'proxy_reservation_sources': [info(ROOT.parent / 'codex/codex-rs/network-proxy/src' / name) for name in ['proxy.rs','http_proxy.rs','socks5.rs']] if args.proxy_reservations else [],
                'limits': ['Native service and generation waits are simulated; no physical packet or guest ownership proof.',
-                          'Core host staging I/O helpers are supplied by the isolated driver; production overlay source runs unchanged.']}
+                          'Core host staging I/O helpers are supplied by the isolated driver; production overlay source runs unchanged.',
+                          'Temporary Tokio copy adds three unreachable native Metadata method prototypes only; any filesystem use fails the network fixture.']}
     (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
     print(json.dumps(counts))
     print(output / 'receipt.json')

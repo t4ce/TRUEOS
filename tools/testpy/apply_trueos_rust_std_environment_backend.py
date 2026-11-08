@@ -96,7 +96,54 @@ pub fn read_output(_out: ChildPipe, _stdout: &mut Vec<u8>, _err: ChildPipe, _std
 
 '''
     source = replace_once(source, marker, native_read + marker, common)
+    # Keep the Unix command builder vocabulary without retaining FD ownership
+    # that native spawning can never use. Actual native files keep their
+    # existing capability in NativeFile until the rejected command is dropped.
+    source = replace_once(source, '    Fd(FileDesc),',
+        '    #[cfg(not(target_os = "trueos"))]\n    Fd(FileDesc),', common)
+    source = replace_once(source, "    StaticFd(BorrowedFd<'static>),",
+        "    #[cfg(not(target_os = \"trueos\"))]\n    StaticFd(BorrowedFd<'static>),", common)
+    source = replace_once(source, 'impl From<FileDesc> for Stdio {',
+        '#[cfg(not(target_os = "trueos"))]\nimpl From<FileDesc> for Stdio {', common)
+    source = replace_once(source, 'pub type ChildPipe = crate::sys::pipe::Pipe;', '''pub type ChildPipe = crate::sys::pipe::Pipe;
+
+#[cfg(target_os = "trueos")]
+impl From<ChildPipe> for Stdio {
+    fn from(pipe: ChildPipe) -> Self { pipe.diverge() }
+}''', common)
+    for stream in ["STDOUT", "STDERR"]:
+        expression = f'Stdio::StaticFd(unsafe {{ BorrowedFd::borrow_raw(libc::{stream}_FILENO) }})'
+        replacement = f'''#[cfg(target_os = "trueos")]
+        {{ Stdio::Inherit }}
+        #[cfg(not(target_os = "trueos"))]
+        {{ {expression} }}'''
+        source = replace_once(source, expression, replacement, common)
     changes[common] = source
+
+    # Native child processes have no pipe endpoints. Select std's existing
+    # uninhabited Unsupported pipe, so impossible child I/O retains no Unix FD.
+    path = system / "pipe/mod.rs"
+    source = changes.get(path, path.read_text())
+    changes[path] = replace_once(source, 'cfg_select! {', '''cfg_select! {
+    target_os = "trueos" => {
+        mod unsupported;
+        pub use unsupported::{Pipe, pipe};
+    }''', path)
+
+    # Arbitrary Unix descriptors cannot become native child-process stdio.
+    # Command configuration and ExitStatus decoding remain available.
+    path = system.parent / "os/unix/process.rs"
+    source = changes.get(path, path.read_text())
+    for implementation in [
+        'impl FromRawFd for process::Stdio {',
+        'impl From<OwnedFd> for process::Stdio {',
+        'impl From<OwnedFd> for process::ChildStdin {',
+        'impl From<OwnedFd> for process::ChildStdout {',
+        'impl From<OwnedFd> for process::ChildStderr {',
+    ]:
+        source = replace_once(source, implementation,
+            '#[cfg(not(target_os = "trueos"))]\n' + implementation, path)
+    changes[path] = source
 
     # File objects have no Unix descriptor. The standard streams retain their
     # public AsFd wrapper solely to identify stream 0/1/2 for the typed query.

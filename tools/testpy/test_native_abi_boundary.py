@@ -39,6 +39,7 @@ mod prebind {{ {policy} }}
 use std::sync::atomic::{{AtomicUsize, Ordering}};
 static KNOWN: AtomicUsize = AtomicUsize::new(0);
 static JOKER: AtomicUsize = AtomicUsize::new(0);
+const STB_WEAK: u8 = 2;
 fn resolve_known_import(_: &str) -> Option<usize> {{
     KNOWN.fetch_add(1, Ordering::Relaxed); None
 }}
@@ -55,7 +56,9 @@ fn main() {{
             freestanding += 1;
         }} else {{
             assert!(prebind::prebind_import_error(name).is_some(), "{{name}}");
-            assert!(resolve_import(name).is_none(), "{{name}} reached a fallback");
+            for bind in [1, STB_WEAK] {{
+                assert!(resolve_import(name, bind).is_none(), "{{name}} bind={{bind}} reached a fallback");
+            }}
             retired += 1;
         }}
     }}
@@ -63,7 +66,9 @@ fn main() {{
                  "trueos_cabi_calloc", "trueos_cabi_free", "trueos_cabi_realloc",
                  "trueos_cabi_malloc_usable_size"] {{
         assert!(prebind::prebind_import_error(name).is_some(), "{{name}}");
-        assert!(resolve_import(name).is_none(), "{{name}} reached a fallback");
+        for bind in [1, STB_WEAK] {{
+            assert!(resolve_import(name, bind).is_none(), "{{name}} bind={{bind}} reached a fallback");
+        }}
     }}
     assert_eq!(KNOWN.load(Ordering::Relaxed), 0);
     assert_eq!(JOKER.load(Ordering::Relaxed), 0);
@@ -72,7 +77,9 @@ fn main() {{
                  "trueos_platform_dns_resolve_ipv4"] {{
         assert!(prebind::prebind_import_error(name).is_none(), "{{name}}");
     }}
-    assert_eq!(resolve_import("unrelated_optional_import"), Some(123));
+    assert_eq!(resolve_import("unrelated_optional_import", 1), Some(123));
+    assert_eq!(resolve_import("unrelated_optional_import", STB_WEAK), None);
+    assert_eq!(JOKER.load(Ordering::Relaxed), 1);
     println!("{{retired}} historical imports retired; {{freestanding}} freestanding helpers retained; removed aliases cannot reach loader fallbacks");
 }}
 '''

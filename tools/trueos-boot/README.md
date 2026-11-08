@@ -251,10 +251,9 @@ This path has booted the physical test rig through to the running kernel.
 The loader selects the console's 2560×1440 RGB/BGR framebuffer when firmware
 offers it, otherwise retaining a usable firmware mode. It captures EDID from
 the same GOP device and copies it into retained boot responses. The kernel
-uses that monitor data for physical font sizing, including Shell3 text and
-the home button. When EDID is unavailable on an active display, fonts use
-their native 6×11 pixel proportions: 12×22 cells at the default text scale,
-with a proportional home glyph. This keeps the same line/quad R8 production;
+uses that monitor data for physical font sizing, including Shell3 text.
+When EDID is unavailable on an active display, fonts use their native 6×11
+pixel proportions: 12×22 cells at the default text scale. This keeps the same line/quad R8 production;
 the general millimetre APIs still require measured monitor dimensions.
 
 ## Hardware diagnostics

@@ -165,25 +165,6 @@ fn cell_origin(slot: usize) -> [f32; 2] {
     ]
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum MaskGlyph {
-    Character(char),
-    HomeButton,
-}
-impl From<char> for MaskGlyph {
-    fn from(ch: char) -> Self { Self::Character(ch) }
-}
-impl MaskGlyph {
-    fn character(self) -> Option<char> {
-        match self { Self::Character(ch) => Some(ch), Self::HomeButton => None }
-    }
-    fn lines(self) -> Option<microfont::raster_line::GlyphStrips> {
-        match self {
-            Self::Character(ch) => microfont::raster_line::glyph_strips(ch),
-            Self::HomeButton => microfont::raster_line::home_button_strips(),
-        }
-    }
-}
 fn upload(
     batches: &mut ResidentGlyphs,
     vertices: &[[f32; 3]],
@@ -385,7 +366,7 @@ fn upload_glyphs() -> Result<ResidentGlyphs, &'static str> {
     upload(&mut resident, &vertices, &indices, Topology::TriangleList, [0; 16])?;
     for ch in (' '..='~').chain(microfont::raster_line::GLYPH_CHARACTERS.iter()
         .copied().filter(|&ch| is_extra_line(ch))) {
-        upload_line_glyph(&mut resident, ch.into(),
+        upload_line_glyph(&mut resident, ch,
             glyph_slot(ch).ok_or("microfont-glyph-slot")?)?;
     }
     upload_rounded_glyphs(&mut resident, None)?;
@@ -440,10 +421,10 @@ fn finish_upload(resident: &mut ResidentGlyphs) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn upload_line_glyph(resident: &mut ResidentGlyphs, glyph: MaskGlyph, slot: usize) -> Result<(), &'static str> {
+fn upload_line_glyph(resident: &mut ResidentGlyphs, glyph: char, slot: usize) -> Result<(), &'static str> {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    let Some(strips) = glyph.lines() else {
+    let Some(strips) = microfont::raster_line::glyph_strips(glyph) else {
         return Ok(());
     };
     let at = cell_origin(slot);
@@ -485,7 +466,7 @@ fn upload_line_glyph(resident: &mut ResidentGlyphs, glyph: MaskGlyph, slot: usiz
 /// work is limited to coordinate transforms. For this virgl diagnostic,
 /// strokes use only native line bodies, without endpoint or join patches.
 fn native_mask_geometry(
-    config: AtlasConfig, width: u32, height: u32, single: Option<MaskGlyph>,
+    config: AtlasConfig, width: u32, height: u32,
 ) -> Result<crate::virtio_gpu_logo::NativeMaskGeometry, &'static str> {
     use crate::virtio_gpu_logo::{NativeMaskGeometry, NativeMaskVertex};
     use microfont::raster_line::Point;
@@ -510,13 +491,11 @@ fn native_mask_geometry(
         let length = libm::sqrtf(delta[0] * delta[0] + delta[1] * delta[1]);
         (length > 1e-6).then(|| [delta[0] / length, delta[1] / length])
     };
-    let glyphs: Vec<_> = if let Some(ch) = single { alloc::vec![(ch, 0)] } else {
-        (' '..='~').chain(microfont::raster_line::GLYPH_CHARACTERS.iter().copied()
-            .filter(|&ch| is_extra_line(ch)))
-            .filter_map(|ch| glyph_slot(ch).map(|slot| (ch.into(), slot))).collect()
-    };
+    let glyphs = (' '..='~').chain(microfont::raster_line::GLYPH_CHARACTERS.iter().copied()
+        .filter(|&ch| is_extra_line(ch)))
+        .filter_map(|ch| glyph_slot(ch).map(|slot| (ch, slot)));
     for (ch, slot) in glyphs {
-        let Some(strips) = ch.lines() else { continue; };
+        let Some(strips) = microfont::raster_line::glyph_strips(ch) else { continue; };
         for strip in strips {
             let points: Vec<_> = strip.iter_points().map(|p| point(slot, p)).collect();
             for segment in points.windows(2) {
@@ -529,14 +508,11 @@ fn native_mask_geometry(
             // supplemental endpoint caps and bevel/circular join patches.
         }
     }
-    let quads: Vec<_> = if let Some(ch) = single { alloc::vec![(ch, 0)] } else {
-        microfont::raster_quad::GLYPH_CHARACTERS.iter().copied()
-            .filter_map(|ch| glyph_slot(ch).map(|slot| (ch.into(), slot))).collect()
-    };
+    let quads = microfont::raster_quad::GLYPH_CHARACTERS.iter().copied()
+        .filter_map(|ch| glyph_slot(ch).map(|slot| (ch, slot)));
     let budget = rounded_quad_budget(config);
     for (ch, slot) in quads {
-        if let Some(quads) = ch.character().and_then(|ch|
-            microfont::raster_quad::glyph_quads_with_curve_quads(ch, budget)) {
+        if let Some(quads) = microfont::raster_quad::glyph_quads_with_curve_quads(ch, budget) {
             for quad in quads {
                 geometry.quads.extend(quad.vertices.map(|at|
                     vertex(pixel(slot, at), [0.0; 4], [0.0; 4])));
@@ -553,7 +529,6 @@ pub(crate) struct CoverageAtlas {
     /// Virgl produces the same color-free service result using native lines,
     /// points and quads. Retain its fenced readback under this atlas lock.
     native_mask: Option<(Vec<u8>, u32, u32, u64)>,
-    native_glyph: Option<MaskGlyph>,
     config: Option<AtlasConfig>,
     generation: u64,
     poisoned: bool,
@@ -612,7 +587,7 @@ impl CoverageAtlas {
         }
         if crate::virtio_gpu_logo::output_dimensions().is_some() {
             self.config = None;
-            let geometry = native_mask_geometry(config, width, height, self.native_glyph)?;
+            let geometry = native_mask_geometry(config, width, height)?;
             let pixels = crate::virtio_gpu_logo::render_coverage_mask(width, height, geometry)?;
             let phys = crate::phys::virt_to_phys_checked(pixels.as_ptr())
                 .ok_or("microfont-virgl-mask-address")?;
@@ -723,7 +698,6 @@ fn with_warmed_atlas<T>(
 ) -> Result<T, &'static str> {
     let config = config.normalized()?;
     let mut guard = ATLAS.try_lock().ok_or("microfont-atlas-busy")?;
-    warm_start_glyph()?;
     if guard.is_none() {
         *guard = Some(CoverageAtlas {
             geometry: if crate::virtio_gpu_logo::output_dimensions().is_some() {
@@ -731,7 +705,6 @@ fn with_warmed_atlas<T>(
             } else { upload_glyphs()? },
             mask: None,
             native_mask: None,
-            native_glyph: None,
             config: None,
             generation: 0,
             poisoned: false,
@@ -740,95 +713,6 @@ fn with_warmed_atlas<T>(
     let atlas = guard.as_mut().unwrap();
     atlas.warm(config)?;
     consumer(atlas)
-}
-
-pub(crate) const START_GLYPH_EM_MM: u32 = 50;
-static START_GLYPH: spin::Once<OwnedGlyphMask> = spin::Once::new();
-static START_GLYPH_READY: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
-static START_GLYPH_WARM: spin::Mutex<()> = spin::Mutex::new(());
-
-/// Keep the home glyph proportional to the default text em when firmware has
-/// no physical monitor size. This sizes only font masks, not millimetre APIs.
-pub(crate) fn home_button_em_height() -> Option<u32> {
-    if let Some((_, height)) = crate::ui4::physical_extent_pixels(START_GLYPH_EM_MM, START_GLYPH_EM_MM) {
-        return Some(height);
-    }
-    let (_, text_height) = super::shell3_font_service::cell_extent(
-        super::shell3_font_service::DEFAULT_UI4_FONT_SCALE)?;
-    // 50mm / 7.5mm = 20/3; round the scaled pixel height once.
-    text_height.checked_mul(20)?.checked_add(1).map(|height| height / 3)
-}
-
-/// Return the service-owned mask as soon as its one-time production completes.
-/// Observe before checking publication so completion cannot race waiter setup.
-pub(crate) async fn wait_for_start_glyph() -> &'static OwnedGlyphMask {
-    loop {
-        let observed = START_GLYPH_READY.observe();
-        if let Some(glyph) = START_GLYPH.get() {
-            return glyph;
-        }
-        START_GLYPH_READY.wait_after(observed).await;
-    }
-}
-
-// Keep native production on supported GPUs; only the experimental laptop path
-// uses an independent CPU mask while its render engine is being brought up.
-pub(crate) fn warm_start_glyph() -> Result<(), &'static str> {
-    if START_GLYPH.get().is_some() { return Ok(()); }
-    let _warm = START_GLYPH_WARM.try_lock().ok_or("microfont-start-glyph-busy")?;
-    if START_GLYPH.get().is_some() { return Ok(()); }
-    let height = home_button_em_height()
-        .ok_or("microfont-start-glyph-physical-size-unavailable")?;
-    let (glyph, producer) = if super::shell3_font_service::cpu_bitmap_fallback_enabled() {
-        (super::microfont_home_cpu::build(height)?, "cpu")
-    } else {
-        (build_home_button_mask(height)?, "native-gpu")
-    };
-    let glyph = START_GLYPH.call_once(|| glyph);
-    START_GLYPH_READY.notify_all();
-    crate::log_important!(target: "microfont-mask";
-        "microfont-start-glyph: ready glyph=homebutton source=private-line-asset producer={} em_mm={} em_height_px={} extent={}x{} format=r8 bytes={} productions=1 retained=service-lifetime\n",
-        producer, START_GLYPH_EM_MM, glyph.em_height_px, glyph.width, glyph.height, glyph.pixels.len());
-    Ok(())
-}
-
-/// One independently warmed glyph. It never enlarges or invalidates the atlas.
-pub(crate) struct OwnedGlyphMask {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) em_height_px: u32,
-    pub(crate) pixels: Vec<u8>,
-}
-
-pub(crate) fn build_home_button_mask(em_height_px: u32) -> Result<OwnedGlyphMask, &'static str> {
-    let glyph = MaskGlyph::HomeButton;
-    if glyph.lines().is_none() { return Err("microfont-homebutton-missing"); }
-    let config = AtlasConfig { glyph_height_px: Some(em_height_px), line_width_px: 6.0, ..AtlasConfig::default() };
-    if !(11..=4000).contains(&em_height_px) { return Err("microfont-single-glyph-size"); }
-    let (width, height) = config.cell_extent();
-    let mut geometry = ResidentGlyphs { batches: Vec::new(), bytes: 0, constants: None };
-    if crate::virtio_gpu_logo::output_dimensions().is_none() {
-        upload_line_glyph(&mut geometry, glyph, 0)?;
-        finish_upload(&mut geometry)?;
-    }
-    let mut glyph = CoverageAtlas { geometry, mask: None, native_mask: None,
-        native_glyph: Some(glyph), config: None, generation: 0, poisoned: false };
-    glyph.warm_extent(config, (width, height))?;
-    let surface = glyph.surface();
-    let source = crate::phys::phys_to_virt(surface.phys as usize) as *mut u8;
-    if !crate::intel::dma_flush_strided_row_spans(&[
-        crate::intel::DmaFlushRows::new(source, width as usize, surface.pitch_bytes as usize, height as usize),
-    ]) { return Err("microfont-single-glyph-cache"); }
-    let mut pixels = alloc::vec![0; width as usize * height as usize];
-    for y in 0..height as usize {
-        for x in 0..width as usize {
-            pixels[y * width as usize + x] = unsafe {
-                core::ptr::read_volatile(source.add(y * surface.pitch_bytes as usize + x))
-            };
-        }
-    }
-    if !pixels.iter().any(|&coverage| coverage != 0) { return Err("microfont-single-glyph-empty"); }
-    Ok(OwnedGlyphMask { width, height, em_height_px, pixels })
 }
 
 /// Immutable service-owned R8 tiles, shared by Shell3 and the UI text sinks.

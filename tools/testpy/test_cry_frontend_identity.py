@@ -106,6 +106,19 @@ mod identity_regressions {
         CRY_STATE.lock().durable=None;
         assert_eq!(ssh_key_account("t4ce",&key),None); assert!(!ssh_requires_account_proof("t4ce")); reset();
     }
+    #[test] fn development_ssh_bypass_is_explicit_and_matches_only_loaded_durable_account() {
+        reset();
+        assert_eq!(crate::shell3::ssh_boot::account_without_proof("t4ce"),None);
+        saved("t4ce",AccountId::new(712),MachineRole::User);
+        assert_eq!(crate::shell3::ssh_boot::account_without_proof("t4ce"),Some(AccountId::new(712)));
+        assert_eq!(crate::shell3::ssh_boot::account_without_proof("other"),None);
+        assert_eq!(crate::shell3::ssh_boot::account_without_proof("T4CE"),None);
+        assert_eq!(crate::shell3::ssh_boot_disabled::account_without_proof("t4ce"),None);
+        assert!(ssh_requires_account_proof("t4ce"));
+        CRY_STATE.lock().durable=None;
+        assert_eq!(crate::shell3::ssh_boot::account_without_proof("t4ce"),None);
+        reset();
+    }
     #[test] fn cry_session_opens_only_after_the_same_proof_commits() {
         reset(); let report=enrolled("t4ce");
         assert_eq!(authenticated_access_account(1),None);
@@ -182,6 +195,17 @@ def production_remote_harness():
       'INIT':item(ssh,'pub(super) fn init()'),'SERVICE_AUTH':item(ssh,'pub(super) async fn service_auth()')}
     text=REMOTE_HARNESS
     for key,value in fields.items():text=text.replace('@'+key+'@',value)
+    boot=(ROOT/'src/shell3/ssh_boot.rs').read_text()
+    # Exercise both settings regardless of the currently selected development policy.
+    policy=re.sub(r'= (?:true|false);', '= true;', re.search(
+        r'pub\(super\) const DEV_SKIP_SSH_ACCOUNT_PROOF: bool = (?:true|false);',boot)[0])
+    policy+='\n'+item(boot,'pub(super) fn account_without_proof(')
+    policy=policy.replace('pub(super)', 'pub(crate)')
+    disabled=policy.replace('DEV_SKIP_SSH_ACCOUNT_PROOF: bool = true;', 'DEV_SKIP_SSH_ACCOUNT_PROOF: bool = false;')
+    text=text.replace('pub(crate) mod ssh {',
+        'pub(crate) mod ssh_boot {\n'+policy+'\n}\n'
+        'pub(crate) mod ssh_boot_disabled {\n'+disabled+'\n}\n'
+        'pub(crate) mod ssh {')
     return text
 
 
@@ -227,6 +251,7 @@ trueos-time={{path={json.dumps(str(ROOT/'crates/trueos-executor/embassy-time'))}
         with (sunset/'Cargo.toml').open('a') as stream: stream.write('\n[workspace]\n')
         run('sunset-encrypted-auth',cargo+['test','--offline','--manifest-path',str(sunset/'Cargo.toml'),'--target','x86_64-unknown-linux-gnu','--features','std','--lib','native_protocol_tests','--','--test-threads=1'])
     paths=['src/crypt.rs','src/shell3/tui/accounts.rs','vendor/sunset/src/event.rs','vendor/sunset/src/native_protocol_tests.rs','src/shell3/ssh.rs','src/shell3/tui.rs','src/shell3/admin.rs','src/shell3/tty.rs','src/shell3/net.rs','src/shell3/system/cry.rs','src/net/adapter.rs','tools/testpy/fixtures/remote_cry_tests.rs','tools/testpy/test_cry_frontend_identity.py']
+    paths.append('src/shell3/ssh_boot.rs')
     sources=[{'path':str(ROOT/p),'sha256':hashlib.sha256((ROOT/p).read_bytes()).hexdigest()} for p in paths]
     (output/'receipt.json').write_text(json.dumps({'scope':__doc__,'checks':checks,'sources':sources},indent=2)+'\n')
     print(output/'receipt.json')

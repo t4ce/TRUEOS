@@ -39,6 +39,15 @@ fn native_net_rejects_pathname_sockets_without_panicking() {
 '''
 
 TOKIO_BOUNDARY_CASES = r'''
+ test("std-facing native UnixSocket factories refuse before capability creation",||{
+  assert_eq!(tokio::net::UnixSocket::new_stream().unwrap_err().kind(),std::io::ErrorKind::Unsupported);
+  assert_eq!(tokio::net::UnixSocket::new_datagram().unwrap_err().kind(),std::io::ErrorKind::Unsupported);
+ });
+ test("std-facing native Unix imports cannot claim descriptor validation",||{
+  let (socket,_peer)=std::os::unix::net::UnixStream::pair().unwrap();
+  socket.set_nonblocking(true).unwrap();
+  assert_eq!(tokio::net::UnixStream::from_std(socket).unwrap_err().kind(),std::io::ErrorKind::Unsupported);
+ });
  test("std-facing native sockets reject transfers to Unix descriptors",||{current().block_on(async{
   let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
   let stream=TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
@@ -182,7 +191,7 @@ panic="abort"
                 '--manifest-path', str(native / 'Cargo.toml'), '--target', 'x86_64-unknown-linux-gnu',
                 '--bin', 'tokio-native-std'], env)
             counts['tokio-' + mode] = len(re.findall(r'^ok ', text, re.M))
-            assert counts['tokio-' + mode] == 18
+            assert counts['tokio-' + mode] == 20
         text = run('native-id-is-not-fd', cargo + ['check', '--offline', '--manifest-path',
             str(native / 'Cargo.toml'), '--target', 'x86_64-unknown-linux-gnu',
             '--features', 'native-fd-check', '--bin', 'native-fd-trait-rejection'], env, expected=1)
@@ -192,7 +201,7 @@ panic="abort"
                 str(native / 'Cargo.toml'), '--target', 'x86_64-unknown-linux-gnu', '--features',
                 'full-signal-check', '--bin', 'tokio-native-std'], env)
             counts['tokio-full'] = len(re.findall(r'^ok ', text, re.M))
-            assert counts['tokio-full'] == 19
+            assert counts['tokio-full'] == 21
         host = work / 'host'
         manifest(host, f'''[package]
 name="native-net-host-control"

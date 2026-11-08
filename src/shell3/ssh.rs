@@ -26,7 +26,13 @@ static AUTH_REQUESTS: spin::Once<&'static crate::net::adapter::NetQueue<AuthRequ
     spin::Once::new();
 
 pub(super) fn init() {
-    AUTH_REQUESTS.call_once(|| crate::net::adapter::NetQueue::new_leaked("ssh-cry-auth", 64));
+    AUTH_REQUESTS.call_once(|| {
+        if super::ssh_boot::DEV_SKIP_SSH_ACCOUNT_PROOF {
+            crate::log_warn!(target: "service";
+                "IMPORTANT shell3-ssh: DEV_SKIP_SSH_ACCOUNT_PROOF=true; loaded account access WITHOUT identity proof. Authentication works; bypass enabled for temporary development boots. Restore proof in src/shell3/ssh_boot.rs before deployment.\n");
+        }
+        crate::net::adapter::NetQueue::new_leaked("ssh-cry-auth", 64)
+    });
 }
 
 /// Called by the BSP authentication worker; never block an AP executor on IO.
@@ -115,7 +121,8 @@ impl Session {
     }
 
     /// A verified enrolled SSH key may establish an account. Development
-    /// none-auth grants terminal access with no account identity.
+    /// none-auth may bind the exact loaded account only under the explicit
+    /// ssh_boot development bypass; otherwise it has no account identity.
     pub fn access_account(&self) -> Option<trueos_crypto::AccountId> {
         self.authenticated.then_some(self.access_account).flatten()
     }
@@ -170,9 +177,11 @@ impl Session {
                     match event {
                         ServEvent::Hostkeys(h) => h.hostkeys(&[&self.host_key])?,
                         ServEvent::FirstAuth(mut h) => {
-                            self.access_account = None;
+                            let username = h.username()?;
+                            self.access_account = super::ssh_boot::account_without_proof(username);
                             if super::ssh_boot::allow_none()
-                                && !crate::crypt::ssh_requires_account_proof(h.username()?) {
+                                && (self.access_account.is_some()
+                                    || !crate::crypt::ssh_requires_account_proof(username)) {
                                 h.allow()?;
                             } else {
                                 h.set_auth_methods(false, true)?;

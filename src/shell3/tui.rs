@@ -991,7 +991,8 @@ pub(super) fn select(frontend: Frontend, name: Option<&str>) -> bool {
         route.selected = selected;
         if selected && route.screen.dimensions() != (frontend.cols, frontend.rows) {
             route.screen.resize(frontend.cols, frontend.rows);
-            route.surface_generation = route.surface_generation.wrapping_add(1).max(1);
+            // Geometry changes preserve the attachment and its pending input.
+            // Consumers compare dimensions separately from surface identity.
             changed = true;
         }
     }

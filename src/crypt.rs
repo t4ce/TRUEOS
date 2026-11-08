@@ -1189,6 +1189,17 @@ pub(crate) fn ssh_key_account(username: &str, key: &[u8; 32]) -> Option<AccountI
     Some(state.credential?.account)
 }
 
+/// Development-only identity lookup, NOT authentication. The SSH transport must
+/// gate this behind ssh_boot::DEV_SKIP_SSH_ACCOUNT_PROOF. Never invent an account
+/// or use an unrelated local terminal's identity when the requested name differs.
+pub(crate) fn ssh_development_account(username: &str) -> Option<AccountId> {
+    let state = CRY_STATE.lock();
+    if state.durable.is_none() || state.username.as_deref() != Some(username) {
+        return None;
+    }
+    Some(state.credential?.account)
+}
+
 /// A fresh cry code authorizes adding or revoking one client public key.
 /// The replacement set becomes live only after the encrypted envelope commits.
 pub(crate) fn prepare_ssh_key_change(

@@ -120,7 +120,6 @@ Pool sizes are task storage capacities, not CPU/thread counts. Caller candidates
 | [`ui4_link_service_task`](../../src/ui4/link_service.rs#L71) (src/ui4/link_service.rs:71) | `1` | source | [trace](runtime-services.md) |
 | [`ui4_screenshot_service_task`](../../src/ui4/screenshot.rs#L1106) (src/ui4/screenshot.rs:1106) | `1` | source | [trace](runtime-services.md) |
 | [`ui4_slot4_service_task`](../../src/ui4/slot4_service.rs#L57) (src/ui4/slot4_service.rs:57) | `1` | source | [trace](runtime-services.md) |
-| [`ui4_start_button_service_task`](../../src/ui4/start_button.rs#L102) (src/ui4/start_button.rs:102) | `1` | source | [trace](runtime-services.md) |
 | [`ui4_video_conversion_service_task`](../../src/ui4/video_frame.rs#L1054) (src/ui4/video_frame.rs:1054) | `2` | source | [trace](runtime-services.md) |
 | [`ui4_window_broker_snapshot_service_task`](../../src/ui4/window_broker.rs#L1692) (src/ui4/window_broker.rs:1692) | `1` | source | [trace](runtime-services.md) |
 | [`usb_device_pool_worker_task`](../../src/usb3/dev_gears.rs#L148) (src/usb3/dev_gears.rs:148) | `1 (macro default)` | source | [trace](runtime-services.md) |

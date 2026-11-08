@@ -719,22 +719,6 @@
     "usage_note": "Entry admission still depends on readiness, gate, wrapper, and hardware; not a liveness measurement."
   },
   {
-    "name": "ui4-start-button",
-    "kind": "enabled_gated",
-    "status": "boot conditional",
-    "required": "0",
-    "gate": "ui4_input_gate",
-    "placement": "UI core (AP1; BSP fallback)",
-    "wrapper": "spawn_ui4_start_button_service_task",
-    "line": 1195,
-    "wrapper_line": 690,
-    "feature": null,
-    "config": null,
-    "default_feature_compiled": true,
-    "initial_registry_enabled": true,
-    "usage_note": "Entry admission still depends on readiness, gate, wrapper, and hardware; not a liveness measurement."
-  },
-  {
     "name": "ui4-screenshot-service",
     "kind": "enabled",
     "status": "boot conditional",

@@ -146,7 +146,7 @@ pub(crate) async fn prepare() -> Result<(), &'static str> {
             continue;
         }
         match reply.wait().await {
-            Err("render-busy" | "in-flight" | "render-storage-busy" | "microfont-atlas-busy" | "microfont-start-glyph-busy" | "virgl-offscreen-busy") => {
+            Err("render-busy" | "in-flight" | "render-storage-busy" | "microfont-atlas-busy" | "virgl-offscreen-busy") => {
                 Timer::after(Duration::from_millis(20)).await;
             }
             result => return result,
@@ -386,7 +386,7 @@ pub(crate) async fn grid_glyph(scale: u32, ch: char) -> Result<Vec<u8>, &'static
             continue;
         }
         match reply.wait().await {
-            Err("render-busy" | "in-flight" | "render-storage-busy" | "microfont-atlas-busy" | "microfont-start-glyph-busy" | "virgl-offscreen-busy") =>
+            Err("render-busy" | "in-flight" | "render-storage-busy" | "microfont-atlas-busy" | "virgl-offscreen-busy") =>
                 Timer::after(Duration::from_millis(20)).await,
             result => return result,
         }
@@ -411,8 +411,7 @@ fn grid_glyph_blocking(scale: u32, ch: char) -> Result<Vec<u8>, &'static str> {
     Ok(result)
 }
 
-/// Publish text and warm the independent private home asset. Native rigs keep
-/// GPU raster production; the adopted laptop alone uses the CPU mitigation.
+/// Publish text once the font atlas is ready.
 #[cfg(not(test))]
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn microfont_warm_task() {
@@ -427,16 +426,6 @@ pub(crate) async fn microfont_warm_task() {
                 crate::log_warn!(target: "microfont-mask";
                     "microfont: warm deferred reason={}\n", reason);
                 trueos_time::Timer::after(trueos_time::Duration::from_millis(100)).await;
-            }
-        }
-    }
-    loop {
-        match super::microfont_mask_service::warm_start_glyph() {
-            Ok(()) => return,
-            Err(reason) => {
-                crate::log_warn!(target: "microfont-mask";
-                    "microfont: home warm deferred reason={}\n", reason);
-                Timer::after(Duration::from_millis(100)).await;
             }
         }
     }

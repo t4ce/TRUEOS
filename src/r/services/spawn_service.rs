@@ -73,7 +73,6 @@ define_started_flags!(
     GAMEPAD_CONTROL_SERVICE_STARTED,
     UI4_INPUT_SERVICE_STARTED,
     UI4_SLOT4_SERVICE_STARTED,
-    UI4_START_BUTTON_SERVICE_STARTED,
     UI4_SCREENSHOT_SERVICE_STARTED,
     UI4_H264_ENCODE_STREAM_STARTED,
     UI4_COMPOSITOR_STARTED,
@@ -693,10 +692,6 @@ fn spawn_ui4_slot4_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_slot4_service_task())
 }
 
-fn spawn_ui4_start_button_service_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_start_button_service_task())
-}
-
 fn spawn_ui4_screenshot_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::ui4::ui4_screenshot_service_task())
 }
@@ -937,7 +932,7 @@ const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
 // Own the AtomicBool fields in a static array; an interior-mutable temporary
 // cannot be promoted behind a shared slice reference.
-const TASK_COUNT: usize = 63
+const TASK_COUNT: usize = 62
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + 2 * cfg!(feature = "trueos_ttstt") as usize
     + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize;
@@ -1206,13 +1201,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         ui4_slot4_service_gate,
         &UI4_SLOT4_SERVICE_STARTED,
         spawn_ui4_slot4_service_task,
-    ),
-    TaskSpec::enabled_gated(
-        "ui4-start-button",
-        0,
-        ui4_input_gate,
-        &UI4_START_BUTTON_SERVICE_STARTED,
-        spawn_ui4_start_button_service_task,
     ),
     TaskSpec::enabled(
         "ui4-screenshot-service",

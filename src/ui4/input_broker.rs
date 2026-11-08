@@ -1118,8 +1118,6 @@ impl InputBroker {
                 if let Some(next) =
                     translated_frame_placement(target.placement, dx, dy, width, height)
                 {
-                    let next =
-                        super::start_button::constrain_drag_placement(target.owner, next, x, width);
                     match super::move_window(target.owner, target.id, next) {
                         Ok(()) => {
                             target.placement = next;
@@ -1551,15 +1549,6 @@ impl InputBroker {
                 return;
             };
             super::screenshot::request_window_capture(window, route.x, route.y);
-            return;
-        }
-        if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
-            && event.key_code == crate::r::keyboard::KEYBOARD_KEY_START
-        {
-            if event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_PRESS != 0 {
-                let _ = self.consumed_keys.push(event);
-                super::request_start_button_reveal();
-            }
             return;
         }
         let route_index = self.keyboard_route_index(&event, combo_id, true);

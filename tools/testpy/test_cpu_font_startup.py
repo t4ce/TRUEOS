@@ -322,65 +322,7 @@ fn bitmap_policy_requires_exact_physical_laptop_revision_and_latched_panel() {
 }
 
 mod microfont_mask_service {
-    use alloc::vec::Vec;
-    use crate::spin;
     pub(crate) use crate::shell3_font_service::ready_atlas;
-    static START_GLYPH:spin::Once<OwnedGlyphMask>=spin::Once::new();
-    static START_GLYPH_WARM:spin::Mutex<()>=spin::Mutex::new(());
-    static START_GLYPH_READY:Ready=Ready;
-    struct Ready;
-    impl Ready {fn notify_all(&self) {}}
-    const START_GLYPH_EM_MM:u32=50;
-    fn home_button_em_height()->Option<u32> {Some(147)}
-    static NATIVE_HOME_CALLS:std::sync::atomic::AtomicUsize=std::sync::atomic::AtomicUsize::new(0);
-    pub(crate) static CPU_HOME_CALLS:std::sync::atomic::AtomicUsize=std::sync::atomic::AtomicUsize::new(0);
-    fn build_home_button_mask(height:u32)->Result<OwnedGlyphMask,&'static str> {
-        NATIVE_HOME_CALLS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
-        if crate::NATIVE_ATLAS_QUARANTINED.load(std::sync::atomic::Ordering::Relaxed) {
-            Err("native-home-quarantined")
-        } else {
-            Ok(OwnedGlyphMask {width:1,height:1,em_height_px:height,pixels:vec![17]})
-        }
-    }
-'''
-    source += item("src/r/services/microfont_mask_service.rs", "OwnedGlyphMask") + "\n"
-    source += item("src/r/services/microfont_mask_service.rs", "warm_start_glyph") + "\n"
-    source += r'''
-    #[test]
-    fn desktop_home_glyph_uses_native_line_asset_producer() {
-        use std::sync::atomic::Ordering;
-        crate::set_laptop(false);
-        crate::NATIVE_ATLAS_QUARANTINED.store(false,Ordering::Relaxed);
-        warm_start_glyph().unwrap();
-        assert_eq!(START_GLYPH.get().unwrap().pixels,vec![17]);
-        warm_start_glyph().unwrap();
-        assert_eq!(NATIVE_HOME_CALLS.load(Ordering::Relaxed),1);
-        assert_eq!(CPU_HOME_CALLS.load(Ordering::Relaxed),0);
-    }
-    #[test]
-    fn laptop_home_glyph_uses_cpu_line_asset_without_native_work() {
-        use std::sync::atomic::Ordering;
-        crate::set_laptop(true);
-        warm_start_glyph().unwrap();
-        assert_eq!(START_GLYPH.get().unwrap().pixels,vec![255]);
-        assert_eq!(NATIVE_HOME_CALLS.load(Ordering::Relaxed),0);
-        assert_eq!(CPU_HOME_CALLS.load(Ordering::Relaxed),1);
-    }
-    #[test]
-    fn desktop_home_native_failure_cannot_switch_to_cpu() {
-        use std::sync::atomic::Ordering;
-        crate::set_laptop(false);
-        assert_eq!(warm_start_glyph(),Err("native-home-quarantined"));
-        assert!(START_GLYPH.get().is_none());
-        assert_eq!(NATIVE_HOME_CALLS.load(Ordering::Relaxed),1);
-        assert_eq!(CPU_HOME_CALLS.load(Ordering::Relaxed),0);
-    }
-}
-mod microfont_home_cpu {
-    pub(crate) fn build(height:u32)->Result<super::microfont_mask_service::OwnedGlyphMask,&'static str> {
-        super::microfont_mask_service::CPU_HOME_CALLS.fetch_add(1,std::sync::atomic::Ordering::Relaxed);
-        Ok(super::microfont_mask_service::OwnedGlyphMask {width:1,height:1,em_height_px:height,pixels:vec![255]})
-    }
 }
 
 mod spawn_service {
@@ -607,7 +549,7 @@ def main() -> None:
         listing = subprocess.check_output([str(binary), "--list"], text=True)
         names = [line.removesuffix(": test") for line in listing.splitlines()
                  if line.endswith(": test")]
-        assert len(names) >= 20, names
+        assert len(names) >= 17, names
         for name in names:
             subprocess.run([str(binary), name, "--exact"], check=True)
 

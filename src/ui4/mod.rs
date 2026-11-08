@@ -36,7 +36,6 @@ pub(crate) use screenshot::writable_capture_root_handle;
 mod slot4_service;
 mod button_outline;
 mod button_outline_geometry;
-mod start_button;
 pub(crate) mod text_area;
 pub(crate) mod text_area_raster;
 pub(crate) mod text_blit;
@@ -132,7 +131,6 @@ pub(crate) use screenshot::{
 pub(crate) use slot4_service::{
     software_cursor_rects as interaction_overlay_rects, ui4_slot4_service_task,
 };
-pub(crate) use start_button::{request_start_button_reveal, ui4_start_button_service_task};
 pub(crate) use video_frame::{
     DecodedNv12Source, DecodedVideoConversionReport,
     VIDEO_RGBA_BUFFER_COUNT, VideoPlaybackSession, begin_decoded_nv12_conversion_batch,

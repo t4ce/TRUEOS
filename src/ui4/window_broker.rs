@@ -63,7 +63,6 @@ impl WindowOwner {
     pub(crate) const GPGPU_PREVIEW: Self = Self::KernelApp(5);
     pub(crate) const COLOR_PICKER_SERVICE: Self = Self::KernelApp(6);
     pub(crate) const SVG_OUTLINE_PROBE: Self = Self::KernelApp(7);
-    pub(crate) const START_BUTTON_SERVICE: Self = Self::KernelApp(8);
     pub(crate) const LINK_SERVICE: Self = Self::KernelApp(9);
     pub(crate) const CODEX_PROMPT_SERVICE: Self = Self::KernelApp(10);
     pub(crate) const SHELL3_SERVICE: Self = Self::KernelApp(11);
@@ -77,7 +76,6 @@ impl WindowOwner {
             Self::GPGPU_PREVIEW => "gpgpu-preview",
             Self::COLOR_PICKER_SERVICE => "color-picker-service",
             Self::SVG_OUTLINE_PROBE => "svg-outline-probe",
-            Self::START_BUTTON_SERVICE => "start-button-service",
             Self::LINK_SERVICE => "link-service",
             Self::CODEX_PROMPT_SERVICE => "codex-prompt-service",
             Self::SHELL3_SERVICE => "shell3-service",
@@ -1027,10 +1025,7 @@ impl WindowBroker {
     ) -> Result<WindowPlane, WindowBrokerError> {
         let (id_slot, _) = unpack_handle(id.0)?;
         if requested == WindowPlane::Interaction {
-            if !matches!(
-                owner,
-                WindowOwner::COLOR_PICKER_SERVICE | WindowOwner::START_BUTTON_SERVICE
-            ) {
+            if owner != WindowOwner::COLOR_PICKER_SERVICE {
                 return Err(WindowBrokerError::InvalidPlane);
             }
             if self.windows.iter().enumerate().any(|(slot, window)| {
@@ -4408,16 +4403,6 @@ mod tests {
             )
             .expect("replacement remains on the fixed interaction plane");
         assert_eq!(broker.windows[slot].plane, WindowPlane::Interaction);
-
-        let start_owner = WindowOwner::START_BUTTON_SERVICE;
-        let start_session = broker.begin_additional_session(start_owner).unwrap();
-        let mut start = test_window(start_owner, start_session, 12, 0, i32::MAX, true);
-        start.plane = WindowPlane::Interaction;
-        let start = broker
-            .create(start, FrameBuffering::Double, 0)
-            .expect("trusted start button shares slot 4 with the color picker");
-        let (start_slot, _) = unpack_handle(start.raw()).unwrap();
-        assert_eq!(broker.windows[start_slot].plane, WindowPlane::Interaction);
 
         let second_session = broker.begin_additional_session(owner).unwrap();
         let mut second = test_window(owner, second_session, 13, 0, 101, true);
