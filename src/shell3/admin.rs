@@ -13,6 +13,7 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
+use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 use trueos_time::{Duration, Timer};
 use zeroize::{Zeroize, Zeroizing};
@@ -51,6 +52,23 @@ pub(super) fn start(name: &str, frontend: Frontend) -> Result<(), String> {
     };
     spawner.spawn(token);
     Ok(())
+}
+
+/// Keep bootstrap sign-in on its own frontend, independent of the shared Cry menu.
+pub(super) fn start_login(frontend: Frontend) -> Result<String, String> {
+    let name = format!("cry-login-{}", frontend.id);
+    let Some((target, spawner)) = helper::admit(&name, frontend)? else {
+        return Ok(name);
+    };
+    let token = match login_task(target.clone()) {
+        Ok(token) => token,
+        Err(_) => {
+            tui::cancel_native_attach(&target);
+            return Err("Sign-in task pool is full.".into());
+        }
+    };
+    spawner.spawn(token);
+    Ok(name)
 }
 
 enum Field {
@@ -178,6 +196,22 @@ struct Job {
     result: Option<Result<Outcome, String>>,
 }
 type Reply = Arc<Mutex<Job>>;
+struct LoginAttempt {
+    target: MatrixTarget,
+    active: Arc<AtomicBool>,
+}
+impl LoginAttempt {
+    fn validate(&self, frontend: u64) -> Result<(), String> {
+        if self.active.load(Ordering::Acquire)
+            && tui::native_visible(&self.target)
+            && tui::native_frontend_id(&self.target) == Some(frontend)
+        {
+            Ok(())
+        } else {
+            Err("Sign-in cancelled.".into())
+        }
+    }
+}
 enum Request {
     Setup(String),
     Enrollment,
@@ -189,6 +223,7 @@ enum Request {
         frontend: u64,
         scope: u8,
         code: Zeroizing<String>,
+        attempt: Option<LoginAttempt>,
     },
     Unlock {
         username: String,
@@ -259,8 +294,19 @@ impl Request {
                 }
             },
             Self::Enrollment => enrollment(),
-            Self::Login { frontend, scope, code } => {
+            Self::Login {
+                frontend,
+                scope,
+                code,
+                attempt,
+            } => {
+                if let Some(attempt) = &attempt {
+                    attempt.validate(frontend)?;
+                }
                 let (message, account) = cry::login_for_scope(scope, &code).await?;
+                if let Some(attempt) = &attempt {
+                    attempt.validate(frontend)?;
+                }
                 if !tui::bind_authenticated_frontend(frontend, Some(account)) {
                     return Err("The signing-in frontend closed or belongs to a guest.".into());
                 }
@@ -286,6 +332,8 @@ impl Request {
 }
 struct View {
     kind: Kind,
+    login_only: bool,
+    login_attempt: Option<Arc<AtomicBool>>,
     page: Page,
     selected: usize,
     input: Input,
@@ -302,6 +350,8 @@ impl View {
     fn new(kind: Kind) -> Self {
         Self {
             kind,
+            login_only: false,
+            login_attempt: None,
             page: Page::Home,
             selected: 0,
             input: Input::default(),
@@ -354,7 +404,28 @@ impl View {
             super::service::notify_work();
         });
     }
-    fn complete(&mut self) {
+    fn submit_login(&mut self, target: &MatrixTarget, scope: u8, code: Zeroizing<String>) {
+        let active = self.login_only.then(|| Arc::new(AtomicBool::new(true)));
+        self.login_attempt = active.clone();
+        self.submit(
+            target,
+            Request::Login {
+                frontend: tui::native_frontend_id(target).unwrap_or(0),
+                scope,
+                code,
+                attempt: active.map(|active| LoginAttempt {
+                    target: target.clone(),
+                    active,
+                }),
+            },
+        );
+    }
+    fn cancel_login(&mut self) {
+        if let Some(active) = self.login_attempt.take() {
+            active.store(false, Ordering::Release);
+        }
+    }
+    fn complete(&mut self, target: &MatrixTarget) {
         let Some(reply) = &self.pending else {
             return;
         };
@@ -362,6 +433,17 @@ impl View {
             return;
         };
         self.pending = None;
+        if self.login_only {
+            match result {
+                Ok(outcome) => {
+                    self.result = outcome.message;
+                    self.leave(target);
+                }
+                Err(error) => self.problem(&error),
+            }
+            self.set_page(Page::Field(Field::LoginCode));
+            return;
+        }
         match result {
             Ok(outcome) => {
                 self.result = outcome.message;
@@ -694,7 +776,7 @@ impl View {
                         self.set_page(Page::Enrollment(qr));
                     }
                 } else if valid {
-                    self.submit(target, Request::Login { frontend: tui::native_frontend_id(target).unwrap_or(0), scope, code: value });
+                    self.submit_login(target, scope, value);
                 } else {
                     self.problem("Enter a 6-digit authenticator code.");
                     self.set_page(Page::Enrollment(qr));
@@ -702,7 +784,7 @@ impl View {
             }
             Page::Field(Field::LoginCode) => {
                 if value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_digit()) {
-                    self.submit(target, Request::Login { frontend: tui::native_frontend_id(target).unwrap_or(0), scope, code: value });
+                    self.submit_login(target, scope, value);
                 } else {
                     self.problem("Enter a 6-digit authenticator code.");
                     self.set_page(Page::Field(Field::LoginCode));
@@ -750,6 +832,10 @@ impl View {
         }
     }
     fn leave(&mut self, target: &MatrixTarget) {
+        self.cancel_login();
+        if self.login_only {
+            self.pending = None;
+        }
         if self.page.sensitive() {
             self.set_page(Page::Home);
             self.screen
@@ -943,21 +1029,50 @@ impl View {
         }
     }
 }
+impl Drop for View {
+    fn drop(&mut self) {
+        self.cancel_login();
+    }
+}
 #[trueos_executor::task(pool_size = 2)]
 async fn menu_task(kind: Kind, target: MatrixTarget) {
+    run_menu(kind, target, false).await;
+}
+#[trueos_executor::task(pool_size = super::MAX_SHELL3_INSTANCES)]
+async fn login_task(target: MatrixTarget) {
+    run_menu(Kind::Cry, target, true).await;
+}
+async fn run_menu(kind: Kind, target: MatrixTarget, login_only: bool) {
     let mut view = View::new(kind);
+    let mut was_visible = true;
+    view.login_only = login_only;
+    if login_only {
+        view.set_page(Page::Field(Field::LoginCode));
+        if let Some(username) = crypt::status().username {
+            view.result = format!("Sign in as {username}.");
+        }
+    }
     while let Some((mut bytes, _)) = tui::native_read(&target) {
-        view.complete();
+        view.complete(&target);
         if !tui::native_visible(&target) {
+            if login_only {
+                view.cancel_login();
+                view.pending = None;
+            }
             if view.page.sensitive() {
                 view.set_page(Page::Home);
                 let (cols, rows) = view.geometry;
                 view.screen.paint(&target, &[], cols, rows);
             }
+            was_visible = false;
             bytes.zeroize();
             Timer::after(Duration::from_millis(20)).await;
             continue;
         }
+        if login_only && !was_visible {
+            view.set_page(Page::Field(Field::LoginCode));
+        }
+        was_visible = true;
         let Some(surface) = tui::surface(&target) else {
             break;
         };

@@ -3,6 +3,9 @@
 use alloc::{string::String, vec::Vec};
 
 pub(crate) enum Startup {
+    GuestShell {
+        access_account: Option<trueos_crypto::AccountId>,
+    },
     Link {
         source: crate::ui4::Ui4CursorSource,
         anchor: (u32, u32),
@@ -16,6 +19,15 @@ pub(crate) enum Startup {
 }
 
 impl Startup {
+    pub(super) fn guest_account(&self) -> Option<Option<trueos_crypto::AccountId>> {
+        match self {
+            Self::GuestShell { access_account } | Self::Blueprint { access_account, .. } => {
+                Some(*access_account)
+            }
+            Self::Link { .. } => None,
+        }
+    }
+
     /// Desktop entry points retain their placement across first-paint retries.
     pub(super) fn configure_window(&self, shell: &mut super::Shell3) {
         let Self::Link { anchor, .. } = self else {
@@ -45,6 +57,7 @@ impl Startup {
 
     pub(super) fn launch(self, shell: &mut super::Shell3) {
         match self {
+            Self::GuestShell { .. } => {}
             Self::Link { source, anchor } => {
                 match super::link::start(shell.tui_frontend()) {
                     Ok(()) => shell.enter_native_terminal("link"),

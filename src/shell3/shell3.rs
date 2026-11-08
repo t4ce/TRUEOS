@@ -7,6 +7,7 @@ mod font;
 mod link;
 mod helper;
 mod lifecycle;
+mod local_account;
 mod os;
 #[path = "system/output.rs"]
 pub(crate) mod output;
@@ -48,6 +49,7 @@ mod captured;
 mod ssh;
 mod ssh_boot;
 mod status;
+mod title;
 mod transition;
 mod tty;
 pub(crate) mod tui;
@@ -189,10 +191,6 @@ impl TitleTime {
         let minutes_of_day = (local_seconds / 60) % (24 * 60);
         alloc::format!("{:02}:{:02}", minutes_of_day / 60, minutes_of_day % 60)
     }
-}
-
-fn title_left_text(time: &str) -> String {
-    format!("TrueOS {} {}", OPERATOR, time)
 }
 
 pub struct MatrixSlots;
@@ -542,7 +540,10 @@ struct SpecialRowsState {
 impl SpecialRowsState {
     fn new(time: &str, prompt_left: &str) -> Self {
         Self {
-            title: RowStrips::new(&title_left_text(time), ""),
+            title: RowStrips {
+                left: title::Identity::default().left(time),
+                right: Vec::new(),
+            },
             // StatusRow/Left is read from the shared MatrixSlots system.
             status: RowStrips::new("", ""),
             promt: RowStrips {
@@ -650,6 +651,7 @@ pub struct Shell3 {
     rows_count: usize,
     layout_generation: usize,
     time: String,
+    title_identity: title::Identity,
     clock: crate::chronos::signals::Subscription,
     mode: Mode,
     active_matrix_slot: Option<String>,
@@ -668,6 +670,7 @@ pub struct Shell3 {
     update_baseline: update::Snapshot,
     pending_presentation: Option<(update::Snapshot, UpdateBatch, Vec<update::RenderedLine>)>,
     pending_startup: Option<startup::Startup>,
+    local_account: Option<local_account::Bootstrap>,
     show: Show,
 }
 
@@ -731,7 +734,7 @@ impl Shell3 {
                 actual,
             });
         }
-        Ok(Self::new_inner(
+        let mut shell = Self::new_inner(
             time,
             aka_names,
             appdb_names,
@@ -739,7 +742,11 @@ impl Shell3 {
             columns,
             rows,
             executor_slot,
-        ))
+        );
+        // Only human UI4 shells select a local account. SSH and guest-owned
+        // terminals keep the principal supplied by their own launch/auth path.
+        shell.local_account = Some(local_account::Bootstrap::default());
+        Ok(shell)
     }
 
     fn new_inner(
@@ -791,6 +798,7 @@ impl Shell3 {
             rows_count,
             layout_generation: 0,
             time,
+            title_identity: title::Identity::default(),
             clock: crate::chronos::signals::subscribe(crate::chronos::signals::Every::MINUTE),
             mode: Mode::CMD,
             active_matrix_slot: None,
@@ -809,6 +817,7 @@ impl Shell3 {
             update_baseline: initial,
             pending_presentation: None,
             pending_startup: None,
+            local_account: None,
             show: Show::default(),
         }
     }
@@ -852,6 +861,7 @@ impl Shell3 {
     /// Publish the current title, status, and prompt strips through UI4.
     pub async fn present(&mut self) -> Result<(), &'static str> {
         self.reconcile_matrix_selection();
+        self.refresh_title_identity();
         if self.show.is_closing() || (self.show.window().is_some() && self.show.is_closed()) {
             self.pending_startup = None;
             self.pending_presentation = None;
@@ -924,11 +934,14 @@ impl Shell3 {
             }
         }
         self.matrix_selection_dirty = false;
+        self.reconcile_local_account();
         if let Some(startup) = self.pending_startup.take()
             && !self.show.is_closing()
             && !self.show.is_closed()
         {
             startup.launch(self);
+            // A desktop helper must not park the startup authenticator form.
+            self.reconcile_local_account();
         }
         Ok(())
     }
@@ -991,18 +1004,26 @@ impl Shell3 {
         }
     }
 
+    /// A UI4 shell requested by a Blueprint inherits its captured principal,
+    /// including anonymity, just like the Blueprint's terminal sessions.
+    pub(super) fn inherit_guest_account(&mut self, account: Option<trueos_crypto::AccountId>) {
+        self.local_account = None;
+        tui::bind_guest_frontend_account(self.tui_frontend(), account);
+    }
+
     pub fn get_size(&self) -> (usize, usize) {
         (self.columns, self.rows_count)
     }
 
     pub(super) fn refresh_clock(&mut self) -> bool {
+        let identity_changed = self.refresh_title_identity();
         let Some(tick) = self.clock.take() else {
-            return false;
+            return identity_changed;
         };
         let minutes = (tick.local_seconds / 60) % (24 * 60);
         let time = alloc::format!("{:02}:{:02}", minutes / 60, minutes % 60);
         if self.time == time {
-            return false;
+            return identity_changed;
         }
         self.set_time(&time);
         true
@@ -1011,7 +1032,16 @@ impl Shell3 {
     pub fn set_time(&mut self, time: &str) {
         self.time.clear();
         self.time.push_str(time);
-        self.rows.title.left = vec![MetaFmtStr::new(title_left_text(&self.time))];
+        self.rows.title.left = self.title_identity.left(&self.time);
+    }
+
+    fn refresh_title_identity(&mut self) -> bool {
+        let account = tui::frontend_access_account(self.tui_frontend());
+        if !self.title_identity.refresh(account) {
+            return false;
+        }
+        self.rows.title.left = self.title_identity.left(&self.time);
+        true
     }
 
     pub fn set_mode(&mut self, mode: u8) -> bool {
@@ -1142,6 +1172,7 @@ impl Shell3 {
 
     /// Every owner reconciles deletion locally; no cross-AP model mutation.
     pub(super) fn reconcile_matrix_selection(&mut self) {
+        self.reconcile_local_account();
         self.finish_command_latch(false);
         let recalled = self.command_history.cursor.is_some();
         if self.command_history.sync() && recalled {
@@ -1169,6 +1200,46 @@ impl Shell3 {
             || (self.active_matrix_slot.is_some() && self.active_matrix_slot_name().is_none())
         {
             self.select_matrix_slot_index(0);
+        }
+    }
+
+    fn reconcile_local_account(&mut self) {
+        if self.show.window().is_none() || self.show.is_closing() || self.show.is_closed() {
+            return;
+        }
+        let current = tui::frontend_access_account(self.tui_frontend());
+        let Some(action) = self.local_account.as_mut().and_then(|bootstrap| bootstrap.poll(current))
+        else {
+            return;
+        };
+        let accepted = match action {
+            local_account::Action::Bind(account) => {
+                let bound = tui::bind_authenticated_frontend(self.tui_frontend, Some(account));
+                if bound {
+                    crate::log_important!(target: "service";
+                        "shell3-local: frontend={} account={} proof=skipped policy=DEV_SKIP_SSH_ACCOUNT_PROOF\n",
+                        self.tui_frontend, account.raw(),
+                    );
+                }
+                bound
+            }
+            local_account::Action::Challenge => {
+                // Finish a desktop startup first, then select the challenge so
+                // that its helper cannot immediately switch the form away.
+                if self.pending_startup.is_some() {
+                    return;
+                }
+                match admin::start_login(self.tui_frontend()) {
+                    Ok(name) => {
+                        self.enter_native_terminal(&name);
+                        true
+                    }
+                    Err(_) => false,
+                }
+            }
+        };
+        if accepted && let Some(bootstrap) = self.local_account.as_mut() {
+            bootstrap.complete();
         }
     }
 
@@ -1594,7 +1665,13 @@ impl Shell3 {
                 ),
             }
         } else if self.mode == Mode::ADM && text == "sh3" {
-            if let Err(error) = service::request_shell3() {
+            let request = match tui::guest_frontend_account(self.tui_frontend()) {
+                Some(access_account) => service::request_shell3_with_startup(Some(
+                    startup::Startup::GuestShell { access_account },
+                )),
+                None => service::request_shell3(),
+            };
+            if let Err(error) = request {
                 let message = match error {
                     Shell3Error::NoExecutor => "sh3: no Shell3 AP executor is available".into(),
                     Shell3Error::InstanceLimit => "sh3: Shell3 instance limit reached".into(),

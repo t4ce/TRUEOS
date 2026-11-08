@@ -54,14 +54,23 @@ There is no guest operation for inventing an account or granting itself a key.
 
 ## Captured identity
 
-A human frontend receives an account only after successful Cry sign-in, an
+A human frontend normally receives an account after successful Cry sign-in, an
 SSH request signed by that account's enrolled key, or a verified SSH Cry code.
 The SSH code route durably consumes the replay step before accepting the session
 and does not sign in any other terminal. An unsigned SSH key probe,
 username text, or an anonymous development connection does not authenticate an
-account. Persisted SSH usernames must prove their identity by enrolled key or Cry code,
-even when no SSH key has been added. They cannot bypass proof through
-development none-auth.
+account. With account proof enabled, persisted SSH usernames must prove their
+identity by enrolled key or Cry code, even when no SSH key has been added.
+
+Temporary development boots currently share
+`shell3::ssh_boot::DEV_SKIP_SSH_ACCOUNT_PROOF` between SSH and local UI4 shells.
+SSH none-auth can select only the exact loaded saved username; local Shell3
+selects the saved automatic boot account. An early local shell retries while
+account restoration is pending. This binds the account to that frontend without
+fabricating a verified Cry session or bypassing app and filesystem access keys.
+The local selection runs once, so signing out does not automatically sign back
+in. With the shared flag disabled, a local shell opens its own Cry authenticator
+form instead. An unsaved enrollment supplies no automatic identity.
 
 Successful Cry login binds the exact initiating frontend after durable success.
 Other terminals keep their own bindings. A frontend must park an active protected
@@ -70,7 +79,9 @@ run before changing account or logging out; detach clears only its own binding. 
 generated credential public keys.
 
 Launch requests capture their frontend's account before queuing. Guest launches
-and child terminals inherit the parent's captured principal. They never consult
+and child terminals inherit the parent's captured principal, including UI4
+windows and a guest terminal's `sh3` command. These shells do not select the
+automatic local account. They never consult
 a later global login or adopt a presentation destination's account. The VM
 binding is cleared at teardown. Queued work retains a unique binding epoch;
 reusing a VM slot cannot lend the new run's grants to old work. Protected retained

@@ -1200,6 +1200,25 @@ pub(crate) fn ssh_development_account(username: &str) -> Option<AccountId> {
     Some(state.credential?.account)
 }
 
+/// The saved automatic boot account, without claiming a verified login. Local
+/// Shell3 may select it for its login challenge or the shared development policy.
+/// An unfinished, unsaved enrollment must never supply a launch principal.
+pub(crate) fn local_shell_account() -> Option<AccountId> {
+    let state = CRY_STATE.lock();
+    state.durable.as_ref()?;
+    Some(state.credential?.account)
+}
+
+/// Resolve a display name only for this exact account. A terminal must never
+/// show another frontend's user merely because that user is loaded globally.
+pub(crate) fn account_username(account: AccountId) -> Option<String> {
+    let state = CRY_STATE.lock();
+    if state.credential?.account != account {
+        return None;
+    }
+    state.username.clone()
+}
+
 /// A fresh cry code authorizes adding or revoking one client public key.
 /// The replacement set becomes live only after the encrypted envelope commits.
 pub(crate) fn prepare_ssh_key_change(

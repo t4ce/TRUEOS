@@ -30,15 +30,14 @@ pub(super) struct Terminal {
 impl Terminal {
     pub fn new_ssh(shell: Shell3, account: Option<trueos_crypto::AccountId>) -> Self {
         let frontend = shell.tui_frontend;
-        let terminal = Self::start(shell, true);
+        // Establish this terminal's identity before rendering its first title.
+        super::tui::bind_remote_frontend(frontend);
         super::tui::bind_authenticated_frontend(frontend, account);
-        terminal
+        Self::start(shell, true)
     }
 
     fn start(mut shell: Shell3, controls: bool) -> Self {
-        if controls {
-            super::tui::bind_remote_frontend(shell.tui_frontend);
-        }
+        shell.refresh_title_identity();
         shell.command_history.set_recording(false);
         let mut history = CommandHistory::default();
         history.set_scope(super::matrix_target::TRANSPORT_NET_TCP_SCOPE);

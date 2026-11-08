@@ -1,6 +1,15 @@
 #![allow(dead_code)]
 extern crate alloc;
 extern crate self as spin;
+extern crate self as trueos_crypto;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AccountId(u64);
+impl AccountId {
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{LazyLock, Mutex as StdMutex, MutexGuard};
@@ -28,6 +37,9 @@ struct World {
     tty_input: Vec<Vec<u8>>,
     tty_resized: Vec<(usize, usize)>,
     tty_polled: usize,
+    vm_principals: BTreeMap<u8, AccountId>,
+    guest_bindings: Vec<(u64, Option<AccountId>)>,
+    tty_ssh_accounts: Vec<Option<AccountId>>,
     next_slot: u64,
     provider_calls: Vec<&'static str>,
     provider_payload_bytes: usize,
@@ -64,6 +76,11 @@ mod hv {
 mod allocators {
     pub fn with_host_alloc_domain_strong<T>(run: impl FnOnce() -> T) -> T {
         run()
+    }
+}
+mod access_key_db {
+    pub fn principal_for_vm(vm: u8) -> Option<crate::AccountId> {
+        crate::world().vm_principals.get(&vm).copied()
     }
 }
 mod r {
@@ -106,6 +123,11 @@ mod shell3 {
     pub(crate) mod matrix_target {
         pub(crate) fn matrix_slot_is_live(lease: &super::MatrixSlotLease) -> bool {
             crate::world().live.contains(lease)
+        }
+    }
+    pub(crate) mod tui {
+        pub(crate) fn bind_guest_frontend_account(frontend: u64, account: Option<crate::AccountId>) {
+            crate::world().guest_bindings.push((frontend, account));
         }
     }
     pub(crate) mod service {
@@ -183,6 +205,9 @@ mod shell3 {
         pub(crate) fn active_matrix_lease(&self) -> Option<MatrixSlotLease> {
             Some(self.lease.clone())
         }
+        pub(crate) fn tui_frontend(&self) -> u64 {
+            self.lease.generation
+        }
     }
     impl Drop for Shell3 {
         fn drop(&mut self) {
@@ -198,8 +223,13 @@ mod shell3 {
             pub overflow: bool,
         }
         impl Terminal {
-            pub(crate) fn new_ssh(shell: super::Shell3) -> Self {
-                crate::world().tty_created += 1;
+            pub(crate) fn new_ssh(shell: super::Shell3, account: Option<crate::AccountId>) -> Self {
+                let mut state = crate::world();
+                assert!(state.guest_bindings.iter().any(|entry| entry.0 == shell.tui_frontend()),
+                    "guest identity must be bound before constructing its terminal");
+                state.tty_created += 1;
+                state.tty_ssh_accounts.push(account);
+                drop(state);
                 Self {
                     shell,
                     output: b"\x1b[?1049hTTY\n".to_vec(),
@@ -496,6 +526,26 @@ mod shell3 {
             assert_eq!(test.drain(handle).1, Some(0));
             assert_eq!(world().released, vec![AP]);
             assert_eq!(world().dropped.len(), 1);
+        }
+
+        #[test]
+        fn guest_terminal_keeps_the_callers_principal_captured_before_worker_claim() {
+            for principal in [None, Some(crate::AccountId::new(712))] {
+                let mut test = SessionTest::new();
+                if let Some(account) = principal {
+                    world().vm_principals.insert(1, account);
+                }
+                test.open(b"", (100, 25), true);
+                // A later human login or VM principal change cannot change an
+                // already admitted session, including an anonymous session.
+                world().vm_principals.insert(1, crate::AccountId::new(993));
+                test.poll(2);
+                let state = world();
+                assert_eq!(state.guest_bindings.len(), 1);
+                assert_eq!(state.guest_bindings[0].1, principal);
+                assert_eq!(state.tty_ssh_accounts, vec![None],
+                    "guest terminals must not request an SSH account rebind");
+            }
         }
 
         #[test]

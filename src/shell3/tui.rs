@@ -712,6 +712,13 @@ pub(super) fn frontend_access_account(frontend: Frontend) -> Option<trueos_crypt
     ROUTES.lock().accounts.account(frontend.id)
 }
 
+/// Distinguish an anonymous guest from a human terminal when it requests a
+/// child UI4 shell. The child must keep the guest's captured launch principal.
+pub(super) fn guest_frontend_account(frontend: Frontend) -> Option<Option<trueos_crypto::AccountId>> {
+    let routes = ROUTES.lock();
+    routes.accounts.is_guest(frontend.id).then(|| routes.accounts.account(frontend.id))
+}
+
 /// Capture the frontend which owns this exact live native menu lease.
 pub(super) fn native_frontend_id(target: &MatrixTarget) -> Option<u64> {
     let lease = crate::shell3::matrix_target_slot_lease(target);
@@ -719,13 +726,15 @@ pub(super) fn native_frontend_id(target: &MatrixTarget) -> Option<u64> {
         .find(|route| route.lease == lease && route.native.is_some())?.frontend
 }
 
-/// Trusted authentication completion for one live human frontend. Guest-owned
-/// terminals retain their launch principal, including an anonymous principal.
+/// Trusted identity completion for one live human frontend, including the
+/// explicit SSH/local development policy. Guest-owned terminals retain their
+/// launch principal, including an anonymous principal.
 pub(super) fn bind_authenticated_frontend(frontend: u64, account: Option<trueos_crypto::AccountId>) -> bool {
     let mut routes = ROUTES.lock();
     if routes.accounts.is_guest(frontend)
         || !routes.routes.iter().any(|route| route.frontend == Some(frontend))
             && !routes.remote_frontends.iter().any(|entry| entry.0 == frontend)
+            && !routes.ui4_windows.iter().any(|entry| entry.0 == frontend)
     {
         return false;
     }

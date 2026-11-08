@@ -3,7 +3,8 @@ extern crate alloc;
 extern crate self as trueos_crypto;
 extern crate self as spin;
 extern crate self as trueos_time;
-pub struct AccountId;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AccountId(pub u64);
 pub use std::time::Duration;
 
 pub struct Mutex<T>(std::sync::Mutex<T>);
@@ -104,7 +105,15 @@ mod shell3 {
     #[derive(Default)]
     struct World {
         bound: bool,
+        boundary_events: Vec<&'static str>,
+        local_account: Option<crate::AccountId>,
+        local_account_initializations: usize,
+        local_account_reconciliations: usize,
+        requires_account_proof: bool,
+        login_challenges: usize,
+        guest_bindings: Vec<Option<crate::AccountId>>,
         launches: Vec<(String, Vec<u8>, u64, Option<String>)>,
+        launch_accounts: Vec<Option<crate::AccountId>>,
         launch_error: bool,
         errors: Vec<&'static str>,
         terminal_selected: bool,
@@ -131,11 +140,16 @@ mod shell3 {
         }
         pub(super) fn launch_bytes_with_script_for_account(
             archive: String, bytes: Vec<u8>, frontend: u64, script: Option<String>,
-            _: Option<crate::AccountId>,
+            access_account: Option<crate::AccountId>,
         ) -> Result<super::QueuedApp, &'static str> {
             super::WORLD.with_borrow_mut(|world| {
                 assert!(world.bound, "launch must follow frontend/window binding");
+                let prerequisite = if world.guest_bindings.is_empty() { "local-account" } else { "bind" };
+                assert_eq!(world.boundary_events.last(), Some(&prerequisite),
+                    "startup must follow frontend binding and its identity policy");
+                world.boundary_events.push("blueprint");
                 world.launches.push((archive, bytes, frontend, script));
+                world.launch_accounts.push(access_account);
                 if world.launch_error { return Err("vm-admission-failed"); }
                 Ok(super::QueuedApp { slot: "runtime-test".into() })
             })
@@ -145,14 +159,27 @@ mod shell3 {
         pub fn start(frontend: u64) -> Result<(), &'static str> {
             super::WORLD.with_borrow_mut(|world| {
                 assert!(world.bound, "native Link must follow frontend/window binding");
+                assert_eq!(world.boundary_events.last(), Some(&"local-account"),
+                    "native startup must follow local identity reconciliation");
+                world.boundary_events.push("link");
                 world.link_launches.push(frontend);
                 if world.link_error { Err("link-admission-failed") } else { Ok(()) }
             })
         }
     }
     mod tui {
+        pub fn bind_guest_frontend_account(_: u64, account: Option<crate::AccountId>) {
+            super::WORLD.with_borrow_mut(|world| {
+                world.guest_bindings.push(account);
+                world.local_account = account;
+                world.boundary_events.push("guest-account");
+            });
+        }
         pub fn bind_ui4_window(_: u64, _: crate::ui4::WindowId, _: u32) {
-            super::WORLD.with_borrow_mut(|world| world.bound = true);
+            super::WORLD.with_borrow_mut(|world| {
+                world.bound = true;
+                world.boundary_events.push("bind");
+            });
         }
     }
     struct MatrixSlots;
@@ -215,6 +242,7 @@ mod shell3 {
         rows_count: usize,
         pending_presentation: Option<(Snapshot, (), Vec<Vec<u8>>)>,
         pending_startup: Option<startup::Startup>,
+        local_account: Option<()>,
         show: Show,
         tui_frontend: u64,
         update_baseline: Snapshot,
@@ -235,6 +263,7 @@ mod shell3 {
                     bytes: vec![1, 2, 3], script: Some("ide example".into()),
                     access_account: None,
                 }),
+                local_account: Some(()),
                 show: Show::default(), tui_frontend: 33,
                 update_baseline: Snapshot, update_callbacks: vec![],
                 matrix_selection_dirty: false, active_matrix_slot: None,
@@ -242,6 +271,44 @@ mod shell3 {
             }
         }
         fn reconcile_matrix_selection(&mut self) {}
+        fn refresh_title_identity(&mut self) -> bool { false }
+        fn reconcile_local_account(&mut self) {
+            if self.show.window().is_none() || self.show.is_closing() || self.show.is_closed() {
+                return;
+            }
+            if self.local_account.is_none() {
+                return;
+            }
+            // Account selection and proof policy have their own crypto fixture.
+            // This boundary fixture observes when presentation invokes bootstrap.
+            let challenge_started = WORLD.with_borrow_mut(|world| {
+                assert!(world.bound);
+                assert!(matches!(world.boundary_events.last(),
+                    Some(&"bind") | Some(&"blueprint") | Some(&"link")),
+                    "local identity must follow binding or admitted startup");
+                world.boundary_events.push("local-account");
+                world.local_account_reconciliations += 1;
+                if world.requires_account_proof {
+                    if self.pending_startup.is_some() {
+                        return false;
+                    }
+                    world.login_challenges += 1;
+                    world.boundary_events.push("login");
+                    world.terminal_selected = true;
+                    return true;
+                }
+                if world.local_account.is_none() {
+                    world.local_account = Some(crate::AccountId(11));
+                    world.local_account_initializations += 1;
+                }
+                false
+            });
+            if challenge_started {
+                self.local_account = None;
+                self.active_matrix_slot = Some("login".into());
+                self.matrix_selection_dirty = true;
+            }
+        }
         fn font_scale_needed(&self) -> bool { false }
         fn requested_font_scale(&self) -> u32 { 1 }
         fn set(&mut self, columns: usize, rows: usize) { self.columns = columns; self.rows_count = rows; }
@@ -297,6 +364,10 @@ mod shell3 {
             assert!(shell.presentation_pending());
             assert!(!shell.show_is_closed());
             assert_eq!(launch_count(), 0);
+            WORLD.with_borrow(|world| {
+                assert!(world.boundary_events.is_empty());
+                assert_eq!(world.local_account_initializations, 0);
+            });
         }
         assert_eq!(shell.show.calls, 2, "one paint attempt per caller retry");
         run(shell.present()).unwrap();
@@ -309,8 +380,119 @@ mod shell3 {
             "/apps/common/ide/builds/1-7/4/example.bp".into(), vec![1, 2, 3],
             33, Some("ide example".into()),
         )]));
+        WORLD.with_borrow(|world| {
+            assert_eq!(world.boundary_events,
+                vec!["bind", "local-account", "blueprint", "local-account"]);
+            assert_eq!(world.local_account_initializations, 1);
+            assert_eq!(world.launch_accounts, vec![None],
+                "local identity must not replace a startup's captured account");
+        });
         run(shell.present()).unwrap();
         assert_eq!(launch_count(), 1);
+        WORLD.with_borrow(|world| {
+            assert_eq!(world.boundary_events,
+                vec!["bind", "local-account", "blueprint", "local-account", "bind", "local-account"]);
+            assert_eq!(world.local_account_reconciliations, 3);
+            assert_eq!(world.local_account_initializations, 1);
+        });
+    }
+
+    #[test]
+    fn local_shell_initializes_identity_without_a_startup_command() {
+        let mut shell = Shell3::fixture();
+        shell.pending_startup = None;
+        run(shell.present()).unwrap();
+        WORLD.with_borrow(|world| {
+            assert_eq!(world.boundary_events, vec!["bind", "local-account"]);
+            assert_eq!(world.local_account_initializations, 1);
+            assert_eq!(world.local_account, Some(crate::AccountId(11)));
+            assert!(world.launches.is_empty());
+        });
+    }
+
+    #[test]
+    fn startup_retains_its_captured_account_after_local_identity_initialization() {
+        let mut shell = Shell3::fixture();
+        let captured_account = crate::AccountId(29);
+        if let Some(startup::Startup::Blueprint { access_account, .. }) = &mut shell.pending_startup {
+            *access_account = Some(captured_account);
+        } else {
+            panic!("fixture must provide a Blueprint startup");
+        }
+        run(shell.present()).unwrap();
+        WORLD.with_borrow(|world| {
+            assert_eq!(world.local_account, Some(crate::AccountId(11)));
+            assert_eq!(world.launch_accounts, vec![Some(captured_account)]);
+            assert_eq!(world.boundary_events,
+                vec!["bind", "local-account", "blueprint", "local-account"]);
+        });
+    }
+
+    #[test]
+    fn guest_blueprint_startup_retains_anonymous_or_captured_identity_through_retries() {
+        for account in [None, Some(crate::AccountId(29))] {
+            let mut shell = Shell3::fixture();
+            if let Some(startup::Startup::Blueprint { access_account, .. }) = &mut shell.pending_startup {
+                *access_account = account;
+            }
+            let inherited = shell.pending_startup.as_ref().unwrap().guest_account();
+            assert_eq!(inherited, Some(account), "anonymous guests still require inherited binding");
+            shell.inherit_guest_account(inherited.unwrap());
+            assert!(shell.local_account.is_none());
+            shell.show.outcomes.extend([Err("copy-unavailable"), Ok(())]);
+            assert!(run(shell.present()).is_err());
+            assert_eq!(launch_count(), 0);
+            run(shell.present()).unwrap();
+            run(shell.present()).unwrap();
+            WORLD.with_borrow(|world| {
+                assert_eq!(world.guest_bindings, vec![account]);
+                assert_eq!(world.local_account, account);
+                assert_eq!(world.local_account_initializations, 0);
+                assert_eq!(world.local_account_reconciliations, 0);
+                assert_eq!(world.launch_accounts, vec![account]);
+                assert_eq!(world.boundary_events, vec!["guest-account", "bind", "blueprint", "bind"]);
+            });
+        }
+    }
+
+    #[test]
+    fn guest_window_without_startup_keeps_its_originating_principal() {
+        for account in [None, Some(crate::AccountId(29))] {
+            let mut shell = Shell3::fixture();
+            shell.pending_startup = None;
+            shell.inherit_guest_account(account);
+            run(shell.present()).unwrap();
+            WORLD.with_borrow(|world| {
+                assert_eq!(world.guest_bindings, vec![account]);
+                assert_eq!(world.local_account, account);
+                assert_eq!(world.local_account_initializations, 0);
+                assert_eq!(world.boundary_events, vec!["guest-account", "bind"]);
+                assert!(world.launches.is_empty());
+            });
+        }
+    }
+
+    #[test]
+    fn guest_sh3_command_opens_an_inherited_shell_without_starting_an_app() {
+        for account in [None, Some(crate::AccountId(29))] {
+            let mut shell = Shell3::fixture();
+            let startup = startup::Startup::GuestShell { access_account: account };
+            assert_eq!(startup.guest_account(), Some(account));
+            shell.inherit_guest_account(startup.guest_account().unwrap());
+            shell.pending_startup = Some(startup);
+            run(shell.present()).unwrap();
+            run(shell.present()).unwrap();
+            assert!(shell.pending_startup.is_none());
+            WORLD.with_borrow(|world| {
+                assert_eq!(world.guest_bindings, vec![account]);
+                assert_eq!(world.local_account, account);
+                assert_eq!(world.local_account_initializations, 0);
+                assert_eq!(world.local_account_reconciliations, 0);
+                assert!(world.launches.is_empty());
+                assert!(world.link_launches.is_empty());
+                assert_eq!(world.boundary_events, vec!["guest-account", "bind", "bind"]);
+            });
+        }
     }
 
     #[test]
@@ -342,6 +524,10 @@ mod shell3 {
             assert_eq!(shell.show.calls, 1);
             drop(shell);
             assert_eq!(launch_count(), 0);
+            WORLD.with_borrow(|world| {
+                assert!(world.boundary_events.is_empty());
+                assert_eq!(world.local_account_initializations, 0);
+            });
         }
     }
 
@@ -353,6 +539,11 @@ mod shell3 {
         assert!(shell.pending_startup.is_none());
         assert!(!shell.presentation_pending());
         assert_eq!(launch_count(), 0);
+        WORLD.with_borrow(|world| {
+            assert_eq!(world.boundary_events, vec!["bind"]);
+            assert_eq!(world.local_account_reconciliations, 0);
+            assert_eq!(world.local_account_initializations, 0);
+        });
     }
 
     #[test]
@@ -380,6 +571,36 @@ mod shell3 {
             source: crate::ui4::Ui4CursorSource { controller_id: 2, slot_id: 3, ep_target: 4 },
             anchor: (1800, 1000),
         }
+    }
+
+    #[test]
+    fn desktop_link_startup_keeps_human_local_account_policy() {
+        assert_eq!(link_startup().guest_account(), None);
+    }
+
+    #[test]
+    fn account_proof_challenge_remains_selected_after_desktop_link_startup() {
+        let mut shell = Shell3::fixture();
+        shell.pending_startup = Some(link_startup());
+        WORLD.with_borrow_mut(|world| world.requires_account_proof = true);
+        shell.show.outcomes.extend([Err("copy-unavailable"), Ok(())]);
+        assert!(run(shell.present()).is_err());
+        WORLD.with_borrow(|world| {
+            assert_eq!(world.login_challenges, 0);
+            assert!(world.boundary_events.is_empty());
+        });
+        run(shell.present()).unwrap();
+        assert_eq!(shell.active_matrix_slot.as_deref(), Some("login"));
+        WORLD.with_borrow(|world| {
+            assert_eq!(world.boundary_events,
+                vec!["bind", "local-account", "link", "local-account", "login"]);
+            assert_eq!(world.link_enters, vec!["link"]);
+            assert_eq!(world.login_challenges, 1);
+            assert_eq!(world.local_account, None, "challenge must not grant identity before proof");
+        });
+        run(shell.present()).unwrap();
+        assert_eq!(shell.active_matrix_slot.as_deref(), Some("login"));
+        WORLD.with_borrow(|world| assert_eq!(world.login_challenges, 1));
     }
 
     #[test]

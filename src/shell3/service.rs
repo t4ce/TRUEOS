@@ -534,6 +534,12 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
             ) {
                 Ok(index) => {
                     if let Some(shell) = owned_shells.get_mut(index) {
+                        if let Some(account) = startup.as_ref()
+                            .and_then(super::startup::Startup::guest_account)
+                            .or_else(|| window.as_ref().map(|window| window.access_account))
+                        {
+                            shell.inherit_guest_account(account);
+                        }
                         // A failed first paint must retain the admitted launch
                         // through the normal presentation retries.
                         if let Some(startup) = startup.as_ref() {
@@ -1017,6 +1023,7 @@ pub(crate) struct WindowGeometry {
 struct WindowSpawn {
     placement: WindowGeometry,
     ready: alloc::sync::Arc<core::sync::atomic::AtomicI64>,
+    access_account: Option<trueos_crypto::AccountId>,
 }
 static WINDOW_SPAWNS: spin::Mutex<Vec<(u8, alloc::sync::Arc<core::sync::atomic::AtomicI64>)>> =
     spin::Mutex::new(Vec::new());
@@ -1042,6 +1049,7 @@ pub(crate) fn blueprint_window_spawn(vm_id: u8, geometry: Option<WindowGeometry>
             Some(WindowSpawn {
                 placement: geometry,
                 ready: ready.clone(),
+                access_account: crate::access_key_db::principal_for_vm(vm_id),
             }),
         )
         .is_err()

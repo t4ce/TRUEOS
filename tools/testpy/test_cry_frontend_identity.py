@@ -119,6 +119,81 @@ mod identity_regressions {
         assert_eq!(crate::shell3::ssh_boot::account_without_proof("t4ce"),None);
         reset();
     }
+    #[test] fn local_shell_bootstrap_waits_for_a_restored_durable_account() {
+        use crate::shell3::{local_account::{Action,Bootstrap},local_account_disabled};
+        reset();
+        let mut local=Bootstrap::default();
+        let mut proof=local_account_disabled::Bootstrap::default();
+        assert_eq!(local_shell_account(),None);
+        assert!(local.poll(None).is_none());
+        assert!(proof.poll(None).is_none());
+        setup_root_key("t4ce").unwrap();
+        assert_eq!(local_shell_account(),None);
+        assert_eq!(crate::shell3::ssh_boot::local_account_without_proof(),None);
+        assert!(local.poll(None).is_none());
+        assert!(proof.poll(None).is_none());
+        let account=AccountId::new(712);
+        let (key,envelope)=saved("t4ce",account,MachineRole::User); reset();
+        unlock_persisted("t4ce",&key,&envelope).unwrap();
+        assert_eq!(local_shell_account(),Some(account));
+        assert!(matches!(local.poll(None),Some(Action::Bind(actual)) if actual==account));
+        assert!(matches!(proof.poll(None),Some(local_account_disabled::Action::Challenge)));
+        reset();
+    }
+    #[test] fn local_shell_development_identity_shares_the_bypass_without_a_fake_two_factor_session() {
+        use crate::shell3::local_account::{Action,Bootstrap};
+        let account=AccountId::new(712);
+        let (key,envelope)=saved("t4ce",account,MachineRole::User); reset();
+        unlock_persisted("t4ce",&key,&envelope).unwrap();
+        assert_eq!(crate::shell3::ssh_boot::local_account_without_proof(),Some(account));
+        assert_eq!(crate::shell3::ssh_boot_disabled::local_account_without_proof(),None);
+        let mut local=Bootstrap::default();
+        assert!(matches!(local.poll(None),Some(Action::Bind(actual)) if actual==account));
+        local.complete();
+        assert!(status().session.is_none());
+        for scope in [0,1,2,3] {
+            assert_eq!(authenticated_access_account(scope),None);
+            assert!(!has_authenticated_two_factor_session(scope));
+            assert_eq!(authenticated_history_identity(scope),None);
+        }
+        CRY_STATE.lock().durable=None;
+        assert_eq!(local_shell_account(),None);
+        assert_eq!(crate::shell3::ssh_boot::local_account_without_proof(),None);
+        reset();
+    }
+    #[test] fn local_shell_bootstrap_retries_until_completed_and_does_not_undo_signout() {
+        use crate::shell3::{local_account::{Action,Bootstrap},local_account_disabled};
+        saved("t4ce",AccountId::new(712),MachineRole::User);
+        let mut local=Bootstrap::default();
+        for _ in 0..2 {
+            assert!(matches!(local.poll(None),Some(Action::Bind(account)) if account==AccountId::new(712)));
+        }
+        local.complete();
+        assert!(local.poll(None).is_none());
+        let mut proof=local_account_disabled::Bootstrap::default();
+        for _ in 0..2 {
+            assert!(matches!(proof.poll(None),Some(local_account_disabled::Action::Challenge)));
+        }
+        proof.complete();
+        assert!(proof.poll(None).is_none());
+        reset();
+    }
+    #[test] fn local_shell_bootstrap_never_overrides_an_existing_frontend_identity() {
+        use crate::shell3::{local_account::Bootstrap,local_account_disabled};
+        reset();
+        let mut local=Bootstrap::default();
+        let mut proof=local_account_disabled::Bootstrap::default();
+        let current=Some(AccountId::new(993));
+        assert!(local.poll(current).is_none());
+        assert!(proof.poll(current).is_none());
+        saved("t4ce",AccountId::new(712),MachineRole::User);
+        assert!(local.poll(None).is_none());
+        assert!(proof.poll(None).is_none());
+        let mut already_bound=Bootstrap::default();
+        assert!(already_bound.poll(Some(AccountId::new(712))).is_none());
+        assert!(already_bound.poll(None).is_none());
+        reset();
+    }
     #[test] fn cry_session_opens_only_after_the_same_proof_commits() {
         reset(); let report=enrolled("t4ce");
         assert_eq!(authenticated_access_account(1),None);
@@ -127,17 +202,161 @@ mod identity_regressions {
         assert_eq!(committed.account,report.account); assert_eq!(authenticated_access_account(1),Some(report.account));
         assert_eq!(authenticated_access_account(2),None); reset();
     }
+    #[test] fn account_username_matches_only_the_exact_loaded_credential() {
+        reset(); assert_eq!(account_username(AccountId::ROOT),None);
+        saved("t4ce",AccountId::new(712),MachineRole::User);
+        assert_eq!(account_username(AccountId::new(712)).as_deref(),Some("t4ce"));
+        assert_eq!(account_username(AccountId::new(993)),None);
+        assert_eq!(account_username(AccountId::ROOT),None);
+        CRY_STATE.lock().credential=None;
+        assert_eq!(account_username(AccountId::new(712)),None);
+        saved("legacy",AccountId::ROOT,MachineRole::Root);
+        assert_eq!(account_username(AccountId::ROOT).as_deref(),Some("legacy")); reset();
+    }
+    fn title_text(title:&crate::shell3::ShellTitle,time:&str)->String {
+        title.left(time).iter().map(|run|run.text.as_str()).collect()
+    }
+    #[test] fn bound_shell_title_uses_the_group_color_and_preserves_identity_across_clock_changes() {
+        saved("t4ce",AccountId::new(712),MachineRole::User);
+        let mut title=crate::shell3::ShellTitle::default();
+        assert!(title.refresh(Some(AccountId::new(712))));
+        assert_eq!(title_text(&title,"17:51"),"TrueOS § 17:51 T4ce");
+        let runs=title.left("17:51");
+        let username=runs.iter().find(|run|run.text.trim()=="T4ce").unwrap();
+        assert_eq!(username.color,Some(crate::shell3::RgbaColor::Cyan));
+        assert!(!runs[0].text.contains("T4ce")); assert_eq!(runs[0].color,None);
+        assert!(!title.refresh(Some(AccountId::new(712))));
+        assert_eq!(title_text(&title,"17:52"),"TrueOS § 17:52 T4ce"); reset();
+    }
+    #[test] fn anonymous_and_unknown_shell_titles_never_borrow_the_loaded_username() {
+        saved("t4ce",AccountId::new(712),MachineRole::User);
+        let mut anonymous=crate::shell3::ShellTitle::default();
+        anonymous.refresh(None);
+        assert_eq!(title_text(&anonymous,"17:51"),"TrueOS § 17:51");
+        let mut unknown=crate::shell3::ShellTitle::default();
+        unknown.refresh(Some(AccountId::new(993)));
+        assert_eq!(title_text(&unknown,"17:51"),"TrueOS § 17:51"); reset();
+    }
+    #[test] fn shell_title_waits_for_its_bound_accounts_name_to_be_restored() {
+        reset(); let mut title=crate::shell3::ShellTitle::default();
+        title.refresh(Some(AccountId::new(712)));
+        assert_eq!(title_text(&title,"17:51"),"TrueOS § 17:51");
+        saved("t4ce",AccountId::new(712),MachineRole::User);
+        assert!(title.refresh(Some(AccountId::new(712))));
+        assert_eq!(title_text(&title,"17:51"),"TrueOS § 17:51 T4ce"); reset();
+    }
+    #[test] fn shell_titles_keep_separate_names_until_their_own_binding_changes() {
+        saved("t4ce",AccountId::new(712),MachineRole::User);
+        let mut first=crate::shell3::ShellTitle::default();
+        let mut second=crate::shell3::ShellTitle::default();
+        first.refresh(Some(AccountId::new(712)));
+        saved("bob",AccountId::new(993),MachineRole::User);
+        second.refresh(Some(AccountId::new(993)));
+        assert!(!first.refresh(Some(AccountId::new(712))));
+        assert_eq!(title_text(&first,"17:51"),"TrueOS § 17:51 T4ce");
+        assert_eq!(title_text(&second,"17:51"),"TrueOS § 17:51 Bob");
+        assert!(first.refresh(None));
+        assert_eq!(title_text(&first,"17:51"),"TrueOS § 17:51");
+        first.refresh(Some(AccountId::new(712)));
+        assert_eq!(title_text(&first,"17:51"),"TrueOS § 17:51");
+        assert!(first.refresh(Some(AccountId::new(993))));
+        assert_eq!(title_text(&first,"17:51"),"TrueOS § 17:51 Bob"); reset();
+    }
 }
 '''
 
 
 REMOTE_HARNESS = r"""
+// The protected-VM classifier is the only policy service needed by the
+// production frontend binding function. VM 7 represents a protected app.
+mod access_key_db { pub fn is_protected_vm(vm:u8)->bool { vm==7 } }
 mod net {pub mod adapter {use alloc::{boxed::Box,collections::VecDeque,vec::Vec};use core::sync::atomic::{AtomicU32,Ordering};
 @NET_QUEUE@
 @NET_QUEUE_IMPL@
 }}
 mod shell3 {
  pub use system::cry;
+ #[derive(Clone,Copy,Debug,PartialEq,Eq)] pub enum RgbaColor { Cyan }
+ pub const OPERATOR:char='§';
+ #[path="__METAFMTSTR__"] mod metafmtstr;
+ pub use metafmtstr::MetaFmtStr;
+ #[path="__TITLE__"] mod title;
+ #[derive(Default)] pub(crate) struct ShellTitle(title::Identity);
+ impl ShellTitle {
+  pub(crate) fn refresh(&mut self,account:Option<trueos_crypto::AccountId>)->bool { self.0.refresh(account) }
+  pub(crate) fn left(&self,time:&str)->alloc::vec::Vec<MetaFmtStr> { self.0.left(time) }
+ }
+ pub(crate) mod tui {
+  use alloc::vec::Vec;
+  use crate::accounts;
+  struct Native { active:bool }
+  // Rendering, window handles, and transport output are hardware boundaries;
+  // retain only the fields consumed by the actual binding and active checks.
+  struct Route { frontend:Option<u64>, vm:Option<u8>, owner:Option<()>, native:Option<Native> }
+  impl Route {
+@ROUTE_ACTIVE@
+  }
+  struct Registry {
+   routes:Vec<Route>, ui4_windows:Vec<(u64,(),u32)>,
+   remote_frontends:Vec<(u64,())>, accounts:accounts::Bindings,
+  }
+  impl Registry {
+   const fn new()->Self { Self { routes:Vec::new(),ui4_windows:Vec::new(),
+    remote_frontends:Vec::new(),accounts:accounts::Bindings::new() } }
+  }
+  static ROUTES:spin::Mutex<Registry>=spin::Mutex::new(Registry::new());
+@BIND_AUTHENTICATED_FRONTEND@
+  #[cfg(test)] mod tests {
+   use super::*;
+   use trueos_crypto::AccountId;
+   const ALICE:AccountId=AccountId::new(712);
+   const BOB:AccountId=AccountId::new(993);
+   fn reset(){*ROUTES.lock()=Registry::new();}
+   fn window(frontend:u64){ROUTES.lock().ui4_windows.push((frontend,(),2));}
+   #[test] fn production_binding_accepts_a_registered_blank_local_window() {
+    reset();window(10);
+    assert!(ROUTES.lock().routes.is_empty());
+    assert!(bind_authenticated_frontend(10,Some(ALICE)));
+    assert_eq!(ROUTES.lock().accounts.account(10),Some(ALICE));
+    assert_eq!(ROUTES.lock().accounts.account(11),None);
+    assert!(bind_authenticated_frontend(10,None));
+    assert_eq!(ROUTES.lock().accounts.account(10),None);reset();
+   }
+   #[test] fn production_binding_rejects_unknown_and_detached_frontends() {
+    reset();
+    assert!(!bind_authenticated_frontend(10,Some(ALICE)));
+    window(10);assert!(bind_authenticated_frontend(10,Some(ALICE)));
+    {let mut routes=ROUTES.lock();routes.ui4_windows.clear();routes.accounts.remove(10);}
+    assert!(!bind_authenticated_frontend(10,Some(BOB)));
+    assert_eq!(ROUTES.lock().accounts.account(10),None);reset();
+   }
+   #[test] fn production_binding_cannot_upgrade_or_replace_a_guest_window() {
+    for account in [None,Some(ALICE)] {
+     reset();window(10);ROUTES.lock().accounts.bind_guest(10,account);
+     assert!(!bind_authenticated_frontend(10,Some(BOB)));
+     assert!(!bind_authenticated_frontend(10,None));
+     assert_eq!(ROUTES.lock().accounts.account(10),account);
+    }
+    reset();
+   }
+   #[test] fn production_binding_preserves_an_active_protected_apps_principal() {
+    reset();window(10);assert!(bind_authenticated_frontend(10,Some(ALICE)));
+    ROUTES.lock().routes.push(Route{frontend:Some(10),vm:Some(7),owner:Some(()),native:None});
+    assert!(bind_authenticated_frontend(10,Some(ALICE)));
+    assert!(!bind_authenticated_frontend(10,Some(BOB)));
+    assert!(!bind_authenticated_frontend(10,None));
+    assert_eq!(ROUTES.lock().accounts.account(10),Some(ALICE));
+    // A protected app on another frontend does not hold this window's identity.
+    window(11);assert!(bind_authenticated_frontend(11,Some(BOB)));reset();
+   }
+   #[test] fn production_binding_allows_switching_when_the_protected_route_is_parked() {
+    reset();window(10);assert!(bind_authenticated_frontend(10,Some(ALICE)));
+    ROUTES.lock().routes.push(Route{frontend:Some(10),vm:Some(7),owner:None,native:None});
+    assert!(bind_authenticated_frontend(10,Some(BOB)));
+    assert_eq!(ROUTES.lock().accounts.account(10),Some(BOB));reset();
+   }
+  }
+ }
  pub mod system { pub mod cry {
   use crate::crypt::{self,CryError};use alloc::{string::String,vec::Vec};use zeroize::Zeroizing;
   static MODE:core::sync::atomic::AtomicU32=core::sync::atomic::AtomicU32::new(0);
@@ -188,23 +407,30 @@ static AUTH_REQUESTS:spin::Once<&'static crate::net::adapter::NetQueue<AuthReque
 def production_remote_harness():
     from test_sdk_metadata_v2 import item
     command=(ROOT/'src/shell3/system/cry.rs').read_text();ssh=(ROOT/'src/shell3/ssh.rs').read_text();queue=(ROOT/'src/net/adapter.rs').read_text()
+    tui=(ROOT/'src/shell3/tui.rs').read_text()
     fields={'NET_QUEUE':item(queue,'pub struct NetQueue<T>'),'NET_QUEUE_IMPL':item(queue,'impl<T> NetQueue<T>'),
+      'ROUTE_ACTIVE':item(tui,'fn active(&self)'),'BIND_AUTHENTICATED_FRONTEND':item(tui,'pub(super) fn bind_authenticated_frontend('),
       'PENDING':re.search(r'struct PendingProof\(u64\);',command)[0],
       'PENDING_DROP':item(command,'impl Drop for PendingProof'),'ERROR_TEXT':item(command,'pub(crate) fn error_text('),'REMOTE_LOGIN':item(command,'pub(crate) async fn remote_login('),
       'OUTCOME':'#[derive(Clone,Copy)]\n'+item(ssh,'enum AuthOutcome'),'COMPLETION':item(ssh,'pub(super) struct AuthCompletion'),'REQUEST':item(ssh,'pub(super) struct AuthRequest'),
       'INIT':item(ssh,'pub(super) fn init()'),'SERVICE_AUTH':item(ssh,'pub(super) async fn service_auth()')}
-    text=REMOTE_HARNESS
+    text=REMOTE_HARNESS.replace('__METAFMTSTR__',str(ROOT/'src/shell3/metafmtstr.rs')).replace('__TITLE__',str(ROOT/'src/shell3/title.rs'))
     for key,value in fields.items():text=text.replace('@'+key+'@',value)
     boot=(ROOT/'src/shell3/ssh_boot.rs').read_text()
     # Exercise both settings regardless of the currently selected development policy.
     policy=re.sub(r'= (?:true|false);', '= true;', re.search(
         r'pub\(super\) const DEV_SKIP_SSH_ACCOUNT_PROOF: bool = (?:true|false);',boot)[0])
     policy+='\n'+item(boot,'pub(super) fn account_without_proof(')
+    policy+='\n'+item(boot,'pub(super) fn local_account_without_proof(')
     policy=policy.replace('pub(super)', 'pub(crate)')
     disabled=policy.replace('DEV_SKIP_SSH_ACCOUNT_PROOF: bool = true;', 'DEV_SKIP_SSH_ACCOUNT_PROOF: bool = false;')
+    local=(ROOT/'src/shell3/local_account.rs').read_text().replace('pub(super)', 'pub(crate)')
+    local_disabled=local.replace('super::ssh_boot', 'super::ssh_boot_disabled')
     text=text.replace('pub(crate) mod ssh {',
         'pub(crate) mod ssh_boot {\n'+policy+'\n}\n'
         'pub(crate) mod ssh_boot_disabled {\n'+disabled+'\n}\n'
+        'pub(crate) mod local_account {\n'+local+'\n}\n'
+        'pub(crate) mod local_account_disabled {\n'+local_disabled+'\n}\n'
         'pub(crate) mod ssh {')
     return text
 
@@ -251,7 +477,7 @@ trueos-time={{path={json.dumps(str(ROOT/'crates/trueos-executor/embassy-time'))}
         with (sunset/'Cargo.toml').open('a') as stream: stream.write('\n[workspace]\n')
         run('sunset-encrypted-auth',cargo+['test','--offline','--manifest-path',str(sunset/'Cargo.toml'),'--target','x86_64-unknown-linux-gnu','--features','std','--lib','native_protocol_tests','--','--test-threads=1'])
     paths=['src/crypt.rs','src/shell3/tui/accounts.rs','vendor/sunset/src/event.rs','vendor/sunset/src/native_protocol_tests.rs','src/shell3/ssh.rs','src/shell3/tui.rs','src/shell3/admin.rs','src/shell3/tty.rs','src/shell3/net.rs','src/shell3/system/cry.rs','src/net/adapter.rs','tools/testpy/fixtures/remote_cry_tests.rs','tools/testpy/test_cry_frontend_identity.py']
-    paths.append('src/shell3/ssh_boot.rs')
+    paths.extend(['src/shell3/ssh_boot.rs','src/shell3/local_account.rs','src/shell3/title.rs','src/shell3/metafmtstr.rs'])
     sources=[{'path':str(ROOT/p),'sha256':hashlib.sha256((ROOT/p).read_bytes()).hexdigest()} for p in paths]
     (output/'receipt.json').write_text(json.dumps({'scope':__doc__,'checks':checks,'sources':sources},indent=2)+'\n')
     print(output/'receipt.json')
