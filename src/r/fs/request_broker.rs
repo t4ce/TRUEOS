@@ -213,6 +213,13 @@ pub(crate) fn request_release_vm(vm_id: u8) -> usize {
 }
 
 enum Request {
+    PreparePrivateAppFiles {
+        id: u64,
+        root: String,
+        archive: String,
+        account: Option<trueos_crypto::AccountId>,
+        completion: Completion<()>,
+    },
     PrepareCodexSqlite {
         id: u64,
         root: String,
@@ -356,6 +363,7 @@ impl Request {
             | Self::WriteFileFinish { .. }
             | Self::WriteFileAbort { .. }
             | Self::PrepareCodexSqlite { .. }
+            | Self::PreparePrivateAppFiles { .. }
             | Self::PrepareVolatileFiles { .. }
             | Self::HtmlTree { .. }
             | Self::JsonAll { .. } => None,
@@ -373,6 +381,7 @@ impl Request {
 
     fn metadata(&self) -> (u64, &'static str) {
         match self {
+            Self::PreparePrivateAppFiles { id, .. } => (*id, "prepare-private-app-files"),
             Self::PrepareVolatileFiles { id, .. } => (*id, "prepare-volatile-files"),
             Self::PrepareCodexSqlite { id, .. } => (*id, "prepare-codex-sqlite"),
             Self::ReadFile { id, .. } => (*id, "read-file"),
@@ -480,6 +489,14 @@ pub(crate) fn prepare_codex_sqlite(
     account: Option<trueos_crypto::AccountId>,
 ) -> core::result::Result<FsResult<()>, BlockingRequestError> {
     submit(|id, completion| Request::PrepareCodexSqlite { id, root, archive, account, completion })
+}
+
+pub(crate) fn prepare_private_app_files(
+    root: String,
+    archive: String,
+    account: Option<trueos_crypto::AccountId>,
+) -> core::result::Result<FsResult<()>, BlockingRequestError> {
+    submit(|id, completion| Request::PreparePrivateAppFiles { id, root, archive, account, completion })
 }
 
 pub fn read_file_len(
@@ -738,6 +755,10 @@ async fn process_request(owned: OwnedRequest) {
         crate::access_key_db::audit_path(vm, disk, path, operation, create).await;
     }
     match request {
+        Request::PreparePrivateAppFiles { id, root, archive, account, completion } => {
+            let result = crate::access_key_workspace::prepare_persistent(&archive, &root, account).await;
+            finish(id, "prepare-private-app-files", completion, result, &mut progress);
+        }
         Request::PrepareCodexSqlite { id, root, archive, account, completion } => {
             let result = crate::access_key_workspace::prepare_sqlite(&archive, &root, account).await;
             finish(id, "prepare-codex-sqlite", completion, result, &mut progress);

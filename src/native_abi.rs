@@ -230,6 +230,60 @@ pub unsafe extern "C" fn sys_rand(recv_buf: *mut u32, words: usize) {
     }
 }
 
+/// Fill writable storage with kernel CSPRNG bytes. Returns zero on success,
+/// -22 for invalid storage, or -5 when entropy is unavailable. Valid output is
+/// cleared before use and on every provider failure, including partial fills.
+/// Native stackful threads run in the host, so only Hull guest contexts may
+/// execute the VM-call transport.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_random_bytes_v1(out: *mut u8, len: usize) -> i32 {
+    if len == 0 {
+        return 0;
+    }
+    if out.is_null() || len > isize::MAX as usize {
+        return -TRUEOS_EINVAL;
+    }
+    let guest = crate::hv::current_hull_guest_context_vm_id().is_some();
+    let host = if guest {
+        out
+    } else {
+        let Some(host) = abi_host_ptr(out, len) else {
+            return -TRUEOS_EINVAL;
+        };
+        host
+    };
+    // Callers may provide uninitialized allocation storage.
+    unsafe { ptr::write_bytes(host, 0, len) };
+    let bytes = unsafe { slice::from_raw_parts_mut(host, len) };
+    if guest {
+        let mut chunk = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+        for destination in bytes.chunks_mut(chunk.len()) {
+            let want = destination.len();
+            let (status, got, reported) = trueos_vm::vmcall::call_with_payload_reported_len(
+                trueos_vm::vmcall::OP_RAND_BYTES,
+                want as u64,
+                0,
+                &[],
+                &mut chunk[..want],
+            );
+            if status != trueos_vm::vmcall::STATUS_OK || got != want as u64 || reported != want {
+                bytes.fill(0);
+                chunk.fill(0);
+                return -TRUEOS_EIO;
+            }
+            destination.copy_from_slice(&chunk[..want]);
+        }
+        chunk.fill(0);
+        return 0;
+    }
+    if crate::tyche::fill_bytes(bytes) {
+        0
+    } else {
+        bytes.fill(0);
+        -TRUEOS_EIO
+    }
+}
+
 fn child_vmx_stdio() -> bool {
     crate::r::io::env::var("TRUEOS_MCP_STDIO").as_deref() == Some("1")
 }

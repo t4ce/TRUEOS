@@ -57,6 +57,16 @@ pub(crate) fn grant_owned_workspace(
 
 static OWNED_WORKSPACES: Mutex<Vec<(ContainerId, AccountId, RecordKey)>> = Mutex::new(Vec::new());
 
+/// Host environment attestations require a completed durable provisioning,
+/// including direct staging/restore callers that bypass normal preparation.
+pub(crate) fn owned_workspace_prepared(archive: &str, workspace: &str, account: Option<AccountId>) -> bool {
+    let Some(account) = account else { return false; };
+    let Some(container) = container_for_workspace(archive, workspace) else { return false; };
+    OWNED_WORKSPACES.lock().iter().any(|(id, owner, key)| {
+        id == &container && *owner == account && *key != RecordKey::Ffa
+    })
+}
+
 pub(crate) fn workspace_for_vm(vm_id: u8) -> Option<String> {
     workspace_for_vm_at(vm_id, principal_epoch(vm_id)?)
 }

@@ -1058,6 +1058,10 @@ unsafe extern "C" {
     pub safe fn trueos_cabi_poll_once();
     pub safe fn trueos_cabi_sleep_ms(ms: u64);
     pub safe fn trueos_cabi_thread_current_id() -> usize;
+    /// Fill writable storage with kernel CSPRNG bytes; zero means success.
+    /// Returns -22 for invalid storage or -5 for unavailable entropy, clearing
+    /// valid output on provider failure. Available on guest and native threads.
+    pub fn trueos_cabi_random_bytes_v1(out: *mut u8, len: usize) -> i32;
     /// Create an independent stackful thread; zero reports successful admission.
     /// The returned handle must be consumed once by join or detach.
     pub fn trueos_cabi_thread_spawn(

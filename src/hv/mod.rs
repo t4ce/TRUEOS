@@ -3191,6 +3191,10 @@ fn prepare_blueprint_launch_on_lane(
         crate::r::io::kfs::prepare_volatile_files(app_fs_root.as_str(), pending.archive.as_str(), pending.access_account)
             .map_err(|err| alloc::format!("Codex RAM files preparation failed: {:?}", err))?;
     }
+    if crate::hv::blueprint::uses_private_persistent_files(&pending.archive) {
+        crate::r::io::kfs::prepare_private_app_files(&app_fs_root, &pending.archive, pending.access_account)
+            .map_err(|err| alloc::format!("private app owner admission failed: {:?}", err))?;
+    }
     if crate::hv::blueprint::codex_sqlite_service_requested(
         &pending.archive, &pending.app_args, pending.launch_script.as_deref(),
     ).map_err(AllocString::from)? {
@@ -3379,6 +3383,18 @@ pub fn stage_blueprint_launch(
         console_input_since_ms: None,
         exit_reason: None,
     };
+    // A caller's environment cannot assert successful private provisioning.
+    // Only this host-owned archive policy supplies the marker, after the
+    // fallible owner/key preparation completed before guest entry.
+    process_context.vars.remove("TRUEOS_PRIVATE_APP_ROOT");
+    if crate::hv::blueprint::uses_private_persistent_files(&state.archive) {
+        if !crate::access_key_db::owned_workspace_prepared(&state.archive, &app_fs_root, state.access_account) {
+            clear_blueprint_child_template(vm_id);
+            return Err(StartError::AccessDenied);
+        }
+        process_context.vars.insert(AllocString::from("TRUEOS_PRIVATE_APP_ROOT"),
+            alloc::format!("/{}", app_fs_root.trim_matches('/')));
+    }
     if state.timing.request != 0 {
         process_context.vars.insert(AllocString::from("TRUEOS_STARTUP_REQUEST"), alloc::format!("{}", state.timing.request));
     }

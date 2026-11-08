@@ -21,7 +21,7 @@ macro_rules! log_warn { (target:$t:expr;$($a:tt)*) => {{ let _=format_args!($($a
 pub(crate) use log_warn;
 mod allcaps { pub mod hv { pub const VM_ID_LIMIT:usize=4; } }
 mod allocators { pub fn with_host_alloc_domain_strong<T>(f:impl FnOnce()->T)->T { f() } }
-mod hv { pub mod blueprint { pub fn app_fs_root_for_archive(a:&str,_:&[u8])->String { format!("apps/{}",a.strip_suffix(".bp").unwrap_or(a)) } } }
+mod hv { pub mod blueprint { pub fn app_fs_root_for_archive(a:&str,_:&[u8])->String { format!("apps/{}",a.strip_suffix(".bp").unwrap_or(a)) } pub fn uses_private_persistent_files(a:&str)->bool{matches!(a,"xerj.bp"|"xerj-service.bp")} } }
 mod wait {
  pub struct EmbassySpinRawMutex(spin::Mutex<()>);
  unsafe impl embassy_sync::blocking_mutex::raw::RawMutex for EmbassySpinRawMutex {
@@ -57,7 +57,7 @@ mod r {
    pub async fn file_out_async(_:DeviceHandle,path:&str)->Result<Option<Vec<u8>>,Error>{EVENTS.lock().unwrap().push("read");if FAIL_READ.swap(false,Ordering::SeqCst){return Err(Error::Io)}Ok(FILES.lock().unwrap().get(path).cloned())}
    pub async fn dir_create_all_async(_:DeviceHandle,_:&str)->Result<bool,Error>{EVENTS.lock().unwrap().push("mkdir");Ok(true)}
    pub async fn file_in_typed_checked_async(_:DeviceHandle,path:&str,bytes:&[u8],_:ContentTypeId,create_new:bool,expected:Option<[u8;32]>,_:bool)->Result<bool,CheckedWriteError>{
-    EVENTS.lock().unwrap().push("publish");if FAIL_PUBLISH.swap(false,Ordering::SeqCst){return Err(CheckedWriteError::Device(Error::Io))}
+    EVENTS.lock().unwrap().push("publish");if FAIL_PUBLISH.swap(false,Ordering::SeqCst)||path.ends_with("/.trueos-private-root")&&FAIL_MARKER.swap(false,Ordering::SeqCst){return Err(CheckedWriteError::Device(Error::Io))}
     let mut fs=FILES.lock().unwrap();let old=fs.get(path);
     if create_new&&old.is_some(){return Err(CheckedWriteError::AlreadyExists)}
     if let Some(expected)=expected{if old.map(|b|<[u8;32]>::from(Sha256::digest(b)))!=Some(expected){return Err(CheckedWriteError::Conflict)}}
@@ -74,7 +74,7 @@ mod r {
    }
   }
   pub mod volatile_files {
-   #[derive(Debug)]pub struct SeedStats;
+   #[derive(Debug,Default)]pub struct SeedStats;
    pub async fn prepare(_:&str)->crate::r::io::kfs::Result<SeedStats>{crate::EVENTS.lock().unwrap().push("seed");if crate::FAIL_SEED.swap(false,crate::Ordering::SeqCst){Err(crate::r::io::kfs::FsError::NoSpace)}else{Ok(SeedStats)}}
    pub async fn stamp_workspace_key(_:&str,_:trueos_fs::RecordKey)->crate::r::io::kfs::Result<()>{crate::EVENTS.lock().unwrap().push("ram-stamp");Ok(())}
   }
@@ -87,10 +87,11 @@ static ENTROPY:AtomicUsize=AtomicUsize::new(1);
 static FAIL_ENTROPY:AtomicBool=AtomicBool::new(false);
 static FAIL_READ:AtomicBool=AtomicBool::new(false);
 static FAIL_PUBLISH:AtomicBool=AtomicBool::new(false);
+static FAIL_MARKER:AtomicBool=AtomicBool::new(false);
 static FAIL_STAMP:AtomicBool=AtomicBool::new(false);
 static FAIL_SEED:AtomicBool=AtomicBool::new(false);
 fn run<F:std::future::Future>(f:F)->F::Output{let mut f=std::pin::pin!(f);let mut cx=std::task::Context::from_waker(std::task::Waker::noop());loop{if let std::task::Poll::Ready(x)=f.as_mut().poll(&mut cx){return x}}}
-fn reset(){FILES.lock().unwrap().clear();KEYS.lock().unwrap().clear();EVENTS.lock().unwrap().clear();for flag in [&FAIL_ENTROPY,&FAIL_READ,&FAIL_PUBLISH,&FAIL_STAMP,&FAIL_SEED]{flag.store(false,Ordering::SeqCst)}access_key_db::configure_policy(|db|*db=trueos_fs::access::AccessKeyDb::new());for vm in 0..4{access_key_db::clear_vm(vm)}}
+fn reset(){FILES.lock().unwrap().clear();KEYS.lock().unwrap().clear();EVENTS.lock().unwrap().clear();for flag in [&FAIL_ENTROPY,&FAIL_READ,&FAIL_PUBLISH,&FAIL_MARKER,&FAIL_STAMP,&FAIL_SEED]{flag.store(false,Ordering::SeqCst)}access_key_db::configure_policy(|db|*db=trueos_fs::access::AccessKeyDb::new());for vm in 0..4{access_key_db::clear_vm(vm)}}
 const ALICE:AccountId=AccountId::new(1);const BOB:AccountId=AccountId::new(2);
 fn prepare(root:&str,account:Option<AccountId>)->r::io::kfs::Result<r::fs::volatile_files::SeedStats>{run(access_key_workspace::prepare("codex.bp",root,account))}
 fn bound_key(root:&str)->RecordKey{KEYS.lock().unwrap()[root]}
@@ -100,6 +101,39 @@ fn bound_key(root:&str)->RecordKey{KEYS.lock().unwrap()[root]}
 #[test]fn publication_failure_never_stamps_or_grants(){reset();FAIL_PUBLISH.store(true,Ordering::SeqCst);let root="apps/codex_pubfail";assert!(prepare(root,Some(ALICE)).is_err());assert!(KEYS.lock().unwrap().is_empty());assert!(FILES.lock().unwrap().is_empty());assert!(!EVENTS.lock().unwrap().contains(&"seed"));}
 #[test]fn failed_stamp_or_ram_preparation_never_grants_and_can_retry(){reset();let root="apps/codex_stampfail";FAIL_STAMP.store(true,Ordering::SeqCst);assert!(prepare(root,Some(ALICE)).is_err());let image=FILES.lock().unwrap()[access_key_workspace::CONFIGURATION_DB_PATH].clone();FAIL_SEED.store(true,Ordering::SeqCst);assert!(prepare(root,Some(ALICE)).is_err());let key=bound_key(root);access_key_db::bind_launch(0,"codex.bp",root,Some(ALICE));assert!(access_key_db::authorize_protected_workspace(0,key).is_err());prepare(root,Some(ALICE)).unwrap();assert_eq!(FILES.lock().unwrap()[access_key_workspace::CONFIGURATION_DB_PATH],image);assert_eq!(access_key_db::authorize_protected_workspace(0,key),Ok(()));}
 #[test]fn read_or_entropy_failure_cannot_initialize_a_new_catalog(){reset();FAIL_READ.store(true,Ordering::SeqCst);assert!(prepare("apps/codex_readfail",Some(ALICE)).is_err());FAIL_ENTROPY.store(true,Ordering::SeqCst);assert!(prepare("apps/codex_rngfail",Some(ALICE)).is_err());assert!(FILES.lock().unwrap().is_empty());assert!(KEYS.lock().unwrap().is_empty());}
+#[test]fn persistent_apps_publish_private_marker_without_ram_overlay(){
+ reset();let root="apps/xerj_persistent";
+ assert!(!access_key_db::owned_workspace_prepared("xerj.bp",root,Some(ALICE)));
+ run(access_key_workspace::prepare_persistent("xerj.bp",root,Some(ALICE))).unwrap();
+ assert_ne!(bound_key(root),RecordKey::Ffa);
+ assert_eq!(FILES.lock().unwrap()[&format!("{root}/.trueos-private-root")],b"trueos-private-workspace-v1\n");
+ assert_eq!(*EVENTS.lock().unwrap(),vec!["read","mkdir","publish","read","mkdir","stamp","publish"]);
+ assert!(access_key_db::owned_workspace_prepared("xerj.bp",root,Some(ALICE)));
+ assert!(!access_key_db::owned_workspace_prepared("xerj.bp",root,None));
+ assert!(!access_key_db::owned_workspace_prepared("xerj.bp",root,Some(BOB)));
+ access_key_db::bind_launch(0,"xerj.bp",root,Some(ALICE));
+ assert_eq!(access_key_db::authorize_protected_workspace(0,bound_key(root)),Ok(()));
+}
+#[test]fn persistent_marker_failure_never_grants_and_retry_reuses_key(){
+ reset();let root="apps/xerj_marker_failure";FAIL_MARKER.store(true,Ordering::SeqCst);
+ assert!(run(access_key_workspace::prepare_persistent("xerj.bp",root,Some(ALICE))).is_err());
+ let key=bound_key(root);let image=FILES.lock().unwrap()[access_key_workspace::CONFIGURATION_DB_PATH].clone();
+ assert!(!access_key_db::owned_workspace_prepared("xerj.bp",root,Some(ALICE)));
+ access_key_db::bind_launch(0,"xerj.bp",root,Some(ALICE));assert!(access_key_db::authorize_protected_workspace(0,key).is_err());
+ run(access_key_workspace::prepare_persistent("xerj.bp",root,Some(ALICE))).unwrap();
+ assert_eq!(bound_key(root),key);assert_eq!(FILES.lock().unwrap()[access_key_workspace::CONFIGURATION_DB_PATH],image);
+ assert_eq!(access_key_db::authorize_protected_workspace(0,key),Ok(()));
+ assert!(!EVENTS.lock().unwrap().contains(&"seed"));
+}
+#[test]fn persistent_owner_and_app_checks_precede_any_secret_write(){
+ reset();assert!(run(access_key_workspace::prepare_persistent("other.bp","apps/other",Some(ALICE))).is_err());
+ assert!(run(access_key_workspace::prepare_persistent("xerj.bp","apps/xerj_anon",None)).is_err());assert!(EVENTS.lock().unwrap().is_empty());
+ let root="apps/xerj-service_persistent_owner";
+ run(access_key_workspace::prepare_persistent("xerj-service.bp",root,Some(ALICE))).unwrap();
+ let before=FILES.lock().unwrap().clone();EVENTS.lock().unwrap().clear();
+ assert_eq!(run(access_key_workspace::prepare_persistent("xerj-service.bp",root,Some(BOB))).unwrap_err(),r::io::kfs::FsError::PermissionDenied);
+ assert_eq!(*FILES.lock().unwrap(),before);assert_eq!(*EVENTS.lock().unwrap(),vec!["read"]);
+}
 #[test]fn sqlite_adopts_existing_images_without_copy_and_rejects_conflicts_or_foreign_owner(){
  reset();const OLD:&str="apps/common/sqlite-service/codex";const NEW:&str="apps/codex/.codex/sqlite-service/codex";
  KEYS.lock().unwrap().insert(OLD.into(),RecordKey::Ffa);FILES.lock().unwrap().insert(format!("{OLD}/db-0123456789abcdef.sqlite"),b"existing sqlite image bytes".to_vec());

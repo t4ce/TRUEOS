@@ -12,6 +12,23 @@ pub(crate) const CONFIGURATION_DB_PATH: &str = "users/configuration.redb";
 pub(crate) async fn prepare(
     archive: &str, workspace: &str, account: Option<AccountId>,
 ) -> Result<crate::r::fs::volatile_files::SeedStats> {
+    prepare_owned(archive, workspace, account, true).await
+}
+
+/// Persistent private app data uses the same durable owner/key relation as
+/// Codex, without installing its boot-local RAM file overlay.
+pub(crate) async fn prepare_persistent(
+    archive: &str, workspace: &str, account: Option<AccountId>,
+) -> Result<()> {
+    if !crate::hv::blueprint::uses_private_persistent_files(archive) {
+        return Err(FsError::BadPath);
+    }
+    prepare_owned(archive, workspace, account, false).await.map(|_| ())
+}
+
+async fn prepare_owned(
+    archive: &str, workspace: &str, account: Option<AccountId>, volatile: bool,
+) -> Result<crate::r::fs::volatile_files::SeedStats> {
     let account = account.ok_or(FsError::PermissionDenied)?;
     if crate::access_key_db::container_for_workspace(archive, workspace).is_none() {
         return Err(FsError::BadPath);
@@ -53,8 +70,23 @@ pub(crate) async fn prepare(
     if !fs::stamp_directory_key_async(disk, workspace, key).await? {
         return Err(FsError::PermissionDenied);
     }
-    let stats = crate::r::fs::volatile_files::prepare(workspace).await?;
-    crate::r::fs::volatile_files::stamp_workspace_key(workspace, key).await?;
+    let stats = if volatile {
+        let stats = crate::r::fs::volatile_files::prepare(workspace).await?;
+        crate::r::fs::volatile_files::stamp_workspace_key(workspace, key).await?;
+        stats
+    } else {
+        // The marker is a comparison anchor, not a secret or a guest-selected
+        // authority. Its current ancestor key is the stamped private root.
+        let marker = alloc::format!("{workspace}/.trueos-private-root");
+        if !fs::file_in_typed_checked_async(
+            disk, &marker, b"trueos-private-workspace-v1\n", fs::ContentTypeId::BLOB,
+            false, None, false,
+        ).await.map_err(|error| match error {
+            fs::CheckedWriteError::Device(error) => FsError::from(error),
+            _ => FsError::Device(crate::disc::block::Error::Io),
+        })? { return Err(FsError::NoSpace); }
+        crate::r::fs::volatile_files::SeedStats::default()
+    };
     crate::access_key_db::grant_owned_workspace(archive, workspace, account, key)
         .map_err(|_| FsError::PermissionDenied)?;
     crate::access_key_db::reserve_codex_sqlite(workspace, account, key)

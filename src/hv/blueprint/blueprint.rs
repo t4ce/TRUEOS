@@ -1247,6 +1247,9 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "sys_alloc_aligned" => Some(crate::native_abi::sys_alloc_aligned as *const () as usize),
         "sys_dealloc" => Some(crate::native_abi::sys_dealloc as *const () as usize),
         "sys_rand" => Some(crate::native_abi::sys_rand as *const () as usize),
+        "trueos_cabi_random_bytes_v1" => {
+            Some(crate::native_abi::trueos_cabi_random_bytes_v1 as *const () as usize)
+        }
         "sys_write" => Some(crate::native_abi::sys_write as *const () as usize),
         "sys_read" => Some(crate::native_abi::sys_read as *const () as usize),
         "sys_halt" => Some(crate::native_abi::sys_halt as *const () as usize),
@@ -1773,6 +1776,10 @@ fn safe_archive_stem(archive: &str) -> String {
 
 pub(crate) fn uses_volatile_codex_files(archive: &str) -> bool {
     matches!(safe_archive_stem(archive).as_str(), "codex" | "codex-check")
+}
+
+pub(crate) fn uses_private_persistent_files(archive: &str) -> bool {
+    matches!(safe_archive_stem(archive).as_str(), "xerj" | "xerj-service")
 }
 
 /// Match the service's real argv + launch-stream option precedence. Only its
