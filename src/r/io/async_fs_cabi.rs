@@ -242,6 +242,7 @@ pub(crate) fn progress_lines(maximum: usize) -> Vec<String> {
 struct Request {
     id: u32,
     owner: u32,
+    actor: crate::r::fs::trueosfs::authorized::Actor,
     kind: RequestKind,
 }
 
@@ -264,6 +265,7 @@ enum OperationState {
 #[derive(Debug)]
 struct Operation {
     owner: u32,
+    actor: crate::r::fs::trueosfs::authorized::Actor,
     state: OperationState,
 }
 
@@ -496,6 +498,7 @@ fn start(owner: u32, kind: RequestKind) -> i32 {
 }
 
 fn start_inner(owner: u32, kind: RequestKind) -> i32 {
+    let actor = match crate::r::fs::trueosfs::authorized::actor_from_owner(owner) { Ok(actor) => actor, Err(error) => return map_block_error(error) };
     let mut operations = lock_operations();
     if operations.len() >= ASYNC_FS_MAX_OPERATIONS {
         return FS_ERR_NO_SPACE;
@@ -507,6 +510,7 @@ fn start_inner(owner: u32, kind: RequestKind) -> i32 {
         id,
         Operation {
             owner,
+            actor,
             state: OperationState::Pending,
         },
     );
@@ -519,7 +523,7 @@ fn start_inner(owner: u32, kind: RequestKind) -> i32 {
         PROGRESS.release(owner, id);
         return FS_ERR_NO_SPACE;
     }
-    requests.push_back(Request { id, owner, kind });
+    requests.push_back(Request { id, owner, actor, kind });
     drop(requests);
     notify_request_arrival();
     id as i32
@@ -675,6 +679,7 @@ fn start_completed_read(owner: u32, bytes: Vec<u8>) -> i32 {
 }
 
 fn start_completed_read_inner(owner: u32, bytes: Vec<u8>) -> i32 {
+    let actor = match crate::r::fs::trueosfs::authorized::actor_from_owner(owner) { Ok(actor) => actor, Err(error) => return map_block_error(error) };
     if bytes.len() as u64 > ASYNC_FS_MAX_RESULT_BYTES {
         return FS_ERR_TOO_LARGE;
     }
@@ -689,6 +694,7 @@ fn start_completed_read_inner(owner: u32, bytes: Vec<u8>) -> i32 {
         id,
         Operation {
             owner,
+            actor,
             state: OperationState::Read(bytes),
         },
     );
@@ -750,13 +756,15 @@ fn start_write_inner(
     legacy_blob: bool,
     checked: Option<CheckedWriteOptions>,
 ) -> i32 {
+    let actor = match crate::r::fs::trueosfs::authorized::actor_from_owner(owner) { Ok(actor) => actor, Err(error) => return map_block_error(error) };
     crate::allocators::with_host_alloc_domain_strong(|| {
-        stage_write(owner, path, total_len, content_type, legacy_blob, checked)
+        stage_write(owner, actor, path, total_len, content_type, legacy_blob, checked)
     })
 }
 
 fn stage_write(
     owner: u32,
+    actor: crate::r::fs::trueosfs::authorized::Actor,
     path: String,
     total_len: usize,
     content_type: crate::r::fs::trueosfs::ContentTypeId,
@@ -794,6 +802,7 @@ fn stage_write(
         id,
         Operation {
             owner,
+            actor,
             state: OperationState::Upload {
                 path,
                 bytes,
@@ -849,6 +858,7 @@ pub(crate) fn write_commit(owner: u32, id: u32) -> i32 {
             } if bytes.len() == total_len => Request {
                 id,
                 owner,
+                actor: operation.actor,
                 kind: RequestKind::Write {
                     path,
                     bytes,
@@ -1128,7 +1138,8 @@ fn mounted_roots_text() -> String {
 }
 
 async fn process(request: &Request) -> OperationState {
-    let actor = match crate::r::fs::trueosfs::authorized::actor_from_owner(request.owner) { Ok(actor) => actor, Err(error) => return OperationState::Failed(map_block_error(error)) };
+    let actor = request.actor;
+    if let Err(error) = crate::r::fs::trueosfs::authorized::authorize_keys(actor, &[]) { return OperationState::Failed(map_block_error(error)); }
     if let RequestKind::FileObject(command) = &request.kind {
         let result = if matches!(command.op, 1 | 14) {
             let path = match core::str::from_utf8(&command.payload) { Ok(path) => path, Err(_) => return OperationState::Failed(FS_ERR_BAD_UTF8) };
@@ -1137,8 +1148,8 @@ async fn process(request: &Request) -> OperationState {
                 crate::access_key_db::audit_path(vm, disk, path, "file-open", command.flags & 48 != 0).await;
             }
             if command.op == 14 { crate::r::fs::trueosfs::authorized::assert_private_path(actor, disk, path).await.map(|()| Vec::new()).map_err(map_block_error) }
-            else { crate::r::fs::trueosfs::file_objects::open(request.owner, disk, path, command.flags).await }
-        } else { crate::r::fs::trueosfs::file_objects::operate(request.owner, command).await };
+            else { crate::r::fs::trueosfs::file_objects::open_for_actor(request.owner, actor, disk, path, command.flags).await }
+        } else { crate::r::fs::trueosfs::file_objects::operate_for_actor(request.owner, actor, command).await };
         return match result { Ok(bytes) => OperationState::Read(bytes), Err(code) => OperationState::Failed(code) };
     }
     if let RequestKind::Read { path } = &request.kind {
@@ -1189,7 +1200,7 @@ async fn process(request: &Request) -> OperationState {
 
     if let RequestKind::Write { path, bytes, .. } = &request.kind {
         if path == trueos_ide::store_protocol::REQUEST {
-            return match crate::r::services::ide_source_service::write_for_owner(request.owner, bytes).await {
+            return match crate::r::services::ide_source_service::write_for_owner(actor, request.owner, bytes).await {
                 Ok(()) => OperationState::Unit,
                 Err(code) => OperationState::Failed(code),
             };

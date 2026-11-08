@@ -45,24 +45,28 @@ static OPERATIONS: Mutex<Vec<OperationRecord>> = Mutex::new(Vec::new());
 enum CodecRequest {
     PackPath {
         owner: u32,
+        actor: Actor,
         id: u32,
         source_path: String,
         archive_path: String,
     },
     PackPaths {
         owner: u32,
+        actor: Actor,
         id: u32,
         source_paths: Vec<String>,
         archive_path: String,
     },
     UnpackPath {
         owner: u32,
+        actor: Actor,
         id: u32,
         archive_path: String,
         output_path: String,
     },
     DecodeLz4Path {
         owner: u32,
+        actor: Actor,
         id: u32,
         archive_path: String,
     },
@@ -162,8 +166,9 @@ fn next_operation_id(operations: &[OperationRecord]) -> Result<u32, CodecError> 
 
 fn enqueue_operation(
     owner: u32,
-    request: impl FnOnce(u32) -> CodecRequest,
+    request: impl FnOnce(u32, Actor) -> CodecRequest,
 ) -> Result<u32, CodecError> {
+    let actor = authorized::actor_from_owner(owner)?;
     let mut requests = REQUESTS.lock();
     if requests.len() >= REQUEST_CAP {
         return Err(CodecError::QueueFull);
@@ -183,7 +188,7 @@ fn enqueue_operation(
         queued_ms: codec_now_ms(),
         delivery_started_ms: None,
     });
-    requests.push_back(request(id));
+    requests.push_back(request(id, actor));
     let queued = requests.len();
     drop(operations);
     drop(requests);
@@ -226,8 +231,9 @@ pub fn enqueue_archive_pack(
     if source_path == archive_path {
         return Err(CodecError::BadPath);
     }
-    enqueue_operation(owner, |id| CodecRequest::PackPath {
+    enqueue_operation(owner, |id, actor| CodecRequest::PackPath {
         owner,
+        actor,
         id,
         source_path,
         archive_path,
@@ -258,8 +264,9 @@ pub fn enqueue_archive_pack_many(
         }
         normalized_sources.push(source_path);
     }
-    enqueue_operation(owner, |id| CodecRequest::PackPaths {
+    enqueue_operation(owner, |id, actor| CodecRequest::PackPaths {
         owner,
+        actor,
         id,
         source_paths: normalized_sources,
         archive_path,
@@ -276,8 +283,9 @@ pub fn enqueue_archive_unpack(
     if archive_path == output_path {
         return Err(CodecError::BadPath);
     }
-    enqueue_operation(owner, |id| CodecRequest::UnpackPath {
+    enqueue_operation(owner, |id, actor| CodecRequest::UnpackPath {
         owner,
+        actor,
         id,
         archive_path,
         output_path,
@@ -302,8 +310,9 @@ pub fn operation_status(owner: u32, id: u32) -> i32 {
 /// Decode only: no destination directory or filesystem writes.
 pub fn enqueue_lz4_decode(owner: u32, archive_path: String) -> Result<u32, CodecError> {
     let archive_path = normalize_path(&archive_path, false)?;
-    enqueue_operation(owner, |id| CodecRequest::DecodeLz4Path {
+    enqueue_operation(owner, |id, actor| CodecRequest::DecodeLz4Path {
         owner,
+        actor,
         id,
         archive_path,
     })
@@ -687,8 +696,7 @@ async fn compress_entries(entries: Vec<OwnedSourceEntry>) -> Result<Vec<u8>, Cod
     Ok(out)
 }
 
-async fn pack_path_job(owner: u32, source_path: &str, archive_path: &str) -> Result<CodecReport, CodecError> {
-    let actor = authorized::actor_from_owner(owner)?;
+async fn pack_path_job(actor: Actor, source_path: &str, archive_path: &str) -> Result<CodecReport, CodecError> {
     let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
     let entries = collect_source_entries(actor, disk, source_path, archive_path).await?;
     let source_bytes = entries.iter().try_fold(0u64, |total, entry| {
@@ -726,11 +734,10 @@ async fn pack_path_job(owner: u32, source_path: &str, archive_path: &str) -> Res
 }
 
 async fn pack_paths_job(
-    owner: u32,
+    actor: Actor,
     source_paths: &[String],
     archive_path: &str,
 ) -> Result<CodecReport, CodecError> {
-    let actor = authorized::actor_from_owner(owner)?;
     let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
     let mut total = 0usize;
     let mut names = BTreeSet::new();
@@ -809,12 +816,12 @@ fn validate_entry_set(entries: &[super::tar::Entry]) -> Result<Vec<String>, Code
 }
 
 async fn unpack_path_job(
+    actor: Actor,
     owner: u32,
     id: u32,
     archive_path: &str,
     output_path: &str,
 ) -> Result<CodecReport, CodecError> {
-    let actor = authorized::actor_from_owner(owner)?;
     let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
     crate::log_info!(target: "storage"; "codec/archive: phase=read-begin source={:?} destination={:?} root={:?}\n", archive_path, output_path, disk);
     let info = authorized::node_info(actor, disk, archive_path)
@@ -994,22 +1001,25 @@ async fn execute_request(request: CodecRequest) {
     crate::log_info!(target: "storage"; "codec/archive: phase=running owner={} operation={}\n", owner, id);
     let result = match request {
         CodecRequest::PackPath {
+            actor,
             source_path,
             archive_path,
             ..
-        } => pack_path_job(owner, source_path.as_str(), archive_path.as_str()).await,
+        } => pack_path_job(actor, source_path.as_str(), archive_path.as_str()).await,
         CodecRequest::PackPaths {
+            actor,
             source_paths,
             archive_path,
             ..
-        } => pack_paths_job(owner, source_paths.as_slice(), archive_path.as_str()).await,
+        } => pack_paths_job(actor, source_paths.as_slice(), archive_path.as_str()).await,
         CodecRequest::UnpackPath {
+            actor,
             archive_path,
             output_path,
             ..
-        } => unpack_path_job(owner, id, archive_path.as_str(), output_path.as_str()).await,
-        CodecRequest::DecodeLz4Path { archive_path, .. } => {
-            match decode_lz4_path_job(owner, id, &archive_path).await {
+        } => unpack_path_job(actor, owner, id, archive_path.as_str(), output_path.as_str()).await,
+        CodecRequest::DecodeLz4Path { actor, archive_path, .. } => {
+            match decode_lz4_path_job(actor, owner, id, &archive_path).await {
                 Ok((report, bytes)) => {
                     retain_result_bytes(owner, id, bytes);
                     Ok(report)
@@ -1030,12 +1040,12 @@ async fn execute_request(request: CodecRequest) {
 }
 
 async fn decode_lz4_path_job(
+    actor: Actor,
     owner: u32,
     id: u32,
     path: &str,
 ) -> Result<(CodecReport, Vec<u8>), CodecError> {
     let started = codec_now_ms();
-    let actor = authorized::actor_from_owner(owner)?;
     let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
     crate::log_info!(target: "storage"; "codec/archive: phase=ram-read source={:?}\n", path);
     let info = authorized::node_info(actor, disk, path)

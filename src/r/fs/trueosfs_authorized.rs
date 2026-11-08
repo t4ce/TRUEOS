@@ -1,5 +1,5 @@
 //! Explicit caller authorization at the filesystem publication boundary.
-//! Host callers pass None; guest callers pass their captured VM principal.
+//! Host callers use Host; guests carry their captured VM binding epoch.
 //! Every check observes records under the same root lease as its operation.
 use super::*;
 
@@ -7,21 +7,18 @@ use super::*;
 pub(crate) enum Actor {
     Host,
     Public,
-    Vm(u8),
+    Vm(u8, u64),
 }
-impl From<Option<u8>> for Actor {
-    fn from(vm: Option<u8>) -> Self {
-        vm.map_or(Self::Host, Self::Vm)
-    }
+pub(crate) fn actor_for_vm(vm: u8) -> Result<Actor, block::Error> {
+    let epoch = crate::access_key_db::principal_epoch(vm).ok_or(block::Error::PermissionDenied)?;
+    Ok(Actor::Vm(vm, epoch))
 }
 
 pub(crate) fn actor_from_owner(owner: u32) -> Result<Actor, block::Error> {
     if owner & 0x8000_0000 == 0 {
         return Ok(Actor::Host);
     }
-    u8::try_from(owner & !0x8000_0000)
-        .map(Actor::Vm)
-        .map_err(|_| block::Error::PermissionDenied)
+    actor_for_vm(u8::try_from(owner & !0x8000_0000).map_err(|_| block::Error::PermissionDenied)?)
 }
 
 fn canonical_path(path: &str) -> Result<&str, block::Error> {
@@ -93,6 +90,7 @@ pub(crate) async fn check_path_under_lease(
     if actor == Actor::Host {
         return Ok(());
     }
+    authorize_keys(actor, &[])?;
     let path = canonical_path(path)?;
     if reserved_path(path) {
         return Err(block::Error::PermissionDenied);
@@ -101,10 +99,16 @@ pub(crate) async fn check_path_under_lease(
 }
 
 pub(crate) fn authorize_keys(actor: Actor, keys: &[RecordKey]) -> Result<(), block::Error> {
+    if let Actor::Vm(vm, epoch) = actor {
+        crate::access_key_db::authorize_record_at(vm, epoch, RecordKey::Ffa)
+            .map_err(|_| block::Error::PermissionDenied)?;
+    }
     for &key in keys {
-        if key == RecordKey::Ffa { continue; }
+        if key == RecordKey::Ffa {
+            continue;
+        }
         match actor {
-            Actor::Vm(vm) => crate::access_key_db::authorize_record(vm, key)
+            Actor::Vm(vm, epoch) => crate::access_key_db::authorize_record_at(vm, epoch, key)
                 .map_err(|_| block::Error::PermissionDenied)?,
             Actor::Public => return Err(block::Error::PermissionDenied),
             Actor::Host => {}
@@ -163,14 +167,30 @@ pub(super) async fn lease(
     ),
     block::Error,
 > {
+    lease_observed(disk, &mut |_| {}).await
+}
+
+async fn lease_observed(
+    disk: block::DeviceHandle,
+    observe: &mut impl FnMut(ReadRangePhase),
+) -> Result<
+    (
+        crate::disc::access::Activity,
+        write_gate::RootWriteLease,
+        trueos_fs::FsParams,
+    ),
+    block::Error,
+> {
     let activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
+    observe(ReadRangePhase::Placement);
     let placement = placement_for_io_async(disk)
         .await?
         .ok_or(block::Error::NotReady)?;
     loop {
+        observe(ReadRangePhase::Index);
         ensure_index_async(disk, &placement).await?;
         let lease = write_gate::RootWriteLease::acquire(disk.id()).await;
         if ROOTS
@@ -255,13 +275,18 @@ pub(crate) async fn read(
     path: &str,
     max_len: u64,
 ) -> Result<Option<Vec<u8>>, block::Error> {
-    Ok(read_snapshot(actor, disk, path, max_len).await?.map(|(bytes, _)| bytes))
+    Ok(read_snapshot(actor, disk, path, max_len)
+        .await?
+        .map(|(bytes, _)| bytes))
 }
 
 /// Cached consumers retain these keys with the bytes, including after unlink or
 /// rename. Re-authorize the retained identities before serving resident data.
 pub(crate) async fn read_snapshot(
-    actor: Actor, disk: block::DeviceHandle, path: &str, max_len: u64,
+    actor: Actor,
+    disk: block::DeviceHandle,
+    path: &str,
+    max_len: u64,
 ) -> Result<Option<(Vec<u8>, Vec<RecordKey>)>, block::Error> {
     let (_activity, _lease, params) = lease(disk).await?;
     check_path_under_lease(actor, disk, &params, path).await?;
@@ -275,9 +300,12 @@ pub(crate) async fn read_snapshot(
     if node.data_len > max_len {
         return Err(block::Error::OutOfBounds);
     }
-    Ok(trueos_fs::read_file_at_record(&KernelBlockIo::new(disk), &params, &file_record(node))
-        .await
-        .map_err(map_engine_err)?.map(|bytes| (bytes, keys)))
+    Ok(
+        trueos_fs::read_file_at_record(&KernelBlockIo::new(disk), &params, &file_record(node))
+            .await
+            .map_err(map_engine_err)?
+            .map(|bytes| (bytes, keys)),
+    )
 }
 
 fn file_record(node: trueos_fs::NodeRecordRef) -> trueos_fs::FileRecordRef {
@@ -293,13 +321,32 @@ fn file_record(node: trueos_fs::NodeRecordRef) -> trueos_fs::FileRecordRef {
 
 /// Pin an immutable read record as a capability at an authorized open boundary.
 /// This does not expose a guest-supplied physical record or a Unix descriptor.
-pub(crate) async fn open_read(actor: Actor, disk: block::DeviceHandle, path: &str) -> Result<Option<FileReadHandle>, block::Error> {
+pub(crate) async fn open_read(
+    actor: Actor,
+    disk: block::DeviceHandle,
+    path: &str,
+) -> Result<Option<FileReadHandle>, block::Error> {
     let (_activity, _lease, params) = lease(disk).await?;
     check_path_under_lease(actor, disk, &params, path).await?;
-    let Some(node) = node_record_under_lease(disk, &params, path).await? else { return Ok(None); };
-    if node.kind != NodeKind::File { return Err(block::Error::InvalidParam); }
-    let mount_seq = ROOTS.lock().iter().find(|mount| mount.disk_id == disk.id()).map(|mount| mount.seq).ok_or(block::Error::NotReady)?;
-    Ok(Some(FileReadHandle { disk, params, record: file_record(node), mount_seq }))
+    let Some(node) = node_record_under_lease(disk, &params, path).await? else {
+        return Ok(None);
+    };
+    if node.kind != NodeKind::File {
+        return Err(block::Error::InvalidParam);
+    }
+    let mount_seq = ROOTS
+        .lock()
+        .iter()
+        .find(|mount| mount.disk_id == disk.id())
+        .map(|mount| mount.seq)
+        .ok_or(block::Error::NotReady)?;
+    Ok(Some(FileReadHandle {
+        actor,
+        disk,
+        params,
+        record: file_record(node),
+        mount_seq,
+    }))
 }
 
 pub(crate) async fn read_range(
@@ -309,7 +356,18 @@ pub(crate) async fn read_range(
     offset: u64,
     out: &mut [u8],
 ) -> Result<Option<usize>, block::Error> {
-    let (_activity, _lease, params) = lease(disk).await?;
+    read_range_observed(actor, disk, path, offset, out, |_| {}).await
+}
+
+pub(crate) async fn read_range_observed(
+    actor: Actor,
+    disk: block::DeviceHandle,
+    path: &str,
+    offset: u64,
+    out: &mut [u8],
+    mut observe: impl FnMut(ReadRangePhase),
+) -> Result<Option<usize>, block::Error> {
+    let (_activity, _lease, params) = lease_observed(disk, &mut observe).await?;
     check_path_under_lease(actor, disk, &params, path).await?;
     let Some(node) = node_record_under_lease(disk, &params, path).await? else {
         return Ok(None);
@@ -317,6 +375,7 @@ pub(crate) async fn read_range(
     if node.kind != NodeKind::File {
         return Err(block::Error::InvalidParam);
     }
+    observe(ReadRangePhase::Read);
     trueos_fs::read_file_range_at(
         &KernelBlockIo::new(disk),
         &params,
@@ -400,6 +459,7 @@ pub(crate) async fn index_snapshot(
     actor: Actor,
     disk: block::DeviceHandle,
 ) -> Result<Option<Vec<IndexNode>>, block::Error> {
+    authorize_keys(actor, &[])?;
     let (_activity, _lease, params) = lease(disk).await?;
     let candidates = {
         let roots = ROOTS.lock();
@@ -409,7 +469,7 @@ pub(crate) async fn index_snapshot(
             .and_then(|mount| mount.index.as_ref())
             .ok_or(block::Error::NotReady)?;
         let mut nodes = Vec::new();
-        for (key, entry) in index {
+        for (key, entry) in index.iter() {
             let kind = match entry.kind {
                 trueos_fs::LogKind::Put => NodeKind::File,
                 trueos_fs::LogKind::Directory => NodeKind::Directory,
@@ -433,42 +493,94 @@ pub(crate) async fn index_snapshot(
     Ok(Some(nodes))
 }
 
-pub(crate) async fn json_all(actor: Actor, disk: block::DeviceHandle, max_entries: usize) -> Result<Option<String>, block::Error> {
+pub(crate) async fn json_all(
+    actor: Actor,
+    disk: block::DeviceHandle,
+    max_entries: usize,
+) -> Result<Option<String>, block::Error> {
+    authorize_keys(actor, &[])?;
     let (_activity, _lease, params) = lease(disk).await?;
     let candidates = {
         let roots = ROOTS.lock();
-        let index = roots.iter().find(|mount| mount.disk_id == disk.id()).and_then(|mount| mount.index.as_ref()).ok_or(block::Error::NotReady)?;
-        index.keys().map(|key| core::str::from_utf8(key).map(String::from).map_err(|_| block::Error::Corrupted)).collect::<Result<Vec<_>, _>>()?
+        let index = roots
+            .iter()
+            .find(|mount| mount.disk_id == disk.id())
+            .and_then(|mount| mount.index.as_ref())
+            .ok_or(block::Error::NotReady)?;
+        index
+            .keys()
+            .map(|key| {
+                core::str::from_utf8(key)
+                    .map(String::from)
+                    .map_err(|_| block::Error::Corrupted)
+            })
+            .collect::<Result<Vec<_>, _>>()?
     };
-    let limit = if max_entries == 0 { TRUEOSFS_LIST_SOFT_CAP } else { max_entries.min(TRUEOSFS_LIST_SOFT_CAP) };
+    let limit = if max_entries == 0 {
+        TRUEOSFS_LIST_SOFT_CAP
+    } else {
+        max_entries.min(TRUEOSFS_LIST_SOFT_CAP)
+    };
     let mut entries = Vec::new();
     for path in candidates {
         match check_path_under_lease(actor, disk, &params, &path).await {
             Err(block::Error::PermissionDenied) => continue,
-            Err(error) => return Err(error), Ok(()) => {},
+            Err(error) => return Err(error),
+            Ok(()) => {}
         }
         if let Some(node) = node_record_under_lease(disk, &params, &path).await? {
-            entries.push((path.bytes().filter(|byte| *byte == b'/').count(), path, node));
+            entries.push((
+                path.bytes().filter(|byte| *byte == b'/').count(),
+                path,
+                node,
+            ));
         }
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     let truncated = entries.len() > limit;
-    let visible_limit = if truncated { limit.saturating_sub(1) } else { limit };
-    let mut out = alloc::format!("{{\"version\":2,\"root\":\"/\",\"max_entries\":{limit},\"truncated\":{},\"entries\":[", if truncated { "true" } else { "false" });
+    let visible_limit = if truncated {
+        limit.saturating_sub(1)
+    } else {
+        limit
+    };
+    let mut out = alloc::format!(
+        "{{\"version\":2,\"root\":\"/\",\"max_entries\":{limit},\"truncated\":{},\"entries\":[",
+        if truncated { "true" } else { "false" }
+    );
     let mut first = true;
     for (depth, path, node) in entries.into_iter().take(visible_limit) {
-        if !first { out.push(','); } first = false;
-        out.push_str("{\"path\":"); push_json_string_escaped(&mut out, &path);
-        out.push_str(",\"name\":"); push_json_string_escaped(&mut out, path.rsplit('/').next().unwrap_or(""));
-        out.push_str(",\"kind\":"); push_json_string_escaped(&mut out, if node.kind == NodeKind::Directory { "dir" } else { "file" });
-        out.push_str(&alloc::format!(",\"depth\":{depth},\"id\":{}", node.entry_lba));
-        push_record_key_json(&mut out, node.record_key); out.push('}');
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        out.push_str("{\"path\":");
+        push_json_string_escaped(&mut out, &path);
+        out.push_str(",\"name\":");
+        push_json_string_escaped(&mut out, path.rsplit('/').next().unwrap_or(""));
+        out.push_str(",\"kind\":");
+        push_json_string_escaped(
+            &mut out,
+            if node.kind == NodeKind::Directory {
+                "dir"
+            } else {
+                "file"
+            },
+        );
+        out.push_str(&alloc::format!(
+            ",\"depth\":{depth},\"id\":{}",
+            node.entry_lba
+        ));
+        push_record_key_json(&mut out, node.record_key);
+        out.push('}');
     }
     if truncated {
-        if !first { out.push(','); }
+        if !first {
+            out.push(',');
+        }
         out.push_str("{\"path\":\"...\",\"name\":\"...\",\"kind\":\"more\",\"depth\":0,\"id\":0,\"key\":{\"kind\":\"ffa\"}}");
     }
-    out.push_str("]}"); Ok(Some(out))
+    out.push_str("]}");
+    Ok(Some(out))
 }
 
 pub(crate) async fn create_dir(
@@ -484,6 +596,7 @@ pub(crate) async fn create_dir_all(
     disk: block::DeviceHandle,
     path: &str,
 ) -> Result<bool, block::Error> {
+    authorize_keys(actor, &[])?;
     canonical_path(path)?;
     let mut prefix = String::new();
     for part in path.split('/').filter(|part| !part.is_empty()) {
@@ -645,12 +758,12 @@ pub(crate) async fn assert_private_path(
     disk: block::DeviceHandle,
     path: &str,
 ) -> Result<(), block::Error> {
-    let Actor::Vm(vm) = actor else {
+    let Actor::Vm(vm, epoch) = actor else {
         return Err(block::Error::PermissionDenied);
     };
     let path = canonical_path(path)?;
-    let workspace =
-        crate::access_key_db::workspace_for_vm(vm).ok_or(block::Error::PermissionDenied)?;
+    let workspace = crate::access_key_db::workspace_for_vm_at(vm, epoch)
+        .ok_or(block::Error::PermissionDenied)?;
     let workspace = canonical_path(&workspace)?;
     if path != workspace
         && !path
@@ -666,7 +779,7 @@ pub(crate) async fn assert_private_path(
     if root.kind != NodeKind::Directory || root.record_key == RecordKey::Ffa {
         return Err(block::Error::PermissionDenied);
     }
-    crate::access_key_db::authorize_protected_workspace(vm, root.record_key)
+    crate::access_key_db::authorize_protected_workspace_at(vm, epoch, root.record_key)
         .map_err(|_| block::Error::PermissionDenied)?;
     check_path_under_lease(actor, disk, &params, path).await
 }

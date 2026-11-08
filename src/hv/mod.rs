@@ -3156,6 +3156,19 @@ fn prepare_blueprint_launch_on_lane(
             instance_guid.as_str(),
         )
     };
+    // Admit and protect the workspace before any trusted asset write can touch
+    // an existing owner's tree. Asset materialization may itself create files.
+    let mut files_span = timing.span("ap_files");
+    if crate::hv::blueprint::uses_volatile_codex_files(pending.archive.as_str()) {
+        log(format_args!(
+            "apps: vm{} preparing boot-local Codex files from {}",
+            vm_id, app_fs_root
+        ));
+        crate::r::io::kfs::prepare_volatile_files(app_fs_root.as_str(), pending.archive.as_str(), pending.access_account)
+            .map_err(|err| alloc::format!("Codex RAM files preparation failed: {:?}", err))?;
+    }
+    let files_at_ms = lifecycle_now_ms();
+    files_span.complete();
     let asset_stats = {
         let result = crate::hv::blueprint::materialize_embedded_assets(
             unpacked_bytes.as_slice(),
@@ -3172,17 +3185,6 @@ fn prepare_blueprint_launch_on_lane(
     }
     let assets_at_ms = lifecycle_now_ms();
     assets_span.complete();
-    let mut files_span = timing.span("ap_files");
-    if crate::hv::blueprint::uses_volatile_codex_files(pending.archive.as_str()) {
-        log(format_args!(
-            "apps: vm{} preparing boot-local Codex files from {}",
-            vm_id, app_fs_root
-        ));
-        crate::r::io::kfs::prepare_volatile_files(app_fs_root.as_str(), pending.archive.as_str(), pending.access_account)
-            .map_err(|err| alloc::format!("Codex RAM files preparation failed: {:?}", err))?;
-    }
-    let files_at_ms = lifecycle_now_ms();
-    files_span.complete();
     drop(host_alloc_guard);
     let mut stage_span = timing.span("stage_env");
 
@@ -3222,9 +3224,9 @@ fn prepare_blueprint_launch_on_lane(
         unpacked_at_ms.saturating_sub(prepare_started_ms),
         inspected_at_ms.saturating_sub(unpacked_at_ms),
         arenas_at_ms.saturating_sub(inspected_at_ms),
-        assets_at_ms.saturating_sub(arenas_at_ms),
-        files_at_ms.saturating_sub(assets_at_ms),
-        prepared_at_ms.saturating_sub(files_at_ms),
+        assets_at_ms.saturating_sub(files_at_ms),
+        files_at_ms.saturating_sub(arenas_at_ms),
+        prepared_at_ms.saturating_sub(assets_at_ms),
     );
     Ok(())
 }

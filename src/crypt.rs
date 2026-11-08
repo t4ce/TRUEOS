@@ -1167,13 +1167,12 @@ pub(crate) fn ssh_authorized_keys() -> Vec<[u8; 32]> {
     CRY_STATE.lock().ssh_public_keys.clone()
 }
 
-/// An enrolled account must prove its SSH key instead of taking the anonymous
-/// development none-auth route. Other names remain anonymous terminals.
-pub(crate) fn ssh_requires_public_key(username: &str) -> bool {
+/// A persisted account must prove its identity by enrolled SSH key or Cry code,
+/// even when no SSH key has been enrolled. Other names stay anonymous terminals.
+pub(crate) fn ssh_requires_account_proof(username: &str) -> bool {
     let state = CRY_STATE.lock();
     state.durable.is_some()
         && state.username.as_deref() == Some(username)
-        && !state.ssh_public_keys.is_empty()
 }
 
 /// Return only the persisted account which enrolled this exact SSH key.

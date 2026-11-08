@@ -274,6 +274,23 @@ fn messages() -> Vec<String> { WARNINGS.lock().unwrap().clone() }
     assert!(access_key_db::authorize_record(0, key(8)).is_err());
 }
 
+#[test] fn queued_work_cannot_adopt_a_recycled_slots_next_principal() {
+    reset();
+    access_key_db::bind_launch(0, "epoch-old.bp", "apps/epoch-old", None);
+    let old = access_key_db::principal_epoch(0).unwrap();
+    assert_eq!(access_key_db::authorize_record_at(0, old, RecordKey::Ffa), Ok(()));
+    access_key_db::clear_vm(0);
+    assert!(access_key_db::authorize_record_at(0, old, RecordKey::Ffa).is_err());
+    access_key_db::grant_owned_workspace("epoch-new.bp", "apps/epoch-new", BOB, key(13)).unwrap();
+    access_key_db::bind_launch(0, "epoch-new.bp", "apps/epoch-new", Some(BOB));
+    let new = access_key_db::principal_epoch(0).unwrap();
+    assert_ne!(new, old);
+    assert!(access_key_db::authorize_record_at(0, old, key(13)).is_err());
+    assert!(access_key_db::workspace_for_vm_at(0, old).is_none());
+    assert!(access_key_db::authorize_protected_workspace_at(0, old, key(13)).is_err());
+    assert_eq!(access_key_db::authorize_protected_workspace_at(0, new, key(13)), Ok(()));
+}
+
 #[test] fn awaiting_old_metadata_cannot_attribute_a_warning_to_a_new_principal() {
     reset(); register();
     access_key_db::bind_launch(0, "notes.bp", "apps/notes_team", Some(ALICE));

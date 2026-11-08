@@ -105,6 +105,7 @@ struct Identity {
 #[derive(Clone)]
 struct Description {
     owner: u32,
+    actor: authorized::Actor,
     identity: Identity,
     position: u64,
     flags: u32,
@@ -215,18 +216,8 @@ fn error(error: block::Error) -> i32 {
         _ => FS_ERR_IO,
     }
 }
-fn authorize_keys(owner: u32, keys: &[RecordKey]) -> Result<(), i32> {
-    if owner & 0x8000_0000 == 0 {
-        return Ok(());
-    }
-    let vm = owner & !0x8000_0000;
-    if vm > u8::MAX as u32 {
-        return Err(ERR_PERMISSION);
-    }
-    for key in keys {
-        crate::access_key_db::authorize_record(vm as u8, *key).map_err(|_| ERR_PERMISSION)?;
-    }
-    Ok(())
+fn authorize_keys(actor: authorized::Actor, keys: &[RecordKey]) -> Result<(), i32> {
+    authorized::authorize_keys(actor, keys).map_err(error)
 }
 
 /// Read ancestors and the leaf under the same lease used for I/O/publication.
@@ -458,6 +449,17 @@ pub async fn open(
     path: &str,
     flags: u32,
 ) -> Result<Vec<u8>, i32> {
+    let actor = authorized::actor_from_owner(owner).map_err(error)?;
+    open_for_actor(owner, actor, disk, path, flags).await
+}
+
+pub async fn open_for_actor(
+    owner: u32,
+    actor: authorized::Actor,
+    disk: block::DeviceHandle,
+    path: &str,
+    flags: u32,
+) -> Result<Vec<u8>, i32> {
     let _activity = crate::disc::access::Activity::begin(disk).map_err(error)?;
     let placement = placement_for_io_async(disk)
         .await
@@ -476,16 +478,11 @@ pub async fn open(
         }
         drop(lease);
     };
-    authorized::check_path_under_lease(
-        authorized::actor_from_owner(owner).map_err(error)?,
-        disk,
-        &params,
-        path,
-    )
-    .await
-    .map_err(error)?;
+    authorized::check_path_under_lease(actor, disk, &params, path)
+        .await
+        .map_err(error)?;
     let authorization_keys = authorization_keys_under_lease(disk, &params, path).await?;
-    authorize_keys(owner, &authorization_keys)?;
+    authorize_keys(actor, &authorization_keys)?;
     // An open directory is useful for metadata and sync, never byte I/O.
     let node = if path.is_empty() {
         Some(trueos_fs::NodeRecordRef {
@@ -558,6 +555,7 @@ pub async fn open(
         handle,
         Description {
             owner,
+            actor,
             identity,
             position: 0,
             flags,
@@ -570,7 +568,20 @@ pub async fn open(
 }
 
 pub async fn operate(owner: u32, command: &Command) -> Result<Vec<u8>, i32> {
+    let actor = authorized::actor_from_owner(owner).map_err(error)?;
+    operate_for_actor(owner, actor, command).await
+}
+
+pub async fn operate_for_actor(
+    owner: u32,
+    actor: authorized::Actor,
+    command: &Command,
+) -> Result<Vec<u8>, i32> {
     let (description_id, description) = OBJECTS.lock().description(owner, command.object)?;
+    if actor != description.actor {
+        return Err(ERR_PERMISSION);
+    }
+    authorize_keys(actor, &[])?;
     if command.op == 7 {
         let mut state = OBJECTS.lock();
         let handle = state.allocate(owner)?;
@@ -624,14 +635,9 @@ pub async fn operate(owner: u32, command: &Command) -> Result<Vec<u8>, i32> {
         (file.path.clone(), file.orphan.is_some())
     };
     if !orphan {
-        authorized::check_path_under_lease(
-            authorized::actor_from_owner(owner).map_err(error)?,
-            disk,
-            &params,
-            &path,
-        )
-        .await
-        .map_err(error)?;
+        authorized::check_path_under_lease(actor, disk, &params, &path)
+            .await
+            .map_err(error)?;
     }
     let keys = if orphan {
         OBJECTS
@@ -644,7 +650,7 @@ pub async fn operate(owner: u32, command: &Command) -> Result<Vec<u8>, i32> {
     } else {
         authorization_keys_under_lease(disk, &params, &path).await?
     };
-    authorize_keys(owner, &keys)?;
+    authorize_keys(actor, &keys)?;
     let node = if orphan || path.is_empty() {
         None
     } else {

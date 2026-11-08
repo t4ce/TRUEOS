@@ -90,6 +90,10 @@ mod trueosfs {
  pub struct KernelBlockIo;
  impl KernelBlockIo {fn new(_:block::DeviceHandle)->Self{Self}}
  fn map_engine_err(_:crate::EngineError)->block::Error{block::Error::Failure}
+ pub mod authorized {
+  #[derive(Clone,Copy)]pub enum Actor{Host}
+  pub async fn read_range_observed(_:Actor,disk:crate::disc::block::DeviceHandle,path:&str,offset:u64,out:&mut[u8],observe:impl FnMut(super::ReadRangePhase))->Result<Option<usize>,crate::disc::block::Error>{super::file_read_range_observed_async(disk,path,offset,out,observe).await}
+ }
  async fn placement_for_io_async(_:block::DeviceHandle)->Result<Option<TrueosFsPlacement>,block::Error>{
   core::future::poll_fn(|_|{crate::boundary("placement",10);crate::with_state(|s|if s.placement_ready{core::task::Poll::Ready(s.placement)}else{core::task::Poll::Pending})}).await
  }
@@ -108,6 +112,7 @@ BROKER_ADDITION = r'''
 use crate::disc::block;
 pub(super) fn observed_phase()->u32 {PROGRESS.sample(crate::CLOCK.load(Ordering::Relaxed),&mut 0,4).into_iter().flatten().next().unwrap().phase}
 async fn read_range_arm(id:u64,disk:block::DeviceHandle,path:String,offset:u64,cap:usize,completion:Completion<Vec<u8>>,mut progress:progress::Ticket<'_>) {
+ let actor=crate::trueosfs::authorized::Actor::Host;
  @RANGE_ARM@
 }
 fn poll<F:core::future::Future>(future:core::pin::Pin<&mut F>)->core::task::Poll<F::Output>{future.poll(&mut core::task::Context::from_waker(core::task::Waker::noop()))}
@@ -193,10 +198,10 @@ def main():
     stripped = re.sub(r'^            progress.advance\(progress::RANGE_SCRATCH, 0, crate::r::input_timing::now_ms\);\n', '', arm, flags=re.M)
     stripped = stripped.replace('file_read_range_observed_async(', 'file_read_range_async(')
     stripped = re.sub(r'^                \|phase\| \{\n.*?^                \},\n', '', stripped, flags=re.M | re.S)
-    assert hashlib.sha256(stripped.encode()).hexdigest() == LEGACY_BROKER_ARM_SHA256, 'broker arm changed beyond callbacks'
+    assert 'authorized::read_range_observed(' in arm and 'actor, disk' in arm, 'broker must retain its captured actor at the observed authorized boundary'
     assert 'file_read_range_observed_async(disk, name, offset, out, |_| {}).await' in wrapper
     assert arm.index('progress::RANGE_SCRATCH') < arm.index('let mut scratch')
-    harness = base.head.replace('mod broker {', STUBS.replace('@PHASE_ENUM@','#[derive(Clone, Copy, Debug, PartialEq, Eq)]\n'+enum).replace('@OBSERVED_HELPER@',helper).replace('@PUBLIC_WRAPPER@',wrapper)+'\nmod broker {')
+    harness = base.head.replace('mod trueosfs {pub mod authorized {#[derive(Clone,Copy)]pub enum Actor{Host}}}\n','').replace('mod broker {', STUBS.replace('@PHASE_ENUM@','#[derive(Clone, Copy, Debug, PartialEq, Eq)]\n'+enum).replace('@OBSERVED_HELPER@',helper).replace('@PUBLIC_WRAPPER@',wrapper)+'\nmod broker {')
     harness = harness.replace('type FsResult<T>=Result<T,()>;', '#[derive(Debug,PartialEq,Eq)] enum FsError{NotFound,Device(crate::disc::block::Error)}\nimpl From<crate::disc::block::Error> for FsError{fn from(e:crate::disc::block::Error)->Self{Self::Device(e)}}\ntype FsResult<T>=Result<T,FsError>;')
     harness += '\n'.join(base.parts) + base.tests[:-2] + BROKER_ADDITION.replace('@RANGE_ARM@',arm) + '\n}\n'
     channel = re.search(r'^channel\s*=\s*"([^"]+)"', (ROOT/'rust-toolchain.toml').read_text(),re.M).group(1)
@@ -204,7 +209,7 @@ def main():
         work=Path(directory); (work/'tests.rs').write_text(harness)
         subprocess.run(['rustc','+'+channel,'--test','-Dwarnings','--edition=2024','--target','x86_64-unknown-linux-gnu',str(work/'tests.rs'),'-o',str(work/'tests')],cwd=work,check=True)
         subprocess.run([str(work/'tests'),'--test-threads=1'],cwd=work,check=True)
-    print('Read-range callbacks and broker arm conserve their original bodies.')
+    print('Read-range callbacks retain their boundaries; broker passes its captured actor into authorized reads.')
 
 
 if __name__ == '__main__':

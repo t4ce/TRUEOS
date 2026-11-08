@@ -729,6 +729,15 @@ pub(super) fn bind_authenticated_frontend(frontend: u64, account: Option<trueos_
     {
         return false;
     }
+    if routes.accounts.account(frontend) != account
+        && routes.routes.iter().any(|route| {
+            route.frontend == Some(frontend)
+                && route.active()
+                && route.vm.is_some_and(crate::access_key_db::is_protected_vm)
+        })
+    {
+        return false;
+    }
     routes.accounts.bind_human(frontend, account)
 }
 

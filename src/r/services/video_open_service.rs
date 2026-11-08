@@ -255,6 +255,10 @@ pub(crate) fn enqueue(vm: u8, payload: &[u8], qualified: bool) -> i32 {
     let Ok(path) = core::str::from_utf8(payload) else {
         return -1;
     };
+    let actor = match crate::r::fs::trueosfs::authorized::actor_for_vm(vm) {
+        Ok(actor) => actor,
+        Err(_) => return -19,
+    };
     let source = match crate::hv::with_guest_broker_context(vm, || source(path, qualified)) {
         Ok(source) => source,
         Err(code) => return code,
@@ -273,7 +277,7 @@ pub(crate) fn enqueue(vm: u8, payload: &[u8], qualified: bool) -> i32 {
         return -11;
     };
     let target = crate::hv::blueprint_console_target(vm);
-    match playback_task(source, Session(session), target, crate::r::fs::trueosfs::authorized::Actor::Vm(vm)) {
+    match playback_task(source, Session(session), target, actor) {
         Ok(task) => {
             worker.spawn(task);
             0

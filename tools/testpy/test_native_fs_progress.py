@@ -33,6 +33,7 @@ mod hv { pub(crate) fn vm_run_generation(owner:u8)->Option<u64>{(owner<64).then(
 mod r { pub mod input_timing { pub(crate) fn now_ms()->u64{crate::CLOCK_CALLS.fetch_add(1,core::sync::atomic::Ordering::Relaxed);crate::CLOCK.load(core::sync::atomic::Ordering::Relaxed)} } }
 #[macro_export] macro_rules! log_error { (target: $target:literal; $($args:tt)*)=>{{let _=format_args!($($args)*);}} }
 #[macro_export] macro_rules! log_trace { (target: $target:literal; $($args:tt)*)=>{{let _=format_args!($($args)*);}} }
+mod trueosfs {pub mod authorized {#[derive(Clone,Copy)]pub enum Actor{Host}}}
 mod broker {
 use alloc::{string::String,sync::Arc,vec::Vec};
 use core::sync::atomic::{AtomicU64,Ordering};
@@ -67,7 +68,7 @@ tests=r'''
 #[test] fn production_hooks_own_pending_work_and_publish_before_retirement() {
  crate::CLOCK.store(100,Ordering::Relaxed);arm_startup_diagnostics(0,10,6);
  let completion=Arc::new(CompletionCell::new(true));let consumer=completion.clone();
- let mut owned=OwnedRequest{request:Request{completion:completion.clone()},owner:Some(0),progress:diagnostic_ticket(Some(0),19,"read-file")};
+ let mut owned=OwnedRequest{request:Request{completion:completion.clone()},owner:Some(0),actor:super::trueosfs::authorized::Actor::Host,progress:diagnostic_ticket(Some(0),19,"read-file")};
  BROKER_OWNERS.lock().requests.insert(19,(0,None));drop(consumer);drop(completion);
  let row=PROGRESS.sample(101,&mut 0,4).into_iter().flatten().next().unwrap();assert_eq!((row.id,row.phase),(19,progress::QUEUED));
  owned.progress.advance(progress::SERVICE,0,||102);owned.progress.advance(progress::FILESYSTEM,0,||103);
@@ -104,7 +105,7 @@ assert hv.index('request_broker::arm_startup_diagnostics')<hv.index('let Some(gu
 process=item('async fn process_request(')
 assert process.count('finish(')==20 and process.count('&mut progress);')==23
 assert process.index('progress::SERVICE')<process.index('BROKER_OWNERS.lock()')
-assert process.index('progress::FILESYSTEM')<process.index('Request::PrepareVolatileFiles { id, root, completion } =>')
+assert process.index('progress::FILESYSTEM')<process.index('Request::PrepareVolatileFiles { id, root,')
 assert 'progress: diagnostic_ticket(Some(owner), id, "write-file-abort")' in source
 
 

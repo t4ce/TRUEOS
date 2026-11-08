@@ -57,7 +57,7 @@ fn apply(image: &mut SourceImage, command: Command) -> Reply {
     result.unwrap_or_else(|error| failure("store_failed", error))
 }
 
-pub(crate) async fn write_for_owner(owner: u32, bytes: &[u8]) -> Result<(), i32> {
+pub(crate) async fn write_for_owner(actor: Actor, owner: u32, bytes: &[u8]) -> Result<(), i32> {
     if bytes.len() > store_protocol::MAX_FRAME_BYTES { return Err(FS_ERR_TOO_LARGE); }
     let identity = workspace::caller(owner)?;
     let request: Request = host(|| serde_json::from_slice(bytes)).map_err(|_| FS_ERR_BAD_PARAM)?;
@@ -76,7 +76,7 @@ pub(crate) async fn write_for_owner(owner: u32, bytes: &[u8]) -> Result<(), i32>
         && !workspace::owns_project(identity, &key, project)? {
         host(|| failure("not_owner", "This Edit window does not own that project"))
     } else {
-        execute(Actor::Vm(identity.vm), &mut images, &resolved, &key, request.command, writing).await
+        execute(actor, &mut images, &resolved, &key, request.command, writing).await
     };
     let encoded = host(|| serde_json::to_vec(&reply)).map_err(|_| FS_ERR_BAD_PARAM)?;
     if encoded.len() > store_protocol::MAX_FRAME_BYTES { return Err(FS_ERR_TOO_LARGE); }

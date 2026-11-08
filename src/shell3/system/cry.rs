@@ -249,6 +249,17 @@ pub(crate) async fn login_for_scope(scope: u8, code: &str) -> Result<(String, tr
     Ok((message.into(), report.account))
 }
 
+/// Verify a username-bound SSH authenticator response and durably consume its
+/// replay step. This does not sign in another terminal or mutate global scope.
+pub(crate) async fn remote_login(username: &str, code: &str) -> Result<trueos_crypto::AccountId, String> {
+    let proof = crypt::prepare_remote_login(username, code).map_err(error_text)?;
+    let _pending = PendingProof(proof.challenge_sequence);
+    let plan = crypt::prepare_persistence(proof.challenge_sequence).map_err(error_text)?;
+    write_persistence(&plan).await?;
+    let report = crypt::complete_persisted_remote_login(plan).map_err(error_text)?;
+    Ok(report.account)
+}
+
 pub(crate) async fn change_ssh_key(
     code: &str,
     key: [u8; 32],

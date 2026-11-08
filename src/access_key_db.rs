@@ -8,6 +8,7 @@
 use alloc::vec::Vec;
 use alloc::string::String;
 use spin::Mutex;
+use core::sync::atomic::{AtomicU64, Ordering};
 use trueos_crypto::AccountId;
 use trueos_fs::{
     RecordKey,
@@ -100,9 +101,12 @@ struct Warning {
 }
 
 struct Binding {
+    epoch: u64,
     principal: Principal,
     warnings: Vec<Warning>,
 }
+
+static NEXT_PRINCIPAL_EPOCH: AtomicU64 = AtomicU64::new(1);
 
 static VM_BINDINGS: [Mutex<Option<Binding>>; crate::allcaps::hv::VM_ID_LIMIT] =
     [const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT];
@@ -150,7 +154,10 @@ pub(crate) fn bind_launch(vm_id: u8, archive: &str, workspace: &str, account: Op
         // hashes and runtime instance UUIDs must not change app-wide grants.
         let container = container_for_workspace(archive, workspace)?;
         let principal = Principal { account, container };
+        let epoch = NEXT_PRINCIPAL_EPOCH.fetch_add(1, Ordering::Relaxed);
+        assert!(epoch != 0, "access principal epoch exhausted");
         *slot.lock() = Some(Binding {
+            epoch,
             principal: principal.clone(),
             warnings: Vec::new(),
         });
@@ -183,6 +190,39 @@ fn principal(vm_id: u8) -> Option<Principal> {
             .as_ref()
             .map(|binding| binding.principal.clone())
     })
+}
+
+/// Long-lived host work captures this token before queuing. Reusing a VM slot
+/// never lends its next principal to the previous run's unfinished work.
+pub(crate) fn principal_epoch(vm_id: u8) -> Option<u64> {
+    Some(VM_BINDINGS.get(vm_id as usize)?.lock().as_ref()?.epoch)
+}
+
+fn principal_at(vm_id: u8, epoch: u64) -> Option<Principal> {
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let binding = VM_BINDINGS.get(vm_id as usize)?.lock();
+        let binding = binding.as_ref()?;
+        (binding.epoch == epoch).then(|| binding.principal.clone())
+    })
+}
+
+pub(crate) fn authorize_record_at(vm_id: u8, epoch: u64, key: RecordKey) -> Result<(), AccessDenied> {
+    let subject = principal_at(vm_id, epoch).ok_or(AccessDenied::MissingIdentity)?;
+    if key == RecordKey::Ffa { return Ok(()); }
+    ACCESS_KEY_DB.lock().check_file(subject.account, &subject.container, key)
+}
+
+pub(crate) fn workspace_for_vm_at(vm_id: u8, epoch: u64) -> Option<String> {
+    Some(principal_at(vm_id, epoch)?.container.workspace_root())
+}
+
+pub(crate) fn authorize_protected_workspace_at(vm_id: u8, epoch: u64, root_key: RecordKey) -> Result<(), AccessDenied> {
+    let subject = principal_at(vm_id, epoch).ok_or(AccessDenied::MissingIdentity)?;
+    let account = subject.account.ok_or(AccessDenied::MissingIdentity)?;
+    if !OWNED_WORKSPACES.lock().iter().any(|(id, owner, key)| {
+        id == &subject.container && *owner == account && *key == root_key
+    }) { return Err(AccessDenied::MissingGrant); }
+    ACCESS_KEY_DB.lock().check_file(Some(account), &subject.container, root_key)
 }
 
 /// Child launches inherit the parent's frozen principal, never a global login.

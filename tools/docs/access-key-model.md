@@ -21,8 +21,8 @@ key; `.codex` remains durable. Only after both are ready does trusted host code
 install the owner's app grant and container membership. Any failure aborts
 preparation; it never falls back to public storage.
 
-`/apps` itself stays FFA. New files and directories inherit their direct parent's
-key under the same filesystem lease as their publication. Existing records keep
+`/apps` itself stays FFA. New files and directories inherit the nearest keyed ancestor
+identity under the same filesystem lease as their publication. Existing records keep
 their keys when updated. Old FFA descendants remain protected by the keyed
 ancestor, without rewriting a user's existing data.
 

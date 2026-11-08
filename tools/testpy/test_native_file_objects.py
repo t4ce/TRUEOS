@@ -29,8 +29,9 @@ def main():
         'struct FileWriteStream', 'pub struct FileReadHandle', 'pub async fn file_write_chunk_async(',
         'pub async fn file_write_finish_async(', 'pub async fn file_write_abort_async(',
         'pub async fn file_read_handle_range_async(', 'pub(crate) fn file_read_handle_is_current(',
-        'fn push_json_string_escaped(', 'fn push_hex_bytes(', 'fn push_record_key_json(',
+        'pub(super) enum ReadRangePhase', 'fn push_json_string_escaped(', 'fn push_hex_bytes(', 'fn push_record_key_json(',
     ])
+    helpers=helpers.replace('pub(super) enum ReadRangePhase','#[derive(Clone,Copy,Debug,Eq,PartialEq)]\npub(super) enum ReadRangePhase')
     # These declarations carry derives in production; the extractor deliberately starts at the item.
     helpers=helpers.replace('pub enum CreateDirectoryError','#[derive(Debug)]\npub enum CreateDirectoryError').replace('pub enum RemoveNodeError','#[derive(Debug,PartialEq)]\npub enum RemoveNodeError')
     helpers=helpers.replace('pub enum CheckedWriteError','#[derive(Debug,PartialEq)]\npub enum CheckedWriteError').replace('enum CheckedWriteTypePolicy','#[derive(Clone,Copy,PartialEq,Eq)]\nenum CheckedWriteTypePolicy').replace('pub struct FileReadHandle','#[derive(Clone,Copy)]\npub struct FileReadHandle')

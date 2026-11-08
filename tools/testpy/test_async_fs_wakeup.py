@@ -40,7 +40,7 @@ def harness_source() -> str:
     wait_end = WAIT_SOURCE.index("    pub fn wait_for_event_blocking(")
     wait = WAIT_SOURCE[wait_start:wait_end].removesuffix("    #[inline]\n") + "}\n"
     functions = "\n".join(item(FS_SOURCE, name) for name in (
-        "lock_operations", "next_operation_id", "start_inner", "take_request",
+        "lock_operations", "next_operation_id", "start_inner", "start_write_inner", "stage_write", "take_request",
         "notify_request_arrival", "write_commit", "pending_in", "pending_for_owner",
         "release_owner", "begin_request", "finish_request", "discard",
         "process_owned_request", "poll_request_batch", "service_task",
@@ -69,6 +69,13 @@ mod spin {
     }
 }
 use spin::Mutex;
+static ACTOR_EPOCH: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+mod trueos_ide {pub mod store_protocol {pub const REQUEST:&str="ide-request";pub const MAX_FRAME_BYTES:usize=1024;}}
+mod r { pub mod services {pub mod hull_download_service {pub const PREFIX:&str="download/";pub const MAX_FRAME:usize=1024;}pub mod ide_workspace_service {pub const VFILE_PREFIX:&str="workspace/";pub const MAX_FRAME_BYTES:usize=1024;}} pub mod fs { pub mod trueosfs {pub type ContentTypeId=u32; pub mod file_objects {pub fn release_owner(_:u32)->usize{0}} pub mod authorized {
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)] pub struct Actor(pub u64);
+ pub fn actor_from_owner(_:u32)->Result<Actor,i32>{Ok(Actor(crate::ACTOR_EPOCH.load(core::sync::atomic::Ordering::SeqCst)))}
+}}}}
+fn map_block_error(error:i32)->i32{error}
 mod allocators {
     pub fn with_host_alloc_domain_strong<T>(f: impl FnOnce() -> T) -> T { f() }
 }
@@ -91,6 +98,10 @@ mod wait {
 }
 const ASYNC_FS_MAX_OPERATIONS: usize = 64;
 ''' + active_limit + "\n" + active_type + r'''
+type CheckedWriteOptions=();
+const ASYNC_FS_MAX_RESULT_BYTES:u64=1024;
+const ASYNC_FS_MAX_FILE_WRITE_BYTES:u64=1024;
+const FS_ERR_TOO_LARGE:i32=-4;
 const FS_ERR_NO_SPACE: i32 = -1;
 const FS_ERR_NOT_FOUND: i32 = -2;
 const FS_ERR_BAD_PARAM: i32 = -3;
@@ -118,8 +129,8 @@ enum RequestKind {
 impl RequestKind {
     fn progress_class(&self) -> u32 { match self { Self::Stat { .. } => 4, Self::Write { .. } => 2 } }
 }
-struct Request { owner: u32, id: u32, kind: RequestKind }
-struct Operation { owner: u32, state: OperationState }
+struct Request { owner: u32, id: u32, actor:r::fs::trueosfs::authorized::Actor, kind: RequestKind }
+struct Operation { owner: u32, actor:r::fs::trueosfs::authorized::Actor, state: OperationState }
 enum OperationState {
     Pending,
     Upload { path: String, bytes: Vec<u8>, total_len: usize, content_type: u32, legacy_blob: bool, checked: Option<()> },
@@ -153,6 +164,7 @@ fn poll<F: Future>(future: Pin<&mut F>, wakes: &Arc<WakeCount>) -> Poll<F::Outpu
     future.poll(&mut Context::from_waker(&waker))
 }
 fn reset() {
+    ACTOR_EPOCH.store(1,Ordering::SeqCst);
     ASYNC_FS_REQUESTS.lock().clear();
     ASYNC_FS_OPERATIONS.lock().clear();
     *ASYNC_FS_ACTIVE_REQUESTS.lock() = [None; ASYNC_FS_MAX_ACTIVE];
@@ -176,6 +188,17 @@ fn release_slow() {
 }
 
 #[test]
+fn queued_requests_and_uploads_retain_the_admission_actor_epoch() {
+ reset();let id=start_inner(7,RequestKind::Stat{path:"config".into()});
+ ACTOR_EPOCH.store(2,Ordering::SeqCst);
+ let request=take_request().unwrap();assert_eq!(request.id,id as u32);assert_eq!(request.actor.0,1);
+ finish_request(&request,Some(OperationState::Unit));
+ let upload=start_write_inner(7,"config".into(),1,1,true,None) as u32;
+ ACTOR_EPOCH.store(3,Ordering::SeqCst);
+ if let OperationState::Upload{bytes,..}=&mut ASYNC_FS_OPERATIONS.lock().get_mut(&upload).unwrap().state{bytes.push(1)}else{panic!("upload")}
+ assert_eq!(write_commit(7,upload),0);assert_eq!(take_request().unwrap().actor.0,2);
+}
+#[test]
 fn sleeping_service_is_woken_by_admission_and_rearms_after_drain() {
     reset();
     let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
@@ -194,6 +217,7 @@ fn sleeping_service_is_woken_by_admission_and_rearms_after_drain() {
 fn committed_upload_wakes_service_and_rejected_commit_does_not() {
     reset();
     ASYNC_FS_OPERATIONS.lock().insert(123, Operation {
+        actor:r::fs::trueosfs::authorized::Actor(1),
         owner: 7,
         state: OperationState::Upload {
             path: "config".into(), bytes: vec![1, 2], total_len: 2,
@@ -289,7 +313,7 @@ fn concurrent_owner_slots_are_bounded_and_skip_queued_same_owner() {
         assert_eq!(request.owner, owner);
     }
     assert!(take_request().is_none(), "concurrency limit exceeded");
-    let first = Request { owner: 1, id: ids[0], kind: RequestKind::Stat { path: "".into() } };
+    let first = Request { actor:r::fs::trueosfs::authorized::Actor(1), owner: 1, id: ids[0], kind: RequestKind::Stat { path: "".into() } };
     finish_request(&first, Some(OperationState::Unit));
     assert_eq!(take_request().unwrap().owner, ASYNC_FS_MAX_ACTIVE as u32 + 1);
 }
@@ -338,8 +362,8 @@ fn discarded_queued_request_is_skipped_before_its_owner_successor() {
 fn pending_count_includes_submitting_and_running_owners_without_duplicates() {
     reset();
     let queued = stat_for(7);
-    ASYNC_FS_OPERATIONS.lock().insert(10_000, Operation { owner: 7, state: OperationState::Pending });
-    ASYNC_FS_OPERATIONS.lock().insert(10_001, Operation { owner: 7, state: OperationState::Unit });
+    ASYNC_FS_OPERATIONS.lock().insert(10_000, Operation { actor:r::fs::trueosfs::authorized::Actor(1), owner: 7, state: OperationState::Pending });
+    ASYNC_FS_OPERATIONS.lock().insert(10_001, Operation { actor:r::fs::trueosfs::authorized::Actor(1), owner: 7, state: OperationState::Unit });
     assert_eq!(pending_for_owner(7), 2);
     let request = take_request().unwrap();
     assert_eq!(request.id, queued);

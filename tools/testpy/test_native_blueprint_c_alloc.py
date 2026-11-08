@@ -21,7 +21,18 @@ PROVIDERS=[('zstd-sys','2.0.16+zstd.1.5.7','build.rs'),('onig_sys','69.9.1','bui
 BEHAVIOR=r'''
 extern crate alloc;
 #[path="__ALLOC__"] mod native_alloc;
+#[path="__CLOCK__"] mod native_clock;
+mod vclock {
+ pub fn monotonic_nanos()->u64 {
+  static START:std::sync::OnceLock<std::time::Instant>=std::sync::OnceLock::new();
+  START.get_or_init(std::time::Instant::now).elapsed().as_nanos().try_into().unwrap()
+ }
+}
 use std::io::{Read,Write};
+#[unsafe(no_mangle)]unsafe extern "C" fn trueos_cabi_write(stream:u32,bytes:*const u8,len:usize){
+ let bytes=unsafe{std::slice::from_raw_parts(bytes,len)};
+ match stream {1=>std::io::stdout().write_all(bytes).unwrap(),2=>std::io::stderr().write_all(bytes).unwrap(),_=>panic!("unexpected native console stream")}
+}
 fn main(){
  let bytes=b"Native Blueprint allocation: compress, parse and match real data.\n".repeat(1000);
  let packed=zstd::stream::encode_all(&bytes[..],3).unwrap();assert_eq!(zstd::stream::decode_all(&packed[..]).unwrap(),bytes);println!("ok Zstd compression and decompression with native allocator");
@@ -29,6 +40,10 @@ fn main(){
  let regex=onig::Regex::new(r"(?<item>native)-(?<number>[0-9]+)").unwrap();let caps=regex.captures("prefix native-123 suffix").unwrap();assert_eq!(caps.at(1),Some("native"));assert_eq!(caps.at(2),Some("123"));assert!(!regex.is_match("native-zero"));println!("ok Onig captures and rejection with native allocator");
  let mut parser=tree_sitter::Parser::new();parser.set_language(&tree_sitter_bash::LANGUAGE.into()).unwrap();
  let program=b"cat <<'EOF'\nnative heredoc\nEOF\nfor x in a b; do echo \"$x\"; done\n";let tree=parser.parse(program,None).unwrap();assert!(!tree.root_node().has_error());let again=parser.parse(program,Some(&tree)).unwrap();assert!(!again.root_node().has_error());println!("ok actual Bash external scanner and incremental parsing");
+ #[allow(deprecated)]parser.set_timeout_micros(1);
+ let long="echo native_parser_timeout\n".repeat(20000);assert!(parser.parse(&long,None).is_none());
+ parser.reset();#[allow(deprecated)]parser.set_timeout_micros(0);
+ assert!(!parser.parse(program,None).unwrap().root_node().has_error());println!("ok native monotonic parser deadline cancels and reset parses again");
 }
 '''
 NATIVE_ENTRY=r'''
@@ -44,6 +59,7 @@ unsafe extern "C" {
 }
 #[unsafe(no_mangle)]pub extern "C" fn _start()->! {
  unsafe {
+  core::hint::black_box(trueos::native_c_clock::trueos_blueprint_c_monotonic_nanos());
   let p=trueos::native_c_alloc::trueos_blueprint_c_malloc(32);trueos::native_c_alloc::trueos_blueprint_c_free(p);
   let p=trueos::native_c_alloc::trueos_blueprint_c_calloc(7,9);let p=trueos::native_c_alloc::trueos_blueprint_c_realloc(p,128);trueos::native_c_alloc::trueos_blueprint_c_free(p);
   let mut out=[0u8;128];let mut input=*b"echo native\n";core::hint::black_box(ZSTD_compress(out.as_mut_ptr().cast(),out.len(),input.as_ptr().cast(),input.len(),1));
@@ -83,7 +99,7 @@ edition="2024"
 [workspace]
 [dependencies]
 zstd="=0.13.3"
-zstd-sys={{path={json.dumps(str(staged['zstd-sys']))}}}
+zstd-sys={{path={json.dumps(str(staged['zstd-sys']))},default-features=false}}
 onig={{version="=6.5.1",default-features=false}}
 bzip2={{version="=0.6.1",default-features=false,features=["bzip2-sys","static"]}}
 tree-sitter="=0.25.10"
@@ -96,10 +112,25 @@ path="lib.rs"
 name="native-c-alloc-behavior"
 path="behavior.rs"
 ''')
-  allocator=str(SDK/'crates/trueos-v/src/native_c_alloc.rs');(work/'lib.rs').write_text('extern crate alloc;\n#[path='+json.dumps(allocator)+']pub mod native_alloc;\n');(work/'behavior.rs').write_text(BEHAVIOR.replace('__ALLOC__',allocator))
+  allocator=str(SDK/'crates/trueos-v/src/native_c_alloc.rs');clock=str(SDK/'crates/trueos-v/src/native_c_clock.rs');(work/'lib.rs').write_text('extern crate alloc;\n#[path='+json.dumps(allocator)+']pub mod native_alloc;\n');(work/'behavior.rs').write_text(BEHAVIOR.replace('__ALLOC__',allocator).replace('__CLOCK__',clock))
+  clock_probe=work/'clock-contract.c';clock_probe.write_text('''#include <stdint.h>
+#include <stdbool.h>
+#include <assert.h>
+typedef uint64_t TSDuration;
+#include "'''+str(SDK/'src/tree_sitter_native_clock.h')+'''"
+uint64_t trueos_blueprint_c_monotonic_nanos(void) { return 1999999015; }
+int main(void) {
+ TSClock now=clock_now();assert(now.seconds==1 && now.nanos==999999015);
+ TSClock deadline=clock_after(now,duration_from_micros(2));assert(deadline.seconds==2 && deadline.nanos==1015);
+ assert(clock_is_gt(deadline,now));assert(!clock_is_gt(now,deadline));assert(!clock_is_gt(now,now));
+ assert(clock_is_null(clock_null()));assert(!clock_is_null(now));
+ assert(duration_to_micros(duration_from_micros(UINT64_MAX))==UINT64_MAX);
+ deadline=clock_after(now,UINT64_MAX);assert(deadline.seconds>now.seconds && deadline.nanos<1000000000);
+}
+''');run('native-clock-contract-build',['cc','-std=c11','-Wall','-Wextra','-Werror',str(clock_probe),'-o',str(work/'clock-contract')]);run('native-clock-contract',[str(work/'clock-contract')])
   counts={}
   for mode,flags in [('debug',[]),('release',['--release'])]:
-   env=environment(out/'host-target');text=run('real-c-providers-'+mode,cargo+['run','--offline',*flags,'--target','x86_64-unknown-linux-gnu','--bin','native-c-alloc-behavior'],env);counts[mode]=len(re.findall('^ok ',text,re.M));assert counts[mode]==4
+   env=environment(out/'host-target');text=run('real-c-providers-'+mode,cargo+['run','--offline',*flags,'--target','x86_64-unknown-linux-gnu','--bin','native-c-alloc-behavior'],env);counts[mode]=len(re.findall('^ok ',text,re.M));assert counts[mode]==5
    run('allocation-contract-'+mode,cargo+['test','--offline',*flags,'--target','x86_64-unknown-linux-gnu','--lib'],env)
   base=out/'host-target/x86_64-unknown-linux-gnu/release/build'
   for pattern in ['zstd-sys-*/out/libzstd.a','onig_sys-*/out/libonig.a','tree-sitter-*/out/libtree-sitter.a','tree-sitter-bash-*/out/libtree-sitter-bash.a','bzip2-sys-*/out/lib/libbz2.a']:
@@ -111,7 +142,7 @@ version="0.0.0"
 edition="2024"
 [workspace]
 [dependencies]
-trueos={{path={json.dumps(str(SDK/'api'))},default-features=false,features=["native-c-alloc","default-global-allocator","default-panic-handler"]}}
+trueos={{path={json.dumps(str(SDK/'api'))},default-features=false,features=["native-c-alloc","native-c-clock","default-global-allocator","default-panic-handler"]}}
 [[bin]]
 name="native-c-alloc-probe"
 path="main.rs"
@@ -121,12 +152,13 @@ panic="abort"
   native_env=environment(out/'native-target')
   run('native-core-alloc-object',cargo+['build','--offline','--release','--manifest-path',str(probe/'Cargo.toml'),'--bin','native-c-alloc-probe','--target',str(TARGET),'-Zbuild-std=core,compiler_builtins,alloc','-Zbuild-std-features=compiler-builtins-mem','-Zjson-target-spec'],native_env)
   native=out/'native-target'/TARGET.stem/'release/native-c-alloc-probe.o';linked=out/'native-c-codecs.o'
-  run('native-c-codecs-rel-link',['ld.lld','-r','--gc-sections','--undefined=_start','-o',str(linked),str(native),'--start-group',*[str(p)for p in archives],'--end-group'])
+  sysroot=Path(subprocess.check_output(['rustup','run',TOOLCHAIN,'rustc','--print','sysroot'],text=True).strip());linker=sysroot/'lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld'
+  run('native-c-codecs-rel-link',[str(linker),'-flavor','gnu','-r','--gc-sections','--undefined=_start','-o',str(linked),str(native),'--start-group',*[str(p)for p in archives],'--end-group'])
   text=run('native-c-codecs-imports',['nm','-u',str(linked)]);symbols=sorted({line.split()[-1]for line in text.splitlines()if line.strip()})
-  assert not set(symbols).intersection({'malloc','calloc','realloc','free','trueos_cabi_alloc','trueos_cabi_realloc','trueos_cabi_free'}),symbols
+  assert not set(symbols).intersection({'malloc','calloc','realloc','free','trueos_cabi_alloc','trueos_cabi_realloc','trueos_cabi_free','clock_gettime','clock'}),symbols
   assert not any(s.startswith('trueos_blueprint_c_')for s in symbols),symbols
-  assert 'sys_alloc_aligned'in symbols and'sys_dealloc'in symbols,symbols
+  assert 'sys_alloc_aligned'in symbols and'sys_dealloc'in symbols and'trueos_time_monotonic_nanos'in symbols,symbols
   assert not list((out/'native-target'/TARGET.stem).rglob('libstd-*.rlib'))
- sources=[info(SDK/p)for p in ['src/codex_native_c_overlay.rs','crates/trueos-v/src/native_c_alloc.rs']]
+ sources=[info(SDK/p)for p in ['src/codex_native_c_overlay.rs','src/tree_sitter_native_clock.h','crates/trueos-v/src/native_c_alloc.rs','crates/trueos-v/src/native_c_clock.rs']]
  (out/'receipt.json').write_text(json.dumps({'scope':__doc__,'checks':checks,'cases':counts,'sources':sources,'object':info(linked),'undefined':symbols,'c_archives':[info(p)for p in archives]},indent=2)+'\n');print(out/'receipt.json')
 if __name__=='__main__':main()

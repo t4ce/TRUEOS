@@ -50,6 +50,7 @@ type Completion<T> = Arc<CompletionCell<FsResult<T>>>;
 struct OwnedRequest {
     request: Request,
     owner: Option<u8>,
+    actor: super::trueosfs::authorized::Actor,
     // The broker, rather than its waiting caller, owns this observation.
     progress: progress::Ticket<'static>,
 }
@@ -416,6 +417,7 @@ fn submit<T>(
     let completion = Arc::new(CompletionCell::new());
     let request = build(id, completion.clone());
     let owner = crate::hv::current_guest_execution_context_vm_id();
+    let actor = match owner { Some(vm) => match super::trueosfs::authorized::actor_for_vm(vm) { Ok(actor) => actor, Err(_) => return Ok(Err(FsError::PermissionDenied)) }, None => super::trueosfs::authorized::Actor::Host };
     let (id, operation) = request.metadata();
     let queue_depth = {
         let mut requests = BROKER_REQUESTS.lock();
@@ -425,7 +427,7 @@ fn submit<T>(
         BROKER_OWNERS.lock().submit(id, owner, request.stream_handle());
         let progress = diagnostic_ticket(owner, id, operation);
         crate::allocators::with_host_alloc_domain_strong(|| {
-            requests.push_back(OwnedRequest { request, owner, progress });
+            requests.push_back(OwnedRequest { request, owner, actor, progress });
         });
         requests.len()
     };
@@ -661,8 +663,7 @@ pub fn exists(
 }
 
 async fn process_request(owned: OwnedRequest) {
-    let OwnedRequest { request, owner, mut progress } = owned;
-    let actor = super::trueosfs::authorized::Actor::from(owner);
+    let OwnedRequest { request, owner, actor, mut progress } = owned;
     progress.advance(progress::SERVICE, 0, crate::r::input_timing::now_ms);
     let (request_id, operation) = request.metadata();
     crate::log_trace!(target: "filesystem";
@@ -760,7 +761,19 @@ async fn process_request(owned: OwnedRequest) {
         } => {
             progress.advance(progress::RANGE_SCRATCH, 0, crate::r::input_timing::now_ms);
             let mut scratch = alloc::vec![0u8; cap];
-            let result = match super::trueosfs::authorized::read_range(actor, disk, path.as_str(), offset, scratch.as_mut_slice()).await
+            let result = match super::trueosfs::authorized::read_range_observed(
+                actor, disk, path.as_str(), offset, scratch.as_mut_slice(),
+                |phase| {
+                    use super::trueosfs::ReadRangePhase;
+                    let phase = match phase {
+                        ReadRangePhase::Placement => progress::RANGE_PLACEMENT,
+                        ReadRangePhase::RecordCache => progress::RANGE_RECORD_CACHE,
+                        ReadRangePhase::Index => progress::RANGE_INDEX,
+                        ReadRangePhase::Read => progress::RANGE_READ,
+                    };
+                    progress.advance(phase, 0, crate::r::input_timing::now_ms);
+                },
+            ).await
             {
                 Ok(Some(got)) => {
                     scratch.truncate(got);
@@ -1017,12 +1030,14 @@ fn queue_retired_write_aborts() {
                 id, handle, completion: Arc::new(CompletionCell::new()),
             },
             owner: Some(owner),
+            actor: super::trueosfs::authorized::Actor::Host,
             progress: diagnostic_ticket(Some(owner), id, "write-file-abort"),
         });
     }
 }
 
 async fn stat_async(actor: super::trueosfs::authorized::Actor, disk: block::DeviceHandle, path: &str) -> FsResult<FsStat> {
+    super::trueosfs::authorized::authorize_keys(actor, &[])?;
     if path.is_empty() {
         return Ok(FsStat {
             kind: FsNodeKind::Directory,

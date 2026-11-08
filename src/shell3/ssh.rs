@@ -1,18 +1,25 @@
 //! Kernel SSH transport: public-key login and RFC 4256 authenticator-code recovery.
 //! The BSP commits cry's replay counter; APs own the SSH runner and Shell3.
 use super::tty::Terminal;
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{string::String, sync::Arc, vec::Vec};
+use zeroize::Zeroizing;
 use core::sync::atomic::{AtomicBool, Ordering};
 use sunset::{ChanData, ChanHandle, Event, Runner, ServEvent, Server, SignKey};
 
 const INPUT_LIMIT: usize = 64 * 1024;
 const AUTH_TIMEOUT_MS: u64 = 60_000;
 
+#[derive(Clone, Copy)]
+enum AuthOutcome { Denied, Verified(trueos_crypto::AccountId) }
+
 pub(super) struct AuthCompletion {
-    result: spin::Mutex<Option<bool>>,
+    result: spin::Mutex<Option<AuthOutcome>>,
     cancelled: AtomicBool,
 }
 pub(super) struct AuthRequest {
+    username: String,
+    code: Zeroizing<String>,
+    deadline: trueos_time::Instant,
     completion: Arc<AuthCompletion>,
 }
 static AUTH_REQUESTS: spin::Once<&'static crate::net::adapter::NetQueue<AuthRequest>> =
@@ -28,8 +35,24 @@ pub(super) async fn service_auth() {
         return;
     };
     for request in queue.drain(1) {
-        // Recovery login needs the removed persistence command. Fail closed.
-        *request.completion.result.lock() = Some(false);
+        if request.completion.cancelled.load(Ordering::Acquire)
+            || trueos_time::Instant::now() >= request.deadline
+        {
+            *request.completion.result.lock() = Some(AuthOutcome::Denied);
+            continue;
+        }
+        let result = super::cry::remote_login(&request.username, &request.code).await;
+        let outcome = match result {
+            Ok(account) if !request.completion.cancelled.load(Ordering::Acquire)
+                && trueos_time::Instant::now() < request.deadline => AuthOutcome::Verified(account),
+            Ok(_) => AuthOutcome::Denied,
+            Err(reason) => {
+                // Reason contains a policy/storage category, never the code.
+                crate::log_warn!(target: "service"; "shell3-ssh: authenticator rejected reason={}\n", reason);
+                AuthOutcome::Denied
+            }
+        };
+        *request.completion.result.lock() = Some(outcome);
     }
 }
 
@@ -111,6 +134,9 @@ impl Session {
         }
         if !self.shell_requested && trueos_time::Instant::now() >= self.deadline {
             self.closed = true;
+            if let Some(completion) = &self.auth {
+                completion.cancelled.store(true, Ordering::Release);
+            }
             return;
         }
         if self.drive(terminal).is_err() {
@@ -121,11 +147,15 @@ impl Session {
     fn drive(&mut self, mut terminal: Option<&mut Terminal>) -> sunset::Result<()> {
         if let Some(completion) = self.auth.as_ref() {
             let result = completion.result.lock().take();
-            let Some(success) = result else {
+            let Some(outcome) = result else {
                 return Ok(());
             };
             self.auth = None;
-            self.runner.finish_deferred_auth(success)?;
+            self.access_account = match outcome {
+                AuthOutcome::Denied => None,
+                AuthOutcome::Verified(account) => Some(account),
+            };
+            self.runner.finish_deferred_auth(self.access_account.is_some())?;
         }
         // Bound per-poll CPU work; unread input and output stay queued.
         for _ in 0..64 {
@@ -142,7 +172,7 @@ impl Session {
                         ServEvent::FirstAuth(mut h) => {
                             self.access_account = None;
                             if super::ssh_boot::allow_none()
-                                && !crate::crypt::ssh_requires_public_key(h.username()?) {
+                                && !crate::crypt::ssh_requires_account_proof(h.username()?) {
                                 h.allow()?;
                             } else {
                                 h.set_auth_methods(false, true)?;
@@ -152,11 +182,25 @@ impl Session {
                         // Sunset's response event also carries the RFC 4256 code.
                         // Actual password authentication is disabled above.
                         ServEvent::PasswordAuth(h) => {
+                            self.access_account = None;
+                            let username = h.username()?;
+                            let code = h.password()?;
+                            if crate::crypt::canonical_username(username).as_deref() != Ok(username)
+                                || code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit())
+                            {
+                                h.reject()?;
+                                continue;
+                            }
+                            let username = String::from(username);
+                            let code = Zeroizing::new(String::from(code));
                             let completion = Arc::new(AuthCompletion {
                                 result: spin::Mutex::new(None),
                                 cancelled: AtomicBool::new(false),
                             });
                             let request = AuthRequest {
+                                username,
+                                code,
+                                deadline: self.deadline,
                                 completion: completion.clone(),
                             };
                             if AUTH_REQUESTS

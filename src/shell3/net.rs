@@ -247,7 +247,7 @@ impl WorkerTerminals {
 #[trueos_executor::task]
 pub async fn terminal_task() {
     crate::log_info!(target: "service";
-        "shell3-ssh: policy=development host-key=embedded-stable auth=none storage=independent\n");
+        "shell3-ssh: policy=development host-key=embedded-stable auth=account-proof anonymous=unregistered storage=independent\n");
     super::ssh::init();
     let spawner = unsafe { trueos_executor::Spawner::for_current_executor().await };
     match super::ssh::auth_task() {

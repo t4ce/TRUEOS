@@ -207,6 +207,7 @@ pub(crate) mod authorized;
 
 #[derive(Clone, Copy, Debug)]
 pub struct FileReadHandle {
+    actor: authorized::Actor,
     disk: block::DeviceHandle,
     params: trueos_fs::FsParams,
     record: trueos_fs::FileRecordRef,
@@ -2552,6 +2553,7 @@ pub async fn file_read_open_async(
     };
 
     Ok(record.map(|record| FileReadHandle {
+        actor: authorized::Actor::Host,
         disk,
         params,
         record,
@@ -2570,6 +2572,7 @@ pub async fn file_read_handle_range_async(
     offset: u64,
     out: &mut [u8],
 ) -> Result<Option<usize>, block::Error> {
+    authorized::authorize_keys(handle.actor, &[])?;
     let _activity = crate::disc::access::Activity::begin(handle.disk)?;
     if !file_read_handle_is_current(handle) {
         return Err(block::Error::NotReady);
