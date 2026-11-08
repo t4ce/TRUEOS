@@ -17,6 +17,7 @@ from test_native_mio import ROOT, TOOLCHAIN, environment, info, manifest
 from test_native_rama_tcp import STAGE_DRIVER
 SDK=ROOT.parent/'TRUEOS-Blueprints'
 TARGET=ROOT.parent/'TRUEOS-Buildins/tools/trueos-object-native.json'
+BEHAVIOR_GROUPS=5
 PROVIDERS=[('zstd-sys','2.0.16+zstd.1.5.7','build.rs'),('onig_sys','69.9.1','build.rs'),('tree-sitter','0.25.10','binding_rust/build.rs'),('tree-sitter-bash','0.25.1','bindings/rust/build.rs'),('bzip2-sys','0.1.13+1.0.8','build.rs')]
 BEHAVIOR=r'''
 extern crate alloc;
@@ -130,7 +131,7 @@ int main(void) {
 ''');run('native-clock-contract-build',['cc','-std=c11','-Wall','-Wextra','-Werror',str(clock_probe),'-o',str(work/'clock-contract')]);run('native-clock-contract',[str(work/'clock-contract')])
   counts={}
   for mode,flags in [('debug',[]),('release',['--release'])]:
-   env=environment(out/'host-target');text=run('real-c-providers-'+mode,cargo+['run','--offline',*flags,'--target','x86_64-unknown-linux-gnu','--bin','native-c-alloc-behavior'],env);counts[mode]=len(re.findall('^ok ',text,re.M));assert counts[mode]==5
+   env=environment(out/'host-target');text=run('real-c-providers-'+mode,cargo+['run','--offline',*flags,'--target','x86_64-unknown-linux-gnu','--bin','native-c-alloc-behavior'],env);counts[mode]=len(re.findall('^ok ',text,re.M));assert counts[mode]==BEHAVIOR_GROUPS
    run('allocation-contract-'+mode,cargo+['test','--offline',*flags,'--target','x86_64-unknown-linux-gnu','--lib'],env)
   base=out/'host-target/x86_64-unknown-linux-gnu/release/build'
   for pattern in ['zstd-sys-*/out/libzstd.a','onig_sys-*/out/libonig.a','tree-sitter-*/out/libtree-sitter.a','tree-sitter-bash-*/out/libtree-sitter-bash.a','bzip2-sys-*/out/lib/libbz2.a']:

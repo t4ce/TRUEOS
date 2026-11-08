@@ -54,22 +54,27 @@ There is no guest operation for inventing an account or granting itself a key.
 
 ## Captured identity
 
-A human frontend receives an account only after successful Cry sign-in or an
-SSH request signed by that account's enrolled key. An unsigned SSH key probe,
+A human frontend receives an account only after successful Cry sign-in, an
+SSH request signed by that account's enrolled key, or a verified SSH Cry code.
+The SSH code route durably consumes the replay step before accepting the session
+and does not sign in any other terminal. An unsigned SSH key probe,
 username text, or an anonymous development connection does not authenticate an
-account. Enrolled SSH usernames must proceed to key proof rather than bypassing
-it through development none-auth.
+account. Persisted SSH usernames must prove their identity by enrolled key or Cry code,
+even when no SSH key has been added. They cannot bypass proof through
+development none-auth.
 
 Successful Cry login binds the exact initiating frontend after durable success.
-Other terminals keep their own bindings. Logout or detach clears that frontend's
-binding. Existing stored account IDs remain unchanged, including legacy
+Other terminals keep their own bindings. A frontend must park an active protected
+run before changing account or logging out; detach clears only its own binding. Existing stored account IDs remain unchanged, including legacy
 `t4ce`/ROOT profiles; new accounts persist distinct IDs derived from their newly
 generated credential public keys.
 
 Launch requests capture their frontend's account before queuing. Guest launches
 and child terminals inherit the parent's captured principal. They never consult
 a later global login or adopt a presentation destination's account. The VM
-binding is cleared at teardown. Protected retained runs reject another account's
+binding is cleared at teardown. Queued work retains a unique binding epoch;
+reusing a VM slot cannot lend the new run's grants to old work. Protected retained
+runs reject another account's
 terminal takeover and lifecycle control.
 
 ## Filesystem boundary

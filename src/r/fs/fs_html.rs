@@ -62,15 +62,13 @@ async fn html_tree_impl(
         return Ok(Some(String::from("<ul></ul>")));
     }
 
-    let Some(nodes) = super::trueosfs::authorized::index_snapshot(actor, disk).await? else {
-        return Ok(None);
-    };
-
     const CAP: usize = super::trueosfs::TRUEOSFS_LIST_SOFT_CAP + 2;
     let effective_entries = core::cmp::min(max_entries, super::trueosfs::TRUEOSFS_LIST_SOFT_CAP);
+    let Some((nodes, mut truncated)) = super::trueosfs::authorized::index_snapshot_limited(actor, disk, effective_entries).await? else {
+        return Ok(None);
+    };
     let cap_limit = core::cmp::min(effective_entries.saturating_add(2), CAP);
     let entry_limit = cap_limit.saturating_sub(1);
-    let mut truncated = nodes.len() > effective_entries;
 
     let mut tree: Tree<FsEntry, CAP> = Tree::new();
     let Some(root) = tree.add_root(FsEntry {
