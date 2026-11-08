@@ -1,4 +1,4 @@
-//! Mouse-only layout and interaction for the native LINK terminal.
+//! Mouse-operated LINK layout for grouping keyboard, pointer and gamepad devices.
 use crate::usb3::hid::hut::{HidDevice, HidDeviceId, HidDeviceKind, InputCombo};
 use alloc::{format, string::String, vec, vec::Vec};
 
@@ -28,6 +28,7 @@ pub(super) fn device_label(device: &HidDevice) -> String {
         HidDeviceKind::Mouse => "Mouse",
         HidDeviceKind::Tablet => "Tablet",
         HidDeviceKind::Keyboard => "Keyboard",
+        HidDeviceKind::Gamepad => "Gamepad",
     };
     format!(
         "{}{} {}:{}:{}",
@@ -512,6 +513,9 @@ impl View {
             let keyboard = data.devices.iter().find(|device| {
                 device.combo_id == bucket.combo_id && device.id.kind == HidDeviceKind::Keyboard
             });
+            let gamepad = data.devices.iter().find(|device| {
+                device.combo_id == bucket.combo_id && device.id.kind == HidDeviceKind::Gamepad
+            });
             canvas.text(
                 rect.x + 2,
                 rect.y + 1,
@@ -530,7 +534,20 @@ impl View {
                     |device| format!("█ {}", device_label(device)),
                 ),
             );
-            for (row, device) in [(rect.y + 1, pointer), (rect.y + 2, keyboard)] {
+            canvas.text(
+                rect.x + 2,
+                rect.y + 3,
+                rect.w - 4,
+                &gamepad.map_or_else(
+                    || String::from("░ No gamepad"),
+                    |device| format!("█ {}", device_label(device)),
+                ),
+            );
+            for (row, device) in [
+                (rect.y + 1, pointer),
+                (rect.y + 2, keyboard),
+                (rect.y + 3, gamepad),
+            ] {
                 if let Some(device) = device {
                     canvas.hit(
                         Rect {
@@ -543,16 +560,6 @@ impl View {
                     );
                 }
             }
-            canvas.text(
-                rect.x + 2,
-                rect.y + 3,
-                rect.w - 4,
-                &format!(
-                    "Cursor {}/1 · Key {}/1",
-                    usize::from(pointer.is_some()),
-                    usize::from(keyboard.is_some())
-                ),
-            );
             let tag = if bucket.source_tag.is_empty() {
                 String::from("manual")
             } else {
@@ -581,8 +588,17 @@ impl View {
                     },
                     Hit::Remove(bucket.combo_id),
                 );
-            } else if bucket.gamepad_slot_id != 0 {
-                canvas.text(rect.x + 2, rect.y + 5, rect.w - 4, "Gamepad linked");
+            } else {
+                canvas.text(
+                    rect.x + 2,
+                    rect.y + 5,
+                    rect.w - 4,
+                    &format!(
+                        "Cursor {}/1 · Pad {}/1",
+                        usize::from(pointer.is_some()),
+                        usize::from(gamepad.is_some())
+                    ),
+                );
             }
         }
         if data.buckets.is_empty() {
@@ -1105,5 +1121,128 @@ mod tests {
             }
         }
         assert_eq!(commands, vec![Command::MoveDevice(device, 10)]);
+    }
+
+    #[test]
+    fn all_four_live_hid_classes_have_distinct_physical_and_virtual_labels() {
+        for (kind, name) in [
+            (HidDeviceKind::Mouse, "Mouse"),
+            (HidDeviceKind::Tablet, "Tablet"),
+            (HidDeviceKind::Keyboard, "Keyboard"),
+            (HidDeviceKind::Gamepad, "Gamepad"),
+        ] {
+            let mut entry = device(4, kind);
+            assert_eq!(device_label(&entry), format!("{name} 1:5:1"));
+            entry.virtual_device = true;
+            assert_eq!(device_label(&entry), format!("V {name} 1:5:1"));
+        }
+    }
+
+    #[test]
+    fn mouse_or_tablet_share_one_cursor_slot_while_keyboard_and_gamepad_remain_independent() {
+        for pointer_kind in [
+            None,
+            Some(HidDeviceKind::Mouse),
+            Some(HidDeviceKind::Tablet),
+        ] {
+            let mut data = Snapshot {
+                devices: vec![
+                    device(1, HidDeviceKind::Keyboard),
+                    device(2, HidDeviceKind::Gamepad),
+                ],
+                buckets: vec![bucket(10)],
+            };
+            if let Some(kind) = pointer_kind {
+                data.devices.push(device(0, kind));
+                match kind {
+                    HidDeviceKind::Mouse => {
+                        data.buckets[0].mouse_controller_id = 1;
+                        data.buckets[0].mouse_slot_id = 1;
+                        data.buckets[0].mouse_ep_target = 1;
+                    }
+                    HidDeviceKind::Tablet => {
+                        data.buckets[0].tablet_controller_id = 1;
+                        data.buckets[0].tablet_slot_id = 1;
+                        data.buckets[0].tablet_ep_target = 1;
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            for entry in &mut data.devices {
+                entry.combo_id = 10;
+            }
+            data.buckets[0].keyboard_controller_id = 1;
+            data.buckets[0].keyboard_slot_id = 2;
+            data.buckets[0].keyboard_ep_target = 1;
+            data.buckets[0].gamepad_controller_id = 1;
+            data.buckets[0].gamepad_slot_id = 3;
+            data.buckets[0].gamepad_ep_target = 1;
+            let mut view = View::default();
+            let frame = view.frame(&data, 80, 24);
+            let (rect, _) = frame
+                .hits
+                .iter()
+                .find(|(_, hit)| *hit == Hit::Bucket(10))
+                .unwrap();
+            let footer = &frame.lines[rect.y + 5];
+            assert!(footer.contains(&format!(
+                "Cursor {}/1 · Pad 1/1",
+                usize::from(pointer_kind.is_some())
+            )));
+            assert!(frame.lines[rect.y + 2].contains("Keyboard"));
+            assert!(frame.lines[rect.y + 3].contains("Gamepad"));
+            if let Some(kind) = pointer_kind {
+                assert!(frame.lines[rect.y + 1].contains(match kind {
+                    HidDeviceKind::Mouse => "Mouse",
+                    HidDeviceKind::Tablet => "Tablet",
+                    _ => unreachable!(),
+                }));
+            } else {
+                assert!(frame.lines[rect.y + 1].contains("No cursor"));
+            }
+            assert!(!frame.hits.iter().any(|(_, hit)| *hit == Hit::Remove(10)));
+            for entry in &data.devices {
+                assert!(frame.hits.iter().any(|(hit_rect, hit)| {
+                    hit_rect.x >= view.split && *hit == Hit::Device(entry.id)
+                }));
+            }
+        }
+    }
+
+    #[test]
+    fn gamepad_can_be_dragged_from_device_list_then_from_its_linked_bucket_row() {
+        let mut data = sample();
+        let mut pad = device(2, HidDeviceKind::Gamepad);
+        pad.virtual_device = true;
+        let pad_id = pad.id;
+        data.devices.push(pad);
+        let mut view = View::default();
+        let frame = view.frame(&data, 100, 24);
+        let source = coordinate(&frame, Hit::Device(pad_id));
+        let target = coordinate(&frame, Hit::Remove(10));
+        view.event(Event::Down(source.0, source.1), &frame);
+        view.event(Event::Move(target.0, target.1), &frame);
+        assert_eq!(
+            view.event(Event::Up(target.0, target.1), &frame),
+            Some(Command::MoveDevice(pad_id, 10))
+        );
+        data.devices.last_mut().unwrap().combo_id = 10;
+        data.buckets[0].gamepad_controller_id = pad_id.controller_id;
+        data.buckets[0].gamepad_slot_id = pad_id.slot_id;
+        data.buckets[0].gamepad_ep_target = pad_id.ep_target;
+        let frame = view.frame(&data, 100, 24);
+        let (source, _) = frame
+            .hits
+            .iter()
+            .find(|(rect, hit)| rect.x >= view.split && *hit == Hit::Device(pad_id))
+            .unwrap();
+        assert!(frame.lines[source.y].contains("V Gamepad"));
+        let target = coordinate(&frame, Hit::Remove(20));
+        view.event(Event::Down(source.x, source.y), &frame);
+        view.event(Event::Move(target.0, target.1), &frame);
+        assert_eq!(
+            view.event(Event::Up(target.0, target.1), &frame),
+            Some(Command::MoveDevice(pad_id, 20))
+        );
     }
 }

@@ -7,9 +7,10 @@ use spin::Mutex;
 const MAX_HID_HUT_MICE: usize = 32;
 const MAX_HID_HUT_TABLETS: usize = 32;
 const MAX_HID_HUT_KEYBOARDS: usize = 32;
+const MAX_HID_HUT_GAMEPADS: usize = 32;
 const MAX_HID_HUT_COMBOS: usize = 32;
 pub const HID_HUT_MAX_DEVICES: usize =
-    MAX_HID_HUT_MICE + MAX_HID_HUT_TABLETS + MAX_HID_HUT_KEYBOARDS;
+    MAX_HID_HUT_MICE + MAX_HID_HUT_TABLETS + MAX_HID_HUT_KEYBOARDS + MAX_HID_HUT_GAMEPADS;
 pub const HID_HUT_SOURCE_TAG_MAX: usize = 32;
 const HID_SOURCE_TAG_MAX: usize = HID_HUT_SOURCE_TAG_MAX;
 pub const INPUT_COMBO_FLAG_AUTO_ASSIGNED: u8 = v::vinput::INPUT_COMBO_FLAG_AUTO_ASSIGNED;
@@ -25,6 +26,7 @@ pub enum HidDeviceKind {
     Mouse,
     Keyboard,
     Tablet,
+    Gamepad,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -238,6 +240,7 @@ struct HidHutState {
     mice: Vec<HidMouseState, MAX_HID_HUT_MICE>,
     tablets: Vec<HidTabletState, MAX_HID_HUT_TABLETS>,
     keyboards: Vec<HidKeyboardState, MAX_HID_HUT_KEYBOARDS>,
+    gamepads: Vec<HidDevice, MAX_HID_HUT_GAMEPADS>,
     combos: Vec<InputCombo, MAX_HID_HUT_COMBOS>,
 }
 
@@ -247,6 +250,7 @@ impl HidHutState {
             mice: Vec::new(),
             tablets: Vec::new(),
             keyboards: Vec::new(),
+            gamepads: Vec::new(),
             combos: Vec::new(),
         }
     }
@@ -537,7 +541,28 @@ fn bind_device_in_state(
                 tablet.source_tag = source_tag;
             }
         }
-        ComboDeviceKind::Gamepad => {}
+        ComboDeviceKind::Gamepad => {
+            if !endpoint_is_empty(displaced_endpoint)
+                && !endpoint_matches(displaced_endpoint, endpoint)
+                && let Some(gamepad) = state.gamepads.iter_mut().find(|gamepad| {
+                    gamepad.id.controller_id == displaced_endpoint.controller_id
+                        && gamepad.id.slot_id == displaced_endpoint.slot_id
+                        && gamepad.id.ep_target == displaced_endpoint.ep_target
+                })
+                && gamepad.combo_id == combo_id
+            {
+                gamepad.combo_id = 0;
+            }
+            if let Some(gamepad) = state.gamepads.iter_mut().find(|gamepad| {
+                gamepad.id.controller_id == endpoint.controller_id
+                    && gamepad.id.slot_id == endpoint.slot_id
+                    && gamepad.id.ep_target == endpoint.ep_target
+            }) {
+                gamepad.combo_id = combo_id;
+                gamepad.source_kind = source_kind;
+                gamepad.source_tag = source_tag;
+            }
+        }
     }
     true
 }
@@ -875,6 +900,57 @@ fn keyboard_key_down_bits(modifiers: u8, keys: [u8; 6]) -> [u32; 8] {
     bits
 }
 
+/// Enroll an existing mediated gamepad without injecting an input report.
+/// Button and axis state remain in the gamepad service; HUT stores pairing
+/// metadata only, so Link snapshots remain stable while a program runs.
+pub fn register_gamepad_device(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    source_kind: HidSourceKind,
+    source_tag: &str,
+    virtual_device: bool,
+) -> bool {
+    if slot_id == 0 {
+        return false;
+    }
+    let id = HidDeviceId {
+        kind: HidDeviceKind::Gamepad,
+        controller_id,
+        slot_id,
+        ep_target,
+    };
+    let mut guard = HID_HUT.lock();
+    // Capacity errors must not leave an endpoint reservation behind.
+    if !guard.gamepads.iter().any(|device| device.id == id) && guard.gamepads.is_full() {
+        return false;
+    }
+    let endpoint = ComboEndpoint::new(controller_id, slot_id, ep_target);
+    if !virtual_device && source_kind == HidSourceKind::Human {
+        ensure_auto_combo_binding(&mut guard, ComboDeviceKind::Gamepad, endpoint);
+    }
+    let combo = guard
+        .combos
+        .iter()
+        .find(|combo| endpoint_matches(combo_endpoint(combo, ComboDeviceKind::Gamepad), endpoint));
+    let device = HidDevice {
+        id,
+        combo_id: combo.map_or(0, |combo| combo.combo_id),
+        source_kind: combo.map_or(source_kind, |combo| combo.source_kind),
+        source_tag: combo.map_or_else(
+            || normalized_tag(source_tag),
+            |combo| combo.source_tag.clone(),
+        ),
+        virtual_device,
+    };
+    if let Some(existing) = guard.gamepads.iter_mut().find(|device| device.id == id) {
+        *existing = device;
+        true
+    } else {
+        guard.gamepads.push(device).is_ok()
+    }
+}
+
 pub fn upsert_combo(combo_id: u32, source_kind: HidSourceKind, source_tag: &str) -> bool {
     if combo_id == 0 {
         return false;
@@ -997,6 +1073,7 @@ fn move_device_in_state(
         HidDeviceKind::Mouse => ComboDeviceKind::Mouse,
         HidDeviceKind::Keyboard => ComboDeviceKind::Keyboard,
         HidDeviceKind::Tablet => ComboDeviceKind::Tablet,
+        HidDeviceKind::Gamepad => ComboDeviceKind::Gamepad,
     };
     let live = match device.kind {
         HidDeviceKind::Mouse => state.mice.iter().any(|entry| {
@@ -1017,6 +1094,7 @@ fn move_device_in_state(
                 ComboEndpoint::new(entry.controller_id, entry.slot_id, entry.ep_target),
             )
         }),
+        HidDeviceKind::Gamepad => state.gamepads.iter().any(|entry| entry.id == device),
     };
     if !live {
         return Err(ComboMoveError::DeviceMissing);
@@ -1051,8 +1129,8 @@ fn move_device_in_state(
 }
 
 /// Move one live device atomically, preserving the old pairing on rejection.
-/// A bucket accepts one cursor (mouse or tablet) and one keyboard. Replacing an
-/// occupied slot requires first moving its current device to another bucket.
+/// A bucket accepts one cursor (mouse or tablet), one keyboard, and one gamepad.
+/// Replacing an occupied slot requires first moving its device to another bucket.
 pub fn move_device_to_combo(device: HidDeviceId, combo_id: u32) -> Result<(), ComboMoveError> {
     move_device_in_state(&mut HID_HUT.lock(), device, combo_id)
 }
@@ -1097,6 +1175,11 @@ pub fn remove_combo(combo_id: u32) -> bool {
     for tablet in guard.tablets.iter_mut() {
         if tablet.combo_id == combo_id {
             tablet.combo_id = 0;
+        }
+    }
+    for gamepad in guard.gamepads.iter_mut() {
+        if gamepad.combo_id == combo_id {
+            gamepad.combo_id = 0;
         }
     }
     true
@@ -1154,6 +1237,18 @@ pub fn remove_slot(controller_id: u32, slot_id: u32) -> bool {
             && guard.tablets[idx].slot_id == slot_id
         {
             let _ = guard.tablets.remove(idx);
+            removed = true;
+        } else {
+            idx += 1;
+        }
+    }
+
+    let mut idx = 0usize;
+    while idx < guard.gamepads.len() {
+        if guard.gamepads[idx].id.controller_id == controller_id
+            && guard.gamepads[idx].id.slot_id == slot_id
+        {
+            let _ = guard.gamepads.remove(idx);
             removed = true;
         } else {
             idx += 1;
@@ -1252,6 +1347,9 @@ pub fn devices_snapshot() -> Vec<HidDevice, HID_HUT_MAX_DEVICES> {
             source_tag: keyboard.source_tag.clone(),
             virtual_device: keyboard.virtual_device,
         });
+    }
+    for gamepad in &guard.gamepads {
+        let _ = devices.push(gamepad.clone());
     }
     devices
 }
@@ -1573,6 +1671,69 @@ mod link_tests {
         );
         assert!(remove_empty_combo(combo.combo_id));
         assert!(!remove_empty_combo(combo.combo_id));
+    }
+
+    #[test]
+    fn gamepad_slot_is_independent_of_cursor_and_rejects_replacement_atomically() {
+        let mut state = HidHutState::new();
+        for id in 1..=3 {
+            add_combo(&mut state, id);
+        }
+        for slot in 10..=11 {
+            state
+                .gamepads
+                .push(HidDevice {
+                    id: device(HidDeviceKind::Gamepad, slot),
+                    combo_id: 0,
+                    source_kind: HidSourceKind::Ai,
+                    source_tag: normalized_tag("gamepad"),
+                    virtual_device: true,
+                })
+                .unwrap();
+        }
+        assert!(bind_device_in_state(
+            &mut state,
+            1,
+            ComboDeviceKind::Mouse,
+            ComboEndpoint::new(1, 2, 1)
+        ));
+        assert!(bind_device_in_state(
+            &mut state,
+            2,
+            ComboDeviceKind::Tablet,
+            ComboEndpoint::new(1, 3, 1)
+        ));
+        assert!(bind_device_in_state(
+            &mut state,
+            1,
+            ComboDeviceKind::Gamepad,
+            ComboEndpoint::new(1, 10, 1)
+        ));
+        assert!(bind_device_in_state(
+            &mut state,
+            2,
+            ComboDeviceKind::Gamepad,
+            ComboEndpoint::new(1, 11, 1)
+        ));
+        let before = state.combos.clone();
+        let gamepads_before = state.gamepads.clone();
+        assert_eq!(
+            move_device_in_state(&mut state, device(HidDeviceKind::Gamepad, 10), 2),
+            Err(ComboMoveError::DeviceKindOccupied)
+        );
+        assert_eq!(state.combos, before);
+        assert_eq!(state.gamepads, gamepads_before);
+        assert_eq!(
+            move_device_in_state(&mut state, device(HidDeviceKind::Gamepad, 10), 3),
+            Ok(())
+        );
+        assert_eq!(state.combos[0].gamepad_slot_id, 0);
+        assert_eq!(state.combos[0].mouse_slot_id, 2);
+        assert_eq!(state.combos[1].tablet_slot_id, 3);
+        assert_eq!(state.gamepads[0].combo_id, 3);
+        assert_eq!(state.gamepads[0].source_kind, HidSourceKind::Human);
+        assert_eq!(state.gamepads[0].source_tag.as_str(), "desk");
+        assert!(state.gamepads[0].virtual_device);
     }
 }
 

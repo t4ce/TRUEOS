@@ -106,6 +106,26 @@ pub mod r {
     const OWNER: MouseControlPrincipal = MouseControlPrincipal::KernelApp(0x53);
 
     #[test]
+    fn idle_interactive_cursor_enrolls_in_hut_without_injecting_input_and_visual_cursor_stays_out() {
+        let before_hut = HUT_WRITES.load(Ordering::Relaxed);
+        let before_hid = HID_WRITES.load(Ordering::Relaxed);
+        let before_snapshots = SNAPSHOT_WRITES.load(Ordering::Relaxed);
+        let interactive = request_cursor(MouseControlPrincipal::Vm(7), "idle-mouse", None).unwrap();
+        assert_eq!(HUT_WRITES.load(Ordering::Relaxed), before_hut + 1);
+        assert_eq!(HID_WRITES.load(Ordering::Relaxed), before_hid);
+        assert_eq!(SNAPSHOT_WRITES.load(Ordering::Relaxed), before_snapshots);
+
+        microfont_mask_service::warm_fixture_atlas();
+        let visual = request_glyph_cursor(OWNER, "visual-only", '§', 48, Rgba8::new(0,160,255,255)).unwrap();
+        assert!(cursor_visual_metadata(visual.slot_id).unwrap().visual_only);
+        assert_eq!(HUT_WRITES.load(Ordering::Relaxed), before_hut + 1);
+        assert_eq!(HID_WRITES.load(Ordering::Relaxed), before_hid);
+        assert_eq!(SNAPSHOT_WRITES.load(Ordering::Relaxed), before_snapshots);
+        release_cursor(MouseControlPrincipal::Vm(7), interactive.handle).unwrap();
+        release_cursor(OWNER, visual.handle).unwrap();
+    }
+
+    #[test]
     fn visual_hid_delivery_never_enrolls_input_devices_or_snapshots() {
         usb2::hid::inject_virtual_cursor_event(123,0.1,0.2,0,0,usb2::hid::HID_CURSOR_EVENT_FLAG_VISUAL_ONLY);
         assert_eq!(HID_WRITES.load(Ordering::Relaxed),1);

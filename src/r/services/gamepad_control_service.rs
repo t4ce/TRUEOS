@@ -189,6 +189,17 @@ impl GamepadControlStation {
                 commands: Deque::new(),
             })
             .map_err(|_| GamepadControlError::Capacity)?;
+        if !crate::usb2::hid::hut::register_gamepad_device(
+            0,
+            slot_id,
+            0,
+            crate::usb2::hid::hut::HidSourceKind::Ai,
+            label,
+            true,
+        ) {
+            let _ = self.gamepads.pop();
+            return Err(GamepadControlError::Capacity);
+        }
         crate::log_info!(target: "input";
             "gamepad-control: gamepad allocated handle={} slot={} principal={:?} label={} policy=mediated\n",
             handle,
@@ -222,6 +233,7 @@ impl GamepadControlStation {
     ) -> Result<(), GamepadControlError> {
         let index = self.index(principal, handle)?;
         let gamepad = self.gamepads.remove(index);
+        crate::usb2::hid::hut::remove_slot(0, gamepad.capability.slot_id);
         crate::log_info!(target: "input";
             "gamepad-control: gamepad released handle={} slot={} principal={:?} label={}\n",
             gamepad.capability.handle,

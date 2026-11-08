@@ -569,7 +569,7 @@ fn rel_symbol_value(
             if sym.name.is_empty() {
                 return Ok(0);
             }
-            if let Some(addr) = resolve_import(sym.name) {
+            if let Some(addr) = resolve_import(sym.name, bind) {
                 return Ok(addr);
             }
             if bind == STB_WEAK {
@@ -755,7 +755,7 @@ fn collect_pc_relative_import_symbols(
             if sym.section != SymbolSection::Undefined || sym.name.is_empty() {
                 continue;
             }
-            if let Some(addr) = resolve_import(sym.name) {
+            if let Some(addr) = resolve_import(sym.name, sym.info >> 4) {
                 imports.insert(r_sym, addr);
                 continue;
             }
@@ -1219,7 +1219,7 @@ fn resolve_known_import(name: &str) -> Option<usize> {
     }
 }
 
-fn resolve_import(name: &str) -> Option<usize> {
+fn resolve_import(name: &str, bind: u8) -> Option<usize> {
     // Retired and unsupported imports must not fall through to a return-zero
     // Joker stub on loader paths that do not run the normal launch prebind.
     if prebind::retired_import_error(name).is_some()
@@ -1227,7 +1227,15 @@ fn resolve_import(name: &str) -> Option<usize> {
     {
         return None;
     }
-    resolve_known_import(name).or_else(|| resolve_unresolved_import(name))
+    resolve_known_import(name).or_else(|| {
+        // An absent ELF weak provider has address zero. Installing a Joker
+        // here would make an optional callback appear present to the guest.
+        if bind == STB_WEAK {
+            None
+        } else {
+            resolve_unresolved_import(name)
+        }
+    })
 }
 
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]

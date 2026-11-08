@@ -272,6 +272,21 @@ impl MouseControlStation {
                 commands: Deque::new(),
             })
             .map_err(|_| MouseControlError::Capacity)?;
+        // Link can pair an idle VLayer cursor before its first command. Keep
+        // decorative cursors outside input discovery, and publish no motion.
+        if !visual.visual_only {
+            crate::usb2::hid::hut::upsert_mouse_state(
+                0,
+                slot_id,
+                0,
+                f64::from(width / 2) / f64::from(width.saturating_sub(1).max(1)),
+                f64::from(height / 2) / f64::from(height.saturating_sub(1).max(1)),
+                0,
+                crate::usb2::hid::hut::HidSourceKind::Ai,
+                label,
+                true,
+            );
+        }
         crate::log_info!(target: "input";
             "mouse-control: cursor allocated handle={} slot={} principal={:?} label={} visual_color={:?} policy=mediated\n",
             handle,

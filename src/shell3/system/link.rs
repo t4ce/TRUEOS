@@ -39,7 +39,7 @@ fn execute(command: Command, view: &mut View, target: &MatrixTarget) {
         Command::NewBucket => {
             view.status = match hut::request_combo(HidSourceKind::Human, "link", None) {
                 Some(_) => {
-                    String::from("Bucket created. Drag a mouse or tablet and a keyboard into it.")
+                    String::from("Bucket created. Add a keyboard, mouse or tablet, and gamepad.")
                 }
                 None => {
                     String::from("Bucket limit reached (32). Remove an empty bucket to make room.")
@@ -59,9 +59,9 @@ fn execute(command: Command, view: &mut View, target: &MatrixTarget) {
                 Err(ComboMoveError::CursorOccupied) => {
                     String::from("Bucket already has a cursor. Move it to another bucket first.")
                 }
-                Err(ComboMoveError::DeviceKindOccupied) => {
-                    String::from("Bucket already has a keyboard. Move it to another bucket first.")
-                }
+                Err(ComboMoveError::DeviceKindOccupied) => String::from(
+                    "Bucket already has this device type. Move it to another bucket first.",
+                ),
                 Err(ComboMoveError::DeviceMissing) => {
                     String::from("Device disconnected. Drop cancelled.")
                 }
