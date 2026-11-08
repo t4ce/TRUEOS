@@ -93,6 +93,12 @@ whose root must match the provisioned owner/key relation. This replaces Unix
 mode/nlink assumptions at those call sites. A redirected public `CODEX_HOME`
 fails instead of silently accepting weaker storage.
 
+File-backed diagnostics, MCP OAuth tokens and their coordination files, and
+managed TLS signing keys require the same native private-storage check before
+file effects. Public certificate inputs remain public data. Session-index
+replacement verifies equivalent native access requirements before writing its
+temporary file and again before publication; it does not copy Unix modes.
+
 The unauthenticated HTTP filesystem export uses a public actor, so only FFA
 paths and contents are available there. Its reads, uploads, rename, delete, and
 browser tree use the same storage authority. `users/`, the configuration catalog,

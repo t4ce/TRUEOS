@@ -4,7 +4,9 @@
 Host checks run actual codecs/regex/Bash parser. Their build scripts receive an
 explicit native-OS fixture environment, while Rust uses the ordinary host std.
 A separate no-Unix core+alloc target links the SDK allocator and these same C
-archives, proving native heap ownership rather than a renamed retired provider.
+archives. C uses the normal packer's no-stack-protector flag so that the linked
+probe cannot retain host FS/GS canary accesses. Native heap ownership is checked
+independently of the retired C allocation names.
 """
 from pathlib import Path
 import argparse
@@ -131,7 +133,7 @@ int main(void) {
 ''');run('native-clock-contract-build',['cc','-std=c11','-Wall','-Wextra','-Werror',str(clock_probe),'-o',str(work/'clock-contract')]);run('native-clock-contract',[str(work/'clock-contract')])
   counts={}
   for mode,flags in [('debug',[]),('release',['--release'])]:
-   env=environment(out/'host-target');text=run('real-c-providers-'+mode,cargo+['run','--offline',*flags,'--target','x86_64-unknown-linux-gnu','--bin','native-c-alloc-behavior'],env);counts[mode]=len(re.findall('^ok ',text,re.M));assert counts[mode]==BEHAVIOR_GROUPS
+   env=environment(out/'host-target');env['CFLAGS']=env.get('CFLAGS','')+' -fno-stack-protector';text=run('real-c-providers-'+mode,cargo+['run','--offline',*flags,'--target','x86_64-unknown-linux-gnu','--bin','native-c-alloc-behavior'],env);counts[mode]=len(re.findall('^ok ',text,re.M));assert counts[mode]==BEHAVIOR_GROUPS
    run('allocation-contract-'+mode,cargo+['test','--offline',*flags,'--target','x86_64-unknown-linux-gnu','--lib'],env)
   base=out/'host-target/x86_64-unknown-linux-gnu/release/build'
   for pattern in ['zstd-sys-*/out/libzstd.a','onig_sys-*/out/libonig.a','tree-sitter-*/out/libtree-sitter.a','tree-sitter-bash-*/out/libtree-sitter-bash.a','bzip2-sys-*/out/lib/libbz2.a']:
@@ -159,6 +161,8 @@ panic="abort"
   assert not set(symbols).intersection({'malloc','calloc','realloc','free','trueos_cabi_alloc','trueos_cabi_realloc','trueos_cabi_free','clock_gettime','clock'}),symbols
   assert not any(s.startswith('trueos_blueprint_c_')for s in symbols),symbols
   assert not any(s.startswith('ZSTD_trace_')for s in symbols),symbols
+  instructions=run('native-c-codecs-instructions',['objdump','-d',str(linked)])
+  assert not re.search(r'%[fg]s:',instructions),'native C probe retained host segment-based TLS'
   assert 'sys_alloc_aligned'in symbols and'sys_dealloc'in symbols and'trueos_time_monotonic_nanos'in symbols,symbols
   assert not list((out/'native-target'/TARGET.stem).rglob('libstd-*.rlib'))
  sources=[info(SDK/p)for p in ['src/codex_native_c_overlay.rs','src/tree_sitter_native_clock.h','crates/trueos-v/src/native_c_alloc.rs','crates/trueos-v/src/native_c_clock.rs']]
