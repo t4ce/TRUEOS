@@ -4,6 +4,7 @@ from pathlib import Path
 import argparse
 import json
 import os
+import resource
 import subprocess
 import sys
 import tempfile
@@ -68,7 +69,32 @@ int main(int argc, char **argv) {
  assert(strlen(capture) == 2052 && strcmp(capture + 2048, "-123") == 0);
  sink.write = reject_write; assert(trueos_c_text_printf(&sink, "%s", large) == -1);
  assert(trueos_c_text_putc('a', &sink) == -1); assert(trueos_c_text_puts("x", &sink) == -1);
+ printf("comparisons:%u\n", cases);
  return cases > 50000 ? 0 : 1;
+}
+'''
+ALLOCATION_FAILURE=r'''
+#include <stdlib.h>
+#include <unistd.h>
+#include "__HEADER__"
+void trueos_cabi_write(uint32_t stream,const unsigned char *bytes,size_t len) {
+ if (stream != 2 || write(2,bytes,len)!=(ssize_t)len) _exit(91);
+}
+static void *failed_malloc(size_t size) {(void)size;return NULL;}
+static void *failed_calloc(size_t count,size_t size) {(void)count;(void)size;return NULL;}
+static void *failed_realloc(void *bytes,size_t size) {(void)bytes;(void)size;return NULL;}
+static void failed_free(void *bytes) {(void)bytes;}
+#define malloc failed_malloc
+#define calloc failed_calloc
+#define realloc failed_realloc
+#define free failed_free
+#include "__ALLOC_SOURCE__"
+int main(int argc,char **argv) {
+ if (argc!=2) return 92;
+ if (argv[1][0]=='m') ts_current_malloc(123);
+ else if (argv[1][0]=='c') ts_current_calloc(7,19);
+ else if (argv[1][0]=='r') ts_current_realloc(NULL,456);
+ return 93;
 }
 '''
 BEHAVIOR = r'''
@@ -120,16 +146,30 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
+    resource.setrlimit(resource.RLIMIT_CORE,(0,0))
     contract=out/'text-contract.c';contract.write_text(CONTRACT.replace('__HEADER__',str(SDK/'src/native_c_text.h')))
     checks=[]
     for mode,flags in [('debug',['-O0']),('release',['-O2'])]:
         binary=out/('text-contract-'+mode)
         command=['cc','-std=c11','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-unused-variable',*flags,str(contract),'-o',str(binary)]
         subprocess.run(command,check=True,cwd=out)
-        subprocess.run([str(binary)],check=True,cwd=out)
+        result=subprocess.run([str(binary)],check=True,cwd=out,text=True,capture_output=True)
+        comparisons=int(result.stdout.strip().split(':')[1])
         rejected=subprocess.run([str(binary),'unsupported'],cwd=out,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         assert rejected.returncode < 0,rejected.returncode
-        checks.append({'mode':mode,'comparisons':55120,'unsupported_format_exit':rejected.returncode,'command':command})
+        checks.append({'mode':mode,'comparisons':comparisons,'unsupported_format_exit':rejected.returncode,'command':command})
+    alloc_source=list((Path.home()/'.cargo/registry/src').glob('*/tree-sitter-0.25.10/src/alloc.c'))
+    assert len(alloc_source)==1
+    fatal=out/'allocation-failure.c'
+    fatal.write_text(ALLOCATION_FAILURE.replace('__HEADER__',str(SDK/'src/native_c_text.h')).replace('__ALLOC_SOURCE__',str(alloc_source[0])))
+    failures=[]
+    for mode,flags in [('debug',['-O0']),('release',['-O2'])]:
+        binary=out/('allocation-failure-'+mode)
+        subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-unused-variable',*flags,'-I',str(alloc_source[0].parents[1]/'include'),str(fatal),'-o',str(binary)],check=True,cwd=out)
+        for operation,diagnostic in [('malloc',b'tree-sitter failed to allocate 123 bytes'),('calloc',b'tree-sitter failed to allocate 133 bytes'),('realloc',b'tree-sitter failed to reallocate 456 bytes')]:
+            result=subprocess.run([str(binary),operation],cwd=out,capture_output=True)
+            assert result.returncode<0 and result.stderr==diagnostic,(result.returncode,result.stderr)
+            failures.append({'mode':mode,'operation':operation,'exit':result.returncode,'diagnostic':result.stderr.decode()})
     # Reuse production staging and real-library checks, extending their actual
     # behavior rather than replacing C with a test formatter or parser.
     base.BEHAVIOR=base.BEHAVIOR.replace('println!("ok actual Bash external scanner and incremental parsing");','println!("ok actual Bash external scanner and incremental parsing");\n'+BEHAVIOR)
@@ -144,6 +184,7 @@ def main():
     forbidden={'__fprintf_chk','__snprintf_chk','__vsnprintf_chk','fprintf','snprintf','vsnprintf','fputc','fputs','fwrite','stderr','stdout','fdopen','fclose','dup'}
     assert not forbidden.intersection(receipt['undefined']),receipt['undefined']
     receipt['text_contract']=checks
+    receipt['actual_allocation_failure_paths']=failures
     receipt['text_sources']=[base.info(SDK/path)for path in ['src/codex_native_c_text.rs','src/native_c_text.h']]
     receipt['text_behavior_groups_per_profile']=6
     receipt['scope']=__doc__

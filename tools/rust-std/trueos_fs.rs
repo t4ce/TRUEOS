@@ -277,6 +277,13 @@ impl File {
     pub fn file_attr(&self) -> io::Result<FileAttr> {
         FileAttr::decode(object(5, 0, self.object, 0, &[])?)
     }
+    pub fn has_same_access_key(&self, other: &Self) -> io::Result<bool> {
+        match number(object(15, 0, self.object, other.object, &[])?)? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(error(-2)),
+        }
+    }
     pub fn fsync(&self) -> io::Result<()> {
         object(11, 0, self.object, 0, &[]).map(|_| ())
     }

@@ -474,7 +474,10 @@ pub(crate) async fn list(
     records.check_path(actor, disk, &params, dir).await?;
     let prefix = normalized_dir_prefix(dir);
     if !prefix.is_empty() {
-        match records.node(disk, &params, prefix.trim_end_matches('/')).await? {
+        match records
+            .node(disk, &params, prefix.trim_end_matches('/'))
+            .await?
+        {
             None => return Ok(None),
             Some(node) if node.kind != NodeKind::Directory => {
                 return Err(block::Error::InvalidParam);
@@ -601,14 +604,18 @@ pub(crate) async fn index_snapshot_limited(
     authorize_keys(actor, &[])?;
     let (_activity, _lease, params) = lease(disk).await?;
     let mut records = LeaseRecords::default();
-    filter_index_under_lease(actor, disk, &params, entry_cap, &mut records).await.map(Some)
+    filter_index_under_lease(actor, disk, &params, entry_cap, &mut records)
+        .await
+        .map(Some)
 }
 
 pub(crate) async fn index_snapshot(
     actor: Actor,
     disk: block::DeviceHandle,
 ) -> Result<Option<Vec<IndexNode>>, block::Error> {
-    Ok(index_snapshot_limited(actor, disk, usize::MAX).await?.map(|(nodes, _)| nodes))
+    Ok(index_snapshot_limited(actor, disk, usize::MAX)
+        .await?
+        .map(|(nodes, _)| nodes))
 }
 
 pub(crate) async fn json_all(
@@ -624,12 +631,17 @@ pub(crate) async fn json_all(
         max_entries.min(TRUEOSFS_LIST_SOFT_CAP)
     };
     let mut records = LeaseRecords::default();
-    let (candidates, truncated) = filter_index_under_lease(actor, disk, &params, limit, &mut records).await?;
+    let (candidates, truncated) =
+        filter_index_under_lease(actor, disk, &params, limit, &mut records).await?;
     let mut entries = Vec::new();
     for candidate in candidates {
         let path = candidate.path;
         if let Some(node) = records.node(disk, &params, &path).await? {
-            entries.push((path.bytes().filter(|byte| *byte == b'/').count(), path, node));
+            entries.push((
+                path.bytes().filter(|byte| *byte == b'/').count(),
+                path,
+                node,
+            ));
         }
     }
     authorize_keys(actor, &[])?;

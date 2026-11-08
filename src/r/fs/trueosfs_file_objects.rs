@@ -75,6 +75,10 @@ impl Command {
                 && command.flags <= MAX_TRANSFER as u32
                 && command.payload.is_empty() => {}
             13 if command.object != 0 && command.flags == 0 => {}
+            15 if command.object != 0
+                && command.arg != 0
+                && command.flags == 0
+                && command.payload.is_empty() => {}
             3 if command.object != 0 && command.flags == 0 && command.arg == 0 => {}
             4 if command.object != 0 && command.flags <= 2 && command.payload.is_empty() => {}
             5 | 7 | 8 | 10 | 11
@@ -106,6 +110,7 @@ struct Identity {
 struct Description {
     owner: u32,
     actor: authorized::Actor,
+    authorization_keys: Vec<RecordKey>,
     identity: Identity,
     position: u64,
     flags: u32,
@@ -544,7 +549,7 @@ pub async fn open_for_actor(
     let mut state = OBJECTS.lock();
     let handle = state.allocate(owner)?;
     state.files.entry(identity).or_insert_with(|| NativeFile {
-        authorization_keys,
+        authorization_keys: authorization_keys.clone(),
         disk,
         path: String::from(path),
         kind: node.kind,
@@ -556,6 +561,7 @@ pub async fn open_for_actor(
         Description {
             owner,
             actor,
+            authorization_keys,
             identity,
             position: 0,
             flags,
@@ -678,6 +684,66 @@ pub async fn operate_for_actor(
         node.as_ref().map_or(0, |n| n.data_len)
     };
     match command.op {
+        15 => {
+            // This proves equivalent access requirements; it does not copy,
+            // weaken or fabricate access metadata. Both paths are inspected
+            // under this same root lease. Include the open handle's captured
+            // provenance even if trusted namespace work has since moved it.
+            if kind != NodeKind::File {
+                return Err(ERR_UNSUPPORTED);
+            }
+            let (other, other_path, other_orphan, mut other_keys, mut own_keys) = {
+                let state = OBJECTS.lock();
+                let (_, other) = state.description(owner, command.arg)?;
+                if other.actor != actor {
+                    return Err(ERR_PERMISSION);
+                }
+                if other.identity.root != description.identity.root {
+                    return Err(ERR_UNSUPPORTED);
+                }
+                if other.identity.epoch != description.identity.epoch {
+                    return Err(FS_ERR_NOT_FOUND);
+                }
+                let file = state.files.get(&other.identity).ok_or(FS_ERR_NOT_FOUND)?;
+                if file.kind != NodeKind::File {
+                    return Err(ERR_UNSUPPORTED);
+                }
+                let mut other_keys = other.authorization_keys.clone();
+                if file.orphan.is_some() {
+                    for key in &file.authorization_keys {
+                        if !other_keys.contains(key) {
+                            other_keys.push(*key);
+                        }
+                    }
+                }
+                (other, file.path.clone(), file.orphan.is_some(),
+                    other_keys, description.authorization_keys.clone())
+            };
+            for key in keys {
+                if !own_keys.contains(&key) {
+                    own_keys.push(key);
+                }
+            }
+            if !other_orphan {
+                authorized::check_path_under_lease(actor, disk, &params, &other_path)
+                    .await.map_err(error)?;
+                let other_node = record_at(disk, &params, &other_path).await?
+                    .ok_or(FS_ERR_NOT_FOUND)?;
+                if other_node.file_id != other.identity.file {
+                    return Err(FS_ERR_NOT_FOUND);
+                }
+                for key in authorization_keys_under_lease(disk, &params, &other_path).await? {
+                    if !other_keys.contains(&key) {
+                        other_keys.push(key);
+                    }
+                }
+            }
+            authorize_keys(actor, &own_keys)?;
+            authorize_keys(actor, &other_keys)?;
+            let equivalent = own_keys.len() == other_keys.len()
+                && own_keys.iter().all(|key| other_keys.contains(key));
+            Ok(u64::from(equivalent).to_le_bytes().to_vec())
+        }
         9 | 10 => {
             let mut state = OBJECTS.lock();
             if command.op == 9

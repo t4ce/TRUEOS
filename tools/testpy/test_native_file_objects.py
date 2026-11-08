@@ -12,7 +12,7 @@ from test_sdk_metadata_v2 import item
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--receipt',type=Path);args=parser.parse_args()
     source=ROOT/'src/r/fs/trueosfs_file_objects.rs';fixture=Path(__file__).with_name('fixtures')/'native_file_objects.rs'
-    text=fixture.read_text().replace('@FILE_OBJECT_SOURCE@',str(source)).replace('@CABI_CODES_SOURCE@',str(ROOT/'src/r/cabi_codes.rs')).replace('@AUTHORIZED_SOURCE@',str(ROOT/'src/r/fs/trueosfs_authorized.rs')).replace('@CONTENT_TYPE_SOURCE@',str(ROOT/'src/r/fs/content_type_boundary.rs'))
+    text=fixture.read_text().replace('@FILE_OBJECT_SOURCE@',str(source)).replace('@CABI_CODES_SOURCE@',str(ROOT/'src/r/cabi_codes.rs')).replace('@AUTHORIZED_SOURCE@',str(ROOT/'src/r/fs/trueosfs_authorized.rs')).replace('@CONTENT_TYPE_SOURCE@',str(ROOT/'src/r/fs/content_type_boundary.rs')).replace('@FS_HTML_SOURCE@',str(ROOT/'src/r/fs/fs_html.rs'))
     kernel=(ROOT/'src/r/fs/trueosfs.rs').read_text()
     helpers='\n'.join(item(kernel,marker) for marker in [
         'pub(crate) async fn node_record_under_lease(', 'pub(crate) async fn inherited_record_key_under_lease(',
@@ -47,6 +47,7 @@ edition="2024"
 [workspace]
 [dependencies]
 trueos-fs={{path={json.dumps(str(ROOT/'crates/trueos-fs'))}}}
+trueos-math={{path={json.dumps(str(ROOT/'crates/trueos-math'))},features=["alloc"]}}
 spin="0.10"
 sha2={{version="=0.10.9",default-features=false}}
 infer={{path={json.dumps(str(ROOT/'vendor/infer'))},default-features=false}}
@@ -56,7 +57,7 @@ trueos-crypto={{path={json.dumps(str(ROOT/'crates/trueos-crypto'))}}}
         completed=subprocess.run(command,cwd=path,text=True,capture_output=True,timeout=180)
         print(completed.stdout,end='');print(completed.stderr,end='')
         if args.receipt:
-            sources=[source,fixture,Path(__file__),ROOT/'crates/trueos-fs/src/lib.rs',ROOT/'src/r/fs/trueosfs.rs',ROOT/'src/r/fs/trueosfs_authorized.rs']
+            sources=[source,fixture,Path(__file__),ROOT/'crates/trueos-fs/src/lib.rs',ROOT/'src/r/fs/trueosfs.rs',ROOT/'src/r/fs/trueosfs_authorized.rs',ROOT/'src/r/fs/fs_html.rs']
             args.receipt.write_text(json.dumps({'status':'passed' if completed.returncode==0 else 'failed','utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'command':command,'source_sha256':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},'stdout':completed.stdout,'stderr':completed.stderr,'scope':'Exact production native object authority + real TRUEOSFS engine, memory-backed BlockIo; no rig or platform block driver validation.'},indent=2)+'\n')
         if completed.returncode:raise SystemExit(completed.returncode)
 if __name__=='__main__':main()

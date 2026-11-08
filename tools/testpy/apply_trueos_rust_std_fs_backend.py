@@ -66,6 +66,21 @@ impl Metadata {
 }
 '''
     if addition not in source:source+=addition
+    access_key_addition='''
+#[cfg(target_os = "trueos")]
+impl File {
+    /// Compare the effective native access-key requirements of these open files.
+    ///
+    /// Both captured and current ancestor requirements participate. This proves
+    /// equivalence without changing either file's keys. Files from different
+    /// native roots cannot be compared. Access and identity failures propagate.
+    #[stable(feature = "trueos_fs_access_key", since = "1.99.0")]
+    pub fn has_same_access_key(&self, other: &File) -> io::Result<bool> {
+        self.inner.has_same_access_key(&other.inner)
+    }
+}
+'''
+    if access_key_addition not in source:source+=access_key_addition
     changes[path]=source
     return changes
 

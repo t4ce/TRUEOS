@@ -1,6 +1,7 @@
 #![allow(dead_code, unused_imports)]
 extern crate alloc;
 #[macro_export]macro_rules! log{($($args:tt)*)=>{()}}
+#[macro_export]macro_rules! log_warn{($($args:tt)*)=>{()}}
 use std::future::Future;
 use std::task::{Context,Poll,Waker};
 use std::sync::atomic::{AtomicBool,Ordering};
@@ -33,14 +34,15 @@ mod r{
  pub mod fs{
   pub mod file_watch{pub fn changed(_:crate::disc::block::DiscId,_:&str){}}
   #[path="@CONTENT_TYPE_SOURCE@"]pub mod content_type_boundary;
+  #[path="@FS_HTML_SOURCE@"]pub mod fs_html;
   pub mod trueosfs{
    use alloc::{collections::BTreeMap,string::String,vec::Vec};use crate::disc::block;use spin::Mutex;use core::sync::atomic::{AtomicU32,Ordering};
-   const TRUEOSFS_LIST_SOFT_CAP:usize=1024;
+   pub const TRUEOSFS_LIST_SOFT_CAP:usize=1024;
    static FILE_WRITE_STREAM_SEQ:AtomicU32=AtomicU32::new(1);
    static FILE_WRITE_STREAMS:Mutex<BTreeMap<u32,FileWriteStream>>=Mutex::new(BTreeMap::new());
    pub use trueos_fs::{ContentTypeId,RecordKey,NodeKind,NodeInfo,DirEntry};
    #[derive(Debug)]struct DirListing{entries:Vec<DirEntry>,truncated:bool}
-   #[derive(Debug)]struct IndexNode{path:String,kind:NodeKind}
+   #[derive(Debug)]pub(super) struct IndexNode{pub path:String,pub kind:NodeKind}
    enum ContentIdentityRejectReason{TypeRequired,UnregisteredType,LegacyDowngrade}
    fn record_type_reject(_:ContentIdentityRejectReason){}
    struct RootMount{disk_id:block::DiscId,seq:u32,index:Option<Box<BTreeMap<Vec<u8>,IndexRef>>>}
@@ -75,7 +77,7 @@ mod r{
    fn update_root_index_delete_tree(_:block::DiscId,path:&str)->bool{let prefix=format!("{path}/");INDEX.lock().retain(|name,_|name!=path&&!name.starts_with(&prefix));refresh_index();true}
    fn update_root_index_rename_tree(_:block::DiscId,moves:&[(String,String,IndexRef)])->bool{let changes:Vec<_>={let mut index=INDEX.lock();moves.iter().map(|(src,dst,_)|(dst.clone(),index.remove(src).unwrap())).collect()};for(dst,node)in changes{INDEX.lock().insert(dst,node);}refresh_index();true}
    // @KEY_HELPERS@
-   #[path="@AUTHORIZED_SOURCE@"]mod authorized;
+   #[path="@AUTHORIZED_SOURCE@"]pub(crate) mod authorized;
    #[path="@FILE_OBJECT_SOURCE@"]pub mod file_objects;
    #[cfg(test)]mod tests{
     use super::*;use file_objects::{Command,open,operate};const D:block::DeviceHandle=block::DeviceHandle(1);
@@ -137,6 +139,10 @@ mod r{
      assert!(truncated);assert_eq!(nodes.iter().map(|node|node.path.as_str()).collect::<Vec<_>>(),vec!["apps","z-last","apps/public","apps/public/f000"]);
      assert_eq!(READ_CALLS.load(Ordering::SeqCst),6,"four visible paths plus one lookahead and one denied root; no hidden leaf reads");
      READ_CALLS.store(0,Ordering::SeqCst);
+     let html=crate::run(super::super::fs_html::html_browser_tree_async(D,4,1)).unwrap().unwrap();
+     assert!(html.contains("z-last"));assert!(html.contains("apps/public/f000"));assert!(!html.contains("private"));assert!(html.contains("<li>...</li>"));assert_eq!(html.matches("data-label=").count(),4);
+     assert_eq!(READ_CALLS.load(Ordering::SeqCst),6,"actual HTML renderer supplies its budget before metadata authorization");
+     READ_CALLS.store(0,Ordering::SeqCst);
      let listing=crate::run(auth::list(Actor::Public,D,"apps/public",8)).unwrap().unwrap();
      assert_eq!(listing.entries.len(),8);assert!(listing.truncated);assert_eq!(READ_CALLS.load(Ordering::SeqCst),11,"two ancestors once plus nine candidate leaves");
      READ_CALLS.store(0,Ordering::SeqCst);
@@ -166,6 +172,19 @@ mod r{
       let mut bytes=[0;4];assert_eq!(auth::read_range(Actor::Public,D,"users/dummy",0,&mut bytes).await,Err(block::Error::PermissionDenied));
       assert!(matches!(auth::list(Actor::Public,D,"users",4).await,Err(block::Error::PermissionDenied)));
      });assert_eq!(READ_CALLS.load(Ordering::SeqCst),reads);
+    }
+    fn keyed_file(path:&str,record_key:RecordKey){assert!(crate::run(file_in_with_metadata_async_for_actor(D,path,b"policy",ContentTypeId::BLOB,record_key,true,authorized::Actor::Host)).unwrap());}
+    #[test]fn access_equivalence_accepts_legacy_ffa_beneath_same_owned_root(){
+     reset();crate::run(authorized::create_dir_all(authorized::Actor::Host,D,"apps/demo/legacy-dir")).unwrap();let old=opened(1,"apps/demo/legacy-dir/old",1|2|16);assert_eq!(INDEX.lock()["apps/demo/legacy-dir/old"].record_key,RecordKey::Ffa);crate::run(stamp_directory_key_async(D,"apps/demo",key(51))).unwrap();crate::access_key_db::grant(1,key(51));let owner=0x80000001;let source=opened(owner,"apps/demo/legacy-dir/old",1);let staged=opened(owner,"apps/demo/legacy-dir/staged",1|2|16);assert_eq!(INDEX.lock()["apps/demo/legacy-dir/staged"].record_key,key(51));assert_eq!(id(call(owner,15,0,staged,source,&[]).unwrap()),1);assert_eq!(INDEX.lock()["apps/demo/legacy-dir/old"].record_key,RecordKey::Ffa);assert_eq!(call(owner,15,0,staged,old,&[]),Err(-8));crate::access_key_db::clear();assert_eq!(call(owner,15,0,staged,source,&[]),Err(-19));
+    }
+    #[test]fn access_equivalence_rejects_same_leaf_with_different_ancestor_requirements(){
+     reset();for(app,k)in[("apps/left",key(52)),("apps/right",key(53))]{crate::run(authorized::create_dir_all(authorized::Actor::Host,D,app)).unwrap();crate::run(stamp_directory_key_async(D,app,k)).unwrap();crate::access_key_db::grant(1,k);}crate::access_key_db::grant(1,key(54));keyed_file("apps/left/file",key(54));keyed_file("apps/right/file",key(54));let a=opened(0x80000001,"apps/left/file",1);let b=opened(0x80000001,"apps/right/file",1);{let index=INDEX.lock();assert_eq!(index["apps/left/file"].record_key,index["apps/right/file"].record_key);}assert_eq!(id(call(0x80000001,15,0,a,b,&[]).unwrap()),0);rename("apps/left/file","apps/right/moved");let current=opened(0x80000001,"apps/right/moved",1);assert_eq!(id(call(0x80000001,15,0,current,b,&[]).unwrap()),1);assert_eq!(id(call(0x80000001,15,0,a,b,&[]).unwrap()),0,"old handle retains its extra captured ancestor requirement");
+    }
+    #[test]fn access_equivalence_retains_orphan_policy_across_path_replacement_and_epoch_retirement(){
+     reset();for(app,k)in[("apps/left",key(55)),("apps/right",key(56))]{crate::run(authorized::create_dir_all(authorized::Actor::Host,D,app)).unwrap();crate::run(stamp_directory_key_async(D,app,k)).unwrap();crate::access_key_db::grant(1,k);}let owner=0x80000001;let old=opened(owner,"apps/left/target",1|2|16);let same=opened(owner,"apps/left/staged",1|2|16);let _replacement=opened(1,"apps/right/replacement",1|2|16);rename("apps/right/replacement","apps/left/target");let new=opened(owner,"apps/left/target",1);assert_eq!(id(call(owner,15,0,old,same,&[]).unwrap()),1);assert_eq!(id(call(owner,15,0,old,new,&[]).unwrap()),0,"compare the retained object, not its reused path");crate::access_key_db::reuse_slot();assert_eq!(call(owner,15,0,old,same,&[]),Err(-19));
+    }
+    #[test]fn access_equivalence_rejects_cross_root_objects_and_invalid_wire_fields(){
+     reset();let first=opened(1,"file",1|2|16);ROOTS.lock().push(RootMount{disk_id:block::DeviceHandle(2).id(),seq:1,index:Some(Box::new(BTreeMap::new()))});let second=id(crate::run(open(1,block::DeviceHandle(2),"file",1)).unwrap());assert_eq!(call(1,15,0,first,second,&[]),Err(-20));let mut bytes=Vec::new();bytes.extend_from_slice(&15u32.to_le_bytes());bytes.extend_from_slice(&0u32.to_le_bytes());bytes.extend_from_slice(&first.to_le_bytes());bytes.extend_from_slice(&second.to_le_bytes());assert!(Command::decode(&bytes).is_ok());bytes[4]=1;assert!(Command::decode(&bytes).is_err());bytes[4]=0;bytes.push(0);assert!(Command::decode(&bytes).is_err());
     }
     #[test]fn requests_validate_flags_and_bounds(){let mut request=vec![0;24];request[0..4].copy_from_slice(&2u32.to_le_bytes());request[8..16].copy_from_slice(&1u64.to_le_bytes());request[16..24].copy_from_slice(&u64::MAX.to_le_bytes());assert!(Command::decode(&request).is_err());request[16..24].copy_from_slice(&1u64.to_le_bytes());assert!(Command::decode(&request).is_ok());request.push(0);assert!(Command::decode(&request).is_err());}
    }

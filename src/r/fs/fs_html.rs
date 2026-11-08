@@ -30,7 +30,13 @@ pub async fn html_tree_async(
     disk: block::DeviceHandle,
     max_entries: usize,
 ) -> Result<Option<String>, block::Error> {
-    html_tree_impl(super::trueosfs::authorized::Actor::Host, disk, max_entries, None).await
+    html_tree_impl(
+        super::trueosfs::authorized::Actor::Host,
+        disk,
+        max_entries,
+        None,
+    )
+    .await
 }
 
 /// The HTTP page supplies native disclosures and controls before scripts run.
@@ -39,7 +45,13 @@ pub async fn html_browser_tree_async(
     max_entries: usize,
     root_id: u32,
 ) -> Result<Option<String>, block::Error> {
-    html_tree_impl(super::trueosfs::authorized::Actor::Public, disk, max_entries, Some(root_id)).await
+    html_tree_impl(
+        super::trueosfs::authorized::Actor::Public,
+        disk,
+        max_entries,
+        Some(root_id),
+    )
+    .await
 }
 
 pub(crate) async fn html_tree_for_actor_async(
@@ -64,7 +76,9 @@ async fn html_tree_impl(
 
     const CAP: usize = super::trueosfs::TRUEOSFS_LIST_SOFT_CAP + 2;
     let effective_entries = core::cmp::min(max_entries, super::trueosfs::TRUEOSFS_LIST_SOFT_CAP);
-    let Some((nodes, mut truncated)) = super::trueosfs::authorized::index_snapshot_limited(actor, disk, effective_entries).await? else {
+    let Some((nodes, mut truncated)) =
+        super::trueosfs::authorized::index_snapshot_limited(actor, disk, effective_entries).await?
+    else {
         return Ok(None);
     };
     let cap_limit = core::cmp::min(effective_entries.saturating_add(2), CAP);
@@ -182,14 +196,17 @@ async fn html_tree_impl(
     if let Some(root_id) = browser_root {
         return Ok(Some(browser_tree(&tree, root, root_id)));
     }
-    Ok(Some(tree.html_tree_string(root, |entry, out| match entry.kind {
-        FsKind::Root => out.push('/'),
-        FsKind::Dir => {
-            out.push_str(entry.name.as_str());
-            out.push('/');
-        }
-        FsKind::File => out.push_str(entry.name.as_str()),
-    })))
+    Ok(Some(tree.html_tree_string(
+        root,
+        |entry, out| match entry.kind {
+            FsKind::Root => out.push('/'),
+            FsKind::Dir => {
+                out.push_str(entry.name.as_str());
+                out.push('/');
+            }
+            FsKind::File => out.push_str(entry.name.as_str()),
+        },
+    )))
 }
 
 fn escaped(out: &mut String, text: &str) {
