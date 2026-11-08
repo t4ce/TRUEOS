@@ -5796,19 +5796,19 @@ pub(crate) fn socket_option(
 }
 
 fn service_tick_once(device_index: usize, synchronous: bool) -> bool {
-    let started = crate::chronos::monotonic_nanos();
+    let started_cycles = service_timing::timestamp();
     let Some(service) = service_for_device(device_index) else {
         return false;
     };
 
     let mut svc = service.lock();
-    let locked = crate::chronos::monotonic_nanos();
+    let locked_cycles = service_timing::timestamp();
 
     let mut busy = false;
     if svc.tick() {
         busy = true;
     }
-    let tick_done = crate::chronos::monotonic_nanos();
+    let tick_done_cycles = service_timing::timestamp();
 
     let mut commands = 0;
     for _ in 0..MAX_DRAIN_PER_LOOP {
@@ -5819,14 +5819,15 @@ fn service_tick_once(device_index: usize, synchronous: bool) -> bool {
         busy = true;
         svc.handle_command(owner, cmd);
     }
-    let commands_done = crate::chronos::monotonic_nanos();
+    let commands_done_cycles = service_timing::timestamp();
 
     svc.poll_sockets();
-    let sockets_done = crate::chronos::monotonic_nanos();
+    let sockets_done_cycles = service_timing::timestamp();
     let sockets = svc.records.len();
     drop(svc);
     service_timing::record(device_index, synchronous, service_timing::Phases {
-        started, locked, tick_done, commands_done, sockets_done, commands, sockets, busy,
+        sampled_at_ns: crate::chronos::monotonic_nanos(),
+        started_cycles, locked_cycles, tick_done_cycles, commands_done_cycles, sockets_done_cycles, commands, sockets, busy,
     });
 
     busy

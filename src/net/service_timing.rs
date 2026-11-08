@@ -4,16 +4,21 @@
 //! those calls separate from the BSP task so one slow phase or repeated native
 //! probes can be distinguished without logging each socket or packet.
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::{
+    arch::x86_64::_rdtsc,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 const REPORT_NS: u64 = 5_000_000_000;
 
+/// Phase boundaries use TSC cycles; wall time only paces the bounded report.
 pub(super) struct Phases {
-    pub started: u64,
-    pub locked: u64,
-    pub tick_done: u64,
-    pub commands_done: u64,
-    pub sockets_done: u64,
+    pub sampled_at_ns: u64,
+    pub started_cycles: u64,
+    pub locked_cycles: u64,
+    pub tick_done_cycles: u64,
+    pub commands_done_cycles: u64,
+    pub sockets_done_cycles: u64,
     pub commands: usize,
     pub sockets: usize,
     pub busy: bool,
@@ -24,11 +29,11 @@ struct Counters {
     calls: AtomicU64,
     busy: AtomicU64,
     commands: AtomicU64,
-    lock_ns: AtomicU64,
-    tick_ns: AtomicU64,
-    command_ns: AtomicU64,
-    socket_ns: AtomicU64,
-    max_ns: AtomicU64,
+    lock_cycles: AtomicU64,
+    tick_cycles: AtomicU64,
+    command_cycles: AtomicU64,
+    socket_cycles: AtomicU64,
+    max_cycles: AtomicU64,
     socket_peak: AtomicU64,
 }
 
@@ -39,11 +44,11 @@ impl Counters {
             calls: AtomicU64::new(0),
             busy: AtomicU64::new(0),
             commands: AtomicU64::new(0),
-            lock_ns: AtomicU64::new(0),
-            tick_ns: AtomicU64::new(0),
-            command_ns: AtomicU64::new(0),
-            socket_ns: AtomicU64::new(0),
-            max_ns: AtomicU64::new(0),
+            lock_cycles: AtomicU64::new(0),
+            tick_cycles: AtomicU64::new(0),
+            command_cycles: AtomicU64::new(0),
+            socket_cycles: AtomicU64::new(0),
+            max_cycles: AtomicU64::new(0),
             socket_peak: AtomicU64::new(0),
         }
     }
@@ -51,6 +56,12 @@ impl Counters {
 
 static TIMINGS: [[Counters; super::MAX_NET_DEVICES]; 2] =
     [const { [const { Counters::new() }; super::MAX_NET_DEVICES] }; 2];
+
+/// Match BSP task profiling without the platform clock's millisecond quantization.
+#[inline]
+pub(super) fn timestamp() -> u64 {
+    unsafe { _rdtsc() }
+}
 
 pub(super) fn record(device: usize, synchronous: bool, phases: Phases) {
     let Some(counters) = TIMINGS[usize::from(synchronous)].get(device) else {
@@ -63,24 +74,30 @@ pub(super) fn record(device: usize, synchronous: bool, phases: Phases) {
     counters
         .commands
         .fetch_add(phases.commands as u64, Ordering::Relaxed);
-    counters.lock_ns.fetch_add(
-        phases.locked.saturating_sub(phases.started),
+    counters.lock_cycles.fetch_add(
+        phases.locked_cycles.saturating_sub(phases.started_cycles),
         Ordering::Relaxed,
     );
-    counters.tick_ns.fetch_add(
-        phases.tick_done.saturating_sub(phases.locked),
+    counters.tick_cycles.fetch_add(
+        phases.tick_done_cycles.saturating_sub(phases.locked_cycles),
         Ordering::Relaxed,
     );
-    counters.command_ns.fetch_add(
-        phases.commands_done.saturating_sub(phases.tick_done),
+    counters.command_cycles.fetch_add(
+        phases
+            .commands_done_cycles
+            .saturating_sub(phases.tick_done_cycles),
         Ordering::Relaxed,
     );
-    counters.socket_ns.fetch_add(
-        phases.sockets_done.saturating_sub(phases.commands_done),
+    counters.socket_cycles.fetch_add(
+        phases
+            .sockets_done_cycles
+            .saturating_sub(phases.commands_done_cycles),
         Ordering::Relaxed,
     );
-    counters.max_ns.fetch_max(
-        phases.sockets_done.saturating_sub(phases.started),
+    counters.max_cycles.fetch_max(
+        phases
+            .sockets_done_cycles
+            .saturating_sub(phases.started_cycles),
         Ordering::Relaxed,
     );
     counters
@@ -91,18 +108,18 @@ pub(super) fn record(device: usize, synchronous: bool, phases: Phases) {
     if previous == 0 {
         let _ = counters.report_at.compare_exchange(
             0,
-            phases.sockets_done,
+            phases.sampled_at_ns,
             Ordering::Relaxed,
             Ordering::Relaxed,
         );
         return;
     }
-    if phases.sockets_done.saturating_sub(previous) < REPORT_NS
+    if phases.sampled_at_ns.saturating_sub(previous) < REPORT_NS
         || counters
             .report_at
             .compare_exchange(
                 previous,
-                phases.sockets_done,
+                phases.sampled_at_ns,
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             )
@@ -118,18 +135,23 @@ pub(super) fn record(device: usize, synchronous: bool, phases: Phases) {
     let calls = take(&counters.calls);
     let busy = take(&counters.busy);
     let commands = take(&counters.commands);
-    let lock_ns = take(&counters.lock_ns);
-    let tick_ns = take(&counters.tick_ns);
-    let command_ns = take(&counters.command_ns);
-    let socket_ns = take(&counters.socket_ns);
-    let max_ns = take(&counters.max_ns);
+    let lock_cycles = take(&counters.lock_cycles);
+    let tick_cycles = take(&counters.tick_cycles);
+    let command_cycles = take(&counters.command_cycles);
+    let socket_cycles = take(&counters.socket_cycles);
+    let max_cycles = take(&counters.max_cycles);
     let socket_peak = take(&counters.socket_peak);
     let app_queues = super::APP_QUEUES.lock().len();
+    let tsc_hz = crate::r::time::tsc_hz();
+    let micros = |cycles: u64| {
+        ((u128::from(cycles) * 1_000_000) / u128::from(tsc_hz.max(1))).min(u128::from(u64::MAX))
+            as u64
+    };
     crate::log_info!(target: "net";
         "net-service-timing dev={} origin={} dt_ms={} calls={} busy={} commands={} sockets_peak={} app_queues={} lock_us={} tick_us={} command_us={} socket_us={} max_us={}\n",
         device, if synchronous { "sync" } else { "task" },
-        phases.sockets_done.saturating_sub(previous) / 1_000_000,
+        phases.sampled_at_ns.saturating_sub(previous) / 1_000_000,
         calls, busy, commands, socket_peak, app_queues,
-        lock_ns / 1_000, tick_ns / 1_000, command_ns / 1_000, socket_ns / 1_000, max_ns / 1_000,
+        micros(lock_cycles), micros(tick_cycles), micros(command_cycles), micros(socket_cycles), micros(max_cycles),
     );
 }
