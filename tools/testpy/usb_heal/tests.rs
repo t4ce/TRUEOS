@@ -34,6 +34,8 @@ mod regression {
         assert_eq!(enumeration["last_failure"]["slot_id"], 4);
         assert_eq!(enumeration["last_failure"]["stage"], "configure-hub");
         assert_eq!(enumeration["last_failure"]["reason"], "StallError");
+        assert_eq!(enumeration["recent_failures"].as_array().unwrap().len(), 2);
+        assert_eq!(enumeration["dropped_failure_count"], 0);
 
         // An empty/successful probe does not call record_failure. Later fresh
         // register snapshots must keep both records available through HTTP.
@@ -58,6 +60,19 @@ mod regression {
         assert_eq!(fresh["enumeration"]["first_failure"]["stage"], "address-device");
         assert_eq!(fresh["enumeration"]["last_failure"]["stage"], "enable-slot-or-context");
         assert_eq!(fresh["enumeration"]["last_failure"]["slot_id"], serde_json::Value::Null);
+        let history = fresh["enumeration"]["recent_failures"].as_array().unwrap();
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0]["stage"], "address-device");
+        assert_eq!(history[0]["root_port_id"], 2);
+        assert_eq!(history[1]["stage"], "configure-hub");
+        assert_eq!(history[1]["root_port_id"], 6);
+        assert_eq!(history[1]["port_id"], 3);
+        assert_eq!(history[1]["slot_id"], 4);
+        assert_eq!(history[1]["reason"], "StallError");
+        assert_eq!(history[2]["stage"], "enable-slot-or-context");
+        assert_eq!(history[2]["root_port_id"], 7);
+        assert_eq!(history[2]["slot_id"], serde_json::Value::Null);
+        assert_eq!(fresh["enumeration"]["dropped_failure_count"], 0);
         assert_eq!(controller.controller_resets + controller.port_resets, 0);
         crate::usb3::lab::publish(0, None);
     }

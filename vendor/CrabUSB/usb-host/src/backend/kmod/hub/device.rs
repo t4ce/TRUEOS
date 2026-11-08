@@ -9,7 +9,7 @@ use futures::{FutureExt, future::BoxFuture};
 
 use usb_if::{
     descriptor::{Class, ConfigurationDescriptor, DeviceDescriptor, EndpointType},
-    err::USBError,
+    err::{TransferError, USBError},
     host::{
         ControlSetup,
         hub::{HubDescriptor, PortFeature, PortStatus, PortStatusChange, Speed},
@@ -43,6 +43,10 @@ const HUB_PR_FS: u8 = 0; /* Full speed hub */
 const HUB_PR_HS_SINGLE_TT: u8 = 1; /* Hi-speed hub with single TT */
 const HUB_PR_HS_MULTI_TT: u8 = 2; /* Hi-speed hub with multiple TT */
 const HUB_PR_SS: u8 = 3; /* Super speed hub */
+
+fn hub_tt_think_time_ns(characteristics: u16) -> usize {
+    666 * (usize::from((characteristics >> 5) & 0x03) + 1)
+}
 
 fn parse_hub_descriptor(bytes: &[u8], superspeed: bool) -> Result<HubDescriptor, USBError> {
     let Some(header) = bytes.get(..7) else {
@@ -321,22 +325,19 @@ impl HubDevice {
         // 解析 Hub 特性和配置参数（参考 U-Boot usb_hub_configure）
         let characteristics = self.data.descriptor.hub_characteristics();
 
-        // 解析 TT 思考时间（Bits[6:5]，参考 USB 2.0 规范）
-        let ttt_bits = (characteristics >> 5) & 0x03;
-        info.tt.think_time_ns = match ttt_bits {
-            0 => 0,       // No TT
-            1 => 666,     // 8 FS bit times
-            2 => 666 * 2, // 16 FS bit times
-            3 => 666 * 3, // 24 FS bit times
-            _ => unreachable!(),
-        };
-
         // 判断 Multi-TT（参考 U-Boot）
         // protocol = 0: Full Speed Hub (no TT)
         // protocol = 1: High Speed Single TT
         // protocol = 2: High Speed Multi TT
         // protocol = 3: SuperSpeed Hub (no TT)
         let device_protocol = self.data.dev.descriptor().protocol;
+        info.tt.think_time_ns =
+            if matches!(device_protocol, HUB_PR_HS_SINGLE_TT | HUB_PR_HS_MULTI_TT) {
+                hub_tt_think_time_ns(characteristics)
+            } else {
+                0
+            };
+        info.tt.multi = false;
 
         match device_protocol {
             HUB_PR_FS => {
@@ -349,13 +350,39 @@ impl HubDevice {
             HUB_PR_HS_MULTI_TT => {
                 info.speed = Speed::High;
                 debug!("Hub is High Speed with Multiple TTs");
-                match self.data.dev.claim_interface(0, 1).await {
+                // Select the device's multi-TT alternate without configuring
+                // host endpoints yet. On modern xHCI, the first Configure
+                // Endpoint command must already contain the hub slot metadata.
+                let interface = self.settings.interface_number;
+                match self
+                    .data
+                    .dev
+                    .ctrl_ep_mut()
+                    .control_out(
+                        ControlSetup {
+                            request_type: RequestType::Standard,
+                            recipient: Recipient::Interface,
+                            request: Request::SetInterface,
+                            value: 1,
+                            index: u16::from(interface),
+                        },
+                        &[],
+                    )
+                    .await
+                {
                     Ok(_) => {
                         debug!("TT per port");
                         info.tt.multi = true;
                     }
-                    Err(e) => {
-                        debug!("Using single TT due to claim interface failure: {e}");
+                    Err(TransferError::NotSupported) => {
+                        debug!("Using single TT: multi-TT alternate is unsupported");
+                    }
+                    Err(error) => {
+                        return Err(USBError::Other(anyhow!(
+                            "hub multi-TT SET_INTERFACE interface={} alternate=1 failed: {}",
+                            interface,
+                            error
+                        )));
                     }
                 }
             }

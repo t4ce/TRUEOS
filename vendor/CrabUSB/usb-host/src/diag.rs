@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use core::fmt::{self, Write};
 
 const ENUMERATION_FAILURE_REASON_CAPACITY: usize = 256;
+const ENUMERATION_FAILURE_HISTORY_CAPACITY: usize = 8;
 
 /// Bounded evidence retained by one controller owner across later probes.
 ///
@@ -18,6 +19,10 @@ pub struct XhciEnumerationDiagnostics {
     pub failure_count: u64,
     pub first_failure: Option<XhciEnumerationFailure>,
     pub last_failure: Option<XhciEnumerationFailure>,
+    pub dropped_failure_count: u64,
+    recent_failures: [Option<XhciEnumerationFailure>; ENUMERATION_FAILURE_HISTORY_CAPACITY],
+    recent_start: usize,
+    recent_len: usize,
 }
 
 impl XhciEnumerationDiagnostics {
@@ -43,7 +48,25 @@ impl XhciEnumerationDiagnostics {
         if self.first_failure.is_none() {
             self.first_failure = Some(failure.clone());
         }
+        let index = (self.recent_start + self.recent_len) % ENUMERATION_FAILURE_HISTORY_CAPACITY;
+        self.recent_failures[index] = Some(failure.clone());
+        if self.recent_len < ENUMERATION_FAILURE_HISTORY_CAPACITY {
+            self.recent_len += 1;
+        } else {
+            self.recent_start = (self.recent_start + 1) % ENUMERATION_FAILURE_HISTORY_CAPACITY;
+            self.dropped_failure_count = self.dropped_failure_count.saturating_add(1);
+        }
         self.last_failure = Some(failure);
+    }
+
+    /// Most recent failures in chronological order, bounded independently of
+    /// the total count. The first failure also remains available after eviction.
+    pub fn recent_failures(&self) -> impl Iterator<Item = &XhciEnumerationFailure> {
+        (0..self.recent_len).filter_map(move |offset| {
+            self.recent_failures
+                [(self.recent_start + offset) % ENUMERATION_FAILURE_HISTORY_CAPACITY]
+                .as_ref()
+        })
     }
 }
 
@@ -237,5 +260,25 @@ mod tests {
         assert_eq!(latest.reason(), "ok length");
         assert!(!latest.reason_truncated);
         assert!(diagnostic.first_failure.as_ref().unwrap().reason_truncated);
+    }
+
+    #[test]
+    fn enumeration_history_wraps_in_order_without_losing_first_or_latest() {
+        let mut diagnostic = XhciEnumerationDiagnostics::default();
+        assert_eq!(diagnostic.recent_failures().count(), 0);
+        for port in 1..=18 {
+            diagnostic.record_failure(port, port, Some(port), "address-device", port);
+        }
+        assert_eq!(diagnostic.failure_count, 18);
+        assert_eq!(diagnostic.dropped_failure_count, 10);
+        let retained: Vec<_> = diagnostic.recent_failures().collect();
+        assert_eq!(retained.len(), ENUMERATION_FAILURE_HISTORY_CAPACITY);
+        let ports: Vec<_> = retained.iter().map(|failure| failure.port_id).collect();
+        assert_eq!(ports, [11, 12, 13, 14, 15, 16, 17, 18]);
+        assert_eq!(retained[0].reason(), "11");
+        assert_eq!(retained[7].reason(), "18");
+        assert_eq!(diagnostic.first_failure.as_ref().unwrap().port_id, 1);
+        assert_eq!(diagnostic.last_failure.as_ref().unwrap().port_id, 18);
+        assert_eq!(diagnostic.clone(), diagnostic);
     }
 }

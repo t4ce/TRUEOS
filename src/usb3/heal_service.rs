@@ -227,6 +227,8 @@ pub struct HealEnumerationReport {
     pub failure_count: u64,
     pub first_failure: Option<HealEnumerationFailure>,
     pub last_failure: Option<HealEnumerationFailure>,
+    pub recent_failures: Vec<HealEnumerationFailure>,
+    pub dropped_failure_count: u64,
     pub snapshot_at_ms: Option<u64>,
     pub snapshot_age_ms: Option<u64>,
 }
@@ -842,6 +844,11 @@ fn enumeration_report(
         failure_count: diagnostic.failure_count,
         first_failure: diagnostic.first_failure.as_ref().map(enumeration_failure),
         last_failure: diagnostic.last_failure.as_ref().map(enumeration_failure),
+        recent_failures: diagnostic
+            .recent_failures()
+            .map(enumeration_failure)
+            .collect(),
+        dropped_failure_count: diagnostic.dropped_failure_count,
         snapshot_at_ms,
         snapshot_age_ms: snapshot_at_ms.map(|_| 0),
     }

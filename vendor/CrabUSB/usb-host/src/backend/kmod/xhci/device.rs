@@ -56,6 +56,7 @@ pub struct Device {
     ep_interfaces: BTreeMap<u8, u8>,
     cmd: CommandRing,
     enumeration_stage: &'static str,
+    xhci_version: u16,
 }
 
 // TRUEOS's UAS transport assigns tags 3 through 15. xHCI reserves context
@@ -103,6 +104,10 @@ fn transaction_translator(info: &DeviceAddressInfo) -> Option<(u8, u8, bool)> {
     None
 }
 
+fn xhci_tt_think_time(think_time_ns: u16) -> u8 {
+    (think_time_ns / 666).saturating_sub(1).min(3) as u8
+}
+
 impl Device {
     pub(crate) async fn new(host: &mut Xhci) -> Result<Self> {
         let slot_id = host.device_slot_assignment().await?;
@@ -118,6 +123,7 @@ impl Device {
         let bell = Arc::new(Mutex::new(bell));
         // let port_speed = host.port_speed(port);
         let desc = unsafe { core::mem::zeroed() };
+        let xhci_version = host.reg.read().capability.hciversion.read_volatile().get();
 
         Ok(Self {
             id: slot_id,
@@ -134,6 +140,7 @@ impl Device {
             ep_interfaces: BTreeMap::new(),
             cmd: host.cmd.clone(),
             enumeration_stage: "allocate-ep0",
+            xhci_version,
         })
     }
 
@@ -796,9 +803,9 @@ impl Device {
             // 设置 Multi-TT 标志（参考 U-Boot）
             // 如果 hub->tt.multi 为真，设置 MTT
             // 对于 Full Speed Hub，必须清除 MTT（xHCI 规范 6.2.2）
-            if params.multi_tt {
+            if params.multi_tt && matches!(self.port_speed, Speed::High) {
                 slot_ctx.set_multi_tt();
-            } else if matches!(self.port_speed, Speed::Full) {
+            } else {
                 slot_ctx.clear_multi_tt();
             }
 
@@ -810,22 +817,34 @@ impl Device {
             // 0 = 8 FS bit times, 1 = 16 FS bit times, 2 = 24 FS bit times, 3 = 32 FS bit times
             // 只对 High Speed Hub 设置 TT 思考时间
             if matches!(self.port_speed, Speed::High) {
-                // params.tt_think_time_ns 已经是转换后的值 (0, 666, 1333, 1999)
-                // 需要转换为 xHCI 寄存器值
-                let think_time = if params.tt_think_time_ns > 0 {
-                    ((params.tt_think_time_ns / 666) - 1) as u8
-                } else {
-                    0
-                };
+                let think_time = xhci_tt_think_time(params.tt_think_time_ns);
                 slot_ctx.set_tt_think_time(think_time);
                 debug!(
                     "Set TT think time: {} (tt_think_time_ns={}ns)",
                     think_time, params.tt_think_time_ns
                 );
+            } else {
+                slot_ctx.set_tt_think_time(0);
             }
         });
 
-        self.evaluate().await?;
+        // xHCI 1.x consumes Hub/MTT/TTT/Number of Ports only in the first
+        // Configure Endpoint transition from Addressed to Configured. Evaluate
+        // Context ignores those fields. A0 is the only Add Context flag here:
+        // the hub uses EP0 for port management and has no new endpoint yet.
+        // Ordinary EP0 Max Packet Size updates continue to use Evaluate Context.
+        if self.xhci_version > 0x0095 {
+            mb();
+            self.cmd
+                .cmd_request(command::Allowed::ConfigureEndpoint(
+                    *command::ConfigureEndpoint::default()
+                        .set_slot_id(self.id.into())
+                        .set_input_context_pointer(self.ctx.input_bus_addr()),
+                ))
+                .await?;
+        } else {
+            self.evaluate().await?;
+        }
         Ok(())
     }
 }

@@ -19,6 +19,7 @@ include!(concat!(env!("OUT_DIR"), "/appdb-seed.rs"));
 const APPS: TableDefinition<&str, &[u8]> = TableDefinition::new("apps");
 const HASHES: TableDefinition<&str, &str> = TableDefinition::new("hashes");
 const UPDATED: TableDefinition<&str, &str> = TableDefinition::new("updated");
+const METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 
 static APP_DB: Mutex<Option<Database>> = Mutex::new(None);
 
@@ -89,6 +90,14 @@ pub(crate) fn init_bsp() -> Result<usize, String> {
         }
         count as usize
     };
+    {
+        let read = database.begin_read().map_err(|err| alloc::format!("read AppDB metadata: {err}"))?;
+        let metadata = read.open_table(METADATA).map_err(|err| alloc::format!("open AppDB metadata: {err}"))?;
+        let json = metadata.get(trueos_appbundle::METADATA_KEY)
+            .map_err(|err| alloc::format!("read appbundle.json: {err}"))?
+            .ok_or("AppDB is missing appbundle.json")?;
+        trueos_appbundle::AppBundles::parse(json.value())?;
+    }
     *APP_DB.lock() = Some(database);
     Ok(count)
 }
@@ -153,8 +162,29 @@ pub(crate) fn get(archive: &str) -> Result<Option<Vec<u8>>, String> {
         .map_err(|err| alloc::format!("read app.db {archive}: {err}"))
 }
 
-/// Add or replace a downloaded Blueprint in volatile `app.db`.
-pub(crate) fn insert_download(archive: &str, bytes: &[u8]) -> Result<(), String> {
+/// Read the embedded bundle definitions without exposing them as an app.
+pub(crate) fn appbundle_json() -> Result<Vec<u8>, String> {
+    let guard = APP_DB.lock();
+    let database = guard.as_ref().ok_or("app.db is not initialized")?;
+    let read = database.begin_read().map_err(|err| alloc::format!("read AppDB metadata: {err}"))?;
+    let metadata = read.open_table(METADATA).map_err(|err| alloc::format!("open AppDB metadata: {err}"))?;
+    metadata.get(trueos_appbundle::METADATA_KEY)
+        .map_err(|err| alloc::format!("read appbundle.json: {err}"))?
+        .map(|value| value.value().to_vec()).ok_or_else(|| "AppDB is missing appbundle.json".into())
+}
+
+/// Publish a complete request in one transaction; failed bundles change no rows.
+pub(crate) fn insert_downloads(downloads: &[(String, Vec<u8>)]) -> Result<(), String> {
+    let bundles = trueos_appbundle::AppBundles::parse(&appbundle_json()?)?;
+    if downloads.is_empty() || downloads.len() > trueos_appbundle::MAX_MEMBERS {
+        return Err("Invalid AppDB install batch size".into());
+    }
+    for (index, (archive, _)) in downloads.iter().enumerate() {
+        if !trueos_appbundle::valid_archive(archive)
+            || downloads[..index].iter().any(|(name, _)| name.eq_ignore_ascii_case(archive)) {
+            return Err(alloc::format!("Invalid or duplicate Blueprint: {archive}"));
+        }
+    }
     let guard = APP_DB.lock();
     let database = guard
         .as_ref()
@@ -172,7 +202,9 @@ pub(crate) fn insert_download(archive: &str, bytes: &[u8]) -> Result<(), String>
         let mut updated = write
             .open_table(UPDATED)
             .map_err(|err| alloc::format!("open app.db updated table: {err}"))?;
-        apps.insert(archive, bytes)
+        for (archive, bytes) in downloads {
+        let archive = archive.as_str();
+        apps.insert(archive, bytes.as_slice())
             .map_err(|err| alloc::format!("write app.db {archive}: {err}"))?;
         let sha256 = sha256_hex(bytes);
         hashes
@@ -181,10 +213,18 @@ pub(crate) fn insert_download(archive: &str, bytes: &[u8]) -> Result<(), String>
         updated
             .insert(archive, "this boot")
             .map_err(|err| alloc::format!("write app.db update {archive}: {err}"))?;
+        }
+        for (archive, _) in downloads {
+            for member in bundles.members(archive)? {
+                if apps.get(member.as_str()).map_err(|err| alloc::format!("read app.db {member}: {err}"))?.is_none() {
+                    return Err(alloc::format!("{archive}: required Blueprint {member} is unavailable in AppDB"));
+                }
+            }
+        }
     }
     write
         .commit()
-        .map_err(|err| alloc::format!("commit app.db {archive}: {err}"))?;
+        .map_err(|err| alloc::format!("commit AppDB install batch: {err}"))?;
     drop(guard);
     crate::shell3::service::refresh_appdb_names();
     Ok(())

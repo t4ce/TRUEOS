@@ -115,6 +115,17 @@ fn dispatch_admin_action(spawner: &Spawner, target: &MatrixTarget, reason: &str)
         }
         return;
     }
+    if let Some(url) = reason.strip_prefix("os:update:github:") {
+        if url.starts_with("https://github.com/t4ce/TRUEOS/releases/download/")
+            && url.ends_with(".lz4") && url.len() <= 256
+            && !url.chars().any(|ch| ch.is_control() || ch.is_whitespace())
+        {
+            super::os_update::submit_live_update_from_url_to_target(spawner, target.clone(), url);
+        } else {
+            print_matrix_target_line(target, "os: rejected invalid GitHub release asset URL");
+        }
+        return;
+    }
     if reason == "os:update:live" {
         super::os_update::submit_live_update_to_target(spawner, target.clone());
         return;

@@ -39,7 +39,7 @@ const STARTUP_MANIFEST_VFILE: &str = "vFile:startup";
 const TERMINAL_FRONTEND_VFILE: &str = "vFile:terminal-frontend";
 // Virtual read identifiers may carry a 4096-byte URL, unlike disk paths.
 const ASYNC_FS_MAX_VIRTUAL_READ_PATH: usize = "vFile:hull-navigation/".len() + 4096;
-/// Write a downloaded archive pathname here to import it into volatile AppDB.
+/// Write one or more newline-separated downloaded archive paths for atomic AppDB import.
 /// Completion acknowledges the import; this operation never launches a VM.
 pub(crate) fn is_virtual_write(path: &str) -> bool {
     path.starts_with(crate::r::services::hull_download_service::PREFIX)
@@ -49,7 +49,7 @@ pub(crate) fn is_virtual_write(path: &str) -> bool {
 
 
 pub(crate) fn is_virtual_read(path: &str) -> bool {
-    matches!(path, VMX_LAUNCH_SCRIPT_VFILE | STARTUP_MANIFEST_VFILE | TERMINAL_FRONTEND_VFILE)
+    matches!(path, VMX_LAUNCH_SCRIPT_VFILE | STARTUP_MANIFEST_VFILE | TERMINAL_FRONTEND_VFILE | "vFile:appbundle.json")
         || path.starts_with(crate::r::services::hull_download_service::PREFIX)
         || path.starts_with("vFile:hull-navigation/")
         || path.starts_with("vFile:microfont-grid/")
@@ -1153,6 +1153,12 @@ async fn process(request: &Request) -> OperationState {
         return match result { Ok(bytes) => OperationState::Read(bytes), Err(code) => OperationState::Failed(code) };
     }
     if let RequestKind::Read { path } = &request.kind {
+        if path == "vFile:appbundle.json" {
+            return match crate::app_db::appbundle_json() {
+                Ok(bytes) => OperationState::Read(bytes),
+                Err(_) => OperationState::Failed(FS_ERR_IO),
+            };
+        }
         if path.starts_with(crate::r::services::hull_download_service::PREFIX) {
             return match crate::r::services::hull_download_service::read_for_owner(request.owner, path) {
                 Ok(bytes) => OperationState::Read(bytes), Err(code) => OperationState::Failed(code),
@@ -1214,30 +1220,45 @@ async fn process(request: &Request) -> OperationState {
         if path == "vFile:appdb-install" {
             let vm = request.owner & !0x8000_0000;
             if request.owner & 0x8000_0000 == 0 || vm > u8::MAX as u32 { return OperationState::Failed(FS_ERR_BAD_PATH); }
-            let path = crate::hv::with_guest_broker_context(vm as u8, || {
-                let path = core::str::from_utf8(bytes).ok()?;
-                super::env::resolve_blueprint_archive_path(path).ok()
+            let paths = crate::hv::with_guest_broker_context(vm as u8, || {
+                let text = core::str::from_utf8(bytes).ok()?;
+                if text.len() > trueos_appbundle::MAX_MEMBERS * 4096 { return None; }
+                let mut paths = Vec::new();
+                for path in text.lines() {
+                    if paths.len() == trueos_appbundle::MAX_MEMBERS || path.is_empty() { return None; }
+                    paths.push(super::env::resolve_blueprint_archive_path(path).ok()?);
+                }
+                (!paths.is_empty()).then_some(paths)
             });
-            let Some(path) = path else { return OperationState::Failed(FS_ERR_BAD_PATH); };
-            let archive = path.rsplit('/').next().unwrap_or("");
-            if !archive.ends_with(".bp") { return OperationState::Failed(FS_ERR_BAD_PATH); }
-            let (disk, file) = match selected_disk(&path) { Ok(selected) => selected, Err(code) => return OperationState::Failed(code) };
-            crate::access_key_db::audit_path(vm as u8, disk, file, "appdb-install-read", false).await;
-            let len = match crate::r::fs::trueosfs::authorized::node_info(actor, disk, file).await {
-                Ok(Some(info)) => info.data_len,
-                Ok(None) => return OperationState::Failed(FS_ERR_NOT_FOUND),
-                Err(error) => return OperationState::Failed(map_block_error(error)),
-            };
-            if len > 512 * 1024 * 1024 { return OperationState::Failed(FS_ERR_TOO_LARGE); }
-            let bytes = match crate::r::fs::trueosfs::authorized::read(actor, disk, file, 512 * 1024 * 1024).await {
-                Ok(Some(bytes)) => bytes,
-                Ok(None) => return OperationState::Failed(FS_ERR_NOT_FOUND),
-                Err(error) => return OperationState::Failed(map_block_error(error)),
-            };
-            if crate::hv::blueprint::prebind_required_readiness(&bytes).is_err() { return OperationState::Failed(FS_ERR_BAD_PARAM); }
-            return match crate::app_db::insert_download(archive, &bytes) {
+            let Some(paths) = paths else { return OperationState::Failed(FS_ERR_BAD_PATH); };
+            let mut downloads = Vec::new();
+            let mut total_len = 0u64;
+            for path in paths {
+                let archive = path.rsplit('/').next().unwrap_or("");
+                if !trueos_appbundle::valid_archive(archive) { return OperationState::Failed(FS_ERR_BAD_PATH); }
+                let (disk, file) = match selected_disk(&path) { Ok(selected) => selected, Err(code) => return OperationState::Failed(code) };
+                crate::access_key_db::audit_path(vm as u8, disk, file, "appdb-install-read", false).await;
+                let len = match crate::r::fs::trueosfs::authorized::node_info(actor, disk, file).await {
+                    Ok(Some(info)) => info.data_len,
+                    Ok(None) => return OperationState::Failed(FS_ERR_NOT_FOUND),
+                    Err(error) => return OperationState::Failed(map_block_error(error)),
+                };
+                total_len = total_len.saturating_add(len);
+                if total_len > 512 * 1024 * 1024 { return OperationState::Failed(FS_ERR_TOO_LARGE); }
+                let bytes = match crate::r::fs::trueosfs::authorized::read(actor, disk, file, len).await {
+                    Ok(Some(bytes)) => bytes,
+                    Ok(None) => return OperationState::Failed(FS_ERR_NOT_FOUND),
+                    Err(error) => return OperationState::Failed(map_block_error(error)),
+                };
+                if crate::hv::blueprint::prebind_required_readiness(&bytes).is_err() { return OperationState::Failed(FS_ERR_BAD_PARAM); }
+                downloads.push((String::from(archive), bytes));
+            }
+            return match crate::app_db::insert_downloads(&downloads) {
                 Ok(()) => OperationState::Unit,
-                Err(_) => OperationState::Failed(FS_ERR_IO),
+                Err(error) => {
+                    crate::log_error!(target: "appdb-install"; "AppDB install failed: {}\n", error);
+                    OperationState::Failed(FS_ERR_IO)
+                }
             };
         }
     }

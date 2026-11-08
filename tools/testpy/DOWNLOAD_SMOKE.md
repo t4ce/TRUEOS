@@ -37,23 +37,12 @@ and authorization headers are excluded. Handshake timing covers TCP and TLS
 readiness from the request's start. For a preconnected response, zero means
 that stage completed before the measured interval.
 
-Build the standalone diagnostic using the normal authorized app refresh:
+The standalone `download-smoke` Blueprint has been removed. The parser remains
+available for archived logs captured by that app; its checks below use synthetic
+evidence. Native `download-http:` diagnostics remain available in the kernel.
 
-```sh
-cd ../TRUEOS-Blueprints
-cargo bp download-smoke
-```
-
-Boot a kernel with the native `download-http:` diagnostics enabled, then launch
-`§§download-smoke` through the usual AppDB. The default matrix makes eight
-requests once each, one second apart: general www PNG first, general apex PNG,
-general www page and script, followed by those four URLs through Hull's image
-service. No warmups or repeated probes are performed. App arguments can select
-`--url HTTPS_URL` and `--route general|image|general-happy|both`; see
-`../TRUEOS-Blueprints/apps/download-smoke/README.md` for details.
-
-Capture the current run using the usual bare-metal log drain. This parser does
-not start a drain, launch an app, fetch any URL, or reset the rig:
+Analyze a captured app run with the following command. This parser does not
+start a drain, launch an app, fetch any URL, or reset the rig:
 
 ```sh
 python3 tools/testpy/download_smoke.py --log bld/baremetal-logs/LatestOfThree.logs --output /tmp/download-smoke-native/report.json

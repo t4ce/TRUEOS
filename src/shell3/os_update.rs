@@ -14,14 +14,14 @@ pub(crate) fn submit_live_update_to_target(spawner: &Spawner, target: MatrixTarg
 pub(crate) fn submit_live_update_from_url_to_target(
     spawner: &Spawner,
     target: MatrixTarget,
-    url: &'static str,
+    url: impl Into<alloc::string::String>,
 ) {
     print_matrix_target_line(
         &target,
         "update live: step=01/20 command-accepted mode=RAM-only disk-install=disabled",
     );
 
-    match live_update_command_task(target.clone(), url) {
+    match live_update_command_task(target.clone(), url.into()) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
 
@@ -31,7 +31,7 @@ pub(crate) fn submit_live_update_from_url_to_target(
 }
 
 #[trueos_executor::task]
-async fn live_update_command_task(target: MatrixTarget, url: &'static str) {
+async fn live_update_command_task(target: MatrixTarget, url: alloc::string::String) {
     let task_target = target.clone();
     async move {
         Timer::after(EmbassyDuration::from_millis(1)).await;
@@ -51,7 +51,7 @@ async fn live_update_command_task(target: MatrixTarget, url: &'static str) {
 
         log(alloc::format!("update live: step=03/20 download-begin {}", url).as_str());
         let payload = match crate::surfer::html_shack::fetch_bytes_via_pool(
-            url,
+            url.as_str(),
             120_000,
             crate::update_bundle::MAX_COMPRESSED_BYTES,
         )
