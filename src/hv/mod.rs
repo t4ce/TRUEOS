@@ -4,6 +4,7 @@ pub mod blueprint;
 pub mod blueprint_net;
 pub mod control_kick;
 mod cooperative_stop;
+mod codex_admission;
 mod depthchecker_debug;
 pub(crate) mod launcher;
 pub(crate) mod launch_timing;
@@ -95,6 +96,7 @@ const BLUEPRINT_CHILD_ERR_INVALID: i32 = -1;
 const BLUEPRINT_CHILD_ERR_NOT_FOUND: i32 = -2;
 const BLUEPRINT_CHILD_ERR_QUEUE_FULL: i32 = -3;
 const BLUEPRINT_CHILD_ERR_UNAVAILABLE: i32 = -4;
+static CODEX_ADMISSION: codex_admission::Limit = codex_admission::Limit::new();
 
 
 // VMX tasks can be parked in host waits rather than executing VMRESUME. An IPI
@@ -621,6 +623,7 @@ fn handle_external_interrupt_vmexit(vm_id: u8) -> Result<(), &'static str> {
 pub enum StartError {
     UnsupportedVmId,
     AlreadyRunning,
+    CodexAlreadyRunning,
     ConsoleUnsupported,
     VmxUnsupported,
     MissingGuestModule,
@@ -2103,6 +2106,14 @@ fn start_with_mode(
         return Err(StartError::VgpuQuarantined);
     }
 
+    // Every frontend and child launch converges here. Acquire under lifecycle
+    // control so an old occupant's offline publication cannot retire a new
+    // reservation for the same VM id. Failed starts roll back automatically.
+    let codex_requested = match pending_blueprint.as_ref() {
+        Some(pending) => blueprint::uses_volatile_codex_files(&pending.archive),
+        None => app_vm_archive(vm_id).as_deref().is_some_and(blueprint::uses_volatile_codex_files),
+    };
+    let codex_admission;
     let mut matrix_admission = matrix::Admission::new(vm_id);
     {
         let _control = vm.lifecycle_control.lock();
@@ -2125,6 +2136,14 @@ fn start_with_mode(
             ));
             return Err(StartError::AlreadyRunning);
         }
+        codex_admission = if codex_requested {
+            Some(CODEX_ADMISSION.claim(vm_id).map_err(|()| {
+                hvwarnf(format_args!("hv: vm{} launch rejected: Codex is already starting or running (limit=1)", vm_id));
+                StartError::CodexAlreadyRunning
+            })?)
+        } else {
+            None
+        };
         if let Some(pending) = pending_blueprint.as_mut() {
             // Identity is established under lifecycle admission, before the VM
             // worker can execute. Child and replica launches enter here too.
@@ -2360,6 +2379,7 @@ fn start_with_mode(
         }
     }
     matrix_admission.commit();
+    if let Some(admission) = codex_admission { admission.commit(); }
     Ok(())
 }
 
@@ -4798,6 +4818,7 @@ fn publish_vm_offline(vm_id: u8, vm: &TrueosVmId) {
             ));
         }
     }
+    CODEX_ADMISSION.release_vm(vm_id);
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {

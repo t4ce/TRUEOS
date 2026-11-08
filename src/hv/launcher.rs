@@ -187,7 +187,10 @@ async fn launch_task(
                         }
                         (vm, run)
                     })
-                    .map_err(|error| alloc::format!("{error:?}"))
+                    .map_err(|error| match error {
+                        super::StartError::CodexAlreadyRunning => String::from("Codex is already starting or running; only one Codex VM is allowed"),
+                        _ => alloc::format!("{error:?}"),
+                    })
             }
             None => Err(String::from("no free VM")),
         }

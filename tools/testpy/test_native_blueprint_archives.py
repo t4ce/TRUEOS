@@ -29,7 +29,7 @@ TESTS=r'''
 }
 '''
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True);out=p.parse_args().output.resolve();out.mkdir(parents=True,exist_ok=True);checks=[]
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True);p.add_argument('--tar-version',choices=['0.4.45','0.4.46'],default='0.4.45');args=p.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=True);checks=[]
  with tempfile.TemporaryDirectory(prefix='trueos-archives-')as tmp:
   work=Path(tmp)
   def run(label,cmd,env=None):
@@ -39,7 +39,7 @@ def main():
    if r.returncode:raise RuntimeError(log.read_text()[-14000:])
    return log.read_text()
   driver=STAGE_DRIVER.replace('@MODULE@',json.dumps(str(SDK/'src/codex_native_archive_overlay.rs'))).replace('overlay::stage(&PathBuf::from(&args[1]),&PathBuf::from(&args[2]))','overlay::stage(&PathBuf::from(&args[1]),&PathBuf::from(&args[2]),&args[3],&args[4])');(work/'stage.rs').write_text(driver);run('compile',['rustup','run',TOOLCHAIN,'rustc','--edition=2024',str(work/'stage.rs'),'-o',str(work/'stage')]);staged={}
-  for name,version in [('tar','0.4.45'),('filetime','0.2.27'),('zip','9.0.0')]:
+  for name,version in [('tar',args.tar_version),('filetime','0.2.27'),('zip','9.0.0')]:
    source=list((Path.home()/'.cargo/registry/src').glob(f'*/{name}-{version}'));assert len(source)==1;staged[name]=Path(run('stage-'+name,[str(work/'stage'),str(work/'staged'),str(source[0]),name,version]).strip())
    cargo_manifest=staged[name]/'Cargo.toml';lines=[];skip=False
    for line in cargo_manifest.read_text().splitlines():
@@ -51,7 +51,7 @@ name="native-blueprint-archives-proof"
 version="0.0.0"
 edition="2024"
 [workspace]
-exclude=["staged/source-overlay-crates/tar-0.4.45-trueos","staged/source-overlay-crates/filetime-0.2.27-trueos","staged/source-overlay-crates/zip-9.0.0-trueos"]
+exclude=["staged/source-overlay-crates/tar-{args.tar_version}-trueos","staged/source-overlay-crates/filetime-0.2.27-trueos","staged/source-overlay-crates/zip-9.0.0-trueos"]
 [dependencies]
 tar={{path={json.dumps(str(staged['tar']))}}}
 filetime={{path={json.dumps(str(staged['filetime']))}}}
@@ -69,5 +69,5 @@ os.execvp(args[0],args)
 ''');wrapper.chmod(0o755)
   for mode,flags in [('debug',[]),('release',['--release'])]:
    env=environment(out/'target');env['RUSTC_WRAPPER']=str(wrapper);result=run(mode,['rustup','run',TOOLCHAIN,'cargo','test','--offline',*flags,'--target','x86_64-unknown-linux-gnu','--lib','--','--test-threads=1'],env);assert'10 passed'in result
- (out/'receipt.json').write_text(json.dumps({'scope':__doc__,'checks':checks,'sources':[info(SDK/'src'/p)for p in ['codex_native_archive_overlay.rs','filetime_trueos.rs']]},indent=2)+'\n');print(out/'receipt.json')
+ (out/'receipt.json').write_text(json.dumps({'scope':__doc__,'tar_version':args.tar_version,'checks':checks,'sources':[info(SDK/'src'/p)for p in ['codex_native_archive_overlay.rs','filetime_trueos.rs']]},indent=2)+'\n');print(out/'receipt.json')
 if __name__=='__main__':main()

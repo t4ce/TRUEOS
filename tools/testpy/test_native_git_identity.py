@@ -50,7 +50,7 @@ TESTS=r'''
 '''
 
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True);out=p.parse_args().output.resolve();out.mkdir(parents=True,exist_ok=True);checks=[]
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True);p.add_argument('--ignore-version',choices=['0.4.25','0.4.32'],default='0.4.25');args=p.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=True);checks=[]
  with tempfile.TemporaryDirectory(prefix='trueos-git-identity-')as tmp:
   work=Path(tmp)
   def run(label,cmd,env=None):
@@ -60,8 +60,9 @@ def main():
    if r.returncode:raise RuntimeError(log.read_text()[-12000:])
    return log.read_text()
   staged={}
-  for name,version,method,module in [('walkdir','2.5.0','stage_walkdir','codex_native_data_overlay.rs'),('ignore','0.4.25','stage_ignore','codex_native_data_overlay.rs'),('file-id','0.2.3','stage_file_id','codex_native_data_overlay.rs'),('gix-discover','0.57.0','stage_gix_discover','codex_native_data_overlay.rs'),('gix-sec','0.16.0','stage_gix_sec','codex_native_data_overlay.rs'),('same-file','1.0.6','stage_same_file','native_file_overlays.rs')]:
+  for name,version,method,module in [('walkdir','2.5.0','stage_walkdir','codex_native_data_overlay.rs'),('ignore',args.ignore_version,'stage_ignore'if args.ignore_version=='0.4.25'else'stage_ignore_version','codex_native_data_overlay.rs'),('file-id','0.2.3','stage_file_id','codex_native_data_overlay.rs'),('gix-discover','0.57.0','stage_gix_discover','codex_native_data_overlay.rs'),('gix-sec','0.16.0','stage_gix_sec','codex_native_data_overlay.rs'),('same-file','1.0.6','stage_same_file','native_file_overlays.rs')]:
    extra=',&PathBuf::from(&args[3])'if name=='gix-sec'else''
+   if name=='ignore'and args.ignore_version!='0.4.25':extra=','+json.dumps(args.ignore_version)
    driver=STAGE_DRIVER.replace('@MODULE@',json.dumps(str(SDK/'src'/module))).replace('overlay::stage(&PathBuf::from(&args[1]),&PathBuf::from(&args[2]))',f'overlay::{method}(&PathBuf::from(&args[1]),&PathBuf::from(&args[2]){extra})')
    (work/'stage.rs').write_text(driver);run('compile-'+name,['rustup','run',TOOLCHAIN,'rustc','--edition=2024',str(work/'stage.rs'),'-o',str(work/'stage')])
    source=list((Path.home()/'.cargo/registry/src').glob(f'*/{name}-{version}'));assert len(source)==1
@@ -113,5 +114,5 @@ os.execvp(args[0],args)
   for mode,flags in [('debug',[]),('release',['--release'])]:
    env=environment(out/'target');env['RUSTC_WRAPPER']=str(wrapper)
    result=run(mode,['rustup','run',TOOLCHAIN,'cargo','test','--offline',*flags,'--target','x86_64-unknown-linux-gnu','--lib','--','--test-threads=1'],env);assert'12 passed'in result
- (out/'receipt.json').write_text(json.dumps({'scope':__doc__,'checks':checks,'sources':[info(SDK/'src'/p)for p in ['codex_native_data_overlay.rs','gix_sec_trueos.rs','same_file_trueos.rs']]},indent=2)+'\n');print(out/'receipt.json')
+ (out/'receipt.json').write_text(json.dumps({'scope':__doc__,'ignore_version':args.ignore_version,'checks':checks,'sources':[info(SDK/'src'/p)for p in ['codex_native_data_overlay.rs','gix_sec_trueos.rs','same_file_trueos.rs']]},indent=2)+'\n');print(out/'receipt.json')
 if __name__=='__main__':main()

@@ -272,6 +272,7 @@ struct DecodedVideoConversionProbeSample {
 #[derive(Copy, Clone)]
 struct DecodedVideoConversionOutcome {
     published: bool,
+    retry_resize: bool,
     probe: DecodedVideoConversionProbeSample,
 }
 
@@ -279,6 +280,7 @@ impl DecodedVideoConversionProbeSample {
     const fn finish(self, published: bool) -> DecodedVideoConversionOutcome {
         DecodedVideoConversionOutcome {
             published,
+            retry_resize: false,
             probe: self,
         }
     }
@@ -1075,7 +1077,15 @@ pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32, lane: u8
             continue;
         };
         let started = Instant::now();
-        let mut outcome = convert_publish_decoded_nv12_stream_frame(request).await;
+        let mut outcome = loop {
+            let outcome = convert_publish_decoded_nv12_stream_frame(request).await;
+            if !outcome.retry_resize || request.session.is_cancelled() {
+                break outcome;
+            }
+            // Keep the exact decoder picture pinned while a newer geometry
+            // supersedes this conversion. A resize never drops a picture or
+            // turns an expected stale transaction into a playback failure.
+        };
         // convert_publish returns only before GPU admission or after the
         // accepted RCS read has retired. Transfer the decoder-surface lifetime
         // to this worker so playback can overlap VDBOX with conversion without
@@ -1161,11 +1171,9 @@ fn poll_decoded_video_player_input() {
             {
                 toggle_video_playback_pause(event.window);
             }
-            Ui4InputEvent::Resize(event) => crate::log_warn!(
-                target: "ui4";
-                "ui4 video-player resize ignored window={} extent={}x{} reason=fixed-shell-vid-frame no-placeholder-publish=1\n",
-                event.window.raw(), event.width, event.height,
-            ),
+            // The conversion worker reads the broker's latest placement and
+            // epoch together; coalesced events never stage obsolete extents.
+            Ui4InputEvent::Resize(_) => {}
             _ => {}
         }
     }
@@ -1234,6 +1242,81 @@ fn move_crop_origin(origin: u32, drag_delta: i32, maximum: u32) -> u32 {
     (i64::from(origin) - i64::from(drag_delta)).clamp(0, i64::from(maximum)) as u32
 }
 
+fn stage_video_resize(
+    stream: &mut VideoStream,
+) -> Result<(RetireVideoFrame, WindowPlacement, u64), super::WindowBrokerError> {
+    let (placement, epoch) = super::window_resize_state(VIDEO_OWNER, stream.window)?;
+    let mut replacement = RetireVideoFrame(None);
+    if (placement.width, placement.height) != (stream.frame_width, stream.frame_height) {
+        let Ok(frame) = create_video_frame(placement.width, placement.height) else {
+            // Memory pressure or an unsupported target must not stop playback.
+            // Keep updating the committed frame and retry on the next picture.
+            return Ok((replacement, placement, epoch));
+        };
+        replacement.0 = Some(frame);
+        stream.frame = frame;
+        stream.frame_width = placement.width;
+        stream.frame_height = placement.height;
+        stream.pan_x = stream
+            .pan_x
+            .min(stream.visible_width.saturating_sub(stream.frame_width));
+        stream.pan_y = stream
+            .pan_y
+            .min(stream.visible_height.saturating_sub(stream.frame_height));
+    }
+    Ok((replacement, placement, epoch))
+}
+
+fn publish_video_conversion(
+    live: &mut VideoStream,
+    rendered: VideoStream,
+    replacement: &mut RetireVideoFrame,
+    placement: WindowPlacement,
+    resize_epoch: u64,
+) -> Result<u64, super::WindowBrokerError> {
+    if replacement.0.is_some() {
+        let serial = super::commit_window_frame_replacement(
+            VIDEO_OWNER,
+            rendered.window,
+            rendered.frame,
+            placement,
+            resize_epoch,
+            DamageRect::FULL,
+        )?;
+        // Retirement waits for any other conversion lease and SURFLIVE.
+        // Preserve pan input that arrived while the GPU was converting.
+        replacement.0 = Some(live.frame);
+        live.frame = rendered.frame;
+        live.frame_width = rendered.frame_width;
+        live.frame_height = rendered.frame_height;
+        live.pan_x = live
+            .pan_x
+            .min(live.visible_width.saturating_sub(live.frame_width));
+        live.pan_y = live
+            .pan_y
+            .min(live.visible_height.saturating_sub(live.frame_height));
+        Ok(serial)
+    } else if live.frame != rendered.frame {
+        // The preceding lane committed a replacement while this lane
+        // rendered. Reconvert this same pinned picture into the live frame.
+        Err(super::WindowBrokerError::StaleResize)
+    } else {
+        publish_window_frame(VIDEO_OWNER, rendered.window, DamageRect::FULL)
+    }
+}
+
+// A staged allocation must retire on every early return, including cancelled
+// playback and superseded resize epochs, after accepted GPU reads complete.
+struct RetireVideoFrame(Option<FrameHandle>);
+
+impl Drop for RetireVideoFrame {
+    fn drop(&mut self) {
+        if let Some(frame) = self.0 {
+            retire_video_frame(frame);
+        }
+    }
+}
+
 fn retire_video_frame(frame: FrameHandle) {
     match destroy_frame(frame) {
         Ok(()) | Err(super::FramePoolError::InvalidHandle) => {}
@@ -1289,7 +1372,7 @@ async fn convert_publish_decoded_nv12_stream_frame(
     // drain its broker queue at frame cadence so move/resize/pan never depends
     // on the boot-only pause gate.
     poll_decoded_video_player_input();
-    let Some(stream) = bind_decoded_source_stream(
+    let Some(mut stream) = bind_decoded_source_stream(
         session,
         DecodedVideoFrameSpec::from_nv12_source(source),
         reason,
@@ -1297,6 +1380,10 @@ async fn convert_publish_decoded_nv12_stream_frame(
         probe.bind_layout_us =
             video_conversion_ticks_to_micros(bind_layout_started.elapsed().as_ticks());
         return probe.finish(false);
+    };
+    let (mut replacement, placement, resize_epoch) = match stage_video_resize(&mut stream) {
+        Ok(staged) => staged,
+        Err(_) => return probe.finish(false),
     };
     let Some(layout) = native_viewport_layout(
         stream.visible_width,
@@ -1348,6 +1435,18 @@ async fn convert_publish_decoded_nv12_stream_frame(
                 // Two conversion lanes may wait simultaneously, while the
                 // frame-pool notification is intentionally single-waker.
                 Timer::after(Duration::from_millis(1)).await;
+            }
+            Err(super::FramePoolError::InvalidHandle)
+                if session
+                    .state()
+                    .stream
+                    .lock()
+                    .as_ref()
+                    .is_some_and(|live| live.frame != stream.frame) =>
+            {
+                let mut outcome = probe.finish(false);
+                outcome.retry_resize = true;
+                return outcome;
             }
             Err(error) => {
                 crate::log_warn!(target: "ui4";
@@ -1561,9 +1660,21 @@ async fn convert_publish_decoded_nv12_stream_frame(
             return probe.finish(false);
         }
     };
-    let window_serial = match crate::r::services::video_open_service::publish_browser_frame(session,||publish_window_frame(VIDEO_OWNER, stream.window, DamageRect::FULL)) {
+    let window_serial = match crate::r::services::video_open_service::publish_browser_frame(
+        session,
+        || {
+            let mut slot = session.state().stream.lock();
+            let live = slot.as_mut().ok_or(super::WindowBrokerError::Closed)?;
+            publish_video_conversion(live, stream, &mut replacement, placement, resize_epoch)
+        },
+    ) {
         Some(Ok(serial)) => serial,
         None => return probe.finish(false),
+        Some(Err(super::WindowBrokerError::StaleResize)) => {
+            let mut outcome = probe.finish(false);
+            outcome.retry_resize = true;
+            return outcome;
+        }
         Some(Err(error)) => {
             crate::log_warn!(target: "ui4";
                 "ui4 video-frame window publish failed frame={} window={} error={:?} reason={} action=close-stream source_already_released_at=guc-completion\n",
@@ -1757,7 +1868,7 @@ fn create_stream(
         output: VIDEO_OUTPUT,
         plane: super::WindowPlane::Universal(VIDEO_PLANE_SLOT as u8),
         placement,
-        interaction: super::WindowInteraction::APPLICATION_FIXED_FRAME,
+        interaction: super::WindowInteraction::APPLICATION,
     }) {
         Ok(window) => window,
         Err(_) => {

@@ -119,12 +119,28 @@ fn incomplete_bundle_rolls_back_all_bytes_hashes_and_dates() {
     assert_eq!(REFRESHES.load(Ordering::SeqCst), 0);
 }
 #[test]
-fn batch_publishes_both_and_refreshes_once_regardless_of_input_order() {
+fn missing_xerj_rolls_back_updates_even_when_sqlite_is_installed() {
     reset();
-    app_db::insert_downloads(&[download("codex.bp"), download("sqlite.bp")]).unwrap();
+    app_db::insert_downloads(&[download("sqlite.bp")]).unwrap();
+    REFRESHES.store(0, Ordering::SeqCst);
+    let before = app_db::list().unwrap();
+    let old = app_db::get("apps.bp").unwrap();
+    let error = app_db::insert_downloads(&[download("apps.bp"), download("codex.bp")]).unwrap_err();
+    assert!(error.contains("required Blueprint xerj.bp is unavailable"));
+    assert_eq!(app_db::list().unwrap(), before);
+    assert_eq!(app_db::get("apps.bp").unwrap(), old);
+    assert!(app_db::get("codex.bp").unwrap().is_none());
+    assert_eq!(REFRESHES.load(Ordering::SeqCst), 0);
+}
+#[test]
+fn batch_publishes_all_and_refreshes_once_regardless_of_input_order() {
+    reset();
+    app_db::insert_downloads(&[download("codex.bp"), download("xerj-service.bp"), download("xerj.bp"), download("sqlite.bp")]).unwrap();
     assert_eq!(app_db::get("codex.bp").unwrap().unwrap(), download("codex.bp").1);
     assert_eq!(app_db::get("sqlite.bp").unwrap().unwrap(), download("sqlite.bp").1);
-    assert_eq!(app_db::list().unwrap().len(), 3);
+    assert_eq!(app_db::get("xerj.bp").unwrap().unwrap(), download("xerj.bp").1);
+    assert_eq!(app_db::get("xerj-service.bp").unwrap().unwrap(), download("xerj-service.bp").1);
+    assert_eq!(app_db::list().unwrap().len(), 5);
     assert_eq!(REFRESHES.load(Ordering::SeqCst), 1);
 }
 #[test]
@@ -135,20 +151,64 @@ fn sqlite_alone_succeeds_without_codex() {
     assert!(app_db::get("codex.bp").unwrap().is_none());
 }
 #[test]
-fn missing_or_invalid_second_file_never_imports_the_first() {
-    for invalid in [false, true] {
-        reset(); stage("sqlite.bp");
-        if invalid { FILES.lock().unwrap().insert("common/dl/apps/codex.bp".into(), b"corrupt".to_vec()); }
-        assert!(io::install::run(b"common/dl/apps/sqlite.bp\ncommon/dl/apps/codex.bp").is_err());
-        assert!(app_db::get("sqlite.bp").unwrap().is_none());
-        assert_eq!(REFRESHES.load(Ordering::SeqCst), 0);
+fn xerj_alone_succeeds_without_codex_or_sqlite() {
+    reset();
+    app_db::insert_downloads(&[download("xerj.bp")]).unwrap();
+    assert!(app_db::get("xerj.bp").unwrap().is_some());
+    assert!(app_db::get("codex.bp").unwrap().is_none());
+    assert!(app_db::get("sqlite.bp").unwrap().is_none());
+}
+#[test]
+fn missing_service_rolls_back_codex_even_when_its_engine_is_installed() {
+    reset();
+    app_db::insert_downloads(&[download("sqlite.bp"), download("xerj.bp")]).unwrap();
+    REFRESHES.store(0, Ordering::SeqCst);
+    let before = app_db::list().unwrap();
+    let error = app_db::insert_downloads(&[download("codex.bp")]).unwrap_err();
+    assert!(error.contains("required Blueprint xerj-service.bp is unavailable"));
+    assert_eq!(app_db::list().unwrap(), before);
+    assert!(app_db::get("codex.bp").unwrap().is_none());
+    assert_eq!(REFRESHES.load(Ordering::SeqCst), 0);
+}
+#[test]
+fn service_requires_its_engine_without_requiring_codex() {
+    reset();
+    let error = app_db::insert_downloads(&[download("xerj-service.bp")]).unwrap_err();
+    assert!(error.contains("required Blueprint xerj.bp is unavailable"));
+    assert!(app_db::get("xerj-service.bp").unwrap().is_none());
+    assert_eq!(REFRESHES.load(Ordering::SeqCst), 0);
+    app_db::insert_downloads(&[download("xerj-service.bp"), download("xerj.bp")]).unwrap();
+    assert!(app_db::get("xerj-service.bp").unwrap().is_some());
+    assert!(app_db::get("xerj.bp").unwrap().is_some());
+    assert!(app_db::get("codex.bp").unwrap().is_none());
+    assert_eq!(REFRESHES.load(Ordering::SeqCst), 1);
+}
+#[test]
+fn missing_or_invalid_member_never_imports_any_of_the_batch() {
+    for broken in ["sqlite.bp", "xerj.bp", "xerj-service.bp", "codex.bp"] {
+        for invalid in [false, true] {
+            reset(); stage("sqlite.bp"); stage("xerj.bp"); stage("xerj-service.bp"); stage("codex.bp");
+            let path = format!("common/dl/apps/{broken}");
+            if invalid {
+                FILES.lock().unwrap().insert(path, b"corrupt".to_vec());
+            } else {
+                FILES.lock().unwrap().remove(&path);
+            }
+            assert!(io::install::run(b"common/dl/apps/sqlite.bp\ncommon/dl/apps/xerj.bp\ncommon/dl/apps/xerj-service.bp\ncommon/dl/apps/codex.bp").is_err());
+            for name in ["sqlite.bp", "xerj.bp", "xerj-service.bp", "codex.bp"] {
+                assert!(app_db::get(name).unwrap().is_none());
+            }
+            assert_eq!(REFRESHES.load(Ordering::SeqCst), 0);
+        }
     }
 }
 #[test]
-fn batch_request_imports_both_and_keeps_single_path_compatibility() {
-    reset(); stage("sqlite.bp"); stage("codex.bp");
-    io::install::run(b"common/dl/apps/sqlite.bp\ncommon/dl/apps/codex.bp").unwrap();
+fn batch_request_imports_all_and_keeps_single_path_compatibility() {
+    reset(); stage("sqlite.bp"); stage("xerj.bp"); stage("xerj-service.bp"); stage("codex.bp");
+    io::install::run(b"common/dl/apps/sqlite.bp\ncommon/dl/apps/xerj.bp\ncommon/dl/apps/xerj-service.bp\ncommon/dl/apps/codex.bp").unwrap();
     assert!(app_db::get("sqlite.bp").unwrap().is_some());
+    assert!(app_db::get("xerj.bp").unwrap().is_some());
+    assert!(app_db::get("xerj-service.bp").unwrap().is_some());
     assert!(app_db::get("codex.bp").unwrap().is_some());
     assert_eq!(REFRESHES.load(Ordering::SeqCst), 1);
     reset(); stage("sqlite.bp");
@@ -188,6 +248,24 @@ def main():
                                  str(seed), '2026-11-08 00:00Z', str(BP / 'appbundle.json')], cwd=path, capture_output=True)
         assert result.returncode != 0 and b'sqlite.bp is missing from the seed' in result.stderr
         assert seed.read_bytes() == original
+        (packages / 'sqlite.bp').write_bytes(b'TRBP' + bytes(20))
+        manifest.write_text('{"buildins":["apps","codex","sqlite"]}')
+        result = subprocess.run([env['CARGO_TARGET_DIR'] + '/debug/trueos-appdb-seed', str(manifest), str(packages),
+                                 str(seed), '2026-11-08 00:00Z', str(BP / 'appbundle.json')], cwd=path, capture_output=True)
+        assert result.returncode != 0 and b'xerj.bp is missing from the seed' in result.stderr
+        assert seed.read_bytes() == original
+        (packages / 'xerj.bp').write_bytes(b'TRBP' + bytes(20))
+        manifest.write_text('{"buildins":["apps","codex","sqlite","xerj"]}')
+        result = subprocess.run([env['CARGO_TARGET_DIR'] + '/debug/trueos-appdb-seed', str(manifest), str(packages),
+                                 str(seed), '2026-11-08 00:00Z', str(BP / 'appbundle.json')], cwd=path, capture_output=True)
+        assert result.returncode != 0 and b'xerj-service.bp is missing from the seed' in result.stderr
+        assert seed.read_bytes() == original
+        (packages / 'xerj-service.bp').write_bytes(b'TRBP' + bytes(20))
+        manifest.write_text('{"buildins":["apps","codex","sqlite","xerj","xerj-service"]}')
+        complete_seed = path / 'complete-seed.db'
+        subprocess.run([env['CARGO_TARGET_DIR'] + '/debug/trueos-appdb-seed', str(manifest), str(packages),
+                        str(complete_seed), '2026-11-08 00:00Z', str(BP / 'appbundle.json')], cwd=path, check=True)
+        assert complete_seed.is_file()
 
         text = HARNESS.replace('@APPDB@', json.dumps(str(ROOT / 'src/app_db.rs')))
         text = text.replace('@JSON@', json.dumps(str(BP / 'appbundle.json')))
