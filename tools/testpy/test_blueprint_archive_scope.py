@@ -24,6 +24,7 @@ def function(source: str, signature: str) -> str:
 
 HARNESS = r'''#![allow(dead_code)]
 extern crate alloc;
+mod trueos_appbundle { pub const MAX_MEMBERS: usize = 64; }
 mod r {
     #[path = @PATH_SOURCE@] pub mod path;
     pub mod io {
@@ -72,7 +73,8 @@ mod r {
         }
         pub mod async_fs_cabi {
             pub fn install_path(bytes: &[u8]) -> Option<String> {
-                @INSTALL_PATH@
+                let paths = (|| { @INSTALL_PATH@ })()?;
+                paths.into_iter().next()
             }
         }
     }
@@ -223,8 +225,8 @@ def main() -> None:
     fs = (ROOT / "src/r/io/fs_cabi.rs").read_text()
     blueprint = (ROOT / "src/hv/blueprint/blueprint.rs").read_text()
     asynchronous = (ROOT / "src/r/io/async_fs_cabi.rs").read_text()
-    install = asynchronous[asynchronous.index('if path == "vFile:appdb-install" {'):]
-    closure = function(install, "|| {")[4:-1]
+    install = function(asynchronous, 'async fn install_appdb(')
+    closure = function(install, "|| {")[4:-1].replace('trueos_appbundle::', 'crate::trueos_appbundle::')
     source = HARNESS.replace("@PATH_SOURCE@", json.dumps(str(ROOT / "src/r/path.rs")))
     source = source.replace("@LAUNCH_SOURCE@", json.dumps(str(ROOT / "src/r/io/launch_request.rs")))
     source = source.replace("@RESOLVERS@", resolvers)

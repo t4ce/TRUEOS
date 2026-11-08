@@ -35,10 +35,10 @@ elif [ -n "${CARGO_TARGET_DIR:-}" ]; then
     kernel_target="$CARGO_TARGET_DIR"
 fi
 # The IDE API reference fingerprints Cargo.lock before invoking Cargo.
-# Fresh checkouts have no lock.
-if [ ! -f Cargo.lock ]; then
-    cargo generate-lockfile
-fi
+# Resolve both missing and stale locks before that fingerprint is taken.
+# metadata preserves existing locked versions where possible, unlike rebuilding
+# the lockfile with generate-lockfile. Do not use --no-deps: it skips resolution.
+cargo metadata --format-version 1 > /dev/null
 # edit's build script consumes this reference from the sibling Blueprint crate.
 # Generate it before buildins fingerprints its inputs, outside app Cargo's env.
 export TRUEOS_API_SOURCE_ROOT="$root"

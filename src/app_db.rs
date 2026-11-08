@@ -91,9 +91,14 @@ pub(crate) fn init_bsp() -> Result<usize, String> {
         count as usize
     };
     {
-        let read = database.begin_read().map_err(|err| alloc::format!("read AppDB metadata: {err}"))?;
-        let metadata = read.open_table(METADATA).map_err(|err| alloc::format!("open AppDB metadata: {err}"))?;
-        let json = metadata.get(trueos_appbundle::METADATA_KEY)
+        let read = database
+            .begin_read()
+            .map_err(|err| alloc::format!("read AppDB metadata: {err}"))?;
+        let metadata = read
+            .open_table(METADATA)
+            .map_err(|err| alloc::format!("open AppDB metadata: {err}"))?;
+        let json = metadata
+            .get(trueos_appbundle::METADATA_KEY)
             .map_err(|err| alloc::format!("read appbundle.json: {err}"))?
             .ok_or("AppDB is missing appbundle.json")?;
         trueos_appbundle::AppBundles::parse(json.value())?;
@@ -166,11 +171,17 @@ pub(crate) fn get(archive: &str) -> Result<Option<Vec<u8>>, String> {
 pub(crate) fn appbundle_json() -> Result<Vec<u8>, String> {
     let guard = APP_DB.lock();
     let database = guard.as_ref().ok_or("app.db is not initialized")?;
-    let read = database.begin_read().map_err(|err| alloc::format!("read AppDB metadata: {err}"))?;
-    let metadata = read.open_table(METADATA).map_err(|err| alloc::format!("open AppDB metadata: {err}"))?;
-    metadata.get(trueos_appbundle::METADATA_KEY)
+    let read = database
+        .begin_read()
+        .map_err(|err| alloc::format!("read AppDB metadata: {err}"))?;
+    let metadata = read
+        .open_table(METADATA)
+        .map_err(|err| alloc::format!("open AppDB metadata: {err}"))?;
+    metadata
+        .get(trueos_appbundle::METADATA_KEY)
         .map_err(|err| alloc::format!("read appbundle.json: {err}"))?
-        .map(|value| value.value().to_vec()).ok_or_else(|| "AppDB is missing appbundle.json".into())
+        .map(|value| value.value().to_vec())
+        .ok_or_else(|| "AppDB is missing appbundle.json".into())
 }
 
 /// Publish a complete request in one transaction; failed bundles change no rows.
@@ -181,7 +192,10 @@ pub(crate) fn insert_downloads(downloads: &[(String, Vec<u8>)]) -> Result<(), St
     }
     for (index, (archive, _)) in downloads.iter().enumerate() {
         if !trueos_appbundle::valid_archive(archive)
-            || downloads[..index].iter().any(|(name, _)| name.eq_ignore_ascii_case(archive)) {
+            || downloads[..index]
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(archive))
+        {
             return Err(alloc::format!("Invalid or duplicate Blueprint: {archive}"));
         }
     }
@@ -203,21 +217,27 @@ pub(crate) fn insert_downloads(downloads: &[(String, Vec<u8>)]) -> Result<(), St
             .open_table(UPDATED)
             .map_err(|err| alloc::format!("open app.db updated table: {err}"))?;
         for (archive, bytes) in downloads {
-        let archive = archive.as_str();
-        apps.insert(archive, bytes.as_slice())
-            .map_err(|err| alloc::format!("write app.db {archive}: {err}"))?;
-        let sha256 = sha256_hex(bytes);
-        hashes
-            .insert(archive, sha256.as_str())
-            .map_err(|err| alloc::format!("write app.db hash {archive}: {err}"))?;
-        updated
-            .insert(archive, "this boot")
-            .map_err(|err| alloc::format!("write app.db update {archive}: {err}"))?;
+            let archive = archive.as_str();
+            apps.insert(archive, bytes.as_slice())
+                .map_err(|err| alloc::format!("write app.db {archive}: {err}"))?;
+            let sha256 = sha256_hex(bytes);
+            hashes
+                .insert(archive, sha256.as_str())
+                .map_err(|err| alloc::format!("write app.db hash {archive}: {err}"))?;
+            updated
+                .insert(archive, "this boot")
+                .map_err(|err| alloc::format!("write app.db update {archive}: {err}"))?;
         }
         for (archive, _) in downloads {
             for member in bundles.members(archive)? {
-                if apps.get(member.as_str()).map_err(|err| alloc::format!("read app.db {member}: {err}"))?.is_none() {
-                    return Err(alloc::format!("{archive}: required Blueprint {member} is unavailable in AppDB"));
+                if apps
+                    .get(member.as_str())
+                    .map_err(|err| alloc::format!("read app.db {member}: {err}"))?
+                    .is_none()
+                {
+                    return Err(alloc::format!(
+                        "{archive}: required Blueprint {member} is unavailable in AppDB"
+                    ));
                 }
             }
         }

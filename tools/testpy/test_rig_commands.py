@@ -11,6 +11,7 @@ import urllib.request
 import urllib.error
 
 ROOT = Path(__file__).resolve().parents[2]
+RESOLVE = 'cargo metadata --format-version 1'
 
 
 class RigCommands(unittest.TestCase):
@@ -200,7 +201,7 @@ printf '%s\\0' "$CARGO_BUILD_JOBS" "$RAYON_NUM_THREADS" "$TRUEOS_BUILD_SCOPE" "$
         self.script(self.bin / 'python3', '''
 if [[ $1 == */build_api_prm.py ]]; then
     echo api-reference >> "$TEST_ROOT/trace"
-    test -f "$TEST_ROOT/Cargo.lock"
+    test "$(cat "$TEST_ROOT/Cargo.lock")" = "resolved lock"
     test "$TRUEOS_API_SOURCE_ROOT" = "$TEST_ROOT"
     test "$2" = --output
     test "$3" = "$TEST_ROOT/../TRUEOS-Blueprints/crates/trueos-ide/api-prm"
@@ -243,9 +244,9 @@ else
 test "$TRUEOS_BUILDINS_DIR" = "$TEST_ROOT/tgt/buildins/$TEST_APP_PROFILE"
 fi
 echo "cargo $*" >> "$TEST_ROOT/trace"
-if [[ $1 == generate-lockfile ]]; then
+if [[ $1 == metadata ]]; then
     if [[ ${LOCK_STATUS:-0} != 0 ]]; then exit "$LOCK_STATUS"; fi
-    echo 'generated lock' > "$TEST_ROOT/Cargo.lock"
+    echo 'resolved lock' > "$TEST_ROOT/Cargo.lock"
     exit 0
 fi
 test_kernel_target=${CARGO_TARGET_DIR:-"$TEST_ROOT/tgt"}
@@ -296,7 +297,7 @@ echo runtime > "$3"
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
-                         ['cargo generate-lockfile', 'api-reference', 'buildins', 'cargo build --release',
+                         [RESOLVE, 'api-reference', 'buildins', 'cargo build --release',
                           'cargo boot', 'strip-debug', 'bundle'])
 
     def test_failed_api_generation_stops_before_apps_and_preserves_publication(self):
@@ -308,7 +309,7 @@ echo runtime > "$3"
                                 env=dict(self.env, API_STATUS='26'),
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 26, result.stderr)
-        self.assertEqual((self.root / 'trace').read_text().splitlines(), ['api-reference'])
+        self.assertEqual((self.root / 'trace').read_text().splitlines(), [RESOLVE, 'api-reference'])
         self.assertEqual((current / 'TRUEOS.elf').read_bytes(), b'previous')
 
     def test_failed_lock_generation_stops_before_building_apps(self):
@@ -319,17 +320,17 @@ echo runtime > "$3"
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 25, result.stderr)
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
-                         ['cargo generate-lockfile'])
+                         [RESOLVE])
         self.assertFalse((self.root / 'tgt/pxe-current').exists())
 
-    def test_preparation_builds_apps_before_embedding_and_publishes_complete_kernel(self):
+    def test_preparation_resolves_stale_lock_before_api_and_publishes_complete_kernel(self):
         script = self.prepare_fixture()
         result = subprocess.run(['bash', str(script), '--dev'], env=self.env,
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
-                         ['api-reference', 'buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle'])
-        self.assertEqual((self.root / 'Cargo.lock').read_text(), 'existing lock\n')
+                         [RESOLVE, 'api-reference', 'buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle'])
+        self.assertEqual((self.root / 'Cargo.lock').read_text(), 'resolved lock\n')
         self.assertEqual((self.root / 'tgt/pxe-current/TRUEOS.elf').read_text(), 'runtime\n')
         self.assertEqual((self.root / 'tgt/usb-debug/TRUEOS.elf').read_text(), 'runtime\n')
         self.assertEqual((self.root / 'tgt/x86_64-unknown-trueos/debug/TRUEOS').read_text(), 'kernel\n')
@@ -355,8 +356,8 @@ echo runtime > "$3"
         self.assertEqual((self.root / 'tgt/TrueOS.tar.lz4').resolve(), release.resolve())
         self.assertEqual((self.root / 'tgt/pxe-current/TRUEOS.elf').read_text(), 'runtime\n')
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
-                         ['api-reference', 'buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle',
-                          'api-reference', 'buildins', 'cargo build --release', 'cargo boot', 'strip-debug', 'bundle'])
+                         [RESOLVE, 'api-reference', 'buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle',
+                          RESOLVE, 'api-reference', 'buildins', 'cargo build --release', 'cargo boot', 'strip-debug', 'bundle'])
 
     def test_failed_app_build_leaves_the_previous_publication_intact(self):
         script = self.prepare_fixture()
@@ -367,7 +368,7 @@ echo runtime > "$3"
                                 env=dict(self.env, BUILDINS_STATUS='1'),
                                 capture_output=True, text=True, timeout=10)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual((self.root / 'trace').read_text().splitlines(), ['api-reference', 'buildins'])
+        self.assertEqual((self.root / 'trace').read_text().splitlines(), [RESOLVE, 'api-reference', 'buildins'])
         self.assertEqual((current / 'TRUEOS.elf').read_bytes(), b'previous')
 
     def test_failed_debug_stripping_preserves_publication_and_prevents_reset(self):
@@ -382,7 +383,7 @@ echo runtime > "$3"
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 23, result.stderr)
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
-                         ['api-reference', 'buildins', 'cargo build', 'cargo boot', 'strip-debug'])
+                         [RESOLVE, 'api-reference', 'buildins', 'cargo build', 'cargo boot', 'strip-debug'])
         self.assertEqual((current / 'TRUEOS.elf').read_bytes(), b'previous')
         self.assertFalse((self.root / 'tgt/usb-debug').exists())
 
@@ -408,7 +409,7 @@ echo runtime > "$3"
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 24, result.stderr)
         self.assertEqual((self.root / 'trace').read_text().splitlines(),
-                         ['api-reference', 'buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle'])
+                         [RESOLVE, 'api-reference', 'buildins', 'cargo build', 'cargo boot', 'strip-debug', 'bundle'])
         self.assertEqual(current.resolve(), previous)
         self.assertEqual((current / 'TRUEOS.elf').read_bytes(), b'previous kernel')
         self.assertEqual(profile.read_bytes(), b'previous archive')
