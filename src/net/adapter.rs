@@ -623,6 +623,16 @@ impl fmt::Debug for SharedNetPayload {
 
 #[derive(Clone, Debug)]
 pub enum NetCommand {
+    /// Trusted host-carrier admission. These actors never come from guest wire bytes.
+    OpenTcpListenForActor {
+        actor: crate::r::fs::trueosfs::authorized::Actor,
+        local: core::net::SocketAddr,
+    },
+    OpenTcpConnectForActor {
+        actor: crate::r::fs::trueosfs::authorized::Actor,
+        local: Option<core::net::SocketAddr>,
+        remote: core::net::SocketAddr,
+    },
 
     /// Internal reusable-client fence. Queue ordering ensures all earlier
     /// commands have run before records/events are retired and acknowledged.
@@ -1753,8 +1763,13 @@ enum TcpRoute {
     Loopback(Result<(), ()>),
 }
 
+type NetworkActor = crate::r::fs::trueosfs::authorized::Actor;
+
 struct SocketRecord {
     owner: &'static str,
+    actor: crate::r::fs::trueosfs::authorized::Actor,
+    tcp_bound: Option<core::net::SocketAddr>,
+    tcp_access: Option<(crate::r::fs::trueosfs::authorized::Actor, crate::r::fs::trueosfs::authorized::Actor, u16)>,
     handle: NetHandle,
     kind: SocketKind,
     socket: SocketHandle,
@@ -2618,6 +2633,9 @@ impl NetService {
         let handle = self.alloc_handle();
         let sh = self.sockets.add(socket);
         self.records.push(SocketRecord {
+            actor: NetworkActor::Public,
+            tcp_bound: None,
+            tcp_access: None,
             owner,
             handle,
             kind: SocketKind::Udp,
@@ -2637,15 +2655,18 @@ impl NetService {
     }
 
     fn open_tcp(&mut self, owner: &'static str, port: u16) -> Result<NetHandle, &'static str> {
-        self.open_tcp_listener(owner, port.into())
+        self.open_tcp_listener_for_actor(owner, NetworkActor::Public, core::net::SocketAddr::from(([0,0,0,0], port)))
     }
 
-    fn open_tcp_listener(
+    fn open_tcp_listener_for_actor(
         &mut self,
         owner: &'static str,
-        local: smoltcp::wire::IpListenEndpoint,
+        actor: NetworkActor,
+        local: core::net::SocketAddr,
     ) -> Result<NetHandle, &'static str> {
-        let port = local.port;
+        crate::access_key_db::authorize_tcp_listen(actor, local)
+            .map_err(|_| "tcp listen permission denied")?;
+        let port = local.port();
         self.require_link_up()?;
         if self.records.len() >= SOCKET_SOFT_CAP {
             return Err("no sockets available");
@@ -2669,6 +2690,9 @@ impl NetService {
         let handle = self.alloc_handle();
         let sh = self.sockets.add(socket);
         self.records.push(SocketRecord {
+            actor,
+            tcp_bound: Some(local),
+            tcp_access: None,
             owner,
             handle,
             kind: SocketKind::Tcp,
@@ -2690,6 +2714,7 @@ impl NetService {
     fn open_loopback_tcp_connect(
         &mut self,
         owner: &'static str,
+        actor: NetworkActor,
         remote: NetEndpoint,
         bound: Option<core::net::SocketAddrV4>,
     ) -> Result<(NetHandle, NetHandle, &'static str), &'static str> {
@@ -2719,6 +2744,10 @@ impl NetService {
                         })
             })
             .ok_or("connect failed")?;
+        let server_actor = self.records[listener_index].actor;
+        crate::access_key_db::authorize_tcp_connect(actor, server_actor, remote.port)
+            .map_err(|_| "tcp connect permission denied")?;
+        let access = (actor, server_actor, remote.port);
 
         let local_port = if let Some(bound) = bound {
             bound.port()
@@ -2744,6 +2773,7 @@ impl NetService {
         // the smoltcp listener so it cannot also accept a NIC connection.
         self.sockets.get_mut::<tcp::Socket>(listener_socket).abort();
         let listener = &mut self.records[listener_index];
+        listener.tcp_access = Some(access);
         listener.tcp_loopback_peer = Some(client_handle);
         listener.tcp_remote_v4 = Some(NetEndpoint {
             addr: local_addr,
@@ -2759,6 +2789,9 @@ impl NetService {
         let client_socket = self.sockets.add(client_socket);
 
         self.records.push(SocketRecord {
+            actor,
+            tcp_bound: None,
+            tcp_access: Some(access),
             owner,
             handle: client_handle,
             kind: SocketKind::Tcp,
@@ -2788,6 +2821,10 @@ impl NetService {
     }
 
     fn process_tcp_connect_v4(&mut self, owner: &'static str, remote: NetEndpoint, bound: Option<core::net::SocketAddrV4>) {
+        self.process_tcp_connect_v4_for_actor(owner, NetworkActor::Public, remote, bound)
+    }
+
+    fn process_tcp_connect_v4_for_actor(&mut self, owner: &'static str, actor: NetworkActor, remote: NetEndpoint, bound: Option<core::net::SocketAddrV4>) {
                 // Connections to this interface itself must not depend on NIC
                 // hairpin forwarding. Use the same in-kernel path as localhost.
                 if is_ipv4_loopback(remote.addr)
@@ -2795,7 +2832,7 @@ impl NetService {
                         .local_ipv4
                         .is_some_and(|addr| addr.octets() == remote.addr)
                 {
-                    match self.open_loopback_tcp_connect(owner, remote, bound) {
+                    match self.open_loopback_tcp_connect(owner, actor, remote, bound) {
                         Ok((client_handle, server_handle, server_owner)) => {
                             let _ = push_event(
                                 owner,
@@ -2944,6 +2981,9 @@ impl NetService {
             );
         }
         self.records.push(SocketRecord {
+            actor: NetworkActor::Public,
+            tcp_bound: None,
+            tcp_access: None,
             owner,
             handle,
             kind: SocketKind::Tcp,
@@ -3033,6 +3073,9 @@ impl NetService {
             );
         }
         self.records.push(SocketRecord {
+            actor: NetworkActor::Public,
+            tcp_bound: None,
+            tcp_access: None,
             owner,
             handle,
             kind: SocketKind::Tcp,
@@ -3072,24 +3115,40 @@ impl NetService {
             }
         };
 
+        if self.records[idx].tcp_access.is_some_and(|(client, server, port)|
+            crate::access_key_db::authorize_tcp_connect(client, server, port).is_err()) {
+            self.close_loopback_tcp(handle);
+            return TcpRoute::Loopback(Err(()));
+        }
+
         // Loopback has no smoltcp receive buffer. Retain bytes in the sender's
         // existing transmit queue until the paused peer can receive them.
         self.records[idx].tcp_tx.push(data);
-        self.flush_loopback_tcp_tx(idx);
+        if self.flush_loopback_tcp_tx(idx) { return TcpRoute::Loopback(Err(())); }
         TcpRoute::Loopback(Ok(()))
     }
 
-    fn flush_loopback_tcp_tx(&mut self, idx: usize) {
-        let Some(peer) = self.records[idx].tcp_loopback_peer else { return; };
+    fn flush_loopback_tcp_tx(&mut self, idx: usize) -> bool {
+        let Some(peer) = self.records[idx].tcp_loopback_peer else { return false; };
+        if self.records[idx].tcp_access.is_some_and(|(client, server, port)|
+            crate::access_key_db::authorize_tcp_connect(client, server, port).is_err()) {
+            let handle = self.records[idx].handle;
+            return self.close_loopback_tcp(handle);
+        }
         if crate::mio_compat::tcp_receive_paused(self.device_index, peer.0) {
-            return;
+            return false;
         }
         let Some(peer_owner) = self.records.iter().find(|record| record.handle == peer)
             .map(|record| record.owner)
-        else { return; };
+        else { return false; };
         let owner = self.records[idx].owner;
         let handle = self.records[idx].handle;
         for _ in 0..64 {
+        if self.records[idx].tcp_access.is_some_and(|(client, server, port)|
+            crate::access_key_db::authorize_tcp_connect(client, server, port).is_err()) {
+            let handle = self.records[idx].handle;
+            return self.close_loopback_tcp(handle);
+        }
             let Some(chunk) = self.records[idx].tcp_tx.front() else { break; };
             let len = chunk.len().min(v::vnet::MAX_MSG);
             let data = chunk[..len].to_vec();
@@ -3108,6 +3167,7 @@ impl NetService {
             self.records[idx].tcp_finish_pending = false;
             self.records[idx].tcp_write_closed = true;
         }
+            false
     }
 
     fn send_loopback_udp(
@@ -4204,6 +4264,32 @@ impl NetService {
 
     fn handle_command(&mut self, owner: &'static str, cmd: NetCommand) {
         match cmd {
+            NetCommand::OpenTcpListenForActor { actor, local } => {
+                let result = if matches!(local, core::net::SocketAddr::V6(addr) if addr.scope_id() != 0 || addr.flowinfo() != 0) {
+                    Err("unsupported listen address")
+                } else { self.open_tcp_listener_for_actor(owner, actor, local) };
+                match result {
+                    Ok(handle) => { let _ = push_event(owner, NetEvent::Opened { handle, kind: SocketKind::Tcp }); }
+                    Err(msg) => { let _ = push_event(owner, NetEvent::Error { msg: if msg == "link down" { "tcp listen link down" } else { msg } }); }
+                }
+            }
+            NetCommand::OpenTcpConnectForActor { actor, local, remote } => match (local, remote) {
+                (None, core::net::SocketAddr::V4(remote)) => self.process_tcp_connect_v4_for_actor(owner, actor, NetEndpoint { addr: remote.ip().octets(), port: remote.port() }, None),
+                (Some(core::net::SocketAddr::V4(local)), core::net::SocketAddr::V4(remote)) => self.process_tcp_connect_v4_for_actor(owner, actor, NetEndpoint { addr: remote.ip().octets(), port: remote.port() }, Some(local)),
+                (None, core::net::SocketAddr::V6(remote)) => {
+                    match self.open_tcp_connect_v6(owner, NetEndpointV6 { addr: remote.ip().octets(), port: remote.port() }, None) {
+                        Ok(handle) => { let _ = push_event(owner, NetEvent::Opened { handle, kind: SocketKind::Tcp }); }
+                        Err(msg) => { let _ = push_event(owner, NetEvent::Error { msg: if msg == "link down" { "tcp connect link down" } else { msg } }); }
+                    }
+                }
+                (Some(core::net::SocketAddr::V6(local)), core::net::SocketAddr::V6(remote)) => {
+                    match self.open_tcp_connect_v6(owner, NetEndpointV6 { addr: remote.ip().octets(), port: remote.port() }, Some(local)) {
+                        Ok(handle) => { let _ = push_event(owner, NetEvent::Opened { handle, kind: SocketKind::Tcp }); }
+                        Err(msg) => { let _ = push_event(owner, NetEvent::Error { msg: if msg == "link down" { "tcp connect link down" } else { msg } }); }
+                    }
+                }
+                _ => { let _ = push_event(owner, NetEvent::Error { msg: "invalid local address" }); }
+            },
             NetCommand::OpenTun {
                 ipv4,
                 ipv4_prefix_len,
@@ -4291,7 +4377,7 @@ impl NetService {
                 {
                     Err("unsupported listen address")
                 } else {
-                    self.open_tcp_listener(owner, local.into())
+                    self.open_tcp_listener_for_actor(owner, NetworkActor::Public, local)
                 } {
                     Ok(handle) => {
                         let _ = push_event(
@@ -4663,13 +4749,37 @@ impl NetService {
         }
     }
 
+    fn revoke_tcp_access(&mut self, idx: usize) -> bool {
+        if self.records[idx].tcp_access.is_some_and(|(client, server, port)|
+            crate::access_key_db::authorize_tcp_connect(client, server, port).is_err()) {
+            let handle = self.records[idx].handle;
+            return self.close_loopback_tcp(handle);
+        }
+        // A reservation may have been installed after an unrelated listener
+        // bound. Revoke it before physical TCP can deliver application bytes.
+        if let Some(local) = self.records[idx].tcp_bound {
+            let actor = self.records[idx].actor;
+            let denied = crate::access_key_db::authorize_tcp_listen(actor, local).is_err()
+                || (self.sockets.get::<tcp::Socket>(self.records[idx].socket).state() == tcp::State::Established
+                    && crate::access_key_db::authorize_tcp_connect(NetworkActor::Public, actor, local.port()).is_err());
+            if denied {
+                let owner = self.records[idx].owner;
+                let handle = self.records[idx].handle;
+                let _ = push_event(owner, NetEvent::Closed { handle });
+                self.remove_record(handle);
+                return true;
+            }
+        }
+        false
+    }
+
     fn poll_tcp(&mut self, idx: usize) -> bool {
         if self.records.get(idx).map(|r| r.kind) != Some(SocketKind::Tcp) {
             return false;
         }
+        if self.revoke_tcp_access(idx) { return true; }
         if self.records[idx].tcp_loopback_peer.is_some() {
-            self.flush_loopback_tcp_tx(idx);
-            return false;
+            return self.flush_loopback_tcp_tx(idx);
         }
 
         let (owner, handle, socket_handle) = {

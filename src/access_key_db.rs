@@ -58,13 +58,14 @@ pub(crate) fn grant_owned_workspace(
 static OWNED_WORKSPACES: Mutex<Vec<(ContainerId, AccountId, RecordKey)>> = Mutex::new(Vec::new());
 
 pub(crate) fn workspace_for_vm(vm_id: u8) -> Option<String> {
-    Some(principal(vm_id)?.container.workspace_root())
+    workspace_for_vm_at(vm_id, principal_epoch(vm_id)?)
 }
 
 /// A legacy checkpoint/replication export has no private-key envelope.
 pub(crate) fn is_protected_vm(vm_id: u8) -> bool {
     principal(vm_id).is_some_and(|subject| {
         OWNED_WORKSPACES.lock().iter().any(|(id, _, _)| id == &subject.container)
+            || SQLITE_CONTAINERS.lock().contains(&subject.container)
     })
 }
 
@@ -72,18 +73,13 @@ pub(crate) fn is_protected_vm(vm_id: u8) -> bool {
 /// Public development apps keep their existing control behavior.
 pub(crate) fn authorize_vm_control(vm_id: u8, actor: Option<AccountId>) -> Result<(), AccessDenied> {
     let Some(subject) = principal(vm_id) else { return Ok(()); };
-    if !OWNED_WORKSPACES.lock().iter().any(|(id, _, _)| id == &subject.container) { return Ok(()); }
+    if !is_protected_vm(vm_id) { return Ok(()); }
     ACCESS_KEY_DB.lock().check_resume(actor, subject.account, &subject.container)
 }
 
 /// Credential paths must use this launch's exact persisted owner/key binding.
 pub(crate) fn authorize_protected_workspace(vm_id: u8, root_key: RecordKey) -> Result<(), AccessDenied> {
-    let subject = principal(vm_id).ok_or(AccessDenied::MissingIdentity)?;
-    let account = subject.account.ok_or(AccessDenied::MissingIdentity)?;
-    if !OWNED_WORKSPACES.lock().iter().any(|(id, owner, key)| {
-        id == &subject.container && *owner == account && *key == root_key
-    }) { return Err(AccessDenied::MissingGrant); }
-    authorize_record(vm_id, root_key)
+    authorize_protected_workspace_at(vm_id, principal_epoch(vm_id).ok_or(AccessDenied::MissingIdentity)?, root_key)
 }
 
 #[derive(Clone)]
@@ -213,12 +209,19 @@ pub(crate) fn authorize_record_at(vm_id: u8, epoch: u64, key: RecordKey) -> Resu
 }
 
 pub(crate) fn workspace_for_vm_at(vm_id: u8, epoch: u64) -> Option<String> {
-    Some(principal_at(vm_id, epoch)?.container.workspace_root())
+    let subject = principal_at(vm_id, epoch)?;
+    if SQLITE_DELEGATES.lock().iter().any(|d| d.vm == vm_id && d.epoch == epoch && Some(d.owner) == subject.account) {
+        return Some(String::from("apps/codex"));
+    }
+    Some(subject.container.workspace_root())
 }
 
 pub(crate) fn authorize_protected_workspace_at(vm_id: u8, epoch: u64, root_key: RecordKey) -> Result<(), AccessDenied> {
     let subject = principal_at(vm_id, epoch).ok_or(AccessDenied::MissingIdentity)?;
     let account = subject.account.ok_or(AccessDenied::MissingIdentity)?;
+    if SQLITE_DELEGATES.lock().iter().any(|d| d.vm == vm_id && d.epoch == epoch && d.owner == account && d.key == root_key) {
+        return authorize_record_at(vm_id, epoch, root_key);
+    }
     if !OWNED_WORKSPACES.lock().iter().any(|(id, owner, key)| {
         id == &subject.container && *owner == account && *key == root_key
     }) { return Err(AccessDenied::MissingGrant); }
@@ -239,6 +242,104 @@ pub(crate) fn clear_vm(vm_id: u8) {
     if let Some(slot) = VM_BINDINGS.get(vm_id as usize) {
         slot.lock().take();
     }
+    SQLITE_DELEGATES.lock().retain(|delegate| delegate.vm != vm_id);
+}
+
+/// The current Codex dependency is one named service, not another executable
+/// installation. Reserve even before provisioning so a public listener cannot
+/// impersonate it while Codex starts. This is port_for("codex") in the service.
+pub(crate) const CODEX_SQLITE_PORT: u16 = 42116;
+pub(crate) const CODEX_SQLITE_STORAGE: &str = "/apps/codex/.codex/sqlite-service/codex";
+pub(crate) const CODEX_SQLITE_ENDPOINT: &str = "http://127.0.0.1:42116";
+#[derive(Clone)]
+struct SqliteReservation { owner: AccountId, key: RecordKey }
+#[derive(Clone, Copy)]
+struct SqliteDelegate { vm: u8, epoch: u64, owner: AccountId, key: RecordKey }
+static SQLITE_RESERVATION: Mutex<Option<SqliteReservation>> = Mutex::new(None);
+static SQLITE_CONTAINERS: Mutex<Vec<ContainerId>> = Mutex::new(Vec::new());
+static SQLITE_DELEGATES: Mutex<Vec<SqliteDelegate>> = Mutex::new(Vec::new());
+
+/// Called only after the persisted owner/key is loaded and the root stamped.
+pub(crate) fn reserve_codex_sqlite(workspace: &str, owner: AccountId, key: RecordKey) -> Result<(), AccessDenied> {
+    if workspace != "apps/codex" { return Ok(()); }
+    if key == RecordKey::Ffa { return Err(AccessDenied::UnknownKey); }
+    let mut reservation = SQLITE_RESERVATION.lock();
+    if reservation.as_ref().is_some_and(|old| old.owner != owner || old.key != key) {
+        return Err(AccessDenied::PrincipalMismatch);
+    }
+    *reservation = Some(SqliteReservation { owner, key });
+    Ok(())
+}
+
+/// Explicit trusted dependency admission lends this app the owner's existing
+/// key. No key is generated, no new AppDB row is created, and no other user's
+/// grant is inferred from a display name or a loopback address.
+pub(crate) fn grant_codex_sqlite(archive: &str, workspace: &str, account: Option<AccountId>) -> Result<(), AccessDenied> {
+    let owner = account.ok_or(AccessDenied::MissingIdentity)?;
+    let service = container_for_workspace(archive, workspace).ok_or(AccessDenied::UnknownContainer)?;
+    if service.app().as_str() != "sqlite" { return Err(AccessDenied::UnknownContainer); }
+    let reservation = SQLITE_RESERVATION.lock().clone().ok_or(AccessDenied::MissingGrant)?;
+    if reservation.owner != owner { return Err(AccessDenied::PrincipalMismatch); }
+    let codex = ContainerId::default_for_app(AppId::new("codex"));
+    if !OWNED_WORKSPACES.lock().iter().any(|(id, user, key)| id == &codex && *user == owner && *key == reservation.key) {
+        return Err(AccessDenied::MissingGrant);
+    }
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let mut database = ACCESS_KEY_DB.lock();
+        match database.register_container(service.clone(), ContainerPolicy::Private { owner }) {
+            Ok(()) | Err(trueos_fs::access::PolicyError::ContainerAlreadyRegistered) => {}
+            Err(_) => return Err(AccessDenied::UnknownContainer),
+        }
+        database.add_member(&service, owner).map_err(|_| AccessDenied::NotMember)?;
+        database.grant(owner, GrantScope::Container(service.clone()), reservation.key)
+            .map_err(|_| AccessDenied::MissingGrant)?;
+        let mut containers = SQLITE_CONTAINERS.lock();
+        if !containers.contains(&service) { containers.push(service); }
+        Ok(())
+    })
+}
+
+/// Attach the admitted purpose to this exact launch epoch, before guest entry.
+pub(crate) fn bind_codex_sqlite(vm: u8) -> Result<(), AccessDenied> {
+    let epoch = principal_epoch(vm).ok_or(AccessDenied::MissingIdentity)?;
+    let subject = principal_at(vm, epoch).ok_or(AccessDenied::MissingIdentity)?;
+    let reservation = SQLITE_RESERVATION.lock().clone().ok_or(AccessDenied::MissingGrant)?;
+    if subject.account != Some(reservation.owner) || !SQLITE_CONTAINERS.lock().contains(&subject.container) {
+        return Err(AccessDenied::PrincipalMismatch);
+    }
+    authorize_record_at(vm, epoch, reservation.key)?;
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let mut delegates = SQLITE_DELEGATES.lock();
+        delegates.retain(|old| old.vm != vm);
+        delegates.push(SqliteDelegate { vm, epoch, owner: reservation.owner, key: reservation.key });
+    });
+    Ok(())
+}
+
+fn sqlite_actor(actor: crate::r::fs::trueosfs::authorized::Actor, reservation: &SqliteReservation, service: bool) -> Result<(), ()> {
+    let crate::r::fs::trueosfs::authorized::Actor::Vm(vm, epoch) = actor else { return Err(()); };
+    let subject = principal_at(vm, epoch).ok_or(())?;
+    if subject.account != Some(reservation.owner) { return Err(()); }
+    authorize_record_at(vm, epoch, reservation.key).map_err(|_| ())?;
+    if service && !SQLITE_DELEGATES.lock().iter().any(|d| d.vm == vm && d.epoch == epoch && d.owner == reservation.owner && d.key == reservation.key) {
+        return Err(());
+    }
+    Ok(())
+}
+
+pub(crate) fn authorize_tcp_listen(actor: crate::r::fs::trueosfs::authorized::Actor, local: core::net::SocketAddr) -> Result<(), ()> {
+    if local.port() != CODEX_SQLITE_PORT { return Ok(()); }
+    if local.ip() != core::net::IpAddr::V4(core::net::Ipv4Addr::LOCALHOST) { return Err(()); }
+    let reservation = SQLITE_RESERVATION.lock().clone().ok_or(())?;
+    sqlite_actor(actor, &reservation, true)
+}
+
+/// Called before connection establishment and before each oriented transfer.
+pub(crate) fn authorize_tcp_connect(client: crate::r::fs::trueosfs::authorized::Actor, server: crate::r::fs::trueosfs::authorized::Actor, port: u16) -> Result<(), ()> {
+    if port != CODEX_SQLITE_PORT { return Ok(()); }
+    let reservation = SQLITE_RESERVATION.lock().clone().ok_or(())?;
+    sqlite_actor(client, &reservation, false)?;
+    sqlite_actor(server, &reservation, true)
 }
 
 fn warn_denial(

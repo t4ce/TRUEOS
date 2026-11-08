@@ -79,6 +79,10 @@ pub mod kfs {
         wait_for_filesystem(crate::r::fs::request_broker::prepare_volatile_files(String::from(root), String::from(archive), account))
     }
 
+    pub(crate) fn prepare_codex_sqlite(root: &str, archive: &str, account: Option<trueos_crypto::AccountId>) -> Result<()> {
+        wait_for_filesystem(crate::r::fs::request_broker::prepare_codex_sqlite(String::from(root), String::from(archive), account))
+    }
+
     /// Compatibility boundary for APIs whose public contract is synchronous.
     ///
     /// The caller must already be on a background AP service lane. Only typed,

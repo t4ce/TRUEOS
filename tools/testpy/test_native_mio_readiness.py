@@ -113,6 +113,7 @@ mod mio {
     @COMPAT_ADDR@
     #[derive(Clone, Copy)]
     @SOCKET_SETUP@
+ #[derive(Clone,Copy)]enum NetworkActor{Public}
     @SOCKET_STATE@
     struct MioCompat {
         sockets: Vec<MioSocketState>,
@@ -135,7 +136,7 @@ mod mio {
 
     fn socket(id: u32, owner_vm: Option<u8>, kind: MioSocketKind) -> MioSocketState {
         MioSocketState {
-            id, owner_vm, progress_generation: 7, kind, setup: None, handle: Some(api::NetHandle(id)),
+            id, owner_vm, actor:NetworkActor::Public, progress_generation: 7, kind, setup: None, handle: Some(api::NetHandle(id)),
             listen_handles: Vec::new(), local: None, peer: None, listen_port: None,
             connected: true, closed: false, read_shutdown: false, write_shutdown: false,
             peer_eof: false, error: STATUS_OK, tx_in_flight: 0, rx_stream: VecDeque::new(),

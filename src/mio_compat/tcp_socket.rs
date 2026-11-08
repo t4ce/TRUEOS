@@ -25,6 +25,7 @@ pub(crate) unsafe fn mio_tcp_socket_create_host(family: u32, out: *mut u32) -> i
         compat.sockets.push(MioSocketState {
             id,
             owner_vm: owner,
+            actor: capture_network_actor(owner),
             progress_generation: owner.and_then(crate::hv::vm_run_generation).unwrap_or(0),
             kind: MioSocketKind::TcpSocket,
             setup: Some(TcpSocketSetup {
@@ -62,6 +63,7 @@ fn reserve(compat: &mut MioCompat, id: u32, local: CompatAddr) -> i32 {
         return STATUS_INVALID_INPUT;
     }
     let setup = socket.setup.unwrap();
+    let actor = socket.actor;
     if setup.bound || u32::from(local.to_raw().family) != setup.family {
         return STATUS_INVALID_INPUT;
     }
@@ -73,6 +75,9 @@ fn reserve(compat: &mut MioCompat, id: u32, local: CompatAddr) -> i32 {
         raw.port = port;
     }
     let local = CompatAddr::from_raw(raw).unwrap();
+    if crate::access_key_db::authorize_tcp_listen(actor, local.socket_addr()).is_err() {
+        return STATUS_IO;
+    }
     if compat.tcp_listener_address_in_use(local) {
         return STATUS_IO;
     }
@@ -122,6 +127,7 @@ pub(crate) fn mio_tcp_socket_connect_host(id: u32, raw: TrueosMioSocketAddr) -> 
         {
             return STATUS_INVALID_INPUT;
         }
+        let actor = socket.actor;
         let local = match prepare(compat, id) {
             Ok(local) => local,
             Err(status) => return status,
@@ -148,7 +154,7 @@ pub(crate) fn mio_tcp_socket_connect_host(id: u32, raw: TrueosMioSocketAddr) -> 
             .net
             .as_ref()
             .unwrap()
-            .submit_tcp_connect_from(as_addr(local), as_addr(peer))
+            .submit_tcp_connect_from_for_actor(as_addr(local), as_addr(peer), actor)
             .is_err()
         {
             compat.pending_opens.pop_back();

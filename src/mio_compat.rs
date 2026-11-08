@@ -121,6 +121,12 @@ enum CompatAddr {
 }
 
 impl CompatAddr {
+    fn socket_addr(self) -> core::net::SocketAddr {
+        match self {
+            Self::V4 { addr, port } => core::net::SocketAddr::from((addr, port)),
+            Self::V6 { addr, port } => core::net::SocketAddr::from((addr, port)),
+        }
+    }
     fn from_raw(raw: TrueosMioSocketAddr) -> Option<Self> {
         match raw.family {
             4 => Some(Self::V4 {
@@ -337,7 +343,10 @@ struct TcpSocketSetup {
     nodelay: bool,
 }
 
+type NetworkActor = crate::r::fs::trueosfs::authorized::Actor;
+
 struct MioSocketState {
+    actor: NetworkActor,
     id: u32,
     owner_vm: Option<u8>,
     progress_generation: u64,
@@ -458,6 +467,11 @@ fn vm_guest_vmcall_active() -> bool {
 #[inline]
 fn current_owner_vm() -> Option<u8> {
     crate::hv::current_guest_execution_context_vm_id()
+}
+
+fn capture_network_actor(owner: Option<u8>) -> NetworkActor {
+    owner.and_then(|vm| crate::r::fs::trueosfs::authorized::actor_for_vm(vm).ok())
+        .unwrap_or(NetworkActor::Public)
 }
 
 #[inline]
@@ -687,7 +701,7 @@ impl MioCompat {
     fn ensure_net(&mut self) -> Result<(), i32> {
         if self.net.is_none() {
             let device_index = crate::net::primary_device_index();
-            self.net = VNetBridge::open_primary();
+            self.net = VNetBridge::open_primary_native();
             if self.net.is_some() {
                 MIO_RX_DEVICE_INDEX.store(device_index, AtomicOrdering::Release);
             }
@@ -714,6 +728,10 @@ impl MioCompat {
     fn tcp_listener_address_in_use(&self, local: CompatAddr) -> bool {
         self.sockets.iter().any(|socket| {
             if (socket.kind != MioSocketKind::TcpListener && !socket.setup.is_some_and(|setup| setup.bound)) || socket.closed {
+                return false;
+            }
+            if socket.local.is_some_and(|bound|
+                crate::access_key_db::authorize_tcp_listen(socket.actor, bound.socket_addr()).is_err()) {
                 return false;
             }
             match (socket.local, local) {
@@ -859,7 +877,8 @@ impl MioCompat {
                 core::net::SocketAddr::new(core::net::Ipv6Addr::from(addr).into(), port)
             }
         };
-        if let Err(status) = self.submit(api::Command::OpenTcpListenAt { local }) {
+        let actor = self.socket(socket_id).ok_or(STATUS_NOT_FOUND)?.actor;
+        if let Err(status) = self.submit_for_actor(api::Command::OpenTcpListenAt { local }, actor) {
             self.pending_opens.pop_back();
             return Err(status);
         }
@@ -933,6 +952,14 @@ impl MioCompat {
         }
 
         crate::log!("mio_compat: vnet error unattributed; no pending open msg={}\n", msg);
+    }
+
+    fn submit_for_actor(&mut self, cmd: api::Command, actor: NetworkActor) -> Result<(), i32> {
+        self.ensure_net()?;
+        let result = self.net.as_ref().unwrap().submit_for_actor(cmd, actor)
+            .map_err(|_| STATUS_WOULD_BLOCK);
+        if result.is_ok() { self.kick_net(); }
+        result
     }
 
     fn submit(&mut self, cmd: api::Command) -> Result<(), i32> {
@@ -1054,7 +1081,7 @@ impl MioCompat {
                 {
                     let child_id = self.alloc_socket_id();
                     let event_peer = CompatAddr::from_vnet(peer, peer6);
-                    let (owner_vm, progress_generation, local, fallback_peer, port, inherited_rx) = {
+                    let (owner_vm, actor, progress_generation, local, fallback_peer, port, inherited_rx) = {
                         let listener = self.socket_mut(listener_id).unwrap();
                         listener.listen_handles.retain(|h| *h != handle);
                         let mut inherited_rx = VecDeque::new();
@@ -1070,6 +1097,7 @@ impl MioCompat {
                         }
                         (
                             listener.owner_vm,
+                            listener.actor,
                             listener.progress_generation,
                             listener.local,
                             listener.local.map(CompatAddr::unspecified_same_family),
@@ -1091,6 +1119,7 @@ impl MioCompat {
                     self.sockets.push(MioSocketState {
                         id: child_id,
                         owner_vm,
+                        actor,
                         progress_generation,
                         kind: MioSocketKind::TcpStream,
             setup: None,
@@ -1448,6 +1477,9 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
 
     let owner_vm = current_owner_vm();
     with_compat(|compat| {
+        if crate::access_key_db::authorize_tcp_listen(capture_network_actor(owner_vm), local.socket_addr()).is_err() {
+            return STATUS_IO;
+        }
         if !compat.socket_capacity_available(owner_vm) {
             return STATUS_RESOURCE_EXHAUSTED;
         }
@@ -1489,6 +1521,7 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
         compat.sockets.push(MioSocketState {
             id: socket_id,
             owner_vm,
+            actor: capture_network_actor(owner_vm),
             progress_generation: owner_vm.and_then(crate::hv::vm_run_generation).unwrap_or(0),
             kind: MioSocketKind::TcpListener,
             setup: None,
@@ -1618,6 +1651,7 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
         compat.sockets.push(MioSocketState {
             id: socket_id,
             owner_vm,
+            actor: capture_network_actor(owner_vm),
             progress_generation: owner_vm.and_then(crate::hv::vm_run_generation).unwrap_or(0),
             kind: MioSocketKind::TcpStream,
             setup: None,
@@ -1645,13 +1679,14 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
             kind: api::SocketKind::Tcp,
         });
 
+        let actor = compat.socket(socket_id).unwrap().actor;
         let status = match peer {
-            CompatAddr::V4 { addr, port } => compat.submit(api::Command::OpenTcpConnect {
+            CompatAddr::V4 { addr, port } => compat.submit_for_actor(api::Command::OpenTcpConnect {
                 remote: api::EndpointV4 { addr, port },
-            }),
-            CompatAddr::V6 { addr, port } => compat.submit(api::Command::OpenTcpConnectV6 {
+            }, actor),
+            CompatAddr::V6 { addr, port } => compat.submit_for_actor(api::Command::OpenTcpConnectV6 {
                 remote: api::EndpointV6 { addr, port },
-            }),
+            }, actor),
         };
 
         let status = match status {
@@ -1750,6 +1785,7 @@ pub(crate) unsafe fn mio_udp_socket_bind_host(
         compat.sockets.push(MioSocketState {
             id: socket_id,
             owner_vm,
+            actor: capture_network_actor(owner_vm),
             progress_generation: owner_vm.and_then(crate::hv::vm_run_generation).unwrap_or(0),
             kind: MioSocketKind::Udp,
             setup: None,

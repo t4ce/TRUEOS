@@ -57,5 +57,40 @@ pub(crate) async fn prepare(
     crate::r::fs::volatile_files::stamp_workspace_key(workspace, key).await?;
     crate::access_key_db::grant_owned_workspace(archive, workspace, account, key)
         .map_err(|_| FsError::PermissionDenied)?;
+    crate::access_key_db::reserve_codex_sqlite(workspace, account, key)
+        .map_err(|_| FsError::PermissionDenied)?;
     Ok(stats)
+}
+
+/// The dedicated SQLite dependency uses Codex's existing durable key/root.
+/// It must be admitted by the authenticated owner; preparation is serialized
+/// through the same trusted BSP lane before any service guest executes.
+pub(crate) async fn prepare_sqlite(archive: &str, workspace: &str, account: Option<AccountId>) -> Result<()> {
+    if crate::access_key_db::container_for_workspace(archive, workspace)
+        .is_none_or(|id| id.app().as_str() != "sqlite") { return Err(FsError::BadPath); }
+    let _ = prepare("codex.bp", "apps/codex", account).await?;
+    let _prepare = PREPARE.lock().await;
+    let disk = fs::primary_root_handle().ok_or(FsError::NoRoot)?;
+    let key = fs::node_info_async(disk, "apps/codex").await?
+        .ok_or(FsError::NotFound)?.record_key;
+    // Adopt the current installation's legacy public service directory using
+    // the same explicit owner adoption as its existing Codex app root. Stamp
+    // before moving so no failure leaves the source publicly readable. The
+    // directory move keeps IDs/data and refuses an existing destination.
+    const OLD: &str = "apps/common/sqlite-service/codex";
+    const NEW: &str = "apps/codex/.codex/sqlite-service/codex";
+    if let Some(old) = fs::node_info_async(disk, OLD).await? {
+        if old.kind != trueos_fs::NodeKind::Directory
+            || old.record_key != trueos_fs::RecordKey::Ffa && old.record_key != key {
+            return Err(FsError::PermissionDenied);
+        }
+        if fs::node_info_async(disk, NEW).await?.is_some() { return Err(FsError::AlreadyExists); }
+        if !fs::dir_create_all_async(disk, "apps/codex/.codex/sqlite-service").await? { return Err(FsError::NoSpace); }
+        if !fs::stamp_directory_record_key_async(disk, OLD, key).await? { return Err(FsError::PermissionDenied); }
+        if !fs::dir_rename_async(disk, OLD, NEW).await? {
+            return Err(FsError::Device(crate::disc::block::Error::Io));
+        }
+    }
+    crate::access_key_db::grant_codex_sqlite(archive, workspace, account)
+        .map_err(|_| FsError::PermissionDenied)
 }

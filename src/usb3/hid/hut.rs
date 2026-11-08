@@ -8,6 +8,8 @@ const MAX_HID_HUT_MICE: usize = 32;
 const MAX_HID_HUT_TABLETS: usize = 32;
 const MAX_HID_HUT_KEYBOARDS: usize = 32;
 const MAX_HID_HUT_COMBOS: usize = 32;
+pub const HID_HUT_MAX_DEVICES: usize =
+    MAX_HID_HUT_MICE + MAX_HID_HUT_TABLETS + MAX_HID_HUT_KEYBOARDS;
 pub const HID_HUT_SOURCE_TAG_MAX: usize = 32;
 const HID_SOURCE_TAG_MAX: usize = HID_HUT_SOURCE_TAG_MAX;
 pub const INPUT_COMBO_FLAG_AUTO_ASSIGNED: u8 = v::vinput::INPUT_COMBO_FLAG_AUTO_ASSIGNED;
@@ -16,6 +18,39 @@ static NEXT_AUTO_COMBO_ID: AtomicU32 = AtomicU32::new(1);
 
 pub use v::vinput::InputComboSourceKind;
 pub type HidSourceKind = InputComboSourceKind;
+
+/// The live device classes that can be moved between input buckets.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum HidDeviceKind {
+    Mouse,
+    Keyboard,
+    Tablet,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct HidDeviceId {
+    pub kind: HidDeviceKind,
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub ep_target: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HidDevice {
+    pub id: HidDeviceId,
+    pub combo_id: u32,
+    pub source_kind: HidSourceKind,
+    pub source_tag: String<HID_SOURCE_TAG_MAX>,
+    pub virtual_device: bool,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ComboMoveError {
+    DeviceMissing,
+    ComboMissing,
+    CursorOccupied,
+    DeviceKindOccupied,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HidMouseState {
@@ -323,6 +358,26 @@ fn endpoint_matches(left: ComboEndpoint, right: ComboEndpoint) -> bool {
         && left.ep_target == right.ep_target
 }
 
+/// Mouse and tablet each produce a cursor, so they share one bucket slot.
+fn other_cursor_endpoint(combo: &InputCombo, kind: ComboDeviceKind) -> ComboEndpoint {
+    match kind {
+        ComboDeviceKind::Mouse => combo_endpoint(combo, ComboDeviceKind::Tablet),
+        ComboDeviceKind::Tablet => combo_endpoint(combo, ComboDeviceKind::Mouse),
+        _ => ComboEndpoint::new(0, 0, 0),
+    }
+}
+
+fn combo_is_empty(combo: &InputCombo) -> bool {
+    [
+        ComboDeviceKind::Mouse,
+        ComboDeviceKind::Keyboard,
+        ComboDeviceKind::Tablet,
+        ComboDeviceKind::Gamepad,
+    ]
+    .into_iter()
+    .all(|kind| endpoint_is_empty(combo_endpoint(combo, kind)))
+}
+
 fn combo_contains_usb_slot(combo: &InputCombo, controller_id: u32, slot_id: u32) -> bool {
     [
         ComboDeviceKind::Mouse,
@@ -400,6 +455,9 @@ fn bind_device_in_state(
     else {
         return false;
     };
+    if !endpoint_is_empty(other_cursor_endpoint(&state.combos[target_index], kind)) {
+        return false;
+    }
     let displaced_endpoint = combo_endpoint(&state.combos[target_index], kind);
 
     // A device belongs to at most one collection. This makes manual re-pairing
@@ -503,11 +561,13 @@ fn ensure_auto_combo_binding(
     let same_slot = state.combos.iter().position(|combo| {
         combo.flags & INPUT_COMBO_FLAG_AUTO_ASSIGNED != 0
             && endpoint_is_empty(combo_endpoint(combo, kind))
+            && endpoint_is_empty(other_cursor_endpoint(combo, kind))
             && combo_contains_usb_slot(combo, endpoint.controller_id, endpoint.slot_id)
     });
     let best_effort = state.combos.iter().position(|combo| {
         combo.flags & INPUT_COMBO_FLAG_AUTO_ASSIGNED != 0
             && endpoint_is_empty(combo_endpoint(combo, kind))
+            && endpoint_is_empty(other_cursor_endpoint(combo, kind))
     });
     let target_index = same_slot.or(best_effort).or_else(|| {
         let combo_id = next_combo_id(state)?;
@@ -924,6 +984,93 @@ pub fn bind_combo_gamepad(combo_id: u32, controller_id: u32, slot_id: u32, ep_ta
     )
 }
 
+fn move_device_in_state(
+    state: &mut HidHutState,
+    device: HidDeviceId,
+    combo_id: u32,
+) -> Result<(), ComboMoveError> {
+    if device.slot_id == 0 {
+        return Err(ComboMoveError::DeviceMissing);
+    }
+    let endpoint = ComboEndpoint::new(device.controller_id, device.slot_id, device.ep_target);
+    let kind = match device.kind {
+        HidDeviceKind::Mouse => ComboDeviceKind::Mouse,
+        HidDeviceKind::Keyboard => ComboDeviceKind::Keyboard,
+        HidDeviceKind::Tablet => ComboDeviceKind::Tablet,
+    };
+    let live = match device.kind {
+        HidDeviceKind::Mouse => state.mice.iter().any(|entry| {
+            endpoint_matches(
+                endpoint,
+                ComboEndpoint::new(entry.controller_id, entry.slot_id, entry.ep_target),
+            )
+        }),
+        HidDeviceKind::Keyboard => state.keyboards.iter().any(|entry| {
+            endpoint_matches(
+                endpoint,
+                ComboEndpoint::new(entry.controller_id, entry.slot_id, entry.ep_target),
+            )
+        }),
+        HidDeviceKind::Tablet => state.tablets.iter().any(|entry| {
+            endpoint_matches(
+                endpoint,
+                ComboEndpoint::new(entry.controller_id, entry.slot_id, entry.ep_target),
+            )
+        }),
+    };
+    if !live {
+        return Err(ComboMoveError::DeviceMissing);
+    }
+    let target = state
+        .combos
+        .iter()
+        .find(|combo| combo.combo_id == combo_id)
+        .ok_or(ComboMoveError::ComboMissing)?;
+    if !endpoint_is_empty(other_cursor_endpoint(target, kind)) {
+        return Err(ComboMoveError::CursorOccupied);
+    }
+    let occupied = combo_endpoint(target, kind);
+    if !endpoint_is_empty(occupied) && !endpoint_matches(occupied, endpoint) {
+        return Err(match kind {
+            ComboDeviceKind::Mouse | ComboDeviceKind::Tablet => ComboMoveError::CursorOccupied,
+            _ => ComboMoveError::DeviceKindOccupied,
+        });
+    }
+    let bound = bind_device_in_state(state, combo_id, kind, endpoint);
+    debug_assert!(bound);
+    // A drop is an explicit pairing choice. Future discovery must leave its
+    // remaining slots alone instead of extending this bucket by boot order.
+    if let Some(combo) = state
+        .combos
+        .iter_mut()
+        .find(|combo| combo.combo_id == combo_id)
+    {
+        combo.flags &= !INPUT_COMBO_FLAG_AUTO_ASSIGNED;
+    }
+    Ok(())
+}
+
+/// Move one live device atomically, preserving the old pairing on rejection.
+/// A bucket accepts one cursor (mouse or tablet) and one keyboard. Replacing an
+/// occupied slot requires first moving its current device to another bucket.
+pub fn move_device_to_combo(device: HidDeviceId, combo_id: u32) -> Result<(), ComboMoveError> {
+    move_device_in_state(&mut HID_HUT.lock(), device, combo_id)
+}
+
+/// Delete only an empty bucket, so a stale UI cannot detach live devices.
+pub fn remove_empty_combo(combo_id: u32) -> bool {
+    let mut guard = HID_HUT.lock();
+    let Some(index) = guard
+        .combos
+        .iter()
+        .position(|combo| combo.combo_id == combo_id && combo_is_empty(combo))
+    else {
+        return false;
+    };
+    let _ = guard.combos.remove(index);
+    true
+}
+
 pub fn remove_combo(combo_id: u32) -> bool {
     if combo_id == 0 {
         return false;
@@ -1059,6 +1206,56 @@ pub fn combos_snapshot() -> Vec<InputCombo, MAX_HID_HUT_COMBOS> {
     HID_HUT.lock().combos.clone()
 }
 
+/// Device identities and pairings sampled under one lock. Motion and key
+/// state are deliberately omitted so this snapshot is stable while dragging.
+pub fn devices_snapshot() -> Vec<HidDevice, HID_HUT_MAX_DEVICES> {
+    let guard = HID_HUT.lock();
+    let mut devices = Vec::new();
+    for mouse in &guard.mice {
+        let _ = devices.push(HidDevice {
+            id: HidDeviceId {
+                kind: HidDeviceKind::Mouse,
+                controller_id: mouse.controller_id,
+                slot_id: mouse.slot_id,
+                ep_target: mouse.ep_target,
+            },
+            combo_id: mouse.combo_id,
+            source_kind: mouse.source_kind,
+            source_tag: mouse.source_tag.clone(),
+            virtual_device: mouse.virtual_device,
+        });
+    }
+    for tablet in &guard.tablets {
+        let _ = devices.push(HidDevice {
+            id: HidDeviceId {
+                kind: HidDeviceKind::Tablet,
+                controller_id: tablet.controller_id,
+                slot_id: tablet.slot_id,
+                ep_target: tablet.ep_target,
+            },
+            combo_id: tablet.combo_id,
+            source_kind: tablet.source_kind,
+            source_tag: tablet.source_tag.clone(),
+            virtual_device: tablet.virtual_device,
+        });
+    }
+    for keyboard in &guard.keyboards {
+        let _ = devices.push(HidDevice {
+            id: HidDeviceId {
+                kind: HidDeviceKind::Keyboard,
+                controller_id: keyboard.controller_id,
+                slot_id: keyboard.slot_id,
+                ep_target: keyboard.ep_target,
+            },
+            combo_id: keyboard.combo_id,
+            source_kind: keyboard.source_kind,
+            source_tag: keyboard.source_tag.clone(),
+            virtual_device: keyboard.virtual_device,
+        });
+    }
+    devices
+}
+
 #[inline]
 fn copy_source_tag(
     out: &mut [u8; HID_HUT_SOURCE_TAG_MAX],
@@ -1146,6 +1343,237 @@ pub fn read_keyboards_snapshot(out: &mut [TrueosHidHutKeyboardState]) -> usize {
         wrote += 1;
     }
     wrote
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    fn device(kind: HidDeviceKind, slot_id: u32) -> HidDeviceId {
+        HidDeviceId {
+            kind,
+            controller_id: 1,
+            slot_id,
+            ep_target: 1,
+        }
+    }
+
+    fn mouse(slot_id: u32) -> HidMouseState {
+        HidMouseState {
+            controller_id: 1,
+            slot_id,
+            ep_target: 1,
+            x: 12.0,
+            y: 34.0,
+            buttons_down: 1,
+            combo_id: 0,
+            source_kind: HidSourceKind::Human,
+            source_tag: normalized_tag("physical"),
+            virtual_device: false,
+        }
+    }
+
+    fn keyboard(slot_id: u32) -> HidKeyboardState {
+        HidKeyboardState {
+            controller_id: 1,
+            slot_id,
+            ep_target: 1,
+            modifiers: 0,
+            keys: [0; 6],
+            ascii: [0; 6],
+            key_down_bits: [0; 8],
+            combo_id: 0,
+            source_kind: HidSourceKind::Human,
+            source_tag: normalized_tag("physical"),
+            virtual_device: false,
+        }
+    }
+
+    fn add_combo(state: &mut HidHutState, id: u32) {
+        state
+            .combos
+            .push(empty_combo(
+                id,
+                HidSourceKind::Human,
+                "desk",
+                0,
+                INPUT_COMBO_FLAG_AUTO_ASSIGNED,
+            ))
+            .unwrap();
+    }
+
+    #[test]
+    fn auto_pairing_separates_mouse_and_tablet_in_the_same_usb_slot() {
+        let mut state = HidHutState::new();
+        let endpoint = ComboEndpoint::new(1, 2, 1);
+        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, endpoint);
+        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Tablet, endpoint);
+        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Keyboard, endpoint);
+        assert_eq!(state.combos.len(), 2);
+        assert_eq!(
+            combo_endpoint(&state.combos[0], ComboDeviceKind::Mouse),
+            endpoint
+        );
+        assert_eq!(
+            combo_endpoint(&state.combos[0], ComboDeviceKind::Keyboard),
+            endpoint
+        );
+        assert!(endpoint_is_empty(combo_endpoint(
+            &state.combos[0],
+            ComboDeviceKind::Tablet
+        )));
+        assert_eq!(
+            combo_endpoint(&state.combos[1], ComboDeviceKind::Tablet),
+            endpoint
+        );
+        assert!(endpoint_is_empty(combo_endpoint(
+            &state.combos[1],
+            ComboDeviceKind::Mouse
+        )));
+    }
+
+    #[test]
+    fn binding_a_second_cursor_preserves_both_previous_pairings() {
+        let mut state = HidHutState::new();
+        add_combo(&mut state, 1);
+        add_combo(&mut state, 2);
+        let mouse = ComboEndpoint::new(1, 2, 1);
+        let tablet = ComboEndpoint::new(1, 3, 1);
+        assert!(bind_device_in_state(
+            &mut state,
+            1,
+            ComboDeviceKind::Mouse,
+            mouse
+        ));
+        assert!(bind_device_in_state(
+            &mut state,
+            2,
+            ComboDeviceKind::Tablet,
+            tablet
+        ));
+        let before = state.combos.clone();
+        assert!(!bind_device_in_state(
+            &mut state,
+            2,
+            ComboDeviceKind::Mouse,
+            mouse
+        ));
+        assert!(!bind_device_in_state(
+            &mut state,
+            1,
+            ComboDeviceKind::Tablet,
+            tablet
+        ));
+        assert_eq!(state.combos, before);
+    }
+
+    #[test]
+    fn rejected_drops_are_atomic_and_successful_moves_keep_the_active_pointer() {
+        let mut state = HidHutState::new();
+        for id in 1..=3 {
+            add_combo(&mut state, id);
+        }
+        state.mice.push(mouse(2)).unwrap();
+        state.mice.push(mouse(3)).unwrap();
+        assert!(bind_device_in_state(
+            &mut state,
+            1,
+            ComboDeviceKind::Mouse,
+            ComboEndpoint::new(1, 2, 1)
+        ));
+        assert!(bind_device_in_state(
+            &mut state,
+            2,
+            ComboDeviceKind::Mouse,
+            ComboEndpoint::new(1, 3, 1)
+        ));
+        let before = state.combos.clone();
+        assert_eq!(
+            move_device_in_state(&mut state, device(HidDeviceKind::Mouse, 2), 2),
+            Err(ComboMoveError::CursorOccupied)
+        );
+        assert_eq!(
+            move_device_in_state(&mut state, device(HidDeviceKind::Mouse, 99), 3),
+            Err(ComboMoveError::DeviceMissing)
+        );
+        assert_eq!(
+            move_device_in_state(&mut state, device(HidDeviceKind::Mouse, 2), 99),
+            Err(ComboMoveError::ComboMissing)
+        );
+        assert_eq!(state.combos, before);
+        let before_pointer = state.mice[0].clone();
+        assert_eq!(
+            move_device_in_state(&mut state, device(HidDeviceKind::Mouse, 2), 3),
+            Ok(())
+        );
+        assert!(combo_is_empty(&state.combos[0]));
+        assert_eq!(state.combos[2].flags & INPUT_COMBO_FLAG_AUTO_ASSIGNED, 0);
+        let mut expected_pointer = before_pointer;
+        expected_pointer.combo_id = 3;
+        assert_eq!(state.mice[0], expected_pointer);
+        // Dropping back into the same bucket is harmless.
+        assert_eq!(
+            move_device_in_state(&mut state, device(HidDeviceKind::Mouse, 2), 3),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn occupied_keyboard_slot_rejects_drop_without_displacing_any_device() {
+        let mut state = HidHutState::new();
+        add_combo(&mut state, 1);
+        add_combo(&mut state, 2);
+        state.keyboards.push(keyboard(2)).unwrap();
+        state.keyboards.push(keyboard(3)).unwrap();
+        assert!(bind_device_in_state(
+            &mut state,
+            1,
+            ComboDeviceKind::Keyboard,
+            ComboEndpoint::new(1, 2, 1)
+        ));
+        assert!(bind_device_in_state(
+            &mut state,
+            2,
+            ComboDeviceKind::Keyboard,
+            ComboEndpoint::new(1, 3, 1)
+        ));
+        let before = state.combos.clone();
+        assert_eq!(
+            move_device_in_state(&mut state, device(HidDeviceKind::Keyboard, 2), 2),
+            Err(ComboMoveError::DeviceKindOccupied)
+        );
+        assert_eq!(state.combos, before);
+        assert_eq!(state.keyboards[0].combo_id, 1);
+        assert_eq!(state.keyboards[1].combo_id, 2);
+    }
+
+    #[test]
+    fn empty_bucket_deletion_and_live_snapshots_do_not_depend_on_input_motion() {
+        let combo = request_combo(HidSourceKind::Human, "desk", None).unwrap();
+        assert!(combo_is_empty(&combo));
+        upsert_mouse_state(1, 42, 1, 0.1, 0.2, 1, HidSourceKind::Human, "mouse", false);
+        let mouse = device(HidDeviceKind::Mouse, 42);
+        assert_eq!(move_device_to_combo(mouse, combo.combo_id), Ok(()));
+        assert!(!remove_empty_combo(combo.combo_id));
+        let snapshot = devices_snapshot();
+        assert_eq!(
+            snapshot
+                .iter()
+                .find(|entry| entry.id == mouse)
+                .unwrap()
+                .combo_id,
+            combo.combo_id
+        );
+        upsert_mouse_state(1, 42, 1, 0.9, 0.7, 0, HidSourceKind::Human, "mouse", false);
+        assert_eq!(devices_snapshot(), snapshot);
+        assert!(remove_slot(1, 42));
+        assert_eq!(
+            move_device_to_combo(mouse, combo.combo_id),
+            Err(ComboMoveError::DeviceMissing)
+        );
+        assert!(remove_empty_combo(combo.combo_id));
+        assert!(!remove_empty_combo(combo.combo_id));
+    }
 }
 
 #[cfg(test)]

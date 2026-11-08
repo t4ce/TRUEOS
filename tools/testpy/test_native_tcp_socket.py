@@ -49,7 +49,7 @@ def main():
                'discard_socket', 'socket_for_owner', 'socket_mut_for_owner',
                'socket_by_handle_mut', 'socket_by_handle_id', 'drop_pending_open',
                'pending_opens_for_socket', 'post_tcp_listener_open', 'ensure_tcp_listener_depth',
-               'submit', 'handle_event', 'handle_unattributed_error']
+               'submit', 'submit_for_actor', 'handle_event', 'handle_unattributed_error']
     # Keep any implementation helper added to distinguish failed enqueue from
     # cancellation retirement. Missing required references fail compilation.
     for candidate in ['cancel_pending_open', 'retire_pending_open', 'cancel_last_pending_open']:
@@ -75,6 +75,7 @@ def main():
         '@PENDING@': keep('PendingOpen', item(mio, 'struct PendingOpen')),
         '@METHODS@': '\n'.join(keep(name, function(mio, name)) for name in methods),
         '@OWNER_MATCHES@': keep('owner_matches', function(mio, 'owner_matches')),
+        '@CAPTURE_NETWORK_ACTOR@': keep('capture_network_actor', function(mio, 'capture_network_actor')),
         '@SOCKET_HAS_HANDLE@': keep('socket_has_handle', function(mio, 'socket_has_handle')),
         '@UDP_PEER_MATCHES@': keep('udp_peer_matches', function(mio, 'udp_peer_matches')),
         '@READ_ADDR@': keep('read_addr', function(mio, 'read_addr')),
@@ -82,6 +83,7 @@ def main():
         '@OPTION@': keep('mio_socket_option_host', function(mio, 'mio_socket_option_host')),
         '@ACCEPT@': keep('mio_tcp_listener_accept_host', function(mio, 'mio_tcp_listener_accept_host')),
         '@BRIDGE_CONNECT@': keep('VNetBridge::submit_tcp_connect_from', function(sources['bridge'], 'submit_tcp_connect_from')),
+        '@BRIDGE_ACTOR_CONNECT@': keep('VNet::submit_tcp_connect_from_for_actor', function(sources['bridge'], 'submit_tcp_connect_from_for_actor')),
         '@NET_ENDPOINT@': keep('NetEndpoint', item(sources['adapter'], 'pub struct NetEndpoint')),
         '@NET_ENDPOINT6@': keep('NetEndpointV6', item(sources['adapter'], 'pub struct NetEndpointV6')),
         '@SOCKET_KIND@': keep('SocketKind', item(sources['adapter'], 'pub enum SocketKind')),
@@ -89,6 +91,10 @@ def main():
         '@OPEN_CONNECT@': keep('open_tcp_connect', function(sources['adapter'], 'open_tcp_connect')),
         '@OPEN_CONNECT6@': keep('open_tcp_connect_v6', function(sources['adapter'], 'open_tcp_connect_v6')),
         '@CONNECT_DISPATCH@': keep('OpenTcpConnectFrom dispatch', item(sources['adapter'], r'NetCommand::OpenTcpConnectFrom \{ local, remote \} => match \(local, remote\) \{')),
+        '@PRIVATE_ADAPTER_METHODS@': '\n'.join(keep(name, function(sources['adapter'], name)) for name in [
+            'open_tcp_listener_for_actor', 'open_loopback_tcp_connect', 'route_tcp_send',
+            'flush_loopback_tcp_tx', 'close_loopback_tcp', 'revoke_tcp_access', 'remove_record']),
+        '@TCP_TX_QUEUE@': json.dumps(str(ROOT / 'src/net/tcp_tx_queue.rs')),
     }
     harness = (ROOT / 'tools/testpy/native_mio/tcp_socket_kernel.rs').read_text()
     for key, value in substitutions.items():
@@ -120,16 +126,17 @@ smoltcp={{path={json.dumps(str(ROOT / 'vendor/smoltcp-0.13.1'))},default-feature
                 if result.returncode:
                     raise RuntimeError(log.read_text()[-16000:])
         tests = int(re.search(r'test result: ok\. (\d+) passed', log.read_text())[1])
-        assert tests == 27, tests
+        assert tests == 40, tests
         checks.append({'mode': mode, 'tests': tests, 'log': str(log), 'commands': commands})
     receipt = {'scope': __doc__, 'checks': checks,
                'cases_per_mode': {'native_socket_lifecycle': 20, 'real_smoltcp_endpoints': 4,
-                                  'embedded_production_progress': 3},
+                                  'embedded_production_progress': 3, 'private_native_admission_and_capture': 3,
+                                  'private_loopback_authority': 6, 'embedded_transmit_queue': 4},
                'source_sha256': {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in paths.items()},
                'production_fragments_sha256': {name: hashlib.sha256(body.encode()).hexdigest() for name, body in fragments.items()},
                'harness_sha256': hashlib.sha256(harness.encode()).hexdigest()}
     (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
-    print('Kernel native TCP socket lifecycle/real smoltcp endpoints: 27 production-body cases in debug and release.')
+    print('Kernel native TCP lifecycle/private loopback/real smoltcp: 40 production-body cases in debug and release.')
 
 
 if __name__ == '__main__':

@@ -3,6 +3,8 @@ mod admin;
 mod gpu;
 #[path = "system/font.rs"]
 mod font;
+#[path = "system/link.rs"]
+mod link;
 mod helper;
 mod lifecycle;
 mod os;
@@ -1557,7 +1559,7 @@ impl Shell3 {
         } else if self.mode == Mode::ADM
             && matches!(
                 text.as_str(),
-                "cry" | "disc" | "ram" | "smp" | "net" | "gpu" | "vcpy" | "tlb" | "font"
+                "cry" | "disc" | "ram" | "smp" | "net" | "gpu" | "vcpy" | "tlb" | "font" | "link"
             )
         {
             let frontend = self.tui_frontend();
@@ -1570,6 +1572,7 @@ impl Shell3 {
                 "gpu" => gpu::start(frontend),
                 "vcpy" => vcpy::start(frontend),
                 "font" => font::start(frontend),
+                "link" => link::start(frontend),
                 _ => {
                     let origin = output::DumpTarget(
                         self.active_matrix_slot

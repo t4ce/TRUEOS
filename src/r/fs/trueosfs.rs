@@ -1440,6 +1440,21 @@ pub(crate) async fn stamp_directory_key_async(
     if component.is_empty() || matches!(component, "common" | "." | "..") || component.contains('/')
         || !matches!(key, RecordKey::Key(_)) || disk.parent().is_some()
     { return Err(block::Error::InvalidParam); }
+    stamp_directory_record_key_async(disk, path, key).await
+}
+
+/// Trusted host provisioning only. Existing keyed directories can keep their
+/// own key but can never be reassigned by this operation. No guest setter exists.
+pub(crate) async fn stamp_directory_record_key_async(
+    disk: block::DeviceHandle,
+    path: &str,
+    key: RecordKey,
+) -> Result<bool, block::Error> {
+    if path.is_empty() || normalize_dir_name(path) != path
+        || path.split('/').any(|part| matches!(part, "." | "..") || part.is_empty())
+        || path.bytes().any(|byte| byte < 32 || byte == b'\\')
+        || !matches!(key, RecordKey::Key(_)) || disk.parent().is_some()
+    { return Err(block::Error::InvalidParam); }
     let _activity = crate::disc::access::Activity::begin(disk)?;
     let Some(placement) = placement_for_io_async(disk).await? else { return Ok(false); };
     let params = trueos_fs::FsParams { super_lba: placement.super_lba, data_lba: placement.data_lba, data_end_lba_exclusive: placement.data_end_lba_exclusive };

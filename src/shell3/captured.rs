@@ -269,6 +269,7 @@ impl Captured {
                 self.exit = Some(self.result);
             }
             ["cmd", name] => return self.terminal_required(name),
+            ["link"] => return self.terminal_required("link"),
             ["adm", name]
                 if matches!(
                     *name,
@@ -277,6 +278,7 @@ impl Captured {
                         | "tlb"
                         | "vcpy"
                         | "font"
+                        | "link"
                         | "log"
                         | "sh3"
                         | "pic"

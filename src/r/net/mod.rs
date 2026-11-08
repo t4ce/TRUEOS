@@ -202,8 +202,37 @@ impl VNet {
     }
 
     pub fn submit(&self, cmd: api::Command) -> Result<(), ()> {
-        let cmd = to_kernel_cmd(cmd)?;
-        self.submit_kernel(cmd)
+        let actor = crate::hv::current_guest_execution_context_vm_id()
+            .and_then(|vm| crate::r::fs::trueosfs::authorized::actor_for_vm(vm).ok())
+            .unwrap_or(crate::r::fs::trueosfs::authorized::Actor::Public);
+        self.submit_for_actor(cmd, actor)
+    }
+
+    pub(crate) fn submit_for_actor(
+        &self, cmd: api::Command, actor: crate::r::fs::trueosfs::authorized::Actor,
+    ) -> Result<(), ()> {
+        use core::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+        let authorized = match cmd {
+            api::Command::OpenTcpListen { port } => NetCommand::OpenTcpListenForActor {
+                actor, local: SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)),
+            },
+            api::Command::OpenTcpListenAt { local } => NetCommand::OpenTcpListenForActor { actor, local },
+            api::Command::OpenTcpConnect { remote } => NetCommand::OpenTcpConnectForActor {
+                actor, local: None, remote: SocketAddr::from((Ipv4Addr::from(remote.addr), remote.port)),
+            },
+            api::Command::OpenTcpConnectV6 { remote } => NetCommand::OpenTcpConnectForActor {
+                actor, local: None, remote: SocketAddr::from((Ipv6Addr::from(remote.addr), remote.port)),
+            },
+            other => return self.submit_kernel(to_kernel_cmd(other)?),
+        };
+        self.submit_kernel(authorized)
+    }
+
+    pub(crate) fn submit_tcp_connect_from_for_actor(
+        &self, local: core::net::SocketAddr, remote: core::net::SocketAddr,
+        actor: crate::r::fs::trueosfs::authorized::Actor,
+    ) -> Result<(), ()> {
+        self.submit_kernel(NetCommand::OpenTcpConnectForActor { actor, local: Some(local), remote })
     }
 
     pub(crate) fn submit_tcp_connect_from(

@@ -3167,6 +3167,12 @@ fn prepare_blueprint_launch_on_lane(
         crate::r::io::kfs::prepare_volatile_files(app_fs_root.as_str(), pending.archive.as_str(), pending.access_account)
             .map_err(|err| alloc::format!("Codex RAM files preparation failed: {:?}", err))?;
     }
+    if crate::hv::blueprint::codex_sqlite_service_requested(
+        &pending.archive, &pending.app_args, pending.launch_script.as_deref(),
+    ).map_err(AllocString::from)? {
+        crate::r::io::kfs::prepare_codex_sqlite(&app_fs_root, &pending.archive, pending.access_account)
+            .map_err(|err| alloc::format!("Codex SQLite owner admission failed: {:?}", err))?;
+    }
     let files_at_ms = lifecycle_now_ms();
     files_span.complete();
     let asset_stats = {
@@ -3322,6 +3328,9 @@ pub fn stage_blueprint_launch(
     });
     let launch_script = child_launch.as_ref().and_then(|request| request.script.clone())
         .or_else(|| state.launch_script.clone());
+    let codex_sqlite_service = crate::hv::blueprint::codex_sqlite_service_requested(
+        &state.archive, &state.app_args, launch_script.as_deref(),
+    ).map_err(|_| StartError::GuestMemoryUnavailable)?;
     let mut process_context = BlueprintProcessContext {
         args: crate::hv::blueprint::build_process_args(
             state.archive.as_str(),
@@ -3347,6 +3356,14 @@ pub fn stage_blueprint_launch(
     };
     if state.timing.request != 0 {
         process_context.vars.insert(AllocString::from("TRUEOS_STARTUP_REQUEST"), alloc::format!("{}", state.timing.request));
+    }
+    if state.archive.strip_suffix(".bp").unwrap_or(&state.archive) == "codex" || codex_sqlite_service {
+        process_context.vars.insert(AllocString::from("TRUEOS_CODEX_SQLITE_ENDPOINT"),
+            AllocString::from(crate::access_key_db::CODEX_SQLITE_ENDPOINT));
+    }
+    if codex_sqlite_service {
+        process_context.vars.insert(AllocString::from("TRUEOS_CODEX_SQLITE_STORAGE"),
+            AllocString::from(crate::access_key_db::CODEX_SQLITE_STORAGE));
     }
     if let Some(link) = child_launch {
         // Platform identity, access scope and channel selection are kernel-owned.
@@ -3383,6 +3400,11 @@ pub fn stage_blueprint_launch(
     crate::access_key_db::bind_launch(
         vm_id, &state.archive, &state.app_fs_root, state.access_account,
     );
+    if codex_sqlite_service && crate::access_key_db::bind_codex_sqlite(vm_id).is_err() {
+        crate::access_key_db::clear_vm(vm_id);
+        clear_blueprint_child_template(vm_id);
+        return Err(StartError::GuestMemoryUnavailable);
+    }
     *launch_script_slot.lock() = launch_script;
     *slot.lock() = Some(guest_state);
     let _ = exit_reason_mailbox.lock().take();

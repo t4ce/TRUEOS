@@ -106,6 +106,7 @@ mod mio_compat {
  impl CompatAddr {@FROM_RAW@ @TO_RAW@}
  #[derive(Clone,Copy,PartialEq)] @SOCKET_KIND@
  #[derive(Clone,Copy)] @SOCKET_SETUP@
+ #[derive(Clone,Copy)]enum NetworkActor{Public}
  @SOCKET_STATE@
  struct MioCompat{sockets:Vec<MioSocketState>}
  impl MioCompat {
@@ -123,7 +124,7 @@ mod mio_compat {
   OWNER.with(|v|v.set(None));HULL.with(|v|v.set(None));CALL_FAIL.with(|v|v.set(false));RESPONSE_HISTORY.with(|v|v.borrow_mut().clear());
   net::adapter::reset();MIO_RX_DEVICE_INDEX.store(0,AtomicOrdering::Relaxed);
   with_compat(|c|{c.sockets.clear();for (id,owner,kind,handle) in [(10,None,MioSocketKind::TcpStream,100),(20,Some(1),MioSocketKind::Udp,200),(21,Some(2),MioSocketKind::Udp,200),(30,Some(1),MioSocketKind::TcpListener,100)]{
-   c.sockets.push(MioSocketState{id,owner_vm:owner,progress_generation:1,kind,setup:None,handle:Some(api::NetHandle(handle)),listen_handles:Vec::new(),local:None,peer:None,listen_port:None,connected:true,closed:false,read_shutdown:false,write_shutdown:false,peer_eof:false,error:STATUS_OK,tx_in_flight:0,rx_stream:VecDeque::new(),rx_dgrams:VecDeque::new(),accept_queue:VecDeque::new()});
+   c.sockets.push(MioSocketState{id,owner_vm:owner,actor:NetworkActor::Public,progress_generation:1,kind,setup:None,handle:Some(api::NetHandle(handle)),listen_handles:Vec::new(),local:None,peer:None,listen_port:None,connected:true,closed:false,read_shutdown:false,write_shutdown:false,peer_eof:false,error:STATUS_OK,tx_in_flight:0,rx_stream:VecDeque::new(),rx_dgrams:VecDeque::new(),accept_queue:VecDeque::new()});
   }});
  }
  pub fn datagram(bytes:&[u8],v6:bool){with_compat(|c|c.sockets[1].rx_dgrams.push_back((if v6{CompatAddr::V6{addr:[7;16],port:8080}}else{CompatAddr::V4{addr:[10,1,2,3],port:8080}},bytes.to_vec())));}

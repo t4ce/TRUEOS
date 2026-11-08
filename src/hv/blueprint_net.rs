@@ -95,7 +95,8 @@ pub(crate) fn submit(vm_id: u8, session_id: u32, command_bytes: &[u8]) -> Result
         if session.id != session_id {
             return Err(());
         }
-        session.net.submit(command)
+        let actor = crate::r::fs::trueosfs::authorized::actor_for_vm(vm_id).map_err(|_| ())?;
+        session.net.submit_for_actor(command, actor)
     };
     pump_host_net(vm_id)?;
     result

@@ -18,6 +18,29 @@ enum VNetBridgeBackend {
 }
 
 impl VNetBridge {
+    /// Native Mio is already in VMX root and shares one broker across owners.
+    pub(crate) fn open_primary_native() -> Option<Self> {
+        Some(Self { backend: VNetBridgeBackend::LocalVnet(VNet::open_primary()?) })
+    }
+
+    pub(crate) fn submit_for_actor(
+        &self, command: api::Command, actor: crate::r::fs::trueosfs::authorized::Actor,
+    ) -> Result<(), ()> {
+        match &self.backend {
+            VNetBridgeBackend::LocalVnet(vnet) => vnet.submit_for_actor(command, actor),
+            VNetBridgeBackend::Vmx(_) => Err(()),
+        }
+    }
+
+    pub(crate) fn submit_tcp_connect_from_for_actor(
+        &self, local: core::net::SocketAddr, remote: core::net::SocketAddr,
+        actor: crate::r::fs::trueosfs::authorized::Actor,
+    ) -> Result<(), ()> {
+        match &self.backend {
+            VNetBridgeBackend::LocalVnet(vnet) => vnet.submit_tcp_connect_from_for_actor(local, remote, actor),
+            VNetBridgeBackend::Vmx(_) => Err(()),
+        }
+    }
     pub(crate) fn open_primary() -> Option<Self> {
         if VMX_GUEST_NET_BACKEND.load(Ordering::Acquire)
             && crate::hv::current_hull_guest_context_vm_id().is_some()

@@ -42,17 +42,18 @@ mod tyche {
 }
 mod r {
  pub mod io {pub mod kfs {
-  #[derive(Clone,Copy,Debug,PartialEq)]pub enum FsError{NoRoot,BadPath,NoSpace,AlreadyExists,PermissionDenied,Device(crate::disc::block::Error)}
+  #[derive(Clone,Copy,Debug,PartialEq)]pub enum FsError{NoRoot,NotFound,BadPath,NoSpace,AlreadyExists,PermissionDenied,Device(crate::disc::block::Error)}
   pub type Result<T>=core::result::Result<T,FsError>;
   impl From<crate::disc::block::Error> for FsError{fn from(e:crate::disc::block::Error)->Self{Self::Device(e)}}
  }}
  pub mod fs {
   pub mod trueosfs {
+   pub mod authorized { #[derive(Clone, Copy, Debug, Eq, PartialEq)]pub enum Actor{Host,Public,Vm(u8,u64)} }
    use crate::*;pub use trueos_fs::{RecordKey,ContentTypeId};use crate::disc::block::{DeviceHandle,Error};use sha2::{Digest,Sha256};
-   #[derive(Clone,Copy)]pub struct NodeInfo{pub record_key:RecordKey}
+   #[derive(Clone,Copy)]pub struct NodeInfo{pub record_key:RecordKey,pub kind:trueos_fs::NodeKind}
    pub enum CheckedWriteError{Device(Error),AlreadyExists,Conflict}
    pub fn primary_root_handle()->Option<DeviceHandle>{Some(DeviceHandle)}
-   pub async fn node_info_async(_:DeviceHandle,path:&str)->Result<Option<NodeInfo>,Error>{Ok(KEYS.lock().unwrap().get(path).copied().map(|record_key|NodeInfo{record_key}))}
+   pub async fn node_info_async(_:DeviceHandle,path:&str)->Result<Option<NodeInfo>,Error>{Ok(KEYS.lock().unwrap().get(path).copied().map(|record_key|NodeInfo{record_key,kind:trueos_fs::NodeKind::Directory}))}
    pub async fn file_out_async(_:DeviceHandle,path:&str)->Result<Option<Vec<u8>>,Error>{EVENTS.lock().unwrap().push("read");if FAIL_READ.swap(false,Ordering::SeqCst){return Err(Error::Io)}Ok(FILES.lock().unwrap().get(path).cloned())}
    pub async fn dir_create_all_async(_:DeviceHandle,_:&str)->Result<bool,Error>{EVENTS.lock().unwrap().push("mkdir");Ok(true)}
    pub async fn file_in_typed_checked_async(_:DeviceHandle,path:&str,bytes:&[u8],_:ContentTypeId,create_new:bool,expected:Option<[u8;32]>,_:bool)->Result<bool,CheckedWriteError>{
@@ -63,6 +64,14 @@ mod r {
     fs.insert(path.into(),bytes.to_vec());Ok(true)
    }
    pub async fn stamp_directory_key_async(_:DeviceHandle,path:&str,key:RecordKey)->Result<bool,Error>{EVENTS.lock().unwrap().push("stamp");if FAIL_STAMP.swap(false,Ordering::SeqCst){return Ok(false)}let mut keys=KEYS.lock().unwrap();if keys.get(path).is_some_and(|k|*k!=RecordKey::Ffa&&*k!=key){return Ok(false)}keys.insert(path.into(),key);Ok(true)}
+   pub async fn stamp_directory_record_key_async(disk:DeviceHandle,path:&str,key:RecordKey)->Result<bool,Error>{stamp_directory_key_async(disk,path,key).await}
+   pub async fn dir_rename_async(_:DeviceHandle,old:&str,new:&str)->Result<bool,Error>{
+    let mut keys=KEYS.lock().unwrap();if keys.contains_key(new){return Ok(false)}
+    let Some(key)=keys.remove(old)else{return Ok(false)};keys.insert(new.into(),key);
+    let mut files=FILES.lock().unwrap();let moved:Vec<_>=files.iter().filter(|(p,_)|p.starts_with(&format!("{old}/"))).map(|(p,b)|(p.clone(),b.clone())).collect();
+    for(p,b)in moved{files.remove(&p);files.insert(format!("{new}{}",&p[old.len()..]),b);}
+    EVENTS.lock().unwrap().push("rename");Ok(true)
+   }
   }
   pub mod volatile_files {
    #[derive(Debug)]pub struct SeedStats;
@@ -91,6 +100,20 @@ fn bound_key(root:&str)->RecordKey{KEYS.lock().unwrap()[root]}
 #[test]fn publication_failure_never_stamps_or_grants(){reset();FAIL_PUBLISH.store(true,Ordering::SeqCst);let root="apps/codex_pubfail";assert!(prepare(root,Some(ALICE)).is_err());assert!(KEYS.lock().unwrap().is_empty());assert!(FILES.lock().unwrap().is_empty());assert!(!EVENTS.lock().unwrap().contains(&"seed"));}
 #[test]fn failed_stamp_or_ram_preparation_never_grants_and_can_retry(){reset();let root="apps/codex_stampfail";FAIL_STAMP.store(true,Ordering::SeqCst);assert!(prepare(root,Some(ALICE)).is_err());let image=FILES.lock().unwrap()[access_key_workspace::CONFIGURATION_DB_PATH].clone();FAIL_SEED.store(true,Ordering::SeqCst);assert!(prepare(root,Some(ALICE)).is_err());let key=bound_key(root);access_key_db::bind_launch(0,"codex.bp",root,Some(ALICE));assert!(access_key_db::authorize_protected_workspace(0,key).is_err());prepare(root,Some(ALICE)).unwrap();assert_eq!(FILES.lock().unwrap()[access_key_workspace::CONFIGURATION_DB_PATH],image);assert_eq!(access_key_db::authorize_protected_workspace(0,key),Ok(()));}
 #[test]fn read_or_entropy_failure_cannot_initialize_a_new_catalog(){reset();FAIL_READ.store(true,Ordering::SeqCst);assert!(prepare("apps/codex_readfail",Some(ALICE)).is_err());FAIL_ENTROPY.store(true,Ordering::SeqCst);assert!(prepare("apps/codex_rngfail",Some(ALICE)).is_err());assert!(FILES.lock().unwrap().is_empty());assert!(KEYS.lock().unwrap().is_empty());}
+#[test]fn sqlite_adopts_existing_images_without_copy_and_rejects_conflicts_or_foreign_owner(){
+ reset();const OLD:&str="apps/common/sqlite-service/codex";const NEW:&str="apps/codex/.codex/sqlite-service/codex";
+ KEYS.lock().unwrap().insert(OLD.into(),RecordKey::Ffa);FILES.lock().unwrap().insert(format!("{OLD}/db-0123456789abcdef.sqlite"),b"existing sqlite image bytes".to_vec());
+ run(access_key_workspace::prepare_sqlite("sqlite.bp","apps/sqlite",Some(ALICE))).unwrap();
+ assert!(!KEYS.lock().unwrap().contains_key(OLD));assert_eq!(bound_key(NEW),bound_key("apps/codex"));
+ assert_eq!(FILES.lock().unwrap()[&format!("{NEW}/db-0123456789abcdef.sqlite")],b"existing sqlite image bytes");
+ assert!(!FILES.lock().unwrap().contains_key(&format!("{OLD}/db-0123456789abcdef.sqlite")));
+ let events=EVENTS.lock().unwrap().clone();assert!(events.iter().rposition(|e|*e=="stamp").unwrap()<events.iter().position(|e|*e=="rename").unwrap());
+ access_key_db::bind_launch(0,"sqlite.bp","apps/sqlite",Some(ALICE));access_key_db::bind_codex_sqlite(0).unwrap();assert_eq!(access_key_db::authorize_protected_workspace(0,bound_key(NEW)),Ok(()));
+ let before=FILES.lock().unwrap().clone();KEYS.lock().unwrap().insert(OLD.into(),RecordKey::Ffa);
+ assert_eq!(run(access_key_workspace::prepare_sqlite("sqlite.bp","apps/sqlite",Some(ALICE))).unwrap_err(),r::io::kfs::FsError::AlreadyExists);assert_eq!(*FILES.lock().unwrap(),before);
+ assert_eq!(run(access_key_workspace::prepare_sqlite("sqlite.bp","apps/sqlite",Some(BOB))).unwrap_err(),r::io::kfs::FsError::PermissionDenied);assert_eq!(*FILES.lock().unwrap(),before);
+ assert!(run(access_key_workspace::prepare_sqlite("other.bp","apps/other",Some(ALICE))).is_err());
+}
 '''
 def main():
  p=argparse.ArgumentParser();p.add_argument('--target-dir',type=Path);a=p.parse_args()

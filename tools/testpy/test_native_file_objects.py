@@ -17,6 +17,7 @@ def main():
     helpers='\n'.join(item(kernel,marker) for marker in [
         'pub(crate) async fn node_record_under_lease(', 'pub(crate) async fn inherited_record_key_under_lease(',
         'async fn record_key_for_write_under_lease(', 'pub(crate) async fn stamp_directory_key_async(',
+        'pub(crate) async fn stamp_directory_record_key_async(',
         'pub enum CreateDirectoryError', 'impl From<block::Error> for CreateDirectoryError',
         'pub async fn create_directory_async(', 'pub async fn create_directory_new_async(', 'async fn create_directory_with_policy_async(',
         'async fn file_in_with_metadata_async_for_actor(', 'pub enum RemoveNodeError', 'impl From<block::Error> for RemoveNodeError',

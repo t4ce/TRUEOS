@@ -1767,6 +1767,27 @@ pub(crate) fn uses_volatile_codex_files(archive: &str) -> bool {
     matches!(safe_archive_stem(archive).as_str(), "codex" | "codex-check")
 }
 
+/// Match the service's real argv + launch-stream option precedence. Only its
+/// Codex instance receives the explicit native dependency grant.
+pub(crate) fn codex_sqlite_service_requested(archive: &str, args: &[String], script: Option<&str>) -> Result<bool, &'static str> {
+    if safe_archive_stem(archive) != "sqlite" { return Ok(false); }
+    let mut tokens = args.iter().map(String::as_str)
+        .chain(script.unwrap_or("").split_whitespace());
+    let mut instance = "default";
+    let mut custom_directory = false;
+    while let Some(token) = tokens.next() {
+        match token {
+            "--instance" | "instance" => instance = tokens.next().ok_or("missing SQLite instance name")?,
+            "--data-dir" => { tokens.next().ok_or("missing SQLite data directory")?; custom_directory = true; }
+            _ => return Err("unknown SQLite launch option"),
+        }
+    }
+    if instance == "codex" && custom_directory {
+        return Err("Codex SQLite storage is selected by its native owner grant");
+    }
+    Ok(instance == "codex")
+}
+
 pub(crate) fn app_fs_root_for_archive(archive: &str, _module_bytes: &[u8]) -> String {
     // The historical bare app root is container 0, including across reboots.
     alloc::format!("apps/{}", safe_archive_stem(archive))

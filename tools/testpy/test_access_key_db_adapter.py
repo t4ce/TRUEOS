@@ -37,6 +37,7 @@ mod disc { pub mod block {
     #[derive(Clone, Copy)] pub struct DeviceHandle(pub u32);
 } }
 mod r { pub mod fs { pub mod trueosfs {
+    pub mod authorized { #[derive(Clone, Copy, Debug, Eq, PartialEq)] pub enum Actor { Host, Public, Vm(u8,u64) } }
     #[derive(Clone, Copy)] pub struct NodeInfo { pub record_key: trueos_fs::RecordKey }
     pub async fn node_info_async(disk: crate::disc::block::DeviceHandle, path: &str)
         -> Result<Option<NodeInfo>, &'static str> {
@@ -289,6 +290,59 @@ fn messages() -> Vec<String> { WARNINGS.lock().unwrap().clone() }
     assert!(access_key_db::workspace_for_vm_at(0, old).is_none());
     assert!(access_key_db::authorize_protected_workspace_at(0, old, key(13)).is_err());
     assert_eq!(access_key_db::authorize_protected_workspace_at(0, new, key(13)), Ok(()));
+}
+
+#[test] fn private_sqlite_endpoint_requires_owned_key_and_exact_live_service_purpose() {
+    use r::fs::trueosfs::authorized::Actor;
+    use std::net::{SocketAddr,Ipv4Addr};
+    reset();
+    let port=access_key_db::CODEX_SQLITE_PORT;
+    let local=SocketAddr::from((Ipv4Addr::LOCALHOST,port));
+    assert!(access_key_db::authorize_tcp_listen(Actor::Public,local).is_err());
+    assert!(access_key_db::authorize_tcp_connect(Actor::Host,Actor::Public,port).is_err());
+    assert!(access_key_db::authorize_tcp_listen(Actor::Public,SocketAddr::from((Ipv4Addr::LOCALHOST,port+1))).is_ok());
+    access_key_db::grant_owned_workspace("codex.bp","apps/codex",ALICE,key(21)).unwrap();
+    access_key_db::reserve_codex_sqlite("apps/codex",ALICE,key(21)).unwrap();
+    assert!(access_key_db::reserve_codex_sqlite("apps/codex",BOB,key(21)).is_err());
+    assert!(access_key_db::reserve_codex_sqlite("apps/codex",ALICE,key(22)).is_err());
+    assert!(access_key_db::grant_codex_sqlite("sqlite.bp","apps/sqlite",None).is_err());
+    assert!(access_key_db::grant_codex_sqlite("sqlite.bp","apps/sqlite",Some(BOB)).is_err());
+    assert!(access_key_db::grant_codex_sqlite("malicious.bp","apps/malicious",Some(ALICE)).is_err());
+    access_key_db::grant_codex_sqlite("sqlite.bp","apps/sqlite",Some(ALICE)).unwrap();
+    access_key_db::bind_launch(0,"codex.bp","apps/codex",Some(ALICE));
+    access_key_db::bind_launch(1,"sqlite.bp","apps/sqlite",Some(ALICE));
+    access_key_db::bind_launch(2,"other.bp","apps/other",Some(ALICE));
+    access_key_db::bind_launch(3,"codex.bp","apps/codex",Some(BOB));
+    let actor=|vm|Actor::Vm(vm,access_key_db::principal_epoch(vm).unwrap());
+    let client=actor(0); let service=actor(1); let ungranted=actor(2); let foreign=actor(3);
+    // Correct app/user/key alone cannot impersonate the service purpose.
+    assert!(access_key_db::authorize_tcp_listen(service,local).is_err());
+    assert!(access_key_db::authorize_tcp_connect(client,service,port).is_err());
+    assert!(access_key_db::bind_codex_sqlite(2).is_err());
+    access_key_db::bind_codex_sqlite(1).unwrap();
+    assert_eq!(access_key_db::authorize_tcp_listen(service,local),Ok(()));
+    assert!(access_key_db::authorize_tcp_listen(service,SocketAddr::from((Ipv4Addr::UNSPECIFIED,port))).is_err());
+    assert_eq!(access_key_db::authorize_tcp_connect(client,service,port),Ok(()));
+    for invalid in [ungranted,foreign,Actor::Public,Actor::Host] {
+        assert!(access_key_db::authorize_tcp_connect(invalid,service,port).is_err());
+        assert!(access_key_db::authorize_tcp_connect(client,invalid,port).is_err());
+    }
+    assert!(access_key_db::is_protected_vm(1));
+    assert_eq!(access_key_db::workspace_for_vm(1).as_deref(),Some("apps/codex"));
+    assert_eq!(access_key_db::authorize_protected_workspace(1,key(21)),Ok(()));
+    assert!(access_key_db::authorize_vm_control(1,Some(BOB)).is_err());
+    access_key_db::configure_policy(|db| {assert!(db.revoke(ALICE,&GrantScope::Container(ContainerId::default_for_app("sqlite")),key(21)));});
+    assert!(access_key_db::authorize_tcp_connect(client,service,port).is_err());
+    assert!(access_key_db::authorize_protected_workspace(1,key(21)).is_err());
+    access_key_db::grant_codex_sqlite("sqlite.bp","apps/sqlite",Some(ALICE)).unwrap();
+    access_key_db::clear_vm(1);
+    access_key_db::bind_launch(1,"sqlite.bp","apps/sqlite",Some(ALICE));
+    assert!(access_key_db::authorize_tcp_connect(client,service,port).is_err());
+    assert!(access_key_db::authorize_tcp_listen(actor(1),local).is_err());
+    access_key_db::bind_codex_sqlite(1).unwrap();
+    assert_eq!(access_key_db::authorize_tcp_connect(client,actor(1),port),Ok(()));
+    access_key_db::clear_vm(0);
+    assert!(access_key_db::authorize_tcp_connect(client,actor(1),port).is_err());
 }
 
 #[test] fn awaiting_old_metadata_cannot_attribute_a_warning_to_a_new_principal() {
