@@ -18,8 +18,11 @@ static NO_ID:AtomicBool=AtomicBool::new(false);
 static POLICIES:Mutex<BTreeMap<u64,Vec<u8>>>=Mutex::new(BTreeMap::new());
 trait HostMetadata {fn root_id(&self)->u32;fn file_id(&self)->Option<u64>;}
 impl HostMetadata for Metadata {fn root_id(&self)->u32{1}fn file_id(&self)->Option<u64>{(!NO_ID.load(Ordering::SeqCst)).then(||self.ino())}}
-trait HostAccess {fn has_same_access_key(&self,other:&File)->io::Result<bool>;}
-impl HostAccess for File {fn has_same_access_key(&self,other:&File)->io::Result<bool>{let keys=POLICIES.lock().unwrap();Ok(keys.get(&self.metadata()?.ino())==keys.get(&other.metadata()?.ino()))}}
+trait HostAccess {fn has_same_access_key(&self,other:&File)->io::Result<bool>;fn as_native_file(&self)->io::Result<&File>;}
+impl HostAccess for File {fn has_same_access_key(&self,other:&File)->io::Result<bool>{let keys=POLICIES.lock().unwrap();Ok(keys.get(&self.metadata()?.ino())==keys.get(&other.metadata()?.ino()))}fn as_native_file(&self)->io::Result<&File>{Ok(self)}}
+struct NativeWrapper {std_file:Option<File>}
+impl NativeWrapper {@NATIVE_FILE_BORROW@}
+const UNSUPPORTED:io::ErrorKind=io::ErrorKind::Unsupported;
 fn policy(path:&Path,keys:Vec<u8>){POLICIES.lock().unwrap().insert(std::fs::metadata(path).unwrap().ino(),keys);}
 #[derive(Debug)]pub struct FileMetadata {pub content_type:Option<()>,pub is_directory:bool,pub is_file:bool,pub is_symlink:bool,pub size:u64,pub created_at_ms:i64,pub modified_at_ms:i64}
 mod output {
@@ -62,6 +65,25 @@ mod migration {
   policy(&unpacked,vec![5]);decompress_rollout_to_path(&packed,&unpacked,&locks).await.unwrap();assert_eq!(std::fs::read(&unpacked).unwrap(),payload);assert_eq!(std::fs::read(&plain).unwrap(),payload);
  }
 }
+mod native_snapshot {
+ use std::{io,path::PathBuf,sync::Arc,time::Duration};
+ type Result<T>=io::Result<T>;
+ type AbsolutePathBuf=PathBuf;
+ struct Shell;struct SessionTelemetry;struct StateDbHandle;struct ThreadId;
+ struct SnapshotCredentialBroker;struct ShellSnapshotSandbox;struct SnapshotCredentialBrokerState;
+ enum SnapshotShellMode<'a>{Validation(&'a AbsolutePathBuf)}
+ mod watch {pub struct Sender<T>(pub std::marker::PhantomData<T>);}
+ struct ShellSnapshot{config:Option<Arc<()>>,credential_broker:Option<watch::Sender<SnapshotCredentialBrokerState>>}
+ impl ShellSnapshot {@SNAPSHOT_NEW@ @SNAPSHOT_DISABLED@}
+ @SNAPSHOT_CAPTURE@
+ #[tokio::test]async fn native_snapshots_have_no_task_and_direct_capture_refuses_before_effects(){
+  let temp=tempfile::tempdir().unwrap();let cwd=temp.path().join("must-remain-absent");
+  let state=ShellSnapshot::new(cwd.clone(),ThreadId,SessionTelemetry,Some(StateDbHandle),Some(watch::Sender(std::marker::PhantomData)),true);
+  assert!(state.config.is_none());assert!(state.credential_broker.is_none());
+  let error=run_script_with_timeout(&Shell,"touch must-not-run",Duration::from_secs(1),SnapshotShellMode::Validation(&cwd),&cwd,None,None).await.unwrap_err();
+  assert_eq!(error.kind(),io::ErrorKind::Unsupported);assert!(!cwd.exists());
+ }
+}
 #[test]fn bound_output_retains_real_object_and_rejects_visible_replacement(){
  let temp=tempfile::tempdir().unwrap();let path=temp.path().join("output");std::fs::write(&path,b"old output").unwrap();
  let output=output::BoundOutput::open(&path).unwrap();assert_eq!(std::fs::read(&path).unwrap(),b"old output");output.write(b"new").unwrap();assert_eq!(std::fs::read(&path).unwrap(),b"new");
@@ -82,17 +104,25 @@ mod migration {
  assert_eq!(native_socket::shared_daemon_socket_directory().unwrap_err().kind(),io::ErrorKind::Unsupported);
  assert_eq!(native_socket::prepare_shared_daemon_socket_directory().unwrap_err().kind(),io::ErrorKind::Unsupported);
 }
+#[test]fn native_file_borrow_retains_object_and_rejects_snapshot_only_files(){
+ let temp=tempfile::tempdir().unwrap();let path=temp.path().join("object");std::fs::write(&path,b"retained capability").unwrap();let file=std::fs::File::open(&path).unwrap();let identity=file.metadata().unwrap().ino();let wrapped=NativeWrapper{std_file:Some(file)};std::fs::rename(&path,temp.path().join("original")).unwrap();std::fs::write(&path,b"replacement").unwrap();assert_eq!(wrapped.as_native_file().unwrap().metadata().unwrap().ino(),identity);assert_ne!(std::fs::metadata(&path).unwrap().ino(),identity);assert_eq!(NativeWrapper{std_file:None}.as_native_file().unwrap_err().kind(),io::ErrorKind::Unsupported);
+}
 '''
 def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True);a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
- sources=[CODEX/'exec-server/src/no_follow/native.rs',CODEX/'exec-server/src/no_follow/mod.rs',CODEX/'uds/src/native.rs',CODEX/'thread-store/src/local/rollout_migration/publish.rs']
+ sources=[CODEX/'exec-server/src/no_follow/native.rs',CODEX/'exec-server/src/no_follow/mod.rs',CODEX/'uds/src/native.rs',CODEX/'thread-store/src/local/rollout_migration/publish.rs',ROOT.parent/'TRUEOS-Buildins/vendor/tokio-1.54.1/src/fs/trueos.rs',CODEX/'core/src/shell_snapshot.rs',CODEX/'core/src/environment_selection.rs']
  with tempfile.TemporaryDirectory(prefix='trueos-codex-native-publication-')as tmp:
   work=Path(tmp);native=work/'native_object.rs';text=sources[0].read_text();text=text.replace('use crate::FileMetadata;','use crate::{FileMetadata,HostMetadata};');native.write_text(text)
   bound='\n'.join(item(sources[1].read_text(),marker)for marker in ['pub struct BoundOutput','enum Destination','impl BoundOutput'])
   bound=bound.replace('all(unix, not(target_os = "trueos"))','any()').replace('target_os = "trueos"','all()')
   published=sources[3].read_text();selected='\n'.join(item(published,marker)for marker in ['pub(super) fn verify_native_access(','pub(super) async fn verify_native_open_access(','pub(super) async fn open_staged_rollout(','pub(super) async fn decompress_rollout_to_path(','pub(super) async fn compress_rollout_to_path('])
   selected=selected.replace('#[cfg(not(target_os = "trueos"))]','#[cfg(any())]').replace('#[cfg(all(unix, not(target_os = "trueos"))))]','#[cfg(any())]').replace('#[cfg(all(unix, not(target_os = "trueos")))]','#[cfg(any())]').replace('#[cfg(target_os = "trueos")]','#[cfg(all())]')
-  generated=TESTS.replace('@NATIVE_OBJECT@',str(native)).replace('@NATIVE_SOCKET@',str(sources[2])).replace('@BOUND_OUTPUT@',bound).replace('@MIGRATION@',selected)
+  native_borrow=item(sources[4].read_text(),'pub fn as_native_file(')
+  generated=TESTS.replace('@NATIVE_OBJECT@',str(native)).replace('@NATIVE_SOCKET@',str(sources[2])).replace('@BOUND_OUTPUT@',bound).replace('@MIGRATION@',selected).replace('@NATIVE_FILE_BORROW@',native_borrow)
+  snapshot=sources[5].read_text()
+  constructor=item(snapshot,'pub(crate) fn new(').replace('#[cfg(not(target_os = "trueos"))]','#[cfg(any())]').replace('#[cfg(target_os = "trueos")]','#[cfg(all())]')
+  generated=generated.replace('@SNAPSHOT_NEW@',constructor).replace('@SNAPSHOT_DISABLED@',item(snapshot,'pub(crate) fn disabled(')).replace('@SNAPSHOT_CAPTURE@',item(snapshot,'async fn run_script_with_timeout('))
+  assert sources[6].read_text().count('cfg!(all(unix, not(target_os = "trueos")))')==2
   (work/'lib.rs').write_text(generated)
   (work/'Cargo.toml').write_text('''[package]
 name="codex-native-publication-proof"
@@ -111,6 +141,6 @@ tempfile="=3.27.0"
    command=['cargo','+'+TOOLCHAIN,'test','--offline',*flags,'--target','x86_64-unknown-linux-gnu','--manifest-path',str(work/'Cargo.toml'),'--','--test-threads=1']
    result=subprocess.run(command,cwd=work,env=environment(out/'target'),text=True,capture_output=True,timeout=240);log=out/(mode+'.log');log.write_text(result.stdout+result.stderr)
    if result.returncode:raise RuntimeError(log.read_text()[-14000:])
-   count=int(re.search(r'test result: ok\. (\d+) passed',result.stdout)[1]);assert count==5,count;checks.append({'profile':mode,'tests':count,'log':str(log),'command':command})
+   count=int(re.search(r'test result: ok\. (\d+) passed',result.stdout)[1]);assert count==7,count;checks.append({'profile':mode,'tests':count,'log':str(log),'command':command})
  (out/'receipt.json').write_text(json.dumps({'scope':__doc__,'sources':[info(p)for p in sources],'checks':checks},indent=2)+'\n');print(out/'receipt.json')
 if __name__=='__main__':main()

@@ -315,7 +315,9 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
     // The process ABI still carries a logical app-root string even for a
     // filesystem-free invocation. Constructing that string performs no I/O.
     let Some(app_fs_root) =
-        crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.app_fs_root.clone())
+        crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
+            state.process_fs_root.as_ref().unwrap_or(&state.app_fs_root).clone()
+        })
     else {
         log("run: guest app fs root path failed: guest heap domain unavailable");
         return false;

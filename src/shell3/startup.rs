@@ -3,7 +3,10 @@
 use alloc::{string::String, vec::Vec};
 
 pub(crate) enum Startup {
-    
+    Link {
+        source: crate::ui4::Ui4CursorSource,
+        anchor: (u32, u32),
+    },
     Blueprint {
         archive: String,
         bytes: Vec<u8>,
@@ -13,9 +16,59 @@ pub(crate) enum Startup {
 }
 
 impl Startup {
+    /// Desktop entry points retain their placement across first-paint retries.
+    pub(super) fn configure_window(&self, shell: &mut super::Shell3) {
+        let Self::Link { anchor, .. } = self else {
+            return;
+        };
+        let Some((cell_width, cell_height)) =
+            crate::r::services::shell3_font_service::cell_extent(super::service::microfont_scale())
+        else {
+            return;
+        };
+        let Some((screen_width, screen_height)) = crate::ui4::output_dimensions() else {
+            return;
+        };
+        let width = (super::DEFAULT_COLUMNS as u32)
+            .saturating_mul(cell_width)
+            .min(screen_width);
+        let height = (super::DEFAULT_ROWS as u32)
+            .saturating_mul(cell_height)
+            .min(screen_height);
+        shell.configure_window(super::service::WindowGeometry {
+            x: anchor.0.min(screen_width.saturating_sub(width)) as i32,
+            y: anchor.1.min(screen_height.saturating_sub(height)) as i32,
+            width,
+            height,
+        });
+    }
+
     pub(super) fn launch(self, shell: &mut super::Shell3) {
         match self {
-            
+            Self::Link { source, anchor } => {
+                match super::link::start(shell.tui_frontend()) {
+                    Ok(()) => shell.enter_native_terminal("link"),
+                    Err(error) => super::MatrixSlots::echo(
+                        shell.active_matrix_slot.as_deref(),
+                        shell.active_matrix_lifetime,
+                        error,
+                    ),
+                }
+                if let Some(window) = shell.show.window() {
+                    if let Err(error) = crate::ui4::select_window_for_cursor_at(
+                        source,
+                        crate::ui4::WindowOwner::SHELL3_SERVICE,
+                        window,
+                        anchor.0,
+                        anchor.1,
+                    ) {
+                        crate::log_warn!(target: "ui4/link";
+                            "ui4/link: terminal selection failed window={} cursor={}:{}:{} error={:?}\n",
+                            window.raw(), source.controller_id, source.slot_id, source.ep_target, error,
+                        );
+                    }
+                }
+            }
             Self::Blueprint {
                 archive,
                 bytes,

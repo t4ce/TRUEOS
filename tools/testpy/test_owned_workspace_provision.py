@@ -116,12 +116,13 @@ fn bound_key(root:&str)->RecordKey{KEYS.lock().unwrap()[root]}
 }
 '''
 def main():
- p=argparse.ArgumentParser();p.add_argument('--target-dir',type=Path);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--target-dir',type=Path);p.add_argument('--release',action='store_true');a=p.parse_args()
  channel=re.search(r'channel\s*=\s*"([^"]+)"',(ROOT/'rust-toolchain.toml').read_text())[1]
  with tempfile.TemporaryDirectory(prefix='trueos-owned-workspace-') as temporary:
   d=Path(temporary);(d/'lib.rs').write_text(HARNESS.replace('@ROOT@',str(ROOT)))
   (d/'Cargo.toml').write_text('[package]\nname="trueos-owned-workspace-tests"\nversion="0.0.0"\nedition="2024"\n[lib]\npath="lib.rs"\n[workspace]\n[dependencies]\n'+''.join(f'{name}={{path={json.dumps(str(path))}, features=["std"]}}\n' if name=='trueos-redb' else f'{name}={{path={json.dumps(str(path))}}}\n' for name,path in [('trueos-fs',ROOT/'crates/trueos-fs'),('trueos-crypto',ROOT/'crates/trueos-crypto'),('trueos-redb',ROOT.parent/'TRUEOS-Blueprints/crates/trueos-redb')])+'spin="0.10"\nsha2="0.10.9"\nembassy-sync="0.8"\n')
   cmd=['cargo','+'+channel,'test','--offline','--target','x86_64-unknown-linux-gnu']
+  if a.release:cmd+=['--release']
   if a.target_dir:cmd+=['--target-dir',str(a.target_dir)]
   subprocess.run(cmd+['--','--test-threads=1'],cwd=d,check=True)
 if __name__=='__main__':main()

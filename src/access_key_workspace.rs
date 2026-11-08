@@ -79,13 +79,13 @@ pub(crate) async fn prepare_sqlite(archive: &str, workspace: &str, account: Opti
     // directory move keeps IDs/data and refuses an existing destination.
     const OLD: &str = "apps/common/sqlite-service/codex";
     const NEW: &str = "apps/codex/.codex/sqlite-service/codex";
+    if !fs::dir_create_all_async(disk, "apps/codex/.codex/sqlite-service").await? { return Err(FsError::NoSpace); }
     if let Some(old) = fs::node_info_async(disk, OLD).await? {
         if old.kind != trueos_fs::NodeKind::Directory
             || old.record_key != trueos_fs::RecordKey::Ffa && old.record_key != key {
             return Err(FsError::PermissionDenied);
         }
         if fs::node_info_async(disk, NEW).await?.is_some() { return Err(FsError::AlreadyExists); }
-        if !fs::dir_create_all_async(disk, "apps/codex/.codex/sqlite-service").await? { return Err(FsError::NoSpace); }
         if !fs::stamp_directory_record_key_async(disk, OLD, key).await? { return Err(FsError::PermissionDenied); }
         if !fs::dir_rename_async(disk, OLD, NEW).await? {
             return Err(FsError::Device(crate::disc::block::Error::Io));

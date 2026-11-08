@@ -52,6 +52,58 @@ impl HidBootKind {
     }
 }
 
+/// Publish an opened stream before its first report, so silent keyboards and
+/// stationary pointers can be paired with the mouse alone. This seeds only
+/// HUT discovery state; it does not emit keys, pointer motion, or buttons.
+fn register_hut_stream_device(
+    kind: HidBootKind,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+) {
+    use super::hut::{self, HidSourceKind};
+
+    match kind {
+        HidBootKind::Keyboard => hut::upsert_keyboard_state(
+            controller_id,
+            slot_id,
+            ep_target,
+            0,
+            [0; 6],
+            [0; 6],
+            HidSourceKind::Human,
+            "human",
+            false,
+        ),
+        HidBootKind::Mouse => hut::upsert_mouse_state(
+            controller_id,
+            slot_id,
+            ep_target,
+            0.5,
+            0.5,
+            0,
+            HidSourceKind::Human,
+            "human",
+            false,
+        ),
+        HidBootKind::Tablet => hut::upsert_tablet_state(
+            controller_id,
+            slot_id,
+            ep_target,
+            0.5,
+            0.5,
+            0,
+            0,
+            0,
+            0,
+            HidSourceKind::Human,
+            "tablet",
+            false,
+        ),
+        HidBootKind::EyeTracker => {}
+    }
+}
+
 #[inline]
 fn should_skip_descriptor_logging(vendor_id: u16, product_id: u16, kind: HidBootKind) -> bool {
     // Narrow workaround for QEMU's simple emulated USB boot HID devices, which can
@@ -577,6 +629,8 @@ async fn hid_boot_stream_task(
             return;
         }
     };
+
+    register_hut_stream_device(target.kind, controller_id, slot_id, ep_target);
 
     crate::log_info!(target: "usb";
         "crabusb: hid {} {:04X}:{:04X} ready slot={} if#{} alt={} cfg={} int_in=0x{:02X} mps={} ep_target={} proto={:02X} selected_protocol={} protocol_set={} idle={}\n",

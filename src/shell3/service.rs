@@ -536,6 +536,9 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                     if let Some(shell) = owned_shells.get_mut(index) {
                         // A failed first paint must retain the admitted launch
                         // through the normal presentation retries.
+                        if let Some(startup) = startup.as_ref() {
+                            startup.configure_window(shell);
+                        }
                         shell.pending_startup = startup;
                         if let Some(window) = window.as_ref() {
                             shell.configure_window(window.placement);

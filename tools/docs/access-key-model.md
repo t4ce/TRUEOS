@@ -104,6 +104,41 @@ recheck the requesting actor. Trusted kernel filesystem operations remain
 explicitly privileged. This integration does not claim that every kernel service
 or raw device interface has received a complete confinement audit.
 
+## Codex SQLite dependency
+
+The current default Codex container delegates its existing key to the existing
+SQLite Blueprint's `codex` instance. SQLite remains one AppDB executable entry.
+Its images and endpoint announcement live at
+`apps/codex/.codex/sqlite-service/codex`, under the same durable ancestor key.
+Trusted preparation preserves the legacy service directory by stamping its FFA
+root with that key before moving the directory into Codex's tree. File identities
+and payloads stay intact. An existing destination or foreign source key aborts
+the move; there is no overwrite, merge, deletion or public-storage fallback.
+
+Port 42116, the existing hash-selected `codex` instance port, is reserved for
+this native purpose even before provisioning. Binding requires the exact
+delegated SQLite launch epoch and IPv4 loopback. Connecting requires the same
+captured account and its Codex key grant; the listener must also prove its
+delegated purpose. Native sockets retain their own actors despite sharing a
+transport bridge. Authorization runs before admission and subsequent byte
+transfers, including queued writes. Revocation, retirement and VM-slot reuse
+cannot lend a later principal to an old connection. Public or pre-existing
+listeners cannot impersonate the service by answering `/healthz`.
+
+Reserved native environment values select the private endpoint and storage.
+Codex cannot override this active contract with a public instance or endpoint.
+The service checks private storage before binding and publishing. Other SQLite
+instance names keep their explicitly public development contract. Supporting
+additional private Codex containers with separately named service endpoints is
+future work; the present binding is the default `apps/codex` container.
+
+Native file-object opcode 15 compares two files' effective non-FFA key
+requirements, including captured and current ancestor provenance, under one
+root lease. It copies no access metadata. Codex uses this proof for temporary
+file replacement instead of Unix chmod/chown/time copying. Different policies,
+foreign actors or stale epochs fail; an old FFA leaf and a newly keyed leaf
+under the same protected ancestor can prove equivalent policy.
+
 ## Containers and next steps
 
 Ordinary container 0 uses `apps/<app>`. Additional containers use flat sibling

@@ -40,6 +40,7 @@ edition = "2024"
 heapless = "=0.9.1"
 spin = "=0.10.1"
 v = { path = ''' + json.dumps(str(ROOT / "crates/trueos-v")) + ''' }
+trueos-terminal = { path = ''' + json.dumps(str(ROOT / "crates/trueos-terminal")) + ''' }
 
 [lib]
 path = "lib.rs"

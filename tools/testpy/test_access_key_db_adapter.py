@@ -2,6 +2,7 @@
 """Exercise the production AccessKeyDB adapter with a host filesystem backend."""
 
 from pathlib import Path
+import argparse
 import json
 import re
 import subprocess
@@ -363,6 +364,10 @@ fn messages() -> Vec<String> { WARNINGS.lock().unwrap().clone() }
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--release', action='store_true')
+    parser.add_argument('--target-dir', type=Path)
+    args = parser.parse_args()
     channel = re.search(r'channel\s*=\s*"([^"]+)"', (ROOT / "rust-toolchain.toml").read_text())[1]
     with tempfile.TemporaryDirectory(prefix="trueos-access-key-adapter-") as temporary:
         directory = Path(temporary)
@@ -377,10 +382,13 @@ def main():
         (directory / "tests.rs").write_text(HARNESS.replace("__ADAPTER__", str(ROOT / "src/access_key_db.rs")))
         # Run outside the kernel workspace to avoid its custom target/build-std
         # configuration. Dependencies and adapter source are still production.
-        subprocess.run([
+        command = [
             "cargo", "+" + channel, "test", "--offline", "--lib", "--target",
-            "x86_64-unknown-linux-gnu", "--", "--test-threads=1",
-        ], cwd=directory, check=True)
+            "x86_64-unknown-linux-gnu",
+        ]
+        if args.release: command.append('--release')
+        if args.target_dir: command.extend(['--target-dir', str(args.target_dir.resolve())])
+        subprocess.run(command + ["--", "--test-threads=1"], cwd=directory, check=True)
 
 
 if __name__ == "__main__":

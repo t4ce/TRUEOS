@@ -88,6 +88,18 @@ use r::io::env::{context, resolve_fs_path};
     assert_eq!(resolve_fs_path("/apps/other/./file", false).as_deref(), Some("apps/other/file"));
     assert_eq!(resolve_fs_path("../file", false), None);
 }
+
+#[test] fn delegated_sqlite_view_reuses_only_the_private_service_root() {
+    let root = "apps/codex/.codex/sqlite-service/codex";
+    context(root, Some("sqlite.bp"), false);
+    assert_eq!(resolve_fs_path("/apps/codex/.codex/sqlite-service/codex/db-123.sqlite", false), Some(format!("{root}/db-123.sqlite")));
+    assert_eq!(resolve_fs_path("db-123.sqlite", false), Some(format!("{root}/db-123.sqlite")));
+    assert_eq!(resolve_fs_path("/common/sqlite-service/codex", false).as_deref(), Some("apps/common/sqlite-service/codex"));
+    assert_eq!(resolve_fs_path("/apps/common/sqlite-service/codex", false).as_deref(), Some("apps/common/sqlite-service/codex"));
+    assert_eq!(resolve_fs_path("/apps/codex/.codex/auth.json", false), Some(format!("{root}/apps/codex/.codex/auth.json")));
+    assert_eq!(resolve_fs_path("../auth.json", false), None);
+    assert_eq!(resolve_fs_path("/apps/codex/.codex/sqlite-service/codex/../auth.json", false), None);
+}
 '''
 
 

@@ -625,6 +625,7 @@ pub enum StartError {
     VmxUnsupported,
     MissingGuestModule,
     GuestMemoryUnavailable,
+    AccessDenied,
     NoVmSpawner,
     SpawnFailed,
     VgpuQuarantined,
@@ -702,6 +703,9 @@ pub struct BlueprintLaunchState {
     /// the per-VM virtual `vFile:launch` stream and never through argv.
     pub launch_script: Option<AllocString>,
     pub app_fs_root: AllocString,
+    /// Guest-owned snapshot of the final filesystem view. The container path
+    /// above remains the permission identity even for a delegated dependency.
+    pub(crate) process_fs_root: Option<AllocString>,
     pub identity: BlueprintInstanceIdentity,
     /// Account captured at launch, never inferred from a later Cry login.
     pub access_account: Option<trueos_crypto::AccountId>,
@@ -3209,6 +3213,7 @@ fn prepare_blueprint_launch_on_lane(
             app_args: pending.app_args,
             launch_script: pending.launch_script,
             app_fs_root,
+            process_fs_root: None,
             identity,
             access_account: pending.access_account,
         },
@@ -3316,7 +3321,7 @@ pub fn stage_blueprint_launch(
             module_bytes: state.module_bytes.clone(),
         });
     });
-    let Some(guest_state) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.clone())
+    let Some(mut guest_state) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.clone())
     else {
         clear_blueprint_child_template(vm_id);
         return Err(StartError::GuestMemoryUnavailable);
@@ -3330,7 +3335,7 @@ pub fn stage_blueprint_launch(
         .or_else(|| state.launch_script.clone());
     let codex_sqlite_service = crate::hv::blueprint::codex_sqlite_service_requested(
         &state.archive, &state.app_args, launch_script.as_deref(),
-    ).map_err(|_| StartError::GuestMemoryUnavailable)?;
+    ).map_err(|_| StartError::AccessDenied)?;
     let mut process_context = BlueprintProcessContext {
         args: crate::hv::blueprint::build_process_args(
             state.archive.as_str(),
@@ -3381,6 +3386,25 @@ pub fn stage_blueprint_launch(
             .vars
             .insert(AllocString::from("TRUEOS_MCP_STDIO"), AllocString::from("1"));
     }
+    if codex_sqlite_service {
+        // Execution identity remains SQLite; this dependency's filesystem view
+        // is the owner's delegated private data directory. Keep ordinary
+        // app/common resolution rather than granting global filesystem scope.
+        let root = crate::access_key_db::CODEX_SQLITE_STORAGE;
+        process_context.vars.insert(AllocString::from("TRUEOS_APP_FS_ROOT"), AllocString::from(root.trim_start_matches('/')));
+        process_context.vars.insert(AllocString::from("HOME"), AllocString::from(root));
+        process_context.vars.insert(AllocString::from("PWD"), AllocString::from(root));
+    }
+    // The Hull's launch-context stack is private RW data. Snapshot the selected
+    // view into guest-owned storage instead of rebuilding it from the container
+    // path or asking guest code to walk host BTreeMap nodes.
+    let Some(process_fs_root) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
+        process_context.vars.get("TRUEOS_APP_FS_ROOT").cloned()
+    }) else {
+        clear_blueprint_child_template(vm_id);
+        return Err(StartError::GuestMemoryUnavailable);
+    };
+    guest_state.process_fs_root = process_fs_root;
     // Snapshot native environment bytes while launch-map nodes are readable.
     // A C getenv/environ view is materialized only for an actual legacy client.
     if crate::r::native_process::initialize_environment(
@@ -3403,7 +3427,7 @@ pub fn stage_blueprint_launch(
     if codex_sqlite_service && crate::access_key_db::bind_codex_sqlite(vm_id).is_err() {
         crate::access_key_db::clear_vm(vm_id);
         clear_blueprint_child_template(vm_id);
-        return Err(StartError::GuestMemoryUnavailable);
+        return Err(StartError::AccessDenied);
     }
     *launch_script_slot.lock() = launch_script;
     *slot.lock() = Some(guest_state);

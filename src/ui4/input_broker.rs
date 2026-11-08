@@ -2491,7 +2491,7 @@ pub(crate) fn reselect_window_for_cursor(
 /// Programmatically focus a ready frame while retaining a known cursor
 /// position. Context-menu actions use their captured anchor so opening a
 /// service frame never teleports the software cursor to the frame origin.
-pub(super) fn select_window_for_cursor_at(
+pub(crate) fn select_window_for_cursor_at(
     source: Ui4CursorSource,
     owner: WindowOwner,
     window: WindowId,

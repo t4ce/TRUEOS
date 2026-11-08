@@ -927,6 +927,7 @@ pub fn restore_blueprint_portable_state(
         return Err("blueprint executable range restore failed");
     }
     let state = BlueprintLaunchState {
+        process_fs_root: None,
         timing: launch_timing::Trace::DISABLED,
         archive: archive.clone(),
         module_bytes,
