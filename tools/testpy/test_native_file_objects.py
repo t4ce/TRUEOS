@@ -15,6 +15,7 @@ def main():
     text=fixture.read_text().replace('@FILE_OBJECT_SOURCE@',str(source)).replace('@CABI_CODES_SOURCE@',str(ROOT/'src/r/cabi_codes.rs')).replace('@AUTHORIZED_SOURCE@',str(ROOT/'src/r/fs/trueosfs_authorized.rs')).replace('@CONTENT_TYPE_SOURCE@',str(ROOT/'src/r/fs/content_type_boundary.rs')).replace('@FS_HTML_SOURCE@',str(ROOT/'src/r/fs/fs_html.rs'))
     kernel=(ROOT/'src/r/fs/trueosfs.rs').read_text()
     helpers='\n'.join(item(kernel,marker) for marker in [
+        'struct NodeRecordCacheEntry', 'fn node_record_cache_lookup(', 'fn node_record_cache_insert(',
         'pub(crate) async fn node_record_under_lease(', 'pub(crate) async fn inherited_record_key_under_lease(',
         'async fn record_key_for_write_under_lease(', 'pub(crate) async fn stamp_directory_key_async(',
         'pub(crate) async fn stamp_directory_record_key_async(',

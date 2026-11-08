@@ -1386,11 +1386,42 @@ pub(crate) async fn node_record_under_lease(
     params: &trueos_fs::FsParams,
     path: &str,
 ) -> Result<Option<trueos_fs::NodeRecordRef>, block::Error> {
-    match indexed_removal_entry(disk.id(), path) {
-        Ok(Some(entry)) => trueos_fs::get_node_record_by_lba(&KernelBlockIo::new(disk), params, entry.entry_lba).await.map_err(map_engine_err),
-        Ok(None) => Ok(None),
-        Err(block::Error::NotReady) => trueos_fs::lookup_node_record(&KernelBlockIo::new(disk), params, path).await.map_err(map_engine_err),
-        Err(error) => Err(error),
+    // Resolve the current namespace and its mount incarnation together. Only
+    // immutable physical headers are cached: callers still walk every current
+    // ancestor and authorize its keys for the captured principal on each use.
+    let indexed = {
+        let roots = ROOTS.lock();
+        roots
+            .iter()
+            .find(|mount| mount.disk_id == disk.id())
+            .and_then(|mount| {
+                mount
+                    .index
+                    .as_ref()
+                    .map(|index| (mount.seq, index.get(path.as_bytes()).copied()))
+            })
+    };
+    match indexed {
+        Some((mount_seq, Some(entry))) => {
+            if let Some(record) = node_record_cache_lookup(disk.id(), mount_seq, entry.entry_lba) {
+                return Ok(Some(record));
+            }
+            let record = trueos_fs::get_node_record_by_lba(
+                &KernelBlockIo::new(disk),
+                params,
+                entry.entry_lba,
+            )
+            .await
+            .map_err(map_engine_err)?;
+            if let Some(record) = record {
+                node_record_cache_insert(disk.id(), mount_seq, record);
+            }
+            Ok(record)
+        }
+        Some((_, None)) => Ok(None),
+        None => trueos_fs::lookup_node_record(&KernelBlockIo::new(disk), params, path)
+            .await
+            .map_err(map_engine_err),
     }
 }
 

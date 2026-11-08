@@ -276,16 +276,16 @@ async fn record_at(
     params: &trueos_fs::FsParams,
     path: &str,
 ) -> Result<Option<trueos_fs::NodeRecordRef>, i32> {
+    // Object identity must still follow the current namespace under the root
+    // lease; share its immutable header cache with ancestor authorization.
     let indexed = indexed_removal_entry(disk.id(), path).map_err(error)?;
-    match indexed {
-        Some(entry) => {
-            trueos_fs::get_node_record_by_lba(&KernelBlockIo::new(disk), params, entry.entry_lba)
-                .await
-                .map_err(|e| error(map_engine_err(e)))
-                .and_then(|r| r.ok_or(FS_ERR_IO).map(Some))
-        }
-        None => Ok(None),
+    if indexed.is_none() {
+        return Ok(None);
     }
+    node_record_under_lease(disk, params, path)
+        .await
+        .map_err(error)
+        .and_then(|record| record.ok_or(FS_ERR_IO).map(Some))
 }
 async fn bytes_at(
     disk: block::DeviceHandle,

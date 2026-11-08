@@ -25,6 +25,9 @@ use super::tcp_tx_queue::TcpTxQueue;
 mod poll_cadence;
 use poll_cadence::RxPollCadence;
 
+#[path = "service_timing.rs"]
+mod service_timing;
+
 // Internal netbench (kernel-side) ------------------------------------------------
 //
 // `bench.net` via vnet is convenient but it copies payload bytes multiple times:
@@ -5792,27 +5795,39 @@ pub(crate) fn socket_option(
     }
 }
 
-fn service_tick_once(device_index: usize) -> bool {
+fn service_tick_once(device_index: usize, synchronous: bool) -> bool {
+    let started = crate::chronos::monotonic_nanos();
     let Some(service) = service_for_device(device_index) else {
         return false;
     };
 
     let mut svc = service.lock();
+    let locked = crate::chronos::monotonic_nanos();
 
     let mut busy = false;
     if svc.tick() {
         busy = true;
     }
+    let tick_done = crate::chronos::monotonic_nanos();
 
+    let mut commands = 0;
     for _ in 0..MAX_DRAIN_PER_LOOP {
         let Some((owner, cmd)) = pop_command_for_device(device_index) else {
             break;
         };
+        commands += 1;
         busy = true;
         svc.handle_command(owner, cmd);
     }
+    let commands_done = crate::chronos::monotonic_nanos();
 
     svc.poll_sockets();
+    let sockets_done = crate::chronos::monotonic_nanos();
+    let sockets = svc.records.len();
+    drop(svc);
+    service_timing::record(device_index, synchronous, service_timing::Phases {
+        started, locked, tick_done, commands_done, sockets_done, commands, sockets, busy,
+    });
 
     busy
 }
@@ -5825,7 +5840,7 @@ fn service_tick_once(device_index: usize) -> bool {
 /// still need submitted VNet commands to be drained promptly.
 pub fn service_tick_primary_once() -> bool {
     let idx = crate::net::primary_device_index();
-    service_tick_once(idx)
+    service_tick_once(idx, true)
 }
 
 /// Per-NIC RX poll loop.
@@ -5942,7 +5957,7 @@ pub async fn net_service_task(index: usize) {
         ensure_services(count);
 
         loop {
-            if service_tick_once(index) {
+            if service_tick_once(index, false) {
                 Timer::after(EmbassyDuration::from_micros(0)).await;
             } else {
                 Timer::after(EmbassyDuration::from_micros(NET_SERVICE_SLEEP_US)).await;

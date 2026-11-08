@@ -18,6 +18,30 @@ use std::sync::{Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}};
 use trueos_crypto::{AccountId, KeyHandle, KeyRef, ProviderId};
 use trueos_fs::{RecordKey, access::{AccessKeyDb, ContainerId, ContainerPolicy, GrantScope}};
 
+std::thread_local! {
+    static ALLOCATION_COUNT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+struct CountingAllocator;
+unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        let _ = ALLOCATION_COUNT.try_with(|count| {
+            if let Some(current) = count.get() { count.set(Some(current + 1)); }
+        });
+        unsafe { std::alloc::System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, pointer: *mut u8, layout: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(pointer, layout); }
+    }
+}
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+fn count_allocations(check: impl FnOnce()) -> usize {
+    ALLOCATION_COUNT.with(|count| { assert!(count.replace(Some(0)).is_none()); });
+    check();
+    ALLOCATION_COUNT.with(|count| count.replace(None).unwrap())
+}
+
 static WARNINGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 macro_rules! log_warn {
     (target: $target:expr; $($args:tt)*) => {
@@ -324,6 +348,17 @@ fn messages() -> Vec<String> { WARNINGS.lock().unwrap().clone() }
     assert_eq!(access_key_db::authorize_tcp_listen(service,local),Ok(()));
     assert!(access_key_db::authorize_tcp_listen(service,SocketAddr::from((Ipv4Addr::UNSPECIFIED,port))).is_err());
     assert_eq!(access_key_db::authorize_tcp_connect(client,service,port),Ok(()));
+    // Every idle socket poll rechecks these relations. Their hot path must
+    // inspect the live binding/policy without allocating container copies.
+    let epoch = access_key_db::principal_epoch(0).unwrap();
+    let allocations = count_allocations(|| {
+        for _ in 0..60 {
+            access_key_db::authorize_tcp_connect(client,service,port).unwrap();
+            access_key_db::authorize_tcp_listen(service,local).unwrap();
+            access_key_db::authorize_record_at(0,epoch,key(21)).unwrap();
+        }
+    });
+    assert_eq!(allocations,0,"live SQLite authorization allocated in the poll path");
     for invalid in [ungranted,foreign,Actor::Public,Actor::Host] {
         assert!(access_key_db::authorize_tcp_connect(invalid,service,port).is_err());
         assert!(access_key_db::authorize_tcp_connect(client,invalid,port).is_err());

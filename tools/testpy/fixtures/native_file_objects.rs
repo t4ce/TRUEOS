@@ -36,7 +36,10 @@ mod r{
   #[path="@CONTENT_TYPE_SOURCE@"]pub mod content_type_boundary;
   #[path="@FS_HTML_SOURCE@"]pub mod fs_html;
   pub mod trueosfs{
-   use alloc::{collections::BTreeMap,string::String,vec::Vec};use crate::disc::block;use spin::Mutex;use core::sync::atomic::{AtomicU32,Ordering};
+   use alloc::{collections::BTreeMap,string::String,vec::Vec};use crate::disc::block;use spin::Mutex;use core::sync::atomic::{AtomicU32,AtomicU64,Ordering};
+   const NODE_RECORD_CACHE_CAP:usize=128;
+   static NODE_RECORD_CACHE_SEQ:AtomicU64=AtomicU64::new(1);
+   static NODE_RECORD_CACHE:Mutex<Vec<NodeRecordCacheEntry>>=Mutex::new(Vec::new());
    pub const TRUEOSFS_LIST_SOFT_CAP:usize=1024;
    static FILE_WRITE_STREAM_SEQ:AtomicU32=AtomicU32::new(1);
    static FILE_WRITE_STREAMS:Mutex<BTreeMap<u32,FileWriteStream>>=Mutex::new(BTreeMap::new());
@@ -81,7 +84,7 @@ mod r{
    #[path="@FILE_OBJECT_SOURCE@"]pub mod file_objects;
    #[cfg(test)]mod tests{
     use super::*;use file_objects::{Command,open,operate};const D:block::DeviceHandle=block::DeviceHandle(1);
-    fn reset(){FILE_WRITE_STREAMS.lock().clear();for owner in [1,2,3,0x80000001,0x80000002]{file_objects::release_owner(owner);}crate::access_key_db::clear();crate::access_key_db::reset_epoch();let mut bytes=vec![0;32768*512];trueos_fs::write_blank_superblock(&mut bytes[..512]);*DISK.lock()=bytes;INDEX.lock().clear();*ROOTS.lock()=vec![RootMount{disk_id:D.id(),seq:1,index:Some(Box::new(BTreeMap::new()))}];FAIL_WRITE.store(false,core::sync::atomic::Ordering::SeqCst);assert!(!WRITER.load(core::sync::atomic::Ordering::SeqCst));}
+    fn reset(){NODE_RECORD_CACHE.lock().clear();FILE_WRITE_STREAMS.lock().clear();for owner in [1,2,3,0x80000001,0x80000002]{file_objects::release_owner(owner);}crate::access_key_db::clear();crate::access_key_db::reset_epoch();let mut bytes=vec![0;32768*512];trueos_fs::write_blank_superblock(&mut bytes[..512]);*DISK.lock()=bytes;INDEX.lock().clear();*ROOTS.lock()=vec![RootMount{disk_id:D.id(),seq:1,index:Some(Box::new(BTreeMap::new()))}];FAIL_WRITE.store(false,core::sync::atomic::Ordering::SeqCst);assert!(!WRITER.load(core::sync::atomic::Ordering::SeqCst));}
     fn id(bytes:Vec<u8>)->u64{u64::from_le_bytes(bytes.try_into().unwrap())}
     fn call(owner:u32,op:u32,flags:u32,object:u64,arg:u64,payload:&[u8])->Result<Vec<u8>,i32>{crate::run(operate(owner,&Command{op,flags,object,arg,payload:payload.to_vec()}))}
     fn opened(owner:u32,path:&str,flags:u32)->u64{id(crate::run(open(owner,D,path,flags)).unwrap())}
@@ -134,21 +137,21 @@ mod r{
      // Leaves are deliberately old FFA records: the keyed ancestor, rather
      // than a conveniently matching key on every file, must hide this tree.
      crate::run(stamp_directory_key_async(D,"apps/private",key(41))).unwrap();
-     READ_CALLS.store(0,Ordering::SeqCst);
+     NODE_RECORD_CACHE.lock().clear();READ_CALLS.store(0,Ordering::SeqCst);
      let(nodes,truncated)=crate::run(auth::index_snapshot_limited(Actor::Public,D,4)).unwrap().unwrap();
      assert!(truncated);assert_eq!(nodes.iter().map(|node|node.path.as_str()).collect::<Vec<_>>(),vec!["apps","z-last","apps/public","apps/public/f000"]);
      assert_eq!(READ_CALLS.load(Ordering::SeqCst),6,"four visible paths plus one lookahead and one denied root; no hidden leaf reads");
-     READ_CALLS.store(0,Ordering::SeqCst);
+     NODE_RECORD_CACHE.lock().clear();READ_CALLS.store(0,Ordering::SeqCst);
      let html=crate::run(super::super::fs_html::html_browser_tree_async(D,4,1)).unwrap().unwrap();
      assert!(html.contains("z-last"));assert!(html.contains("apps/public/f000"));assert!(!html.contains("private"));assert!(html.contains("<li>...</li>"));assert_eq!(html.matches("data-label=").count(),4);
      assert_eq!(READ_CALLS.load(Ordering::SeqCst),6,"actual HTML renderer supplies its budget before metadata authorization");
-     READ_CALLS.store(0,Ordering::SeqCst);
+     NODE_RECORD_CACHE.lock().clear();READ_CALLS.store(0,Ordering::SeqCst);
      let listing=crate::run(auth::list(Actor::Public,D,"apps/public",8)).unwrap().unwrap();
      assert_eq!(listing.entries.len(),8);assert!(listing.truncated);assert_eq!(READ_CALLS.load(Ordering::SeqCst),11,"two ancestors once plus nine candidate leaves");
-     READ_CALLS.store(0,Ordering::SeqCst);
+     NODE_RECORD_CACHE.lock().clear();READ_CALLS.store(0,Ordering::SeqCst);
      let json=crate::run(auth::json_all(Actor::Public,D,4)).unwrap().unwrap();
      assert!(json.contains("\"truncated\":true"));assert!(json.contains("z-last"));assert!(!json.contains("private"));assert_eq!(READ_CALLS.load(Ordering::SeqCst),6,"JSON reuses authorized records and stops before remaining headers");
-     READ_CALLS.store(0,Ordering::SeqCst);
+     NODE_RECORD_CACHE.lock().clear();READ_CALLS.store(0,Ordering::SeqCst);
      let nodes=crate::run(auth::index_snapshot(Actor::Public,D)).unwrap().unwrap();
      assert_eq!(nodes.len(),103);assert!(nodes.iter().all(|node|!node.path.contains("private")));
      assert_eq!(READ_CALLS.load(Ordering::SeqCst),104,"each visible record and denied root read once, without rereading ancestors per leaf");
@@ -162,6 +165,61 @@ mod r{
      crate::access_key_db::grant(1,key(42));assert_eq!(crate::run(auth::index_snapshot_limited(Actor::Vm(1,1),D,8)).unwrap().unwrap().0.len(),3);
      crate::access_key_db::clear();assert_eq!(crate::run(auth::index_snapshot_limited(Actor::Vm(1,1),D,8)).unwrap().unwrap().0.len(),1);
      crate::access_key_db::reuse_slot();assert!(matches!(crate::run(auth::index_snapshot_limited(Actor::Vm(1,1),D,8)),Err(block::Error::PermissionDenied)));
+    }
+    #[test]fn repeated_native_operations_reuse_headers_and_recheck_authority(){
+     reset();use authorized::{self as auth,Actor};
+     let dir="apps/demo/.codex/plugins/cache/catalog/skills/tool";
+     let path=format!("{dir}/SKILL.md");
+     crate::run(auth::create_dir_all(Actor::Host,D,dir)).unwrap();
+     crate::run(auth::write(Actor::Host,D,&path,b"skill",ContentTypeId::BLOB,true)).unwrap();
+     crate::run(stamp_directory_key_async(D,"apps/demo",key(43))).unwrap();
+     crate::access_key_db::grant(1,key(43));let actor=Actor::Vm(1,1);let owner=0x80000001;
+     let handle=opened(owner,&path,1);crate::run(auth::node_info(actor,D,&path)).unwrap().unwrap();
+     READ_CALLS.store(0,Ordering::SeqCst);
+     for _ in 0..20{assert_eq!(crate::run(auth::node_info(actor,D,&path)).unwrap().unwrap().data_len,5);}
+     let metadata_reads=READ_CALLS.load(Ordering::SeqCst);
+     READ_CALLS.store(0,Ordering::SeqCst);
+     for _ in 0..20{assert_eq!(crate::run(auth::list(actor,D,dir,8)).unwrap().unwrap().entries.len(),1);}
+     let listing_reads=READ_CALLS.load(Ordering::SeqCst);
+     READ_CALLS.store(0,Ordering::SeqCst);
+     for _ in 0..20{call(owner,5,0,handle,0,&[]).unwrap();seek(owner,handle,0);assert_eq!(call(owner,12,5,handle,0,&[]).unwrap(),b"skill");}
+     let object_reads=READ_CALLS.load(Ordering::SeqCst);
+     let measured=(metadata_reads,listing_reads,object_reads);
+     // The two reads per positional operation validate its record and fetch its
+     // payload. Metadata authorization still executes for every cached header.
+     assert_eq!(measured,(0,0,40),"physical reads for 20 warm native metadata, listing, and object cycles at path depth 9");
+     crate::access_key_db::clear();READ_CALLS.store(0,Ordering::SeqCst);
+     assert_eq!(crate::run(auth::node_info(actor,D,&path)),Err(block::Error::PermissionDenied));
+     assert!(matches!(crate::run(auth::list(actor,D,dir,8)),Err(block::Error::PermissionDenied)));
+     assert_eq!(call(owner,12,5,handle,0,&[]),Err(-19));
+     assert_eq!(READ_CALLS.load(Ordering::SeqCst),0,"grant revocation is checked on cache hits");
+     crate::access_key_db::grant(1,key(43));crate::access_key_db::reuse_slot();
+     assert_eq!(crate::run(auth::node_info(actor,D,&path)),Err(block::Error::PermissionDenied));
+     assert_eq!(call(owner,12,5,handle,0,&[]),Err(-19));
+    }
+    #[test]fn under_lease_cache_follows_current_revision_mount_and_replay_fallback(){
+     reset();use authorized::{self as auth,Actor};
+     crate::run(auth::write(Actor::Host,D,"file",b"old",ContentTypeId::BLOB,true)).unwrap();
+     let old=crate::run(auth::node_info(Actor::Host,D,"file")).unwrap().unwrap();
+     crate::run(auth::write(Actor::Host,D,"file",b"replacement",ContentTypeId::BLOB,true)).unwrap();
+     let current=crate::run(auth::node_info(Actor::Host,D,"file")).unwrap().unwrap();
+     assert_ne!(old.revision,current.revision);assert_eq!(current.data_len,11);
+     crate::run(auth::remove(Actor::Host,D,"file",Some(NodeKind::File))).unwrap();
+     assert_eq!(crate::run(auth::node_info(Actor::Host,D,"file")).unwrap(),None);
+     crate::run(auth::write(Actor::Host,D,"file",b"fresh",ContentTypeId::BLOB,true)).unwrap();
+     let record=INDEX.lock()["file"];let mut stale=record;stale.data_len=999;
+     node_record_cache_insert(D.id(),1,stale);ROOTS.lock()[0].seq=2;
+     READ_CALLS.store(0,Ordering::SeqCst);
+     assert_eq!(crate::run(auth::node_info(Actor::Host,D,"file")).unwrap().unwrap().data_len,5);
+     assert_eq!(READ_CALLS.load(Ordering::SeqCst),1,"new mount ignores old incarnation at the same physical revision");
+     // A late completion from the retired mount cannot replace the new key.
+     node_record_cache_insert(D.id(),1,stale);READ_CALLS.store(0,Ordering::SeqCst);
+     assert_eq!(crate::run(auth::node_info(Actor::Host,D,"file")).unwrap().unwrap().data_len,5);
+     assert_eq!(READ_CALLS.load(Ordering::SeqCst),0);
+     ROOTS.lock()[0].index=None;READ_CALLS.store(0,Ordering::SeqCst);
+     let replayed=crate::run(async{let _lease=write_gate::RootWriteLease::acquire(D.id()).await;node_record_under_lease(D,&params(),"file").await}).unwrap();
+     assert_eq!(replayed,Some(record));assert!(READ_CALLS.load(Ordering::SeqCst)>0,"missing index still replays storage under the existing lease");
+     refresh_index();
     }
     #[test]fn reserved_path_admission_does_not_wait_for_busy_root_or_read_disk(){
      reset();use authorized::{self as auth,Actor};let reads=READ_CALLS.load(Ordering::SeqCst);
@@ -187,7 +245,7 @@ mod r{
      reset();for(app,k)in[("apps/left",key(55)),("apps/right",key(56))]{crate::run(authorized::create_dir_all(authorized::Actor::Host,D,app)).unwrap();crate::run(stamp_directory_key_async(D,app,k)).unwrap();crate::access_key_db::grant(1,k);}let owner=0x80000001;let old=opened(owner,"apps/left/target",1|2|16);let same=opened(owner,"apps/left/staged",1|2|16);let _replacement=opened(1,"apps/right/replacement",1|2|16);rename("apps/right/replacement","apps/left/target");let new=opened(owner,"apps/left/target",1);assert_eq!(id(call(owner,15,0,old,same,&[]).unwrap()),1);assert_eq!(id(call(owner,15,0,old,new,&[]).unwrap()),0,"compare the retained object, not its reused path");crate::access_key_db::reuse_slot();assert_eq!(call(owner,15,0,old,same,&[]),Err(-19));
     }
     #[test]fn access_equivalence_rejects_cross_root_objects_and_invalid_wire_fields(){
-     reset();let first=opened(1,"file",1|2|16);ROOTS.lock().push(RootMount{disk_id:block::DeviceHandle(2).id(),seq:1,index:Some(Box::new(BTreeMap::new()))});let second=id(crate::run(open(1,block::DeviceHandle(2),"file",1)).unwrap());assert_eq!(call(1,15,0,first,second,&[]),Err(-20));let mut bytes=Vec::new();bytes.extend_from_slice(&15u32.to_le_bytes());bytes.extend_from_slice(&0u32.to_le_bytes());bytes.extend_from_slice(&first.to_le_bytes());bytes.extend_from_slice(&second.to_le_bytes());assert!(Command::decode(&bytes).is_ok());bytes[4]=1;assert!(Command::decode(&bytes).is_err());bytes[4]=0;bytes.push(0);assert!(Command::decode(&bytes).is_err());
+     reset();let first=opened(1,"file",1|2|16);let second_index=ROOTS.lock()[0].index.clone();ROOTS.lock().push(RootMount{disk_id:block::DeviceHandle(2).id(),seq:1,index:second_index});let second=id(crate::run(open(1,block::DeviceHandle(2),"file",1)).unwrap());assert_eq!(call(1,15,0,first,second,&[]),Err(-20));let mut bytes=Vec::new();bytes.extend_from_slice(&15u32.to_le_bytes());bytes.extend_from_slice(&0u32.to_le_bytes());bytes.extend_from_slice(&first.to_le_bytes());bytes.extend_from_slice(&second.to_le_bytes());assert!(Command::decode(&bytes).is_ok());bytes[4]=1;assert!(Command::decode(&bytes).is_err());bytes[4]=0;bytes.push(0);assert!(Command::decode(&bytes).is_err());
     }
     #[test]fn requests_validate_flags_and_bounds(){let mut request=vec![0;24];request[0..4].copy_from_slice(&2u32.to_le_bytes());request[8..16].copy_from_slice(&1u64.to_le_bytes());request[16..24].copy_from_slice(&u64::MAX.to_le_bytes());assert!(Command::decode(&request).is_err());request[16..24].copy_from_slice(&1u64.to_le_bytes());assert!(Command::decode(&request).is_ok());request.push(0);assert!(Command::decode(&request).is_err());}
    }

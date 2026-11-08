@@ -202,10 +202,24 @@ fn principal_at(vm_id: u8, epoch: u64) -> Option<Principal> {
     })
 }
 
-pub(crate) fn authorize_record_at(vm_id: u8, epoch: u64, key: RecordKey) -> Result<(), AccessDenied> {
-    let subject = principal_at(vm_id, epoch).ok_or(AccessDenied::MissingIdentity)?;
+/// Borrow an exact live launch for a synchronous, allocation-free check.
+/// Callers may inspect policy while holding this binding, but must not reenter
+/// the binding table or retain the borrow across an await. Policy updates drop
+/// ACCESS_KEY_DB before visiting bindings, preserving binding -> policy order.
+fn with_principal_at<T>(vm_id: u8, epoch: u64, check: impl FnOnce(&Principal) -> T) -> Option<T> {
+    let binding = VM_BINDINGS.get(vm_id as usize)?.lock();
+    let binding = binding.as_ref()?;
+    (binding.epoch == epoch).then(|| check(&binding.principal))
+}
+
+fn authorize_principal_record(subject: &Principal, key: RecordKey) -> Result<(), AccessDenied> {
     if key == RecordKey::Ffa { return Ok(()); }
     ACCESS_KEY_DB.lock().check_file(subject.account, &subject.container, key)
+}
+
+pub(crate) fn authorize_record_at(vm_id: u8, epoch: u64, key: RecordKey) -> Result<(), AccessDenied> {
+    with_principal_at(vm_id, epoch, |subject| authorize_principal_record(subject, key))
+        .ok_or(AccessDenied::MissingIdentity)?
 }
 
 pub(crate) fn workspace_for_vm_at(vm_id: u8, epoch: u64) -> Option<String> {
@@ -318,9 +332,13 @@ pub(crate) fn bind_codex_sqlite(vm: u8) -> Result<(), AccessDenied> {
 
 fn sqlite_actor(actor: crate::r::fs::trueosfs::authorized::Actor, reservation: &SqliteReservation, service: bool) -> Result<(), ()> {
     let crate::r::fs::trueosfs::authorized::Actor::Vm(vm, epoch) = actor else { return Err(()); };
-    let subject = principal_at(vm, epoch).ok_or(())?;
-    if subject.account != Some(reservation.owner) { return Err(()); }
-    authorize_record_at(vm, epoch, reservation.key).map_err(|_| ())?;
+    // Network polling rechecks each live SQLite connection even while idle.
+    // Borrow once rather than cloning both container strings twice per actor;
+    // policy and launch-epoch revocation remain visible on every check.
+    with_principal_at(vm, epoch, |subject| {
+        if subject.account != Some(reservation.owner) { return Err(()); }
+        authorize_principal_record(subject, reservation.key).map_err(|_| ())
+    }).ok_or(())??;
     if service && !SQLITE_DELEGATES.lock().iter().any(|d| d.vm == vm && d.epoch == epoch && d.owner == reservation.owner && d.key == reservation.key) {
         return Err(());
     }
