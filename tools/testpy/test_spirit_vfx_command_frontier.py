@@ -45,6 +45,7 @@ def harness_source() -> str:
     declarations.append(production.item(constants, "direct_rcs_encode_mocs_index"))
     declarations.extend(production.constant(spirit, name) for name in (
         "SPIRIT_VFX_STATE_COMPUTE_MODE_CMD", "SPIRIT_VFX_FORCE_GPU_NON_COHERENT",
+        "SPIRIT_VFX_TGL_VFE_URB_DW5",
     ))
     # Follow references so changing any production constant changes the batch
     # under test. Artifact inputs below are separate from command encoding.
@@ -66,7 +67,7 @@ fn dma_flush(_: *mut u8, _: usize) {}
 mod intel {
     #[derive(Clone,Copy)] pub struct Dev {pub bus:u8,pub slot:u8,pub function:u8}
     pub fn claimed_device()->Option<Dev> {Some(Dev{bus:0,slot:2,function:0})}
-    pub mod render {pub(crate) use crate::fresh_context::tgl_spirit_force_noncoherent;}
+    pub mod render {pub(crate) use crate::fresh_context::tgl_spirit_compute_contract;}
 }
 mod pci {
     std::thread_local! {
@@ -223,7 +224,7 @@ fn sprite_only_keeps_one_walker_and_uses_sprite_instruction_base() {
 }
 
 #[test]
-fn tgl_mode_is_the_only_inserted_packet_and_precedes_sba_in_stalled_3d_interval() {
+fn tgl_contract_changes_only_compute_mode_and_vfe_urb() {
     for background in [false,true] {
         super::physical(0x8086,0x4680,12);let legacy=encoded(background);
         let legacy_offsets=command_offsets(&legacy);
@@ -242,6 +243,8 @@ fn tgl_mode_is_the_only_inserted_packet_and_precedes_sba_in_stalled_3d_interval(
         let mut expected=legacy.clone();
         expected.copy_within(sba..end,sba+2);
         expected[sba..sba+2].copy_from_slice(&[0x61050000,0x00180010]);
+        let vfe=*offsets.iter().find(|&&i|tgl[i]==MEDIA_VFE_STATE_CMD).unwrap();
+        expected[vfe+5]=0x04000000;
         assert_eq!(tgl,expected,"all other commands, descriptors and payload bytes stay identical");
         let first_walker=*offsets.iter().find(|&&i|tgl[i]==GPGPU_WALKER_CMD).unwrap();
         assert_eq!(first_walker*4,0x128,"TGL's extra state adds exactly8bytes before the walker");
@@ -253,6 +256,45 @@ fn tgl_mode_is_the_only_inserted_packet_and_precedes_sba_in_stalled_3d_interval(
             assert_eq!((after>>3)&3,2);
             assert_eq!(after&!mask,old&!mask);
         }
+    }
+}
+
+#[test]
+fn tgl_vfe_allocation_covers_each_real_walker_payload_within_32kib() {
+    super::physical(0x8086,0x9a49,1);
+    for background in [false,true] {
+        let batch=encoded(background);let offsets=command_offsets(&batch);
+        let vfe=*offsets.iter().find(|&&i|batch[i]==MEDIA_VFE_STATE_CMD).unwrap();
+        let dw3=batch[vfe+3];let dw5=batch[vfe+5];
+        assert_eq!((dw3>>16)+1,168,"front-end thread limit stays unchanged");
+        let entries=(dw3>>8)&0xff;
+        let entry_bytes=((dw5>>16)*32+63)&!63;
+        let curbe_bytes=((dw5&0xffff)*32+63)&!63;
+        assert_eq!(entries,1);
+        assert_eq!(curbe_bytes,0,"indirect payloads do not allocate CURBE");
+        assert_eq!(dw5,0x04000000,"match Intel NEO's Gen12LP VFE allocation");
+        assert!(entries*entry_bytes+curbe_bytes<=32*1024);
+        let mut payload_sizes=Vec::new();
+        for walker in offsets.iter().copied().filter(|&i|batch[i]==GPGPU_WALKER_CMD) {
+            assert_eq!(batch[walker-4],MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+            let idd=batch[walker-1]as usize/4;
+            let group_threads=batch[idd+6]&0x3ff;
+            let dimensions=batch[walker+4];
+            let thread_grid=((dimensions&0x3f)+1)*(((dimensions>>8)&0x3f)+1)*
+                (((dimensions>>16)&0x3f)+1);
+            assert_eq!(group_threads,thread_grid);
+            assert_eq!(group_threads,1,"SIMD16 is sixteen workitems in one hardware thread");
+            assert_eq!(dimensions>>30,1,"walker and baked kernels stay SIMD16");
+            assert_eq!(batch[idd+2],IDD_THREAD_PREEMPTION_DISABLE);
+            assert_eq!(batch[idd+6]>>16,0,"no SLM or barrier is introduced");
+            let per_thread_grfs=batch[idd+5]>>16;
+            let cross_thread_grfs=batch[idd+7]&0xff;
+            let payload=(per_thread_grfs*group_threads+cross_thread_grfs)*32;
+            assert_eq!(payload,batch[walker+2],"IDD reads exactly the walker indirect payload");
+            assert!(entry_bytes>=payload,"VFE URB entry must cover indirect data");
+            payload_sizes.push(payload);
+        }
+        assert_eq!(payload_sizes,if background {vec![160,192]}else{vec![192]});
     }
 }
 

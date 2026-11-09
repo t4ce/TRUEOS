@@ -253,8 +253,8 @@ fn append_pipe(out: &mut String, dev: crate::intel::Dev, pipe: PipeInfo, physica
             ctl,
             ctl & PIPE_SCALER_ENABLE != 0,
             (ctl & PIPE_SCALER_BINDING_MASK) >> 25,
-            crate::intel::mmio_read(dev, base + PIPE_SCALER_WIN_POS_FROM_CTRL),
-            crate::intel::mmio_read(dev, base + PIPE_SCALER_WIN_SIZE_FROM_CTRL),
+            crate::intel::mmio_read(dev, base - PIPE_SCALER_WIN_POS_FROM_CTRL),
+            crate::intel::mmio_read(dev, base - PIPE_SCALER_WIN_SIZE_FROM_CTRL),
             crate::intel::mmio_read(dev, base + PIPE_SCALER_VPHASE_FROM_CTRL),
             crate::intel::mmio_read(dev, base + PIPE_SCALER_HPHASE_FROM_CTRL)
         );

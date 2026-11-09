@@ -32,7 +32,7 @@ pub(crate) fn inhibit_uninitialized_tgl_engine_restore() -> bool {
     physical_tgl_rev01()
 }
 
-/// Spirit's TGL A64 reads use BTI 255 and need an explicit non-coherent mode.
-pub(crate) fn tgl_spirit_force_noncoherent() -> bool {
+/// Spirit's TGL prologue needs explicit coherency state and a bounded VFE URB.
+pub(crate) fn tgl_spirit_compute_contract() -> bool {
     physical_tgl_rev01()
 }

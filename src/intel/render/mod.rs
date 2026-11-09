@@ -183,7 +183,7 @@ include!("constants.rs");
 mod hiz;
 mod fresh_context;
 pub(crate) use fresh_context::inhibit_uninitialized_tgl_engine_restore;
-pub(crate) use fresh_context::tgl_spirit_force_noncoherent;
+pub(crate) use fresh_context::tgl_spirit_compute_contract;
 include!("picasso_carrier.rs");
 include!("state.rs");
 include!("warmup.rs");

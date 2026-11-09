@@ -44,6 +44,15 @@ mod intel {
     pub static DBUF_S2: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0x80000000);
     pub static DBUF_READS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
     pub fn mmio_read(_: Dev, offset: usize) -> u32 {
+        // Independent literal Pipe C PS_WIN_POS/SZ addresses. Reading the
+        // HSCALE/reserved addresses above PS_CTRL must not pass these checks.
+        match offset {
+            0x69170 => return 0xC0FE0001,
+            0x69174 => return 0xC0FE0002,
+            0x69270 => return 0xC0FE0003,
+            0x69274 => return 0xC0FE0004,
+            _ => {},
+        }
         if let Some(control) = match offset { 0x45008 => Some(&DBUF_S1), 0x44FE8 => Some(&DBUF_S2), _ => None } {
             DBUF_READS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             return control.load(core::sync::atomic::Ordering::Acquire);
@@ -101,6 +110,10 @@ fn failed_bootstrap_retains_attempted_pipe_and_failure_time_registers() {
         "each DBUF control must be read once without polling");
     assert!(current.contains("display_dbuf slice=s1 register=0x45008 raw=0x40000000 power_request=false power_state=true capture=read-only-no-poll"));
     assert!(current.contains("display_dbuf slice=s2 register=0x44FE8 raw=0xC0000000 power_request=true power_state=true capture=read-only-no-poll"));
+    let scalers: Vec<_> = current.lines().filter(|line| line.starts_with("display_scaler pipe=pipe-c ")).collect();
+    assert_eq!(scalers.len(), 2);
+    assert!(scalers[0].contains("index=0 ") && scalers[0].contains("pos=0xC0FE0001 size=0xC0FE0002"));
+    assert!(scalers[1].contains("index=1 ") && scalers[1].contains("pos=0xC0FE0003 size=0xC0FE0004"));
     assert!(current.contains("stage=static-contract-and-dbuf failure=dbuf-readback plane_slot=4 pipe_slot=2"));
     assert!(current.contains("pipe=pipe-c"));
     assert!(current.contains("last_live_mask=0xF last_polls=5000000"));

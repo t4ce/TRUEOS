@@ -1,5 +1,6 @@
 const SPIRIT_VFX_STATE_COMPUTE_MODE_CMD: u32 = 0x6105_0000;
 const SPIRIT_VFX_FORCE_GPU_NON_COHERENT: u32 = (0b11 << 19) | (0b10 << 3);
+const SPIRIT_VFX_TGL_VFE_URB_DW5: u32 = 1024 << 16;
 
 fn direct_rcs_write_spirit_vfx_binding(
     state: DirectRcsState,
@@ -199,6 +200,7 @@ fn direct_rcs_encode_spirit_vfx_batch(
     let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
     let mut cursor = 0usize;
     let mut ok = true;
+    let tgl_compute_contract = crate::intel::render::tgl_spirit_compute_contract();
     ok &= direct_rcs_push_pipe_control_full(
         batch,
         &mut cursor,
@@ -220,7 +222,7 @@ fn direct_rcs_encode_spirit_vfx_batch(
             | PIPE_CONTROL_DEPTH_STALL
             | PIPE_CONTROL_CS_STALL,
     );
-    if crate::intel::render::tgl_spirit_force_noncoherent() {
+    if tgl_compute_contract {
         // Actual Spirit ISA reads control via A64 BTI 255 (IA coherent).
         // TGL Vol2a pp1267--1268 requires Force Non-Coherent=2 for coherent
         // dataport messages; Intel NEO's Gen12LP encoder programs this mode:
@@ -249,7 +251,17 @@ fn direct_rcs_encode_spirit_vfx_batch(
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW3_UOS);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
-    ok &= direct_rcs_push(batch, &mut cursor, GPGPU_VFE_DW5_UOS);
+    // TGL Vol2a p698 restricts VFE URB allocation to 32KiB; the legacy
+    // 1922*32-byte entry exceeds it. Match Intel NEO's Gen12LP allocation:
+    // https://github.com/intel/compute-runtime/blob/e94049d49fcf0418a934077aeac3aa9978036276/shared/source/gen12lp/preamble_gen12lp.cpp
+    // Keep one entry and CURBE=0. The POSH overlap described by the PRM has
+    // not been observed here; this corrects the limit without proving cause.
+    let vfe_urb_dw5 = if tgl_compute_contract {
+        SPIRIT_VFX_TGL_VFE_URB_DW5
+    } else {
+        GPGPU_VFE_DW5_UOS
+    };
+    ok &= direct_rcs_push(batch, &mut cursor, vfe_urb_dw5);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push(batch, &mut cursor, 0);

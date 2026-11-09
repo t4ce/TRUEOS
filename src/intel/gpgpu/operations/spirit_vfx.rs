@@ -73,6 +73,8 @@ unsafe impl Sync for SpiritVfxRuntime {}
 #[derive(Copy, Clone)]
 struct SpiritVfxSubmitted {
     state: DirectRcsState,
+    first_kernel: UploadedKernelArtifact,
+    control: SpiritVfxBuffer,
     source: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
     submit_ambiguous: bool,
@@ -88,6 +90,118 @@ struct SpiritVfxPending {
     handle: SpiritVfxSubmission,
     submitted: SpiritVfxSubmitted,
     timeout_logged: bool,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct SpiritVfxPpgttEvidence {
+    entries: [u64; 4],
+    read_levels: u8,
+    topology_match: bool,
+    leaf_match: bool,
+}
+
+/// Inspect the retained dense PPGTT through its owned CPU allocation only.
+/// A corrupt parent is evidence, never permission to dereference its address.
+fn spirit_vfx_ppgtt_evidence(
+    state: DirectRcsState,
+    gpu: u64,
+    expected_phys: u64,
+    expected_flags: u64,
+) -> Option<SpiritVfxPpgttEvidence> {
+    if state.ppgtt_virt.is_null()
+        || !(state.ppgtt_virt as usize).is_multiple_of(core::mem::align_of::<u64>())
+        || (state.ppgtt_virt as usize).checked_add(DIRECT_RCS_PPGTT_BYTES).is_none()
+        || state.ppgtt_phys == 0
+        || !state.ppgtt_phys.is_multiple_of(4096)
+        || state.ppgtt_phys.checked_add(DIRECT_RCS_PPGTT_BYTES as u64).is_none()
+        || gpu >= DIRECT_RCS_PPGTT_LIMIT_BYTES
+        || gpu & 0xFFF != expected_phys & 0xFFF
+    {
+        return None;
+    }
+    let pd_index = usize::try_from(gpu >> 21).ok()?;
+    let leaf_offset = exact_ppgtt_pte_offset(gpu & !0xFFF, 0)?;
+    let offsets = [0, 4096, 8192usize.checked_add(pd_index.checked_mul(8)?)?, leaf_offset];
+    if offsets.iter().any(|&offset| {
+        offset.checked_add(core::mem::size_of::<u64>())
+            .is_none_or(|end| end > DIRECT_RCS_PPGTT_BYTES)
+    }) {
+        return None;
+    }
+    let child_offsets = [4096, 8192, 12288usize.checked_add(pd_index.checked_mul(4096)?)?];
+    let mut evidence = SpiritVfxPpgttEvidence {
+        entries: [0; 4], read_levels: 0, topology_match: false, leaf_match: false,
+    };
+    for (level, offset) in offsets.into_iter().enumerate() {
+        let raw = unsafe {
+            core::ptr::read_volatile(state.ppgtt_virt.add(offset).cast::<u64>())
+        };
+        evidence.entries[level] = raw;
+        evidence.read_levels += 1;
+        if level < 3 {
+            let child_phys = state.ppgtt_phys.checked_add(child_offsets[level] as u64)?;
+            // Ignore hardware Accessed bits, but require present, no large
+            // page, and the exact next table inside this allocation.
+            if raw & !0xFFF != child_phys || raw & 0x81 != 1 {
+                return Some(evidence);
+            }
+        } else {
+            evidence.topology_match = true;
+            // Gen12 PAT2 occupies leaf bit7 (PDE bit7 means large page).
+            // https://github.com/torvalds/linux/blob/v6.14/drivers/gpu/drm/i915/gt/intel_gtt.h#L85
+            let policy = super::GEN8_PAGE_PRESENT | GEN8_PAGE_RW | GEN8_PAGE_PWT | GEN8_PAGE_PCD
+                | (1 << 7);
+            evidence.leaf_match = raw & !0xFFF == expected_phys & !0xFFF
+                && raw & policy == expected_flags & policy;
+        }
+    }
+    Some(evidence)
+}
+
+fn spirit_vfx_log_mapping_evidence(dev: super::Dev, submitted: SpiritVfxSubmitted) {
+    // TGL PRM Vol2c, PDP0 p488: RCS 0x2270..0x2277 contains the PML4
+    // pointer in legacy 64-bit mode. Vol9's preemption table identifies
+    // 0x20E4 bits2:1; Vol2c L3ALLOCREG p1264 identifies 0xB134.
+    const PDP0_LO: usize = 0x2270;
+    const PDP0_HI: usize = 0x2274;
+    let state = submitted.state;
+    let ring_before = super::mmio_read(dev, RCS_RING_START);
+    let pdp_hi_before = super::mmio_read(dev, PDP0_HI);
+    let pdp_lo = super::mmio_read(dev, PDP0_LO);
+    let pdp_hi_after = super::mmio_read(dev, PDP0_HI);
+    let preemption_20e4 = super::mmio_read(dev, 0x20E4);
+    let l3alloc_b134 = super::mmio_read(dev, 0xB134);
+    let ring_after = super::mmio_read(dev, RCS_RING_START);
+    let pdp0 = (u64::from(pdp_hi_after) << 32) | u64::from(pdp_lo);
+    let pdp_stable = pdp_hi_before == pdp_hi_after;
+    let spirit_ring = u64::from(ring_before) == state.gpu_va.ring && ring_after == ring_before;
+    let root_matches = (spirit_ring && pdp_stable)
+        .then_some(pdp0 == state.ppgtt_phys);
+    crate::log_error!(target: "gpgpu";
+        "intel/gpgpu: spirit-vfx timeout-mapping root=0x{:X} pdp0=0x{:016X} pdp_hi_before=0x{:08X} pdp_stable={} ring_before=0x{:08X} ring_after=0x{:08X} expected_ring=0x{:X} spirit_ring={} root_matches={:?} preemption_20e4=0x{:08X} l3alloc_b134=0x{:08X} capture=observational-before-context-disable\n",
+        state.ppgtt_phys, pdp0, pdp_hi_before, pdp_stable, ring_before, ring_after,
+        state.gpu_va.ring, spirit_ring, root_matches,
+        preemption_20e4, l3alloc_b134,
+    );
+    let background = submitted.first_kernel.gpu == SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU;
+    let idd_offset = if background { SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES }
+        else { SPIRIT_VFX_SPRITE_IDD_OFFSET_BYTES };
+    let payload_offset = if background { SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES }
+        else { SPIRIT_VFX_SPRITE_PAYLOAD_OFFSET_BYTES };
+    let wb = super::GEN8_PAGE_PRESENT | GEN8_PAGE_RW;
+    for (name, gpu, phys, flags) in [
+        ("first-kernel", submitted.first_kernel.gpu, submitted.first_kernel.phys, wb),
+        ("first-idd", state.gpu_va.batch + idd_offset as u64, state.batch_phys + idd_offset as u64, wb),
+        ("first-payload", state.gpu_va.batch + payload_offset as u64, state.batch_phys + payload_offset as u64, wb),
+        ("control", submitted.control.gpu, submitted.control.phys, wb),
+        ("destination", submitted.dst.gpu, submitted.dst.phys, wb | GEN8_PAGE_PWT | GEN8_PAGE_PCD),
+    ] {
+        let evidence = spirit_vfx_ppgtt_evidence(state, gpu, phys, flags);
+        crate::log_error!(target: "gpgpu";
+            "intel/gpgpu: spirit-vfx timeout-pte resource={} gpu=0x{:X} expected_phys=0x{:X} expected_flags=0x{:X} evidence={:X?} scope=owned-ppgtt-only raw_entries=pml4,pdp,pde,pte unread-levels=zero\n",
+            name, gpu, phys, flags, evidence,
+        );
+    }
 }
 
 static SPIRIT_VFX_RUNTIME: Mutex<Option<SpiritVfxRuntime>> = Mutex::new(None);
@@ -371,6 +485,7 @@ pub(crate) fn poll_spirit_vfx_submission(handle: SpiritVfxSubmission) -> SpiritV
                     (preemption >> 1) & 3,
                     crate::intel::mmio_read(dev, FF_SLICE_CS_CHICKEN1),
                 );
+                spirit_vfx_log_mapping_evidence(dev, pending.submitted);
             }
             quarantine_execution_rcs_context(reason);
             crate::log_error!(target: "gpgpu";
@@ -504,6 +619,8 @@ fn submit_spirit_vfx_batch(
     }
     Some(SpiritVfxSubmitted {
         state,
+        first_kernel: background_upload.unwrap_or(sprite_upload),
+        control: runtime.control,
         source,
         dst,
         submit_ambiguous,
