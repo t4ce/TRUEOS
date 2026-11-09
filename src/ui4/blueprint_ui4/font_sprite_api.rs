@@ -8,22 +8,36 @@ use alloc::vec;
 use v::bp_abi::TrueosUi4FontSpriteStatusV1;
 
 pub(super) struct Sprite {
-    key: [u32; 4],
+    key: [u32; 5],
     id: u32,
     width: u32,
     height: u32,
 }
 
 pub(crate) fn request(owner: WindowOwner, window: u32, bytes: &[u8]) -> Result<u64, i32> {
-    if bytes.len() != 16 {
+    if bytes.len() != 16 && bytes.len() != 20 {
         return Err(ERROR_INVALID);
     }
-    let key: [u32; 4] =
+    let original: [u32; 4] =
         core::array::from_fn(|i| u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap()));
-    let [font, scalar, pixels, color] = key;
+    let [font, scalar, pixels, color] = original;
+    let extra = if bytes.len() == 20 {
+        f32::from_le_bytes(bytes[16..20].try_into().unwrap())
+    } else {
+        0.0
+    };
+    if !extra.is_finite() || !(0.0..=8.0).contains(&extra) {
+        return Err(ERROR_INVALID);
+    }
+    let extra = libm::roundf(extra * 128.0) / 128.0;
+    let key = [font, scalar, pixels, color, extra.to_bits()];
     let height = f32::from_bits(pixels);
     let character = char::from_u32(scalar).ok_or(ERROR_INVALID)?;
-    if font != 1 || !height.is_finite() || !(11.0..=256.0).contains(&height) {
+    if font != 1
+        || !height.is_finite()
+        || !(11.0..=256.0).contains(&height)
+        || (extra != 0.0 && height > 128.0)
+    {
         return Err(ERROR_INVALID);
     }
     let WindowOwner::Vm(vm) = owner else {
@@ -44,12 +58,12 @@ pub(crate) fn request(owner: WindowOwner, window: u32, bytes: &[u8]) -> Result<u
     let height = height as u32;
     let width = (height * 6 + 5) / 11;
     let mut rgba = vec![0; (width * height * 4) as usize];
-    crate::r::services::shell3_font_service::with_cell_coverage(
+    crate::r::services::shell3_font_service::with_styled_cell_coverage(
         character,
         width,
         height,
         color.to_le_bytes(),
-        false,
+        extra,
         |x, y, alpha, ink| {
             let at = ((y * width + x) * 4) as usize;
             rgba[at..at + 3].copy_from_slice(&ink[..3]);
@@ -57,7 +71,7 @@ pub(crate) fn request(owner: WindowOwner, window: u32, bytes: &[u8]) -> Result<u
         },
     )
     .map_err(|reason| {
-        if reason == "shell3-font-not-ready" {
+        if matches!(reason, "shell3-font-not-ready" | "microfont-style-pending") {
             ERROR_BUSY
         } else {
             ERROR_UI4
@@ -114,16 +128,55 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_font_sprite_request_v1(
     color: u32,
     out: *mut u64,
 ) -> i32 {
+    request_sprite(window, font, scalar, pixels, color, None, out)
+}
+
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_font_sprite_request_v2(
+    window: u32,
+    font: u32,
+    scalar: u32,
+    pixels: f32,
+    color: u32,
+    extra_stroke_px: f32,
+    out: *mut u64,
+) -> i32 {
+    request_sprite(
+        window,
+        font,
+        scalar,
+        pixels,
+        color,
+        Some(extra_stroke_px),
+        out,
+    )
+}
+
+fn request_sprite(
+    window: u32,
+    font: u32,
+    scalar: u32,
+    pixels: f32,
+    color: u32,
+    extra_stroke: Option<f32>,
+    out: *mut u64,
+) -> i32 {
     if out.is_null() {
         return ERROR_INVALID;
     }
-    let mut payload = [0; 16];
-    for (target, word) in payload
-        .chunks_exact_mut(4)
-        .zip([font, scalar, pixels.to_bits(), color])
+    let mut payload = [0; 20];
+    for (target, word) in
+        payload[..16]
+            .chunks_exact_mut(4)
+            .zip([font, scalar, pixels.to_bits(), color])
     {
         target.copy_from_slice(&word.to_le_bytes());
     }
+    let payload = if let Some(extra) = extra_stroke {
+        payload[16..20].copy_from_slice(&extra.to_le_bytes());
+        &payload[..20]
+    } else {
+        &payload[..16]
+    };
     let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let mut response = [0; 8];
         let (transport, rc) = trueos_vm::vmcall::call_with_payload(

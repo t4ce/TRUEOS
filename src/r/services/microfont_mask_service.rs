@@ -8,6 +8,7 @@ use crate::intel::{
     render::{self, ResidentScenePrimitiveTopology as Topology},
 };
 use alloc::vec::Vec;
+pub(crate) mod style;
 
 // Twenty columns keep the expanded lowercase line repertoire within the
 // seven-bit X / eight-bit Y join coordinates.

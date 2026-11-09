@@ -281,6 +281,26 @@ pub(crate) fn with_cell_coverage(
     with_cell_coverage_with_face(FontFace::Raster, character, cell_width, cell_height, foreground, underline, pixel)
 }
 
+/// An explicit native stroke variant; dimensions and character advance stay
+/// identical to the requested texture. Cold variants schedule a blocking job.
+pub(crate) fn with_styled_cell_coverage(
+    character: char, cell_width: u32, cell_height: u32,
+    foreground: [u8; 4], extra_stroke_px: f32,
+    mut pixel: impl FnMut(u32, u32, u8, [u8; 4]),
+) -> Result<(), &'static str> {
+    if extra_stroke_px == 0.0 {
+        return with_cell_coverage(character, cell_width, cell_height, foreground, false, pixel);
+    }
+    if cell_width != (cell_height * 6 + 5) / 11 { return Err("microfont-style-shape"); }
+    let mask = super::microfont_mask_service::style::glyph(character, cell_height, extra_stroke_px)?;
+    for y in 0..cell_height {
+        for x in 0..cell_width {
+            pixel(x, y, mask[(y * cell_width + x) as usize], foreground);
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn with_cell_coverage_with_face(
     face: FontFace,
     character: char,

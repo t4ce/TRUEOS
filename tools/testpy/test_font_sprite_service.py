@@ -14,6 +14,8 @@ ADAPTERS = r'''
 #![allow(dead_code, private_interfaces, unused_imports)]
 extern crate alloc;
 extern crate self as v;
+extern crate self as libm;
+pub fn roundf(x:f32)->f32{x.round()}
 pub mod bp_abi {
     #[derive(Debug)] pub struct TrueosUi4FontSpriteStatusV1 {
         pub state:u32, pub sprite_id:u32, pub width:u32, pub height:u32,
@@ -23,11 +25,13 @@ pub mod bp_abi {
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 static READY:AtomicBool=AtomicBool::new(false);
 static SAMPLES:AtomicUsize=AtomicUsize::new(0);
+static STROKE:std::sync::atomic::AtomicU32=std::sync::atomic::AtomicU32::new(0);
 mod r { pub mod services { pub mod shell3_font_service {
-    pub fn with_cell_coverage(_:char,w:u32,h:u32,ink:[u8;4],_:bool,
+    pub fn with_styled_cell_coverage(_:char,w:u32,h:u32,ink:[u8;4],extra:f32,
         mut pixel:impl FnMut(u32,u32,u8,[u8;4])) -> Result<(), &'static str> {
         if !crate::READY.load(crate::Ordering::Relaxed) {return Err("shell3-font-not-ready");}
         crate::SAMPLES.fetch_add(1,crate::Ordering::Relaxed);
+        crate::STROKE.store(extra.to_bits(),crate::Ordering::Relaxed);
         for y in 0..h {for x in 0..w {pixel(x,y,if x==1 {128} else {0},ink);}}
         Ok(())
     }
@@ -92,14 +96,25 @@ fn payload(font:u32,ch:u32,size:f32,color:u32)->Vec<u8>{
         assert_eq!(&p[0..4],&[0,0,0,0]);
         assert_eq!(&p[4..8],&[0,0,0,128],"exact mask alpha, black ink");
     }
+    let mut styled=black.clone(); styled.extend_from_slice(&2.5f32.to_le_bytes());
+    let bold=request(owner,10,&styled).unwrap();
+    assert_ne!(bold,id,"stroke is part of the resource cache key");
+    assert_eq!(request(owner,10,&styled).unwrap(),bold);
+    let bold_info=status(owner,10,bold).unwrap();
+    assert_eq!((bold_info.width,bold_info.height),(35,64),"texture budget is unchanged");
+    assert_eq!(STROKE.load(Ordering::Relaxed),2.5f32.to_bits());
+    for bad in [f32::NAN,-1.,8.1] {
+        let mut invalid=black.clone(); invalid.extend_from_slice(&bad.to_le_bytes());
+        assert_eq!(request(owner,10,&invalid),Err(ERROR_INVALID));
+    }
     let translucent=payload(1,'A' as u32,64.,0x80000000);
     let second=request(owner,10,&translucent).unwrap();
     assert_ne!(id,second);
-    assert_eq!(&SURFACES.lock().sprites[1].1[4..8],&[0,0,0,64]);
+    assert_eq!(&SURFACES.lock().sprites[2].1[4..8],&[0,0,0,64]);
     SURFACES.lock().sprites.clear();
     assert!(status(owner,10,id).is_err(),"stale resource cannot be sampled");
     request(owner,10,&black).unwrap();
-    assert_eq!(SAMPLES.load(Ordering::Relaxed),3,"retired texture is rematerialized");
+    assert_eq!(SAMPLES.load(Ordering::Relaxed),4,"retired texture is rematerialized");
 }
 '''
 

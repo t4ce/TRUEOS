@@ -957,6 +957,16 @@ unsafe extern "C" {
         color_rgba: u32,
         out_ticket: *mut u64,
     ) -> i32;
+    /// Extra stroke width in source texture pixels; output dimensions are unchanged.
+    pub fn trueos_cabi_ui4_scene_font_sprite_request_v2(
+        window_id: u32,
+        font_id: u32,
+        scalar: u32,
+        font_pixels: f32,
+        color_rgba: u32,
+        extra_stroke_px: f32,
+        out_ticket: *mut u64,
+    ) -> i32;
     pub fn trueos_cabi_ui4_scene_font_sprite_status_v1(
         window_id: u32,
         ticket: u64,
