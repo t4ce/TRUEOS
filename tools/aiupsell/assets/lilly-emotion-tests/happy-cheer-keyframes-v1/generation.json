@@ -1,0 +1,54 @@
+{
+  "emotion": "Happy / cheer",
+  "kind": "three keyframes generated together in one call using complete seven-frame motion reference",
+  "tool": "image_gen.imagegen",
+  "date": "2026-11-09",
+  "original_sequence": {
+    "archive": "tools/Lilly.tar.lz4",
+    "members": "Lilly/Happy/cheer_frames/frame_01.png through frame_07.png",
+    "strip": "original-strip.png",
+    "strip_dimensions": [
+      896,
+      128
+    ]
+  },
+  "style_reference": "../happy-cheer-v1/lilly-happy-cheer.png",
+  "output": "lilly-cheer-keyframes.png",
+  "dimensions": [
+    2172,
+    724
+  ],
+  "layout": {
+    "columns": 3,
+    "rows": 1,
+    "cell_width": 724,
+    "cell_height": 724,
+    "poses": [
+      "folded arms, eyes open",
+      "fists raised by shoulders, joyful closed eyes",
+      "open hands raised overhead, joyful closed eyes"
+    ]
+  },
+  "preview": {
+    "file": "preview.gif",
+    "dimensions": [
+      512,
+      512
+    ],
+    "frame_order": [
+      1,
+      2,
+      3,
+      2
+    ],
+    "frame_duration_ms": 500,
+    "note": "Equal-cell crops with no per-frame repositioning or repainting. GIF preview uses a 256-color palette and binary transparency; PNG sheet preserves original RGBA."
+  },
+  "observations": [
+    "Character scale and overall costume remain broadly consistent in the three cells.",
+    "Overhead hands touch the top edge; extra headroom would improve a production asset.",
+    "Small costume and hair-detail changes remain between frames.",
+    "Only three sampled keyframes; no in-between generation or smooth animation is implied."
+  ],
+  "prompt": "Use case: stylized-concept\nAsset type: three-keyframe animation sprite sheet for the Lilly desktop mascot, true transparent PNG.\nPrimary request: Generate ONE coherent sheet containing EXACTLY THREE sequential keyframes of the SAME detailed anime character performing a happy cheer. Use the full small original sequence to understand the motion and the large detailed reference to lock the character design. Conceptual reinterpretation, not pixel-by-pixel upscaling.\nInput images: Image 1 is the COMPLETE original seven-frame cheer sequence in chronological order from left to right. It is a motion reference only. Image 2 is our approved detailed Lilly character illustration and is the identity, costume, proportions, linework, and shading reference. Translate the original motion into this detailed character design; do not revert to the original tiny chibi proportions.\nSheet layout: One horizontal row, EXACTLY THREE equal square cells, no gaps, no borders, no labels. Aim for a 3072 x 1024 image with three 1024 x 1024 cells. Each cell contains ONE complete upper-body-to-mid-thigh Lilly. Center her torso at the same local x-coordinate in each cell. Identical camera, body scale, head size, eye design, outfit, lighting, and lower crop/baseline in all three cells. Reserve enough identical headroom in EVERY cell for the overhead hands of the final pose: the first two characters must not be enlarged to fill their unused headroom. Keep hair, hands, arms entirely within their respective cells with transparent margin. No overlapping neighboring cells.\nMotion, left to right:\nFRAME 1: anticipation, corresponding conceptually to original frame 1: facing forward, arms folded loosely across her chest, a small pleased smile, eyes open. Calm happy readiness.\nFRAME 2: beginning the cheer, corresponding conceptually to original frame 3: both elbows bent, small clenched fists lifted beside her shoulders, broad happy open-mouth smile and joyful closed eyes. Torso rises only slightly.\nFRAME 3: peak cheer, corresponding conceptually to original frame 5: both arms raised high overhead in a broad V, both hands OPEN with natural visible fingers, eyes happily closed, delighted open-mouth smile. Hair lifts slightly with the motion while the character remains the same scale and camera position.\nCharacter invariants: Lilly from image 2, long deep indigo-purple hair with lavender highlights, purple eyes when open, the same small hair ornament, white collared shirt, red bow tie, dark navy cold-shoulder jacket with gold piping/buttons and gold crossed emblem, matching fitted waistcoat/corset details and dark pleated skirt. Preserve these details frame to frame.\nStyle: polished crisp premium 2D anime art, fine confident linework, nuanced cel shading, expressive natural hands. Same exact rendering style in every cell. The moving poses are three moments of one action, not three redesigned characters.\nBackground: genuinely transparent alpha throughout empty areas, no checkerboard painted into the image.\nAvoid: extra frames or rows, text, frame numbers, panel lines, scene background, props, badges outside the costume, confetti, cast shadow, duplicated limbs, missing hands, anatomical errors, unrelated expressions, changes in age or hairstyle or clothing or proportions across cells."
+}
