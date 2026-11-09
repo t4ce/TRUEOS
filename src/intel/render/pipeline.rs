@@ -453,7 +453,26 @@ const fn ordinary_vf_vertex_element_count(vertex_format: TriangleVertexFormat) -
 
         TriangleVertexFormat::PosNormal | TriangleVertexFormat::PosNormalUv => 3,
         TriangleVertexFormat::PosNormalUvTangent => 5,
+        TriangleVertexFormat::PosNormalUvTangentInstancePalette => 6,
     }
+}
+
+/// Buffer, offset, format, and live component count. The two scalar UV
+/// elements pack into the original UV2 shader input without a shader change.
+const fn instance_palette_vertex_elements() -> [(u32, u32, u32, u32); 5] {
+    [
+        (0, 0, SURFACE_FORMAT_R32G32B32_FLOAT, 3),
+        (0, 12, SURFACE_FORMAT_R32G32B32_FLOAT, 3),
+        (1, 0, SURFACE_FORMAT_R8_UNORM, 1),
+        (0, 28, SURFACE_FORMAT_R32G32_FLOAT, 1),
+        (0, 32, SURFACE_FORMAT_R32G32B32A32_FLOAT, 4),
+    ]
+}
+
+/// Preserve VB cache/address controls while selecting compacted u32 rows
+/// as per-instance buffer 1 rather than immutable geometry buffer 0.
+const fn instance_palette_vertex_buffer_dw1(geometry_dw1: u32) -> u32 {
+    (geometry_dw1 & !0xFFF) | 4 | (1 << 26)
 }
 
 fn cmd_3dstate_vertex_elements(count: usize) -> Result<u32, &'static str> {
@@ -2102,7 +2121,7 @@ fn validate_triangle_native_draw_contract(
     let instance_count =
         instances.byte_len / trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN as u32;
     let compacted_count = compacted.byte_len / core::mem::size_of::<u32>() as u32;
-    let expected_instancing = [
+    let mut expected_instancing = [
         TriangleVfInstancingState {
             element_index: 0,
             enabled: false,
@@ -2128,7 +2147,17 @@ fn validate_triangle_native_draw_contract(
             enabled: false,
             step_rate: 0,
         },
+        TriangleVfInstancingState {
+            element_index: 5,
+            enabled: false,
+            step_rate: 0,
+        },
     ];
+    let instance_palette = draw.vertex_format == TriangleVertexFormat::PosNormalUvTangentInstancePalette;
+    if instance_palette {
+        expected_instancing[2].enabled = true;
+        expected_instancing[2].step_rate = 1;
+    }
     let cube_seed = draw.vertex_format == TriangleVertexFormat::Float3
         && draw.vertex_stride == 12
         && draw.vertex_buffer_bytes == 12
@@ -2162,14 +2191,15 @@ fn validate_triangle_native_draw_contract(
         && native.vf_sgvs_dw1 == 0xE002_4002
         && native.vf_sgvs_2_dw1 == 0xB002_0002
         && native.vf_component_packing == [0x0000_0A77, 0, 0, 0];
-    let pbr = draw.vertex_format == TriangleVertexFormat::PosNormalUvTangent
+    let pbr = matches!(draw.vertex_format, TriangleVertexFormat::PosNormalUvTangent | TriangleVertexFormat::PosNormalUvTangentInstancePalette)
         && draw.vertex_stride == 48
         && draw.sampled_texture.is_some()
         && draw.pbr_material.is_some()
-        && native.vertex_element_count == 5
-        && native.vf_sgvs_dw1 == 0xE004_4004
-        && native.vf_sgvs_2_dw1 == 0xB004_0004
-        && native.vf_component_packing == [0x000A_F377, 0, 0, 0];
+        && native.vertex_element_count == if instance_palette { 6 } else { 5 }
+        && native.vf_sgvs_dw1 == if instance_palette { 0xE005_4005 } else { 0xE004_4004 }
+        && native.vf_sgvs_2_dw1 == if instance_palette { 0xB005_0005 } else { 0xB004_0004 }
+        && native.vf_component_packing == if instance_palette { [0x00AF_1177, 0, 0, 0] } else { [0x000A_F377, 0, 0, 0] }
+        && (!instance_palette || compacted_count <= 255);
     if !(cube_seed || pos_normal || pos_normal_uv || pos_normal_sampled || pbr)
         || (draw.pbr_material.is_some() && !pbr)
         || (draw.metallic_roughness_texture.is_some() && draw.sampled_texture.is_none())
@@ -2368,6 +2398,49 @@ mod retained_native_matrix_draw_contract_tests {
             validate_triangle_native_draw_contract(draw, native),
             Err("probe-native-vf-contract")
         );
+    }
+
+    #[test]
+    fn instance_palette_preserves_pbr_payload_and_requires_per_instance_fetch() {
+        let mut native = native_contract();
+        native.vf_sgvs_dw1 = 0xE005_4005;
+        native.vf_sgvs_2_dw1 = 0xB005_0005;
+        native.vertex_element_count = 6;
+        native.vf_component_packing = [0xAF1177, 0, 0, 0];
+        native.vs_storage_bindings[1].byte_len = 32 * 208;
+        native.vs_storage_bindings[2].byte_len = 32 * 4;
+        native.vf_instancing[2].enabled = true;
+        native.vf_instancing[2].step_rate = 1;
+        let mut draw = native_draw(native);
+        draw.vertex_format = TriangleVertexFormat::PosNormalUvTangentInstancePalette;
+        draw.vertex_stride = 48;
+        draw.vertex_buffer_bytes = draw.vertex_count * 48;
+        draw.sampled_texture = Some(TriangleSampledTextureBinding {
+            gpu_addr: 0x28000000, width: 256, height: 2, pitch: 1024, sampler_flags: 3,
+        });
+        draw.pbr_material = Some(super::TrianglePbrMaterial { textures: [None; 4], parameters: [0; 16] });
+        assert_eq!(validate_triangle_native_draw_contract(draw, native), Ok(()));
+        // Attribute compaction still sends exactly 14 floats to the original
+        // shader: position3, normal3, U1, V1, tangent4, synthetic IDs2.
+        assert_eq!(native.vf_component_packing[0].count_ones(), 14);
+        let elements = super::instance_palette_vertex_elements();
+        assert_eq!(elements[2], (1, 0, super::SURFACE_FORMAT_R8_UNORM, 1));
+        assert_eq!(elements[3], (0, 28, super::SURFACE_FORMAT_R32G32_FLOAT, 1));
+        assert_eq!(elements.iter().map(|e| e.3).sum::<u32>() + 2, 14);
+        assert_eq!(0xAF377u32.count_ones(), 14);
+        let vb = super::instance_palette_vertex_buffer_dw1(48 | (1<<14) | (7<<16));
+        assert_eq!(vb & 0xFFF, 4);
+        assert_eq!(vb >> 26, 1);
+        assert_eq!(vb & (1<<14), 1<<14);
+        native.vf_instancing[2].enabled = false;
+        assert!(validate_triangle_native_draw_contract(draw, native).is_err());
+        native.vf_instancing[2].enabled = true;
+        native.vf_sgvs_dw1 = 0xE004_4004;
+        assert!(validate_triangle_native_draw_contract(draw, native).is_err());
+        native.vf_sgvs_dw1 = 0xE005_4005;
+        native.vs_storage_bindings[1].byte_len = 256 * 208;
+        native.vs_storage_bindings[2].byte_len = 256 * 4;
+        assert!(validate_triangle_native_draw_contract(draw, native).is_err());
     }
 
     #[test]
@@ -3773,7 +3846,8 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, probe_state.scissor_rect_offset_bytes)?;
 
     log_batch_offset(cursor, "3DSTATE_VERTEX_BUFFERS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_VERTEX_BUFFERS_1)?;
+    let instance_palette = draw.vertex_format == TriangleVertexFormat::PosNormalUvTangentInstancePalette;
+    push(batch_dwords, &mut cursor, CMD_3DSTATE_VERTEX_BUFFERS_1 + if instance_palette { 4 } else { 0 })?;
     let vertex_buffer_dw1 = draw.vertex_stride
         | (1 << 14)
         | (VERTEX_BUFFER_MOCS << 16)
@@ -3785,6 +3859,14 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, vertex_buffer_dw1)?;
     push_addr(batch_dwords, &mut cursor, draw.vertex_gpu_addr)?;
     push(batch_dwords, &mut cursor, draw.vertex_buffer_bytes)?;
+    if instance_palette {
+        let compacted = draw.native.ok_or("palette-native-required")?.vs_storage_bindings[2];
+        // Buffer index 1, four-byte u32 compaction rows, low byte fetched as
+        // R8_UNORM. Culling cannot shift the selected original instance color.
+        push(batch_dwords, &mut cursor, instance_palette_vertex_buffer_dw1(vertex_buffer_dw1))?;
+        push_addr(batch_dwords, &mut cursor, compacted.gpu_addr)?;
+        push(batch_dwords, &mut cursor, compacted.byte_len)?;
+    }
     intel_render_verbose_log!(
         "probe-vb-state dw1=0x{:08X} pitch={} format={:?} mocs={} address_modify=1 l3_bypass_disable={} gpu=0x{:X} bytes={} source=mesa-gen12-verified-draw\n",
         vertex_buffer_dw1,
@@ -4104,6 +4186,18 @@ fn encode_triangle_probe_batch(
                     VFCOMP_STORE_0,
                     VFCOMP_STORE_0,
                 )?;
+            }
+            TriangleVertexFormat::PosNormalUvTangentInstancePalette => {
+                for (buffer, offset, format, components) in instance_palette_vertex_elements() {
+                    push_vertex_element_state(batch_dwords, &mut cursor, buffer, offset, format,
+                        VFCOMP_STORE_SRC,
+                        if components >= 2 { VFCOMP_STORE_SRC } else { VFCOMP_STORE_0 },
+                        if components >= 3 { VFCOMP_STORE_SRC } else { VFCOMP_STORE_0 },
+                        if components == 4 { VFCOMP_STORE_SRC } else { VFCOMP_STORE_1_FP })?;
+                }
+                push_vertex_element_state(batch_dwords, &mut cursor, 31, 0,
+                    SURFACE_FORMAT_R32G32_UINT, VFCOMP_STORE_0, VFCOMP_STORE_0,
+                    VFCOMP_STORE_0, VFCOMP_STORE_0)?;
             }
             TriangleVertexFormat::PosNormalUvTangent => {
                 for (offset, format, components) in [

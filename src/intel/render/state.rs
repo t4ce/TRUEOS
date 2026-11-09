@@ -100,6 +100,8 @@ enum TriangleVertexFormat {
     /// glTF material vertices with a build-prepared MikkTSpace tangent.
     /// Position, normal, UV, tangent occupy 48 bytes; all reach the VS.
     PosNormalUvTangent,
+    /// Shared PBR geometry with a per-instance palette column fetched by VF.
+    PosNormalUvTangentInstancePalette,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -146,7 +148,7 @@ struct TriangleNativeDrawContract {
     vf_sgvs_2_dw2: u32,
     vertex_element_count: usize,
     vf_component_packing: [u32; 4],
-    vf_instancing: [TriangleVfInstancingState; 5],
+    vf_instancing: [TriangleVfInstancingState; 6],
 }
 
 #[derive(Copy, Clone)]
@@ -539,7 +541,7 @@ impl ResidentChurnForward {
     }
 
     pub(crate) const fn pbr_material(&self) -> bool {
-        matches!(self.vertex_format, TriangleVertexFormat::PosNormalUvTangent)
+        matches!(self.vertex_format, TriangleVertexFormat::PosNormalUvTangent | TriangleVertexFormat::PosNormalUvTangentInstancePalette)
     }
 
     pub(crate) const fn topology(&self) -> ResidentScenePrimitiveTopology {

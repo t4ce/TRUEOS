@@ -197,6 +197,8 @@ const _: () = {
 };
 pub const OP_BP_CLIPBOARD_COMMAND_V1: u32 = 0x230;
 pub const OP_BP_UI4_HULL_TEXT_RUNS_V1: u32 = 0x235;
+pub const OP_BP_UI4_SCENE_FONT_SPRITE_REQUEST_V1: u32 = 0x15E;
+pub const OP_BP_UI4_SCENE_FONT_SPRITE_STATUS_V1: u32 = 0x15F;
 /// Owner-scoped asynchronous web-image lifecycle; no image bytes cross the VM.
 pub const OP_BP_UI4_HULL_IMAGE_REQUEST_V1: u32 = 0x239;
 pub const OP_BP_UI4_HULL_IMAGE_STATUS_V1: u32 = 0x23A;
@@ -2790,6 +2792,25 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 payload,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_FONT_SPRITE_REQUEST_V1 => {
+            let result = request_payload(vm_id, req_len)
+                .ok_or(crate::ui4::blueprint_ui4::ERROR_INVALID)
+                .and_then(|payload| crate::ui4::blueprint_ui4::font_sprite_api::request(
+                    crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32, payload));
+            match result {
+                Ok(ticket) => write_record_response(vm_id, seq, 0, &ticket),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_FONT_SPRITE_STATUS_V1 => {
+            match crate::ui4::blueprint_ui4::font_sprite_api::status(
+                crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32, arg1) {
+                Ok(info) => write_record_response(vm_id, seq, 0, &info),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
             DispatchOutcome::Resume
         }
         OP_BP_UI4_HULL_IMAGE_REQUEST_V1 => {

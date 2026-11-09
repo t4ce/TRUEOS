@@ -12,6 +12,7 @@ pub use button_outline_api::{trueos_cabi_ui4_scene_button_regions_v1, trueos_cab
 pub(crate) mod display_api;
 pub(crate) mod drag_drop_api;
 pub(crate) mod hull_image_api;
+pub(crate) mod font_sprite_api;
 pub(crate) mod hull_text_api;
 pub(crate) mod native_compute_api;
 pub use cursor_image_api::{
@@ -515,6 +516,7 @@ struct BlueprintSceneSurface {
     skybox_kernel_registered: bool,
     hull_images: hull_image_api::ImageResources,
     sprites: Vec<(u32, BlueprintSpriteSource)>,
+    font_sprites: Vec<font_sprite_api::Sprite>,
     sprite_upload: Option<Rgba8Upload>,
     solid_source: Option<OwnedRgba8Surface>,
     sprite_clear_rgba: Option<u32>,
@@ -1291,6 +1293,7 @@ fn open_blueprint_surface_with_cadence_scaled(
                 skybox_kernel_registered: false,
                 hull_images: hull_image_api::ImageResources::new(),
                 sprites: Vec::new(),
+                font_sprites: Vec::new(),
 
                 sprite_upload: None,
                 solid_source: None,
@@ -1342,6 +1345,7 @@ fn open_blueprint_surface_with_cadence_scaled(
         skybox_kernel_registered: false,
         hull_images: hull_image_api::ImageResources::new(),
         sprites: Vec::new(),
+        font_sprites: Vec::new(),
 
         sprite_upload: None,
         solid_source: None,

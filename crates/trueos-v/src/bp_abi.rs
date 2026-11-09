@@ -949,6 +949,19 @@ unsafe extern "C" {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;
+    pub fn trueos_cabi_ui4_scene_font_sprite_request_v1(
+        window_id: u32,
+        font_id: u32,
+        scalar: u32,
+        font_pixels: f32,
+        color_rgba: u32,
+        out_ticket: *mut u64,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_font_sprite_status_v1(
+        window_id: u32,
+        ticket: u64,
+        out: *mut TrueosUi4FontSpriteStatusV1,
+    ) -> i32;
     pub safe fn trueos_cabi_ui4_scene_sprite_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_sprite_frame_begin_region_v1(
         window_id: u32,

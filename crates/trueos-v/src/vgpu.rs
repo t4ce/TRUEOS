@@ -437,6 +437,10 @@ pub const RETAINED_TOPOLOGY_CUBE_PATCHLIST_1: u32 = 0x20;
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV: u32 = 1;
 /// Position3, normal3, UV2, and tangent4 (including handedness), 48 bytes.
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT: u32 = 2;
+/// PBR48 with UV.u fetched per instance from its original compacted index.
+/// Uses a nearest-filtered 256-column atlas (0..254 instances); UV.v remains
+/// authored at byte 28. The geometry and original PBR shader stay shared.
+pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT_INSTANCE_PALETTE: u32 = 3;
 pub const RETAINED_MATERIAL_FLAG_DOUBLE_SIDED: u32 = 1 << 2;
 /// Use nearest min/mag filtering for this PBR material (LOD0, sRGB unchanged).
 pub const RETAINED_MATERIAL_FLAG_NEAREST: u32 = 1 << 3;

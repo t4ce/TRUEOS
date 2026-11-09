@@ -2186,7 +2186,11 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     double_sided: bool,
     topology: ResidentScenePrimitiveTopology,
     maxpix_tornado: bool,
+    instance_palette: bool,
 ) -> Result<ResidentChurnForward, &'static str> {
+    if instance_palette && (vertex_stride != 48 || max_instances > 255 || maxpix_tornado) {
+        return Err("picasso-instance-palette-contract");
+    }
     if maxpix_tornado
         && (vertex_stride != 24
             || max_instances != 1
@@ -2294,6 +2298,20 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         };
         resident.vertex_stride = 48;
         resident.vertex_format = TriangleVertexFormat::PosNormalUvTangent;
+        if instance_palette {
+            // Split the existing UV2 payload into two scalar VF elements.
+            // R8_UNORM(compacted original index) supplies U per instance;
+            // authored V is still per vertex. Packing preserves the exact
+            // 14-float input payload expected by the unchanged PBR VS.
+            resident.vertex_format = TriangleVertexFormat::PosNormalUvTangentInstancePalette;
+            resident.native_vf.vertex_element_count = 6;
+            resident.native_vf.vf_sgvs_dw1 = 0xE005_4005;
+            resident.native_vf.vf_sgvs_2_dw1 = 0xB005_0005;
+            resident.native_vf.vf_component_packing = [0x00AF_1177, 0, 0, 0];
+            resident.native_vf.vf_instancing[2] = TriangleVfInstancingState {
+                element_index: 2, enabled: true, step_rate: 1,
+            };
+        }
     }
     if maxpix_tornado {
         use crate::intel::shader::maxpix_tornado as captured;
@@ -2652,7 +2670,7 @@ fn prepare_resident_churn_forward_draw(
                 })
         }),
         pbr_material: sampled_material
-            .filter(|_| resident.vertex_format == TriangleVertexFormat::PosNormalUvTangent)
+            .filter(|_| resident.pbr_material())
             .map(|material| TrianglePbrMaterial {
                 textures: [
                     material.metallic_roughness,

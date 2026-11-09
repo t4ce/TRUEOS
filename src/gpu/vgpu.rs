@@ -2213,6 +2213,7 @@ pub(crate) fn create_retained_mesh(
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL
             | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV
             | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT_INSTANCE_PALETTE
             | v::vgpu::RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED
             | v::vgpu::RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO
     ) || descriptor.vertex_count == 0
@@ -2234,7 +2235,8 @@ pub(crate) fn create_retained_mesh(
     let index_buffer = BufferHandle::from_raw(descriptor.index_buffer);
     let vertex_stride: usize = match descriptor.vertex_layout {
         v::vgpu::RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED => 12,
-        v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT => 48,
+        v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT_INSTANCE_PALETTE => 48,
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV => 32,
         _ => 24,
     };
@@ -2367,7 +2369,9 @@ pub(crate) fn create_retained_mesh(
         carrier,
         &vertices,
         &indices,
-        if maxpix_tornado {
+        if descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT_INSTANCE_PALETTE {
+            255
+        } else if maxpix_tornado {
             1
         } else {
             v::vgpu::MAX_RETAINED_SCENE_INSTANCES
@@ -2376,6 +2380,7 @@ pub(crate) fn create_retained_mesh(
         double_sided,
         topology,
         maxpix_tornado,
+        descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT_INSTANCE_PALETTE,
     ) {
         Ok(resident) => resident,
         Err(_) => {

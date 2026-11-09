@@ -1,3 +1,4 @@
+# Additive Microfont glyph sprite request/status v1; all existing signatures verified unchanged.
 # Additive fallible native CSPRNG byte fill v1 for guest and stackful workers; all 384 existing signatures verified unchanged.
 # Additive native byte environment, terminal/realm queries and filesystem object/rename policy; all existing signatures unchanged.
 # Additive bounded owner-scoped streaming HTTP exchange v1; all 372 existing contracts verified unchanged.
@@ -50,4 +51,4 @@
 # Additive bounded subdocument fetch with host-applied Referer context; all previous signatures verified unchanged.
 # Additive non-consuming final GET URL metadata; all 369 previous signatures verified unchanged.
 # Intentional retirement of the QJS-only mouse stream; every surviving signature verified unchanged.
-0d3d0d9f6dc272cdce5931235f1661fc5567c45e1da0fb1206b76291ef3cb1aa
+ab58e49442752f6de92d61f03782d4b76498779037bc9b341ed038c4251a216a
