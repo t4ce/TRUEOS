@@ -22,9 +22,9 @@ mod native_ui4;
 mod ui4_bcs;
 mod ui4_bcs_queue;
 
+mod bringup_diag;
 mod display_metrics;
 mod tgl_ui4_layout;
-mod bringup_diag;
 
 pub(super) fn capture_firmware_handoff_evidence(dev: crate::intel::Dev) {
     bringup_diag::capture_firmware(dev);
@@ -34,9 +34,59 @@ fn native_ui4_for_pipe(pipe: PipeInfo) -> bool {
     pipe.slot == 0 && crate::intel::tgl_native_panel::ui4_handoff_active()
 }
 
+pub(super) fn laptop_diagnostic_extent() -> (u32, u32) {
+    (
+        tgl_ui4_layout::DIAGNOSTIC_WIDTH,
+        tgl_ui4_layout::DIAGNOSTIC_HEIGHT,
+    )
+}
+
+fn plane_slot_count(pipe: PipeInfo) -> usize {
+    if native_ui4_for_pipe(pipe) {
+        MAX_UNIVERSAL_PLANE_SLOTS
+    } else {
+        UNIVERSAL_PLANE_SLOTS
+    }
+}
+
+fn application_plane_mask(pipe: PipeInfo) -> u8 {
+    if native_ui4_for_pipe(pipe) {
+        0x2f
+    } else {
+        0x0f
+    }
+}
+
+fn is_application_plane(pipe: PipeInfo, slot: usize) -> bool {
+    slot < u8::BITS as usize && application_plane_mask(pipe) & (1u8 << slot) != 0
+}
+
+fn plane_dbuf_range(pipe: PipeInfo, slot: usize) -> Option<(u16, u16)> {
+    if native_ui4_for_pipe(pipe) {
+        return tgl_ui4_layout::dbuf_range(slot);
+    }
+    [
+        (PLANE_DBUF_SLOT_0_START, PLANE_DBUF_SLOT_0_END),
+        (PLANE_DBUF_SLOT_1_START, PLANE_DBUF_SLOT_1_END),
+        (PLANE_DBUF_SLOT_2_START, PLANE_DBUF_SLOT_2_END),
+        (PLANE_DBUF_SLOT_3_START, PLANE_DBUF_SLOT_3_END),
+        (PLANE_DBUF_SLOT_4_START, PLANE_DBUF_SLOT_4_END),
+    ]
+    .get(slot)
+    .copied()
+}
+
+fn plane_watermark(pipe: PipeInfo, slot: usize) -> Option<u32> {
+    if native_ui4_for_pipe(pipe) {
+        tgl_ui4_layout::watermark(slot)
+    } else {
+        (slot < UNIVERSAL_PLANE_SLOTS).then_some(PLANE_WM_LEVEL0_BOOT_SAFE)
+    }
+}
+
 fn ui4_surface_slot_capacity(pipe: PipeInfo, legacy_capacity: u64) -> u64 {
     if native_ui4_for_pipe(pipe) {
-        tgl_ui4_layout::SURFACE_SLOT_BYTES
+        tgl_ui4_layout::PRIMARY_SLOT_BYTES
     } else {
         legacy_capacity
     }
@@ -51,9 +101,8 @@ const _: () = {
 };
 mod mirror_map_dp_engine;
 pub(crate) use self::mirror_map_dp_engine::{
-    WdCapturePoll,  WdXyuv8888Frame,
-    begin_ui4_wd_xyuv8888_capture, pin_ui4_wd_frame_for_copy, poll_ui4_wd_xyuv8888_capture,
-    start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture,
+    WdCapturePoll, WdXyuv8888Frame, begin_ui4_wd_xyuv8888_capture, pin_ui4_wd_frame_for_copy,
+    poll_ui4_wd_xyuv8888_capture, start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture,
 };
 
 macro_rules! intel_display_focus_log {
@@ -85,10 +134,11 @@ const PIPE_BOTTOM_COLOR_RAW: u32 = pipe_bottom_color_u0_10(0x3FF, 0x3FF, 0x3FF);
 const PRIMARY_FORMAT_PROBE_XRGB: u32 = 0;
 const PRIMARY_FORMAT_PROBE_XBGR: u32 = 1;
 const PRIMARY_FORMAT_PROBE_MODE: u32 = PRIMARY_FORMAT_PROBE_XRGB;
-// Display version 13 exposes one primary plus four sprite planes. TRUEOS uses
-// zero-based indices, so the hardware's top sprite is slot 4.
+// ADL-S/RPL-S expose five universal planes. The physical 9A49 native panel
+// has seven; UI4 retains logical interaction slot 4 on its highest carrier.
 const UNIVERSAL_PLANE_SLOTS: usize = crate::ui4::UNIVERSAL_PLANE_COUNT;
-const UI4_PLANE_SURFACE_FLIP_BATCH_CAPACITY: usize = UNIVERSAL_PLANE_SLOTS;
+const MAX_UNIVERSAL_PLANE_SLOTS: usize = 7;
+const UI4_PLANE_SURFACE_FLIP_BATCH_CAPACITY: usize = MAX_UNIVERSAL_PLANE_SLOTS;
 const UI4_PLANE_SURFACE_FLIP_TIMEOUT_NS: u64 = 25_000_000;
 const PRIMARY_BYTES_PER_PIXEL: u32 = 4;
 const PRIMARY_BASELINE_COLOR: u32 = 0x00FF_37FF;
@@ -350,6 +400,8 @@ static OVERLAY_SURFACES_SLOT_4: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COU
     Mutex::new(OverlaySurfacePool::new()),
     Mutex::new(OverlaySurfacePool::new()),
 ];
+static OVERLAY_SURFACES_SLOT_5: [Mutex<OverlaySurfacePool>; DISPLAY_PIPELINE_COUNT] =
+    [const { Mutex::new(OverlaySurfacePool::new()) }; DISPLAY_PIPELINE_COUNT];
 static UI4_DIRECT_SCANOUT_SLOT_1: [Mutex<Ui4DirectScanoutPool>; DISPLAY_PIPELINE_COUNT] = [
     Mutex::new(Ui4DirectScanoutPool::new()),
     Mutex::new(Ui4DirectScanoutPool::new()),
@@ -374,6 +426,8 @@ static UI4_DIRECT_SCANOUT_SLOT_3: [Mutex<Ui4DirectScanoutPool>; DISPLAY_PIPELINE
     Mutex::new(Ui4DirectScanoutPool::new()),
     Mutex::new(Ui4DirectScanoutPool::new()),
 ];
+static UI4_DIRECT_SCANOUT_SLOT_5: [Mutex<Ui4DirectScanoutPool>; DISPLAY_PIPELINE_COUNT] =
+    [const { Mutex::new(Ui4DirectScanoutPool::new()) }; DISPLAY_PIPELINE_COUNT];
 static PRIMARY_SWAP_SURFACES: [Mutex<PrimarySwapSurfacePool>; DISPLAY_PIPELINE_COUNT] = [
     Mutex::new(PrimarySwapSurfacePool::new()),
     Mutex::new(PrimarySwapSurfacePool::new()),
@@ -698,7 +752,7 @@ fn primary_surface_gpu_for_pipe(pipe: PipeInfo) -> Option<u64> {
 
 fn primary_surface_gpu_capacity(pipe: PipeInfo) -> u64 {
     if native_ui4_for_pipe(pipe) {
-        return tgl_ui4_layout::SURFACE_SLOT_BYTES;
+        return tgl_ui4_layout::PRIMARY_SLOT_BYTES;
     }
     if pipe.slot == 0 {
         PRIMARY_LEGACY_PIPE_GPU_CAPACITY
@@ -1502,7 +1556,11 @@ pub(crate) fn physical_extent_pixels(width_mm: u32, height_mm: u32) -> Option<(u
     display_metrics::physical_extent_pixels(target, width_mm, height_mm)
 }
 
-pub(crate) fn physical_extent_pixels_fraction(width: u32, height: u32, denominator: u32) -> Option<(u32, u32)> {
+pub(crate) fn physical_extent_pixels_fraction(
+    width: u32,
+    height: u32,
+    denominator: u32,
+) -> Option<(u32, u32)> {
     let target = primary_display_output_target()?.pipeline_target;
     display_metrics::physical_extent_pixels_fraction(target, width, height, denominator)
 }
@@ -2390,7 +2448,14 @@ pub(crate) fn queue_ui4_live_overlay_scene_on_slot_damage_region(
     };
 
     for damaged in effective.rects() {
-        fill_overlay_rect(surface, damaged.x, damaged.y, damaged.width, damaged.height, 0);
+        fill_overlay_rect(
+            surface,
+            damaged.x,
+            damaged.y,
+            damaged.width,
+            damaged.height,
+            0,
+        );
         for tile in tiles {
             copy_premultiplied_rgba_tile_into_overlay_clipped(surface, tile, *damaged)?;
         }
@@ -2501,10 +2566,14 @@ fn primary_plane_contract_regs_match(dev: crate::intel::Dev, surface: PrimarySur
     crate::intel::mmio_read(dev, surface.pipe.primary_plane().stride()) == stride_reg
         && crate::intel::mmio_read(dev, surface.pipe.primary_plane().base() + UNI_PLANE_POS_OFF)
             == plane_pos_reg_value(0, 0)
-        && crate::intel::mmio_read(dev, surface.pipe.primary_plane().base() + UNI_PLANE_SIZE_OFF)
-            == plane_size_reg_value(surface.width, surface.height)
-        && crate::intel::mmio_read(dev, surface.pipe.primary_plane().base() + UNI_PLANE_OFFSET_OFF)
-            == plane_pos_reg_value(0, 0)
+        && crate::intel::mmio_read(
+            dev,
+            surface.pipe.primary_plane().base() + UNI_PLANE_SIZE_OFF,
+        ) == plane_size_reg_value(surface.width, surface.height)
+        && crate::intel::mmio_read(
+            dev,
+            surface.pipe.primary_plane().base() + UNI_PLANE_OFFSET_OFF,
+        ) == plane_pos_reg_value(0, 0)
         && (ctl & ctl_match_mask) == (ctl_expected & ctl_match_mask)
 }
 
@@ -2598,11 +2667,8 @@ fn queue_ui4_plane_surface_flip(
     scaler: Option<PlaneScalerFlip>,
     reason: &str,
 ) -> PlaneSurfaceFlipQueueResult {
-    if screenlog::owns_plane(0, crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT)
-        && plane_base
-            == PIPES[0]
-                .plane(crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT)
-                .base()
+    if screenlog::owns_plane(0, screenlog::PLANE_SLOT)
+        && plane_base == PIPES[0].plane(screenlog::PLANE_SLOT).base()
     {
         return PlaneSurfaceFlipQueueResult::Rejected;
     }
@@ -2721,7 +2787,8 @@ fn pipe_scaler_bound_to_plane(
     };
     let control = crate::intel::mmio_read(dev, regs.control);
     control & (PIPE_SCALER_ENABLE | PIPE_SCALER_BINDING_MASK)
-        == PIPE_SCALER_ENABLE | pipe_scaler_binding(plane_slot)
+        == PIPE_SCALER_ENABLE
+            | pipe_scaler_binding(PIPES[pipe_slot].plane(plane_slot).physical_slot())
 }
 
 fn disable_pipe_scaler(dev: crate::intel::Dev, regs: PipeScalerRegisters) {
@@ -2771,7 +2838,12 @@ fn prepare_plane_scaler_flips(
             let target_rebound = wanted_scaler == Some(scaler_id)
                 && crate::intel::mmio_read(dev, regs.control)
                     & (PIPE_SCALER_ENABLE | PIPE_SCALER_BINDING_MASK)
-                    != PIPE_SCALER_ENABLE | pipe_scaler_binding(scaler.plane_slot);
+                    != PIPE_SCALER_ENABLE
+                        | pipe_scaler_binding(
+                            PIPES[scaler.pipe_slot]
+                                .plane(scaler.plane_slot)
+                                .physical_slot(),
+                        );
             if (bound_to_plane && wanted_scaler != Some(scaler_id)) || target_rebound {
                 disable_pipe_scaler(dev, regs);
             }
@@ -2815,7 +2887,12 @@ fn program_plane_scaler_flip(dev: crate::intel::Dev, scaler: PlaneScalerFlip) ->
     crate::intel::mmio_write(
         dev,
         regs.control,
-        PIPE_SCALER_ENABLE | pipe_scaler_binding(scaler.plane_slot),
+        PIPE_SCALER_ENABLE
+            | pipe_scaler_binding(
+                PIPES[scaler.pipe_slot]
+                    .plane(scaler.plane_slot)
+                    .physical_slot(),
+            ),
     );
     crate::intel::mmio_write(dev, regs.vphase, vphase_reg);
     crate::intel::mmio_write(dev, regs.hphase, hphase_reg);
@@ -2886,7 +2963,11 @@ pub(crate) fn submit_ui4_plane_surface_flip_batch() -> bool {
                 geometry.stride_reg,
             );
             crate::intel::mmio_write(dev, entry.plane_base + UNI_PLANE_POS_OFF, geometry.pos_reg);
-            crate::intel::mmio_write(dev, entry.plane_base + UNI_PLANE_SIZE_OFF, geometry.size_reg);
+            crate::intel::mmio_write(
+                dev,
+                entry.plane_base + UNI_PLANE_SIZE_OFF,
+                geometry.size_reg,
+            );
             crate::intel::mmio_write(
                 dev,
                 entry.plane_base + UNI_PLANE_OFFSET_OFF,
@@ -2896,7 +2977,11 @@ pub(crate) fn submit_ui4_plane_surface_flip_batch() -> bool {
         if let Some(alpha) = entry.constant_alpha {
             program_overlay_plane_constant_alpha(dev, entry.plane_base, alpha);
         }
-        crate::intel::mmio_write(dev, entry.plane_base + UNI_PLANE_SURF_OFF, entry.surface_reg);
+        crate::intel::mmio_write(
+            dev,
+            entry.plane_base + UNI_PLANE_SURF_OFF,
+            entry.surface_reg,
+        );
     }
     true
 }
@@ -3099,8 +3184,16 @@ fn overlay_plane_constant_alpha_is_valid(dev: crate::intel::Dev, plane_base: usi
 }
 
 fn program_overlay_plane_constant_alpha(dev: crate::intel::Dev, plane_base: usize, alpha: u8) {
-    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMSK_OFF, plane_keymsk_alpha(alpha));
-    crate::intel::mmio_write(dev, plane_base + UNI_PLANE_KEYMAX_OFF, plane_keymax_alpha(alpha));
+    crate::intel::mmio_write(
+        dev,
+        plane_base + UNI_PLANE_KEYMSK_OFF,
+        plane_keymsk_alpha(alpha),
+    );
+    crate::intel::mmio_write(
+        dev,
+        plane_base + UNI_PLANE_KEYMAX_OFF,
+        plane_keymax_alpha(alpha),
+    );
 }
 
 pub(super) fn decoded_nv12_overlay_plane_alpha() -> u8 {
@@ -3228,7 +3321,11 @@ fn program_plane_watermark_boot_safe(dev: crate::intel::Dev, plane_base: usize, 
 }
 
 fn plane_watermarks_are_boot_safe(dev: crate::intel::Dev, plane_base: usize) -> bool {
-    if crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_0_OFF) != PLANE_WM_LEVEL0_BOOT_SAFE {
+    plane_watermarks_match(dev, plane_base, PLANE_WM_LEVEL0_BOOT_SAFE)
+}
+
+fn plane_watermarks_match(dev: crate::intel::Dev, plane_base: usize, wm0: u32) -> bool {
+    if crate::intel::mmio_read(dev, plane_base + UNI_PLANE_WM_0_OFF) != wm0 {
         return false;
     }
     let mut level = 1usize;
@@ -3254,7 +3351,10 @@ fn program_plane_buf_cfg(
     if before != after {
         crate::intel::mmio_write(dev, plane_base + UNI_PLANE_BUF_CFG_OFF, after);
     }
-    (before, crate::intel::mmio_read(dev, plane_base + UNI_PLANE_BUF_CFG_OFF))
+    (
+        before,
+        crate::intel::mmio_read(dev, plane_base + UNI_PLANE_BUF_CFG_OFF),
+    )
 }
 
 fn ui4_rgba8_plane_stack_ready(pipe: PipeInfo) -> bool {
@@ -3335,15 +3435,16 @@ pub(crate) fn ui4_rgba8_plane_stack_is_ready() -> bool {
 fn wait_for_plane_stack_live(
     dev: crate::intel::Dev,
     pipe: PipeInfo,
-    wanted: [u32; UNIVERSAL_PLANE_SLOTS],
+    wanted: [u32; MAX_UNIVERSAL_PLANE_SLOTS],
     max_iters: usize,
 ) -> (u32, usize) {
-    let want_mask = (1u32 << UNIVERSAL_PLANE_SLOTS) - 1;
+    let count = plane_slot_count(pipe);
+    let want_mask = (1u32 << count) - 1;
     let mut live_mask = 0u32;
     let mut iterations = 0usize;
     while iterations < max_iters {
         live_mask = 0;
-        for (slot, wanted) in wanted.iter().copied().enumerate() {
+        for (slot, wanted) in wanted.iter().copied().enumerate().take(count) {
             if crate::intel::mmio_read(dev, pipe.plane(slot).surf_live()) == wanted {
                 live_mask |= 1u32 << slot;
             }
@@ -3385,7 +3486,11 @@ fn program_rgba8_plane_static_contract(
 
     crate::intel::mmio_write(dev, plane.ctl(), ctl_enabled & !PLANE_CTL_ENABLE);
     crate::intel::mmio_write(dev, plane.stride(), stride);
-    crate::intel::mmio_write(dev, plane.base() + UNI_PLANE_POS_OFF, plane_pos_reg_value(0, 0));
+    crate::intel::mmio_write(
+        dev,
+        plane.base() + UNI_PLANE_POS_OFF,
+        plane_pos_reg_value(0, 0),
+    );
     crate::intel::mmio_write(
         dev,
         plane.base() + UNI_PLANE_SIZE_OFF,
@@ -3410,22 +3515,14 @@ fn program_rgba8_plane_static_contract(
 /// owned by UI4 interaction. Bootstrap fixes the pixel format, blend mode and
 /// DBUF allocation. A direct-present transaction may still change geometry,
 /// constant plane alpha and PLANE_SURF, with SURFLIVE proving the new surface.
-fn microfont_log_boot_surface(
-    pipe: PipeInfo,
-    slot: usize,
-    width: u32,
-    height: u32,
-) -> Option<OverlaySurface> {
+fn microfont_log_boot_surface(pipe: PipeInfo, slot: usize) -> Option<OverlaySurface> {
     if !screenlog::owns_plane(pipe.slot, slot) {
         return None;
     }
     let s = screenlog::surface()?;
-    if s.width != width || s.height != height {
-        return None;
-    }
     Some(OverlaySurface {
-        width,
-        height,
+        width: s.width,
+        height: s.height,
         pitch_bytes: s.pitch_bytes,
         byte_len: s.byte_len,
         virt: s.virt as *mut u8,
@@ -3461,14 +3558,44 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     };
     let pipe = primary.pipe;
     bringup_diag::checkpoint("transparent-front-allocation", usize::MAX);
-    let mut overlay_surfaces = [None; UNIVERSAL_PLANE_SLOTS - 1];
-    for slot in 1..UNIVERSAL_PLANE_SLOTS {
+    let count = plane_slot_count(pipe);
+    if native_ui4_for_pipe(pipe) {
+        // The seven-plane allocation borrows both TGL DBUF slices. Another
+        // active pipe changes the allowed slice routing and needs reallocation.
+        if PIPES.iter().skip(1).any(|other| {
+            crate::intel::mmio_read(dev, PIPECONF_A + other.slot * PIPE_MMIO_STRIDE)
+                & PIPECONF_STATE
+                != 0
+        }) {
+            return fail("native-seven-planes-require-single-active-pipe");
+        }
+        let ctl = crate::intel::mmio_read(dev, tgl_ui4_layout::DBUF_CTL_S2);
+        crate::intel::mmio_write(
+            dev,
+            tgl_ui4_layout::DBUF_CTL_S2,
+            ctl | tgl_ui4_layout::DBUF_POWER_REQUEST,
+        );
+        let mut ready = false;
+        for _ in 0..1_000_000 {
+            if crate::intel::mmio_read(dev, tgl_ui4_layout::DBUF_CTL_S2)
+                & tgl_ui4_layout::DBUF_POWER_STATE
+                != 0
+            {
+                ready = true;
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        if !ready {
+            return fail("native-dbuf-s2-power-timeout");
+        }
+    }
+    let mut overlay_surfaces = [None; MAX_UNIVERSAL_PLANE_SLOTS - 1];
+    for slot in 1..count {
         bringup_diag::checkpoint("transparent-front-allocation", slot);
-        let Some(surface) = microfont_log_boot_surface(pipe, slot, primary.width, primary.height)
-            .or_else(|| {
-                ensure_overlay_surface_for_pipe(dev, pipe, slot, primary.width, primary.height)
-            })
-        else {
+        let Some(surface) = microfont_log_boot_surface(pipe, slot).or_else(|| {
+            ensure_overlay_surface_for_pipe(dev, pipe, slot, primary.width, primary.height)
+        }) else {
             return fail("transparent-front-allocation");
         };
         overlay_surfaces[slot - 1] = Some(surface);
@@ -3478,7 +3605,7 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
         Ok(reg) => reg,
         Err(_) => return fail("primary-address-range"),
     };
-    let mut surface_regs = [0u32; UNIVERSAL_PLANE_SLOTS];
+    let mut surface_regs = [0u32; MAX_UNIVERSAL_PLANE_SLOTS];
     surface_regs[0] = primary_reg;
     for (index, surface) in overlay_surfaces.iter().flatten().enumerate() {
         let Ok(surface_reg) = u32::try_from(surface.gpu) else {
@@ -3491,38 +3618,40 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     // CTL and static register without issuing an interim SURF=0 commit, so the
     // firmware front remains visible until the complete UI4 stack replaces it
     // at one shared frame boundary.
-    let full_mask = (1u32 << UNIVERSAL_PLANE_SLOTS) - 1;
-    let dbuf_ranges = [
-        (PLANE_DBUF_SLOT_0_START, PLANE_DBUF_SLOT_0_END),
-        (PLANE_DBUF_SLOT_1_START, PLANE_DBUF_SLOT_1_END),
-        (PLANE_DBUF_SLOT_2_START, PLANE_DBUF_SLOT_2_END),
-        (PLANE_DBUF_SLOT_3_START, PLANE_DBUF_SLOT_3_END),
-        (PLANE_DBUF_SLOT_4_START, PLANE_DBUF_SLOT_4_END),
-    ];
-    let mut controls = [0u32; UNIVERSAL_PLANE_SLOTS];
-    for slot in 0..UNIVERSAL_PLANE_SLOTS {
+    let full_mask = (1u32 << count) - 1;
+    let mut controls = [0u32; MAX_UNIVERSAL_PLANE_SLOTS];
+    for slot in 0..count {
         bringup_diag::checkpoint("static-contract-and-dbuf", slot);
-        let pitch = if slot == 0 {
-            primary.pitch_bytes
+        let (width, height, pitch) = if slot == 0 {
+            (primary.width, primary.height, primary.pitch_bytes)
         } else {
-            overlay_surfaces[slot - 1]
-                .expect("overlay bootstrap surface")
-                .pitch_bytes
+            let surface = overlay_surfaces[slot - 1].expect("overlay bootstrap surface");
+            (surface.width, surface.height, surface.pitch_bytes)
         };
-        let Some(ctl) = program_rgba8_plane_static_contract(
-            dev,
-            pipe,
-            slot,
-            primary.width,
-            primary.height,
-            pitch,
-        ) else {
+        let Some(ctl) = program_rgba8_plane_static_contract(dev, pipe, slot, width, height, pitch)
+        else {
             return fail("static-contract");
         };
         controls[slot] = ctl;
         let plane_base = pipe.plane(slot).base();
         program_plane_watermark_boot_safe(dev, plane_base, true);
-        let (start, end) = dbuf_ranges[slot];
+        let Some(wm0) = plane_watermark(pipe, slot) else {
+            return fail("watermark-slot");
+        };
+        crate::intel::mmio_write(dev, plane_base + UNI_PLANE_WM_0_OFF, wm0);
+        if screenlog::owns_plane(pipe.slot, slot) {
+            crate::intel::mmio_write(
+                dev,
+                plane_base + UNI_PLANE_POS_OFF,
+                plane_pos_reg_value(
+                    primary.width.saturating_sub(width) / 2,
+                    primary.height.saturating_sub(height) / 2,
+                ),
+            );
+        }
+        let Some((start, end)) = plane_dbuf_range(pipe, slot) else {
+            return fail("dbuf-slot");
+        };
         let (_, programmed) = program_plane_buf_cfg(dev, plane_base, start, end);
         if programmed != plane_buf_cfg_value(start, end) {
             return fail("dbuf-readback");
@@ -3532,8 +3661,8 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     bringup_diag::latch(surface_regs, 0, 0);
     bringup_diag::checkpoint("plane-arm", usize::MAX);
     // Publish every final CTL/SURF pair back-to-back and consume one common
-    // latch. These are the only bootstrap SURF writes for slots 0-4.
-    for slot in 0..UNIVERSAL_PLANE_SLOTS {
+    // latch. Each configured plane receives one bootstrap SURF write.
+    for slot in 0..count {
         let plane = pipe.plane(slot);
         crate::intel::mmio_write(dev, plane.ctl(), controls[slot]);
         crate::intel::mmio_write(dev, plane.surf(), surface_regs[slot]);
@@ -3557,7 +3686,7 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     UI4_RGBA8_PLANE_STACK_STATE.store(UI4_RGBA8_PLANE_STACK_READY, Ordering::Release);
     bringup_diag::checkpoint("publish-output-capabilities", usize::MAX);
     let output = crate::ui4::OutputId::from_slot(0).expect("static UI4 D01 output");
-    let application_plane_mask = (1u8 << crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT) - 1;
+    let application_plane_mask = application_plane_mask(pipe);
     if let Err(reason) =
         crate::ui4::publish_ui4_output_capabilities(crate::ui4::Ui4OutputCapabilities {
             output,
@@ -3570,16 +3699,22 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     }
     bringup_diag::checkpoint("ready", usize::MAX);
     bringup_diag::log_ready(dev);
+    if native_ui4_for_pipe(pipe) {
+        crate::log!(
+            "intel/display: native-plane-layout pipe={} universal_planes=7 application_logical_slots=0,1,2,3,5 application_mask=0x{:02X} interaction_logical=4 interaction_physical=7 diagnostics_logical=6 diagnostics_physical=6 diagnostics=centered-{}x{} dbuf=s1+s2 wm0_full=249 desktop_policy=unchanged\n",
+            pipe.name,
+            application_plane_mask,
+            tgl_ui4_layout::DIAGNOSTIC_WIDTH,
+            tgl_ui4_layout::DIAGNOSTIC_HEIGHT,
+        );
+    }
     crate::log!(
-        "intel/display: ui4-rgba8-plane-stack bootstrap ok=1 pipe={} slots=0-3-composition+4-interaction size={}x{} slot0=xrgb8-opaque slots1-4=premultiplied-rgba8-linear contracts=once bootstrap_surf_writes=one-per-slot runtime=surf-flips-only dbuf_blocks={}/{}/{}/{}/{} commit_frame={}=>{} commit_wait={} live_iters={} live_mask=0x{:X}\n",
+        "intel/display: ui4-rgba8-plane-stack bootstrap ok=1 pipe={} universal_planes={} application_mask=0x{:02X} interaction_logical=4 size={}x{} slot0=xrgb8-opaque overlays=premultiplied-rgba8-linear contracts=once bootstrap_surf_writes=one-per-slot runtime=surf-flips-only commit_frame={}=>{} commit_wait={} live_iters={} live_mask=0x{:X}\n",
         pipe.name,
+        count,
+        application_plane_mask,
         primary.width,
         primary.height,
-        PLANE_DBUF_BALANCED_BLOCKS,
-        PLANE_DBUF_BALANCED_BLOCKS,
-        PLANE_DBUF_BALANCED_BLOCKS,
-        PLANE_DBUF_BALANCED_BLOCKS,
-        PLANE_DBUF_TOP_BLOCKS,
         arm_frame_before,
         arm_frame_after,
         arm_frame_wait,
@@ -3621,8 +3756,10 @@ fn park_decoded_nv12_overlay_plane_before_disable(
     if park_w == 0 || park_h == 0 {
         return false;
     }
-    let hide_pos =
-        plane_pos_reg_value(scanout_w.saturating_sub(park_w), scanout_h.saturating_sub(park_h));
+    let hide_pos = plane_pos_reg_value(
+        scanout_w.saturating_sub(park_w),
+        scanout_h.saturating_sub(park_h),
+    );
     let hide_size = plane_size_reg_value(park_w, park_h);
 
     crate::intel::mmio_write(dev, uv_base + UNI_PLANE_POS_OFF, hide_pos);
@@ -3838,7 +3975,7 @@ pub(crate) fn log_pipe_live_scanout_state(label: &str) {
     );
 
     let mut slot = 0usize;
-    while slot < UNIVERSAL_PLANE_SLOTS {
+    while slot < plane_slot_count(pipe) {
         let plane_base = pipe.plane(slot).base();
         let ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
         let stride = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_STRIDE_OFF);
@@ -3879,8 +4016,16 @@ pub(crate) fn log_pipe_live_scanout_state(label: &str) {
             cus_ctl,
             ((cus_ctl & PLANE_CUS_ENABLE) != 0) as u8,
             ((cus_ctl & PLANE_CUS_Y_PLANE) != 0) as u8,
-            decode_plane_cus_phase(cus_ctl, PLANE_CUS_HPHASE_MASK, PLANE_CUS_HPHASE_SIGN_NEGATIVE),
-            decode_plane_cus_phase(cus_ctl, PLANE_CUS_VPHASE_MASK, PLANE_CUS_VPHASE_SIGN_NEGATIVE),
+            decode_plane_cus_phase(
+                cus_ctl,
+                PLANE_CUS_HPHASE_MASK,
+                PLANE_CUS_HPHASE_SIGN_NEGATIVE
+            ),
+            decode_plane_cus_phase(
+                cus_ctl,
+                PLANE_CUS_VPHASE_MASK,
+                PLANE_CUS_VPHASE_SIGN_NEGATIVE
+            ),
             color_ctl,
             decode_plane_color_alpha(color_ctl),
             buf_cfg
@@ -4023,6 +4168,7 @@ fn overlay_surface_pool(
         2 => Some(&OVERLAY_SURFACES_SLOT_2[pipe.slot]),
         3 => Some(&OVERLAY_SURFACES_SLOT_3[pipe.slot]),
         4 => Some(&OVERLAY_SURFACES_SLOT_4[pipe.slot]),
+        5 if native_ui4_for_pipe(pipe) => Some(&OVERLAY_SURFACES_SLOT_5[pipe.slot]),
         _ => None,
     }
 }
@@ -4036,6 +4182,7 @@ fn ui4_direct_scanout_pool(
         1 => Some(&UI4_DIRECT_SCANOUT_SLOT_1[pipe.slot]),
         2 => Some(&UI4_DIRECT_SCANOUT_SLOT_2[pipe.slot]),
         3 => Some(&UI4_DIRECT_SCANOUT_SLOT_3[pipe.slot]),
+        5 if native_ui4_for_pipe(pipe) => Some(&UI4_DIRECT_SCANOUT_SLOT_5[pipe.slot]),
         _ => None,
     }
 }
@@ -4045,6 +4192,9 @@ fn ui4_direct_scanout_gpu_for_alias(
     plane_slot: usize,
     alias_index: usize,
 ) -> Option<u64> {
+    if native_ui4_for_pipe(pipe) && plane_slot == 5 {
+        return tgl_ui4_layout::extra_direct_scanout_gpu(alias_index);
+    }
     let plane_index = plane_slot;
     if plane_index >= UI4_DIRECT_SCANOUT_PLANE_COUNT
         || alias_index >= UI4_DIRECT_SCANOUT_ALIAS_COUNT
@@ -4105,8 +4255,6 @@ fn primary_compose_rcs_gpu_for_surface(surface: PrimarySwapSurface) -> Option<u6
     PRIMARY_COMPOSE_RCS_GPU_ALIAS_BASE
         .checked_add((surface.buffer_index as u64).checked_mul(COMPOSE_RCS_GPU_ALIAS_BYTES)?)
 }
-
-
 
 fn overlay_back_buffer_index(pool: OverlaySurfacePool) -> usize {
     pool.front_index
@@ -4333,9 +4481,11 @@ fn init_default_overlay_marker(dev: crate::intel::Dev, primary: PrimarySurface) 
         return false;
     }
 
-    let Some(surface) =
-        ensure_overlay_surface(dev, DEFAULT_OVERLAY_MARKER_SIZE, DEFAULT_OVERLAY_MARKER_SIZE)
-    else {
+    let Some(surface) = ensure_overlay_surface(
+        dev,
+        DEFAULT_OVERLAY_MARKER_SIZE,
+        DEFAULT_OVERLAY_MARKER_SIZE,
+    ) else {
         crate::log!(
             "intel/display: default-overlay-marker skipped pipe={} cause=no-surface\n",
             primary.pipe.name
@@ -4440,8 +4590,15 @@ fn ensure_overlay_surface_for_pipe(
             // unconditionally here can expose an incomplete first frame when
             // a small boot marker grows into a full-screen composition.
             let guarded_front = pool.front_index.and_then(|front_index| {
-                pool.surfaces[front_index]
-                    .map(|surface| (pool.width, pool.height, pool.pipe_slot, front_index, surface))
+                pool.surfaces[front_index].map(|surface| {
+                    (
+                        pool.width,
+                        pool.height,
+                        pool.pipe_slot,
+                        front_index,
+                        surface,
+                    )
+                })
             });
             let index = guarded_front
                 .map(|(_, _, _, front_index, _)| (front_index + 1) % OVERLAY_SWAP_BUFFER_COUNT)
@@ -4463,7 +4620,7 @@ fn ensure_overlay_surface_for_pipe(
 
     let pitch_bytes = aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL)?;
     let byte_len = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok()?;
-    if byte_len as u64 > ui4_surface_slot_capacity(pipe, OVERLAY_SWAP_GPU_STRIDE) {
+    if byte_len as u64 > native_ui4::overlay_capacity(pipe) {
         crate::log_warn!(
             target: "intel/display";
             "intel/display: overlay-surface rejected pipeline={} size={}x{} pitch=0x{:X} bytes=0x{:X} reserved_slot_bytes=0x{:X} potential_reason=mode-exceeds-per-pipeline-gpu-address-slot\n",
@@ -4809,14 +4966,6 @@ static UI4_DIRECT_PLANE_SCALER_LOGGED: AtomicBool = AtomicBool::new(false);
 static UI4_EMPTY_OVERLAY_CPU_PARK_LOGGED: AtomicBool = AtomicBool::new(false);
 static UI4_PRIMARY_STACK_PROOF_LOGGED: AtomicBool = AtomicBool::new(false);
 
-
-
-
-
-
-
-
-
 const fn should_log_ui4_direct_checkpoint(sequence: u64) -> bool {
     crate::log_os::flags::UI4_DIAG_PROFILE_ENABLED
         || sequence <= 8 || sequence.is_multiple_of(120)
@@ -4838,7 +4987,10 @@ pub(crate) fn queue_ui4_primary_composition(
 ) -> Result<Ui4AsyncComposition, Ui4AsyncCompositionError> {
     let dev = crate::intel::claimed_device().ok_or(Ui4AsyncCompositionError::Unavailable)?;
     let target = active_display_pipeline_target().ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    let pipe = target.pipeline.pipe().ok_or(Ui4AsyncCompositionError::Unavailable)?;
+    let pipe = target
+        .pipeline
+        .pipe()
+        .ok_or(Ui4AsyncCompositionError::Unavailable)?;
     let change = clip_composition_damage_region(damage, target.width, target.height);
     if change.is_empty()
         || !prepare_ui4_primary_swap_surfaces(dev, pipe, target.width, target.height)
@@ -4875,7 +5027,10 @@ pub(crate) fn queue_ui4_primary_composition(
     let blit = ui4_bcs_queue::queue(destination, copies, source_cache)?;
     Ok(Ui4AsyncComposition {
         work: Some(Ui4AsyncCompositionWork::BcsStack(blit)),
-        target: Ui4AsyncCompositionTarget::Primary { surface, pipeline: target.pipeline },
+        target: Ui4AsyncCompositionTarget::Primary {
+            surface,
+            pipeline: target.pipeline,
+        },
         change,
         effective,
         tile_count: tiles.len(),
@@ -5020,7 +5175,7 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
         .pipeline
         .pipe()
         .ok_or(Ui4AsyncCompositionError::Unavailable)?;
-    if plane_slot >= crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT
+    if !is_application_plane(pipe, plane_slot)
         || source.width == 0
         || source.height == 0
         || dest_width == 0
@@ -5185,10 +5340,6 @@ pub(crate) fn poll_ui4_composition(composition: Ui4AsyncComposition) -> Ui4Async
     }
 }
 
-
-
-
-
 /// Stage only the stable SURF address.  Front ownership and damage history are
 /// committed later, after the asynchronous SURFLIVE poll proves the latch.
 pub(crate) fn stage_ui4_composition_flip(composition: Ui4AsyncComposition) -> bool {
@@ -5332,24 +5483,23 @@ pub(crate) fn ui4_composition_flip_is_live(composition: Ui4AsyncComposition) -> 
         return false;
     };
     let (plane_base, surface_reg) = match composition.target {
-        Ui4AsyncCompositionTarget::Primary { surface, .. } => {
-            (surface.pipe.primary_plane().base(), u32::try_from(surface.gpu).ok())
-        }
-        Ui4AsyncCompositionTarget::Overlay { surface, .. } => {
-            (overlay_plane_base(surface.pipe, surface.plane_slot), u32::try_from(surface.gpu).ok())
-        }
-        Ui4AsyncCompositionTarget::DirectOverlay { surface } => {
-            (overlay_plane_base(surface.pipe, surface.plane_slot), u32::try_from(surface.gpu).ok())
-        }
+        Ui4AsyncCompositionTarget::Primary { surface, .. } => (
+            surface.pipe.primary_plane().base(),
+            u32::try_from(surface.gpu).ok(),
+        ),
+        Ui4AsyncCompositionTarget::Overlay { surface, .. } => (
+            overlay_plane_base(surface.pipe, surface.plane_slot),
+            u32::try_from(surface.gpu).ok(),
+        ),
+        Ui4AsyncCompositionTarget::DirectOverlay { surface } => (
+            overlay_plane_base(surface.pipe, surface.plane_slot),
+            u32::try_from(surface.gpu).ok(),
+        ),
     };
     surface_reg.is_some_and(|surface_reg| {
         crate::intel::mmio_read(dev, plane_base + UNI_PLANE_SURFLIVE_OFF) == surface_reg
     })
 }
-
-
-
-
 
 fn copy_premultiplied_rgba_tile_into_overlay_clipped(
     surface: OverlaySurface,
@@ -5648,7 +5798,12 @@ fn blend_overlay_rect_rgba_clipped(
 }
 
 fn dma_flush_overlay_region(surface: OverlaySurface, damage: CompositionDamageRegion) -> bool {
-    dma_flush_surface_region(surface.virt, surface.byte_len, surface.pitch_bytes as usize, damage)
+    dma_flush_surface_region(
+        surface.virt,
+        surface.byte_len,
+        surface.pitch_bytes as usize,
+        damage,
+    )
 }
 
 fn dma_flush_surface_region(
@@ -5699,7 +5854,12 @@ fn dma_flush_surface_rect_span(
     if end > byte_len {
         return None;
     }
-    Some(crate::intel::DmaFlushRows::new(unsafe { virt.add(start) }, row_bytes, pitch_bytes, rows))
+    Some(crate::intel::DmaFlushRows::new(
+        unsafe { virt.add(start) },
+        row_bytes,
+        pitch_bytes,
+        rows,
+    ))
 }
 
 fn clip_composition_damage(
@@ -5813,7 +5973,7 @@ fn overlay_plane_dynamic_flip_guard(
     plane_slot: usize,
     alpha: OverlayAlphaMode,
 ) -> Result<(), &'static str> {
-    if plane_slot > OVERLAY_UNIVERSAL_PLANE_COUNT {
+    if plane_slot >= plane_slot_count(pipe) || screenlog::owns_plane(pipe.slot, plane_slot) {
         return Err("surface-plane-slot");
     }
     if !ui4_rgba8_plane_stack_ready(pipe) {
@@ -5822,33 +5982,17 @@ fn overlay_plane_dynamic_flip_guard(
     let plane_base = overlay_plane_base(pipe, plane_slot);
     let ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_CTL_OFF);
     let color_ctl = crate::intel::mmio_read(dev, plane_base + UNI_PLANE_COLOR_CTL_OFF);
-    let resources = [
-        (overlay_plane_base(pipe, 0), PLANE_DBUF_SLOT_0_START, PLANE_DBUF_SLOT_0_END),
-        (
-            overlay_plane_base(pipe, UI_OVERLAY_PLANE_SLOT),
-            PLANE_DBUF_SLOT_1_START,
-            PLANE_DBUF_SLOT_1_END,
-        ),
-        (
-            overlay_plane_base(pipe, VIDEO_NV12_PLANE_SLOT),
-            PLANE_DBUF_SLOT_2_START,
-            PLANE_DBUF_SLOT_2_END,
-        ),
-        (
-            overlay_plane_base(pipe, VIDEO_NV12_Y_PLANE_SLOT),
-            PLANE_DBUF_SLOT_3_START,
-            PLANE_DBUF_SLOT_3_END,
-        ),
-        (
-            overlay_plane_base(pipe, crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT),
-            PLANE_DBUF_SLOT_4_START,
-            PLANE_DBUF_SLOT_4_END,
-        ),
-    ];
-    if !resources.iter().all(|(base, start, end)| {
-        plane_watermarks_are_boot_safe(dev, *base)
-            && crate::intel::mmio_read(dev, *base + UNI_PLANE_BUF_CFG_OFF)
-                == plane_buf_cfg_value(*start, *end)
+    if !(0..plane_slot_count(pipe)).all(|slot| {
+        let base = overlay_plane_base(pipe, slot);
+        let Some((start, end)) = plane_dbuf_range(pipe, slot) else {
+            return false;
+        };
+        let Some(wm0) = plane_watermark(pipe, slot) else {
+            return false;
+        };
+        plane_watermarks_match(dev, base, wm0)
+            && crate::intel::mmio_read(dev, base + UNI_PLANE_BUF_CFG_OFF)
+                == plane_buf_cfg_value(start, end)
     }) {
         return Err("dbuf-or-watermark-state");
     }
@@ -6011,9 +6155,13 @@ fn flip_overlay_plane_surface(
     let Some(surface_reg) = u32::try_from(surface.gpu).ok() else {
         return false;
     };
-    let Some(geometry) =
-        overlay_plane_geometry(surface.pitch_bytes, surface.width, surface.height, pos_x, pos_y)
-    else {
+    let Some(geometry) = overlay_plane_geometry(
+        surface.pitch_bytes,
+        surface.width,
+        surface.height,
+        pos_x,
+        pos_y,
+    ) else {
         return false;
     };
     match queue_ui4_plane_surface_flip(
@@ -6046,7 +6194,7 @@ fn flip_overlay_plane_surface(
         }
         PlaneSurfaceFlipQueueResult::Rejected => return false,
         PlaneSurfaceFlipQueueResult::Inactive => {
-            if surface.plane_slot < crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT
+            if is_application_plane(surface.pipe, surface.plane_slot)
                 && crate::r::readiness::is_set(crate::r::readiness::UI4_COMPOSITOR_READY)
             {
                 crate::log_error!(target: "intel/display";
@@ -6291,8 +6439,7 @@ mod direct_plane_scaler_tests {
     use super::{
         OverlayAlphaMode, PLANE_COLOR_ALPHA_MASK, PLANE_COLOR_ALPHA_SW_PREMULT,
         PLANE_CTL_FORMAT_MASK_SKL, PLANE_CTL_FORMAT_XRGB_8888, PLANE_CTL_ORDER_RGBX,
-        PrimaryPlaneSourceFormat, direct_plane_scaler_factor,
-        plane_color_ctl_alpha,
+        PrimaryPlaneSourceFormat, direct_plane_scaler_factor, plane_color_ctl_alpha,
         primary_plane_ctl_enabled_for_format, primary_plane_source_contract_accepted,
     };
 
@@ -6302,25 +6449,43 @@ mod direct_plane_scaler_tests {
             0,
             PrimaryPlaneSourceFormat::Rgba8888Premultiplied,
         );
-        assert_eq!(plane_ctl & PLANE_CTL_FORMAT_MASK_SKL, PLANE_CTL_FORMAT_XRGB_8888);
+        assert_eq!(
+            plane_ctl & PLANE_CTL_FORMAT_MASK_SKL,
+            PLANE_CTL_FORMAT_XRGB_8888
+        );
         assert_ne!(plane_ctl & PLANE_CTL_ORDER_RGBX, 0);
 
         let color_ctl = plane_color_ctl_alpha(0, OverlayAlphaMode::PremultipliedRgba);
-        assert_eq!(color_ctl & PLANE_COLOR_ALPHA_MASK, PLANE_COLOR_ALPHA_SW_PREMULT);
+        assert_eq!(
+            color_ctl & PLANE_COLOR_ALPHA_MASK,
+            PLANE_COLOR_ALPHA_SW_PREMULT
+        );
     }
 
     #[test]
     fn primary_geometry_change_requires_atomic_compositor_batch() {
-        assert!(primary_plane_source_contract_accepted(true, false, true, true));
-        assert!(!primary_plane_source_contract_accepted(true, false, true, false));
-        assert!(primary_plane_source_contract_accepted(true, false, false, false));
+        assert!(primary_plane_source_contract_accepted(
+            true, false, true, true
+        ));
+        assert!(!primary_plane_source_contract_accepted(
+            true, false, true, false
+        ));
+        assert!(primary_plane_source_contract_accepted(
+            true, false, false, false
+        ));
     }
 
     #[test]
     fn primary_immutable_contract_change_always_fails_closed() {
-        assert!(!primary_plane_source_contract_accepted(true, true, false, true));
-        assert!(!primary_plane_source_contract_accepted(true, true, true, true));
-        assert!(!primary_plane_source_contract_accepted(false, false, false, true));
+        assert!(!primary_plane_source_contract_accepted(
+            true, true, false, true
+        ));
+        assert!(!primary_plane_source_contract_accepted(
+            true, true, true, true
+        ));
+        assert!(!primary_plane_source_contract_accepted(
+            false, false, false, true
+        ));
     }
 
     #[test]
@@ -6334,6 +6499,4 @@ mod direct_plane_scaler_tests {
         assert_eq!(direct_plane_scaler_factor(640, 2560), None);
         assert_eq!(direct_plane_scaler_factor(2560, 800), None);
     }
-
-
 }

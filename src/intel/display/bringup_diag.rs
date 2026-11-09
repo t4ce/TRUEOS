@@ -8,7 +8,7 @@ struct Evidence {
     failure: &'static str,
     plane_slot: usize,
     pipe_slot: usize,
-    wanted: [u32; UNIVERSAL_PLANE_SLOTS],
+    wanted: [u32; MAX_UNIVERSAL_PLANE_SLOTS],
     live_mask: u32,
     polls: usize,
 }
@@ -18,7 +18,7 @@ static EVIDENCE: Mutex<Evidence> = Mutex::new(Evidence {
     failure: "none",
     plane_slot: usize::MAX,
     pipe_slot: usize::MAX,
-    wanted: [0; UNIVERSAL_PLANE_SLOTS],
+    wanted: [0; MAX_UNIVERSAL_PLANE_SLOTS],
     live_mask: 0,
     polls: 0,
 });
@@ -60,7 +60,7 @@ pub(super) fn checkpoint(stage: &'static str, plane_slot: usize) {
         stage, plane_slot, UI4_RGBA8_PLANE_STACK_STATE.load(Ordering::Acquire));
 }
 
-pub(super) fn latch(wanted: [u32; UNIVERSAL_PLANE_SLOTS], live_mask: u32, polls: usize) {
+pub(super) fn latch(wanted: [u32; MAX_UNIVERSAL_PLANE_SLOTS], live_mask: u32, polls: usize) {
     let mut evidence = EVIDENCE.lock();
     evidence.wanted = wanted;
     evidence.live_mask = live_mask;
@@ -130,7 +130,9 @@ pub(super) fn append(out: &mut String, dev: crate::intel::Dev) {
     let _ = writeln!(
         out,
         "display_plane_inventory attempted_pipe={} logical_ui4_slots={} physical_universal_planes_per_pipe={} separate_cursor=1 count_source=physical-platform-policy capture=read-only-no-commit",
-        pipe.name, UNIVERSAL_PLANE_SLOTS, physical_count
+        pipe.name,
+        super::plane_slot_count(pipe),
+        physical_count
     );
     if physical_count == 7 {
         for observed_pipe in PIPES {
@@ -164,10 +166,12 @@ fn append_pipe(out: &mut String, dev: crate::intel::Dev, pipe: PipeInfo, physica
     let mut controls = [0u32; 7];
     let mut dbufs = [0u32; 7];
     for slot in 0..physical_count {
-        let plane = pipe.plane(slot);
-        let base = plane.base();
-        let ctl = crate::intel::mmio_read(dev, plane.ctl());
-        let dbuf = crate::intel::mmio_read(dev, plane.buf_cfg());
+        // This inventory is physical, including before native adoption. Do
+        // not apply UI4's logical interaction/extra-application remapping.
+        let base =
+            UNI_PLANE_BASE + pipe.slot * UNI_PLANE_PIPE_STRIDE + slot * UNI_PLANE_SLOT_STRIDE;
+        let ctl = crate::intel::mmio_read(dev, base + UNI_PLANE_CTL_OFF);
+        let dbuf = crate::intel::mmio_read(dev, base + UNI_PLANE_BUF_CFG_OFF);
         controls[slot] = ctl;
         dbufs[slot] = dbuf;
         let _ = writeln!(
@@ -176,13 +180,17 @@ fn append_pipe(out: &mut String, dev: crate::intel::Dev, pipe: PipeInfo, physica
             pipe.name,
             slot,
             slot + 1,
-            (slot < UNIVERSAL_PLANE_SLOTS).then_some(slot),
+            if native_ui4_for_pipe(pipe) {
+                tgl_ui4_layout::logical_slot(slot)
+            } else {
+                (slot < UNIVERSAL_PLANE_SLOTS).then_some(slot)
+            },
             ctl & PLANE_CTL_ENABLE != 0,
             base,
             ctl,
-            crate::intel::mmio_read(dev, plane.surf()),
-            crate::intel::mmio_read(dev, plane.surf_live()),
-            crate::intel::mmio_read(dev, plane.stride()),
+            crate::intel::mmio_read(dev, base + UNI_PLANE_SURF_OFF),
+            crate::intel::mmio_read(dev, base + UNI_PLANE_SURFLIVE_OFF),
+            crate::intel::mmio_read(dev, base + UNI_PLANE_STRIDE_OFF),
             crate::intel::mmio_read(dev, base + UNI_PLANE_POS_OFF),
             crate::intel::mmio_read(dev, base + UNI_PLANE_SIZE_OFF),
             crate::intel::mmio_read(dev, base + UNI_PLANE_OFFSET_OFF),
@@ -205,8 +213,8 @@ fn append_pipe(out: &mut String, dev: crate::intel::Dev, pipe: PipeInfo, physica
             crate::intel::mmio_read(dev, base + UNI_PLANE_WM_SAGV_TRANS_OFF)
         );
     }
-    for extra in UNIVERSAL_PLANE_SLOTS..physical_count {
-        for owned in 0..UNIVERSAL_PLANE_SLOTS {
+    for extra in 1..physical_count {
+        for owned in 0..extra {
             if controls[extra] & controls[owned] & PLANE_CTL_ENABLE != 0
                 && raw_dbuf_ranges_overlap(dbufs[extra], dbufs[owned])
             {

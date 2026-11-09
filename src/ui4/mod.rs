@@ -215,6 +215,13 @@ pub(crate) fn release_owner_resources(owner: WindowOwner) -> OwnerReleaseSummary
 
 pub(crate) const OUTPUT_COUNT: usize = 4;
 pub(crate) const UNIVERSAL_PLANE_COUNT: usize = 5;
+/// Logical index span for application state. Slot 4 stays reserved even when
+/// an output advertises the additional application carrier in slot 5.
+pub(crate) const MAX_APPLICATION_PLANE_SLOTS: usize = 6;
+pub(crate) const ADDITIONAL_APPLICATION_PLANE_SLOT: usize = 5;
+pub(crate) const DEFAULT_APPLICATION_PLANE_MASK: u8 = 0x0F;
+pub(crate) const SUPPORTED_APPLICATION_PLANE_MASK: u8 =
+    DEFAULT_APPLICATION_PLANE_MASK | (1 << ADDITIONAL_APPLICATION_PLANE_SLOT);
 /// Default broker extent for kernel UI4 producers that do not yet negotiate a
 /// size with an external application.
 pub(crate) const DEFAULT_FRAME_WIDTH: u32 = 768;
@@ -226,7 +233,8 @@ pub(crate) const PRIMARY_PLANE_SLOT: usize = 0;
 pub(crate) const ALPHA_OVERLAY_PLANE_SLOT: usize = 1;
 pub(crate) const RGB_OVERLAY_PLANE_SLOT_2: usize = 2;
 pub(crate) const RGB_OVERLAY_PLANE_SLOT_3: usize = 3;
-/// Highest universal plane. UI4 reserves it for input chrome and the trusted
+/// Stable logical interaction carrier, mapped above every application by the
+/// display owner. UI4 reserves it for input chrome and the trusted
 /// kernel color picker; neither participates in an application composition
 /// surface.
 pub(crate) const INTERACTION_OVERLAY_PLANE_SLOT: usize = 4;
@@ -289,7 +297,29 @@ impl Ui4OutputCapabilities {
     }
 }
 
-const UI4_APPLICATION_PLANE_MASK: u8 = (1u8 << INTERACTION_OVERLAY_PLANE_SLOT) - 1;
+pub(crate) const fn is_application_plane_slot(slot: usize) -> bool {
+    slot < MAX_APPLICATION_PLANE_SLOTS
+        && SUPPORTED_APPLICATION_PLANE_MASK & (1u8 << slot) != 0
+}
+
+/// Bottom-to-top application order, independent of the reserved logical hole.
+pub(super) fn application_plane_slots(mask: u8) -> impl DoubleEndedIterator<Item = usize> {
+    (0..MAX_APPLICATION_PLANE_SLOTS)
+        .filter(move |&slot| is_application_plane_slot(slot) && mask & (1u8 << slot) != 0)
+}
+
+pub(super) fn application_plane_mask(output: OutputId) -> u8 {
+    ui4_output_capabilities(output)
+        .map_or(DEFAULT_APPLICATION_PLANE_MASK, |caps| caps.application_plane_mask)
+}
+
+pub(super) fn background_plane_slot(mask: u8, foreground: usize) -> Option<usize> {
+    if foreground == PRIMARY_PLANE_SLOT {
+        Some(PRIMARY_PLANE_SLOT)
+    } else {
+        application_plane_slots(mask).filter(|&slot| slot < foreground).next_back()
+    }
+}
 static UI4_OUTPUT_CAPABILITIES: spin::Mutex<[Option<Ui4OutputCapabilities>; OUTPUT_COUNT]> =
     spin::Mutex::new([None; OUTPUT_COUNT]);
 
@@ -311,8 +341,8 @@ fn publish_output_capabilities_into(
     if capabilities.width == 0 || capabilities.height == 0 {
         return Err("ui4-output-capabilities-empty-extent");
     }
-    if capabilities.application_plane_mask == 0
-        || capabilities.application_plane_mask & !UI4_APPLICATION_PLANE_MASK != 0
+    if capabilities.application_plane_mask & (1 << PRIMARY_PLANE_SLOT) == 0
+        || capabilities.application_plane_mask & !SUPPORTED_APPLICATION_PLANE_MASK != 0
     {
         return Err("ui4-output-capabilities-invalid-application-plane-mask");
     }
@@ -779,13 +809,29 @@ mod live_resource_and_output_capability_tests {
     }
 
     #[test]
+    fn additional_application_carrier_keeps_reserved_slots_out_of_the_mask() {
+        assert_eq!(application_plane_slots(DEFAULT_APPLICATION_PLANE_MASK).collect::<alloc::vec::Vec<_>>(), [0, 1, 2, 3]);
+        assert_eq!(application_plane_slots(SUPPORTED_APPLICATION_PLANE_MASK).collect::<alloc::vec::Vec<_>>(), [0, 1, 2, 3, 5]);
+        assert_eq!(background_plane_slot(SUPPORTED_APPLICATION_PLANE_MASK, 5), Some(3));
+        assert!(!is_application_plane_slot(INTERACTION_OVERLAY_PLANE_SLOT));
+        assert!(!is_application_plane_slot(6));
+        let capabilities = Ui4OutputCapabilities {
+            output: OutputId::from_slot(0).unwrap(), width: 3_840, height: 2_160,
+            application_plane_mask: SUPPORTED_APPLICATION_PLANE_MASK,
+        };
+        let mut outputs = [None; OUTPUT_COUNT];
+        assert_eq!(publish_output_capabilities_into(&mut outputs, capabilities), Ok(()));
+        assert_eq!(capabilities.application_plane_count(), 5);
+    }
+
+    #[test]
     fn capability_publication_is_idempotent_and_rejects_invalid_or_conflicting_state() {
         let output = OutputId::from_slot(0).unwrap();
         let capabilities = Ui4OutputCapabilities {
             output,
             width: 2_560,
             height: 1_440,
-            application_plane_mask: UI4_APPLICATION_PLANE_MASK,
+            application_plane_mask: DEFAULT_APPLICATION_PLANE_MASK,
         };
         let mut outputs = [None; OUTPUT_COUNT];
 
@@ -841,7 +887,7 @@ pub(crate) fn emulator_windows() -> (u64, alloc::vec::Vec<WindowSnapshot>) {
             .filter(|w| !w.plane.is_application()),
     );
     windows.sort_by_key(|w| {
-        (w.plane.slot(), w.presentation_placement.z, w.id.raw(), u8::MAX - w.layer)
+        (w.plane.stack_rank(), w.presentation_placement.z, w.id.raw(), u8::MAX - w.layer)
     });
     (revision, windows)
 }

@@ -130,7 +130,6 @@ pub(crate) enum WdCapturePoll {
     Failed { status: u32 },
 }
 
-
 /// The complete first-version mapping policy. Slots 0 and 4 are invariant;
 /// Spirit's dedicated hardware cursor slot 5 is mirrored separately and is
 /// invariant too. Only the three ordinary single-frame slots may permute.
@@ -375,7 +374,6 @@ static STATE: Mutex<WdCaptureState> = Mutex::new(WdCaptureState::new());
 static CAPTURE_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 static MAP_MODE: AtomicU8 = AtomicU8::new(MirrorMapMode::Identity as u8);
 
-
 fn mirror_map_mode() -> MirrorMapMode {
     MirrorMapMode::from_raw(MAP_MODE.load(Ordering::Acquire))
 }
@@ -410,7 +408,13 @@ fn request_pipe_c_power(dev: crate::intel::Dev) -> Result<u32, WdCaptureError> {
     for index in POWER_WELL_FIRST_INDEX..=POWER_WELL_LAST_INDEX {
         requested |= power_well_request(index);
         crate::intel::mmio_write(dev, HSW_PWR_WELL_CTL2, requested);
-        if !wait_for_mask(dev, HSW_PWR_WELL_CTL2, power_well_state(index), true, POWER_WAIT_ITERS) {
+        if !wait_for_mask(
+            dev,
+            HSW_PWR_WELL_CTL2,
+            power_well_state(index),
+            true,
+            POWER_WAIT_ITERS,
+        ) {
             crate::intel::mmio_write(dev, HSW_PWR_WELL_CTL2, saved);
             return Err(WdCaptureError::PowerWellTimeout);
         }
@@ -591,7 +595,11 @@ fn mirror_cursor(dev: crate::intel::Dev) {
     for base in [CURSOR_WM_TRANS_A, CURSOR_WM_SAGV_A, CURSOR_WM_SAGV_TRANS_A] {
         crate::intel::mmio_write(dev, base + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE, 0);
     }
-    crate::intel::mmio_write(dev, CURSOR_WM_A0 + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE, source_wm0);
+    crate::intel::mmio_write(
+        dev,
+        CURSOR_WM_A0 + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE,
+        source_wm0,
+    );
     // Pipe C owns blocks 2040..2047; do not clone Pipe A's S1 allocation.
     crate::intel::mmio_write(
         dev,
@@ -601,7 +609,10 @@ fn mirror_cursor(dev: crate::intel::Dev) {
     crate::intel::mmio_write(
         dev,
         SEL_FETCH_CUR_CTL_A + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE,
-        crate::intel::mmio_read(dev, SEL_FETCH_CUR_CTL_A + SOURCE_PIPE_SLOT * CURSOR_PIPE_STRIDE),
+        crate::intel::mmio_read(
+            dev,
+            SEL_FETCH_CUR_CTL_A + SOURCE_PIPE_SLOT * CURSOR_PIPE_STRIDE,
+        ),
     );
     // CUR_FBC_CTL is double-buffered with CUR_CTL/CUR_BASE. Preserve the
     // source's mode-defined height contract before CUR_BASE arms the mirror.
@@ -673,6 +684,11 @@ fn aligned_capture_layout(width: u32, height: u32) -> Option<(u32, usize)> {
 
 pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptureError> {
     let dev = crate::intel::claimed_device().ok_or(WdCaptureError::DeviceUnavailable)?;
+    // Native TGL's seven-plane Pipe A owns both DBUF slices. Enabling C
+    // would change slice routing under live scanout; it needs a new allocation.
+    if native_ui4_for_pipe(PIPES[SOURCE_PIPE_SLOT]) {
+        return Err(WdCaptureError::UnsupportedDevice);
+    }
     if dev.device_id != 0x4680 {
         return Err(WdCaptureError::UnsupportedDevice);
     }
@@ -749,7 +765,11 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
         | PIPE_CHICKEN_UNDERRUN_RECOVERY_DISABLE_ADLP
         | PIPE_CHICKEN_PIXEL_ROUNDING_TRUNC_FB_PASSTHRU
         | PIPE_CHICKEN_PER_PIXEL_ALPHA_BYPASS;
-    crate::intel::mmio_write(dev, PIPE_CHICKEN_A + mirror.slot * PIPE_MMIO_STRIDE, chicken);
+    crate::intel::mmio_write(
+        dev,
+        PIPE_CHICKEN_A + mirror.slot * PIPE_MMIO_STRIDE,
+        chicken,
+    );
     let saved_output_color = program_pipe_c_output_bt709_ycbcr(dev);
     initialize_mirror_planes(dev);
     mirror_live_scene(dev);
@@ -891,7 +911,13 @@ pub(crate) fn stop_ui4_wd_xyuv8888_capture() -> Result<(), WdCaptureError> {
         // Intel Display PRM, Sequences for WD: triggered capture must be
         // complete before disabling planes/transcoder. A stop request is not
         // itself retirement proof. Preserve all backing if it remains busy.
-        if !wait_for_mask(dev, WD0_FRAME_STATUS, WD_FRAME_COMPLETE, true, PIPE_WAIT_ITERS) {
+        if !wait_for_mask(
+            dev,
+            WD0_FRAME_STATUS,
+            WD_FRAME_COMPLETE,
+            true,
+            PIPE_WAIT_ITERS,
+        ) {
             state.quarantined = true;
             return Err(WdCaptureError::WdDisableTimeout);
         }
@@ -920,7 +946,6 @@ pub(crate) fn stop_ui4_wd_xyuv8888_capture() -> Result<(), WdCaptureError> {
     );
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {

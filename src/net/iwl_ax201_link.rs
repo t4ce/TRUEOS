@@ -68,7 +68,7 @@ pub(crate) struct Connection {
     deadline: u64,
     handshake: Option<Session>,
     pairwise: Option<CcmpKey>,
-    group: Option<CcmpKey>,
+    group: [Option<CcmpKey>; 4],
     key_confirmation: Option<u16>,
     early_eapol: VecDeque<Vec<u8>>,
     eapol_seen: bool,
@@ -149,7 +149,7 @@ impl Connection {
             deadline: now() + 2000,
             handshake,
             pairwise: None,
-            group: None,
+            group: core::array::from_fn(|_| None),
             key_confirmation: None,
             early_eapol: VecDeque::new(),
             eapol_seen: false,
@@ -209,7 +209,7 @@ impl Connection {
         self.early_eapol.clear();
         self.handshake = None;
         self.pairwise = None;
-        self.group = None;
+        self.group = core::array::from_fn(|_| None);
     }
     pub fn disconnect(&mut self) {
         // Close the controlled port immediately. DMA stays retained and queues
@@ -220,7 +220,7 @@ impl Connection {
         self.early_eapol.clear();
         self.handshake = None;
         self.pairwise = None;
-        self.group = None;
+        self.group = core::array::from_fn(|_| None);
         crate::log_warn!(target: "net"; "iwl-ax201: stage=port-closed reconnect=device-reset-required\n");
     }
     fn next_sequence(&mut self) -> u16 {
@@ -284,9 +284,13 @@ impl Connection {
             self.config.bss.bssid,
             sequence,
         )?;
-        // EAPOL-Key replies carry their own authenticated MIC. Match the
-        // normal supplicant ordering: send M4 clear, then open protected data
-        // only after the radio confirms its delivery.
+        // Initial M2/M4 precede the controlled port opening and remain clear.
+        // Group M2 uses the existing PTK after association, matching hostap's
+        // encrypt=true control-port send once a pairwise key is installed.
+        let frame = if self.state == State::Connected {
+            self.pairwise.as_mut().ok_or("AX201 connected EAPOL requires PTK")?
+                .encrypt(&frame)?
+        } else { frame };
         self.transmit_raw(transport, &frame)
     }
     fn handle_eapol(
@@ -298,14 +302,25 @@ impl Connection {
             return Ok(());
         };
         // A forged/replayed EAPOL frame must never install keys or open a port.
-        let action = match handshake.handle_eapol(bytes) {
+        let group_before_connected = self.state != State::Connected
+            && bytes.get(5..7).is_some_and(|v| u16::from_be_bytes([v[0], v[1]]) & 8 == 0);
+        let result = if group_before_connected {
+            // A group reply must not replace the initial M4 radio-ACK gate.
+            Err("AX201 group rekey before connected port")
+        } else {
+            handshake.handle_eapol(bytes)
+        };
+        let action = match result {
             Ok(action) => action,
             Err(reason) => {
                 self.dropped += 1;
                 self.eapol_rejected = self.eapol_rejected.saturating_add(1);
                 if self.eapol_rejected.is_power_of_two() {
-                    crate::log_warn!(target: "net"; "iwl-ax201: stage=eapol-rejected state={:?} count={} reason={}\n",
-                        self.state, self.eapol_rejected, reason);
+                    let info = bytes.get(5..7).map(|v| u16::from_be_bytes([v[0], v[1]]));
+                    let replay = bytes.get(9..17).map(|v| u64::from_be_bytes(v.try_into().unwrap()));
+                    let class = match info { Some(v) if v & 8 == 0 => "group", Some(_) => "pairwise", None => "truncated" };
+                    crate::log_warn!(target: "net"; "iwl-ax201: stage=eapol-rejected state={:?} count={} class={} key_info={:?} replay={:?} bytes={} reason={}\n",
+                        self.state, self.eapol_rejected, class, info, replay, bytes.len(), reason);
                 }
                 return Ok(());
             }
@@ -313,12 +328,18 @@ impl Connection {
         self.eapol_seen = true;
         if let Some(keys) = action.keys {
             self.pairwise = Some(CcmpKey::new(keys.temporal, 0, self.config.bss.bssid)?);
-            self.group = Some(CcmpKey::with_receive_pn(
+            self.group[usize::from(keys.gtk.id)] = Some(CcmpKey::with_receive_pn(
                 keys.gtk.temporal,
                 keys.gtk.id,
                 self.config.bss.bssid,
                 keys.gtk.receive_pn,
             )?);
+        }
+        if let Some(gtk) = action.group_key {
+            self.group[usize::from(gtk.id)] = Some(CcmpKey::with_receive_pn(
+                gtk.temporal, gtk.id, self.config.bss.bssid, gtk.receive_pn,
+            )?);
+            crate::log_warn!(target: "net"; "iwl-ax201: stage=group-key-installed key_id={}\n", gtk.id);
         }
         let sequence = self.send_eapol(transport, &action.reply)?;
         if self.pairwise.is_some() && self.state != State::Connected {
@@ -401,7 +422,7 @@ impl Connection {
                 Ok(len) => len,
                 Err(_) => return Ok(()),
             };
-            let Some(_iv) = raw.frame.get(header..header + 8) else {
+            let Some(iv) = raw.frame.get(header..header + 8) else {
                 return Ok(());
             };
             // The receiver address selects the security association. A GTK
@@ -410,7 +431,7 @@ impl Connection {
             let key = if raw.frame[4] & 1 == 0 {
                 self.pairwise.as_mut()
             } else {
-                self.group.as_mut()
+                self.group[usize::from(iv[3] >> 6)].as_mut()
             };
             let Some(key) = key else {
                 return Ok(());

@@ -230,27 +230,37 @@ pub(in crate::intel) struct PlaneId {
 }
 
 impl PlaneId {
-    pub(in crate::intel) const fn base(self) -> usize {
-        UNI_PLANE_BASE + self.pipe.slot * UNI_PLANE_PIPE_STRIDE + self.slot * UNI_PLANE_SLOT_STRIDE
+    pub(in crate::intel) fn physical_slot(self) -> usize {
+        if super::native_ui4_for_pipe(self.pipe) {
+            super::tgl_ui4_layout::physical_slot(self.slot).expect("native display plane slot")
+        } else {
+            self.slot
+        }
     }
 
-    pub(in crate::intel) const fn ctl(self) -> usize {
+    pub(in crate::intel) fn base(self) -> usize {
+        UNI_PLANE_BASE
+            + self.pipe.slot * UNI_PLANE_PIPE_STRIDE
+            + self.physical_slot() * UNI_PLANE_SLOT_STRIDE
+    }
+
+    pub(in crate::intel) fn ctl(self) -> usize {
         self.base() + UNI_PLANE_CTL_OFF
     }
 
-    pub(in crate::intel) const fn stride(self) -> usize {
+    pub(in crate::intel) fn stride(self) -> usize {
         self.base() + UNI_PLANE_STRIDE_OFF
     }
 
-    pub(in crate::intel) const fn surf(self) -> usize {
+    pub(in crate::intel) fn surf(self) -> usize {
         self.base() + UNI_PLANE_SURF_OFF
     }
 
-    pub(in crate::intel) const fn surf_live(self) -> usize {
+    pub(in crate::intel) fn surf_live(self) -> usize {
         self.base() + UNI_PLANE_SURFLIVE_OFF
     }
 
-    pub(in crate::intel) const fn buf_cfg(self) -> usize {
+    pub(in crate::intel) fn buf_cfg(self) -> usize {
         self.base() + UNI_PLANE_BUF_CFG_OFF
     }
 }

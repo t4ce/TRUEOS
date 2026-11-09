@@ -608,6 +608,32 @@ mod link_lifecycle_tests {
         packet[5..7].copy_from_slice(&(2u16|8|64|128|256|512|4096).to_be_bytes());packet[9..17].copy_from_slice(&2u64.to_be_bytes());packet[97..99].copy_from_slice(&(key_data.len()as u16).to_be_bytes());packet.extend_from_slice(&key_data);
         let size=(packet.len()-4)as u16;packet[2..4].copy_from_slice(&size.to_be_bytes());let tag=hmac(&ptk[..16],&[&packet]);packet[81..97].copy_from_slice(&tag[..16]);packet
     }
+    fn group_message1(counter:u64,id:u8,key:[u8;16])->Vec<u8>{
+        // RSN group message 1 carries only an encrypted GTK KDE: no RSN IE,
+        // no pairwise bit, zero Key Length and no ANonce binding to M1/M3.
+        let ptk=ptk();let mut kde=vec![0xdd,22,0,15,172,1,id,0];kde.extend_from_slice(&key);
+        let wrapped=wrapped(&ptk[16..32],&kde);let mut packet=vec![0;99];
+        packet[0]=2;packet[1]=3;packet[4]=2;packet[5..7].copy_from_slice(&0x1382u16.to_be_bytes());
+        packet[9..17].copy_from_slice(&counter.to_be_bytes());packet[97..99].copy_from_slice(&(wrapped.len()as u16).to_be_bytes());
+        packet.extend_from_slice(&wrapped);let length=(packet.len()-4)as u16;packet[2..4].copy_from_slice(&length.to_be_bytes());
+        let mic=hmac(&ptk[..16],&[&packet]);packet[81..97].copy_from_slice(&mic[..16]);packet
+    }
+    fn multicast(payload:u8)->Vec<u8>{
+        let mut frame=downlink([8,0],AP,&[payload;46]);frame[4..10].fill(0xff);frame
+    }
+    fn ccmp_packet_number(frame:&[u8])->u64{
+        assert_ne!(frame[1]&0x40,0);let iv=&frame[24..32];
+        u64::from_le_bytes([iv[0],iv[1],iv[4],iv[5],iv[6],iv[7],0,0])
+    }
+    fn assert_group_message2(tx:&RawTx,receiver:&mut CcmpKey,counter:u64){
+        assert_eq!(tx.queue,2);assert!(!tx.options.encrypt); // Host owns CCMP.
+        let frame=receiver.decrypt(&tx.frame).unwrap();assert_eq!(&frame[30..32],&[0x88,0x8e]);
+        let packet=&frame[32..];assert_eq!(packet.len(),99);assert_eq!(&packet[5..7],&0x0302u16.to_be_bytes());
+        assert_eq!(&packet[7..9],&[0,0]);assert_eq!(&packet[9..17],&counter.to_be_bytes());
+        assert_eq!(&packet[17..49],&[0;32]);assert_eq!(&packet[97..99],&[0,0]);
+        let mut authenticated=packet.to_vec();authenticated[81..97].fill(0);
+        assert_eq!(&packet[81..97],&hmac(&ptk()[..16],&[&authenticated])[..16]);
+    }
     #[test]fn failed_station_command_submission_keeps_exact_pending_stage(){
         let mut f=fixture(false);
         crate::net::wifi::SEND_ERROR.with(|v|v.set(Some("command queue unavailable")));
@@ -711,6 +737,65 @@ mod link_lifecycle_tests {
         let frame=gtk.encrypt(&multicast).unwrap();f.frame(frame.clone());
         let ethernet=f.connection.receive().unwrap();assert_eq!(&ethernet[..6],&[0xff;6]);assert_eq!(&ethernet[14..],&[0x77;46]);
         f.frame(frame);assert!(f.connection.receive().is_none());
+    }
+    #[test]fn connected_group_rekey_preserves_pairwise_and_both_group_replay_windows(){
+        let mut f=fixture(true);f.associate();f.eapol(&message1());f.eapol(&message3());let m4=f.raw();f.tx_result(&m4,1);
+        assert!(f.connection.connected());let temporal:[u8;16]=ptk()[32..48].try_into().unwrap();
+        let mut ap_rx=CcmpKey::new(temporal,0,STA).unwrap();let mut ap_tx=CcmpKey::new(temporal,0,STA).unwrap();
+        let mut old_gtk=CcmpKey::new([0x77;16],1,STA).unwrap();let mut new_gtk=CcmpKey::new([0x88;16],2,STA).unwrap();
+        let first_old=old_gtk.encrypt(&multicast(0x71)).unwrap();f.frame(first_old.clone());assert!(f.connection.receive().is_some());
+        f.connection.send(&mut f.transport,&ethernet()).unwrap();let before=f.raw();
+        assert_eq!(ccmp_packet_number(&before.frame),1);ap_rx.decrypt(&before.frame).unwrap();
+
+        let request=group_message1(3,2,[0x88;16]);
+        f.frame(ap_tx.encrypt(&downlink([0x88,0x8e],AP,&request)).unwrap());let response=f.raw();
+        assert_group_message2(&response,&mut ap_rx,3);assert_eq!(ccmp_packet_number(&response.frame),2);
+        assert!(f.connection.connected());
+        let first_new=new_gtk.encrypt(&multicast(0x81)).unwrap();f.frame(first_new.clone());
+        assert_eq!(&f.connection.receive().unwrap()[14..],&[0x81;46]);
+        let second_old=old_gtk.encrypt(&multicast(0x72)).unwrap();f.frame(second_old.clone());
+        assert_eq!(&f.connection.receive().unwrap()[14..],&[0x72;46]); // Old GTK remains until its slot is replaced.
+
+        // Authentic AP retries use a new EAPOL replay counter but the same
+        // GTK. A reply is required without reinstalling it or resetting PN.
+        f.frame(ap_tx.encrypt(&downlink([0x88,0x8e],AP,&group_message1(4,2,[0x88;16]))).unwrap());
+        let retry=f.raw();assert_group_message2(&retry,&mut ap_rx,4);assert_eq!(ccmp_packet_number(&retry.frame),3);
+        for replay in [first_old,second_old,first_new]{f.frame(replay);assert!(f.connection.receive().is_none());}
+        f.frame(new_gtk.encrypt(&multicast(0x82)).unwrap());assert!(f.connection.receive().is_some());
+
+        let unicast=ap_tx.encrypt(&downlink([8,0],AP,&[0x61;46])).unwrap();f.frame(unicast.clone());assert!(f.connection.receive().is_some());
+        f.frame(ap_tx.encrypt(&downlink([0x88,0x8e],AP,&group_message1(5,2,[0x88;16]))).unwrap());
+        let retry=f.raw();assert_group_message2(&retry,&mut ap_rx,5);assert_eq!(ccmp_packet_number(&retry.frame),4);
+        f.frame(unicast);assert!(f.connection.receive().is_none()); // Pairwise RX PN also survives group retry.
+        f.connection.send(&mut f.transport,&ethernet()).unwrap();let after=f.raw();
+        assert_eq!(ccmp_packet_number(&after.frame),5);ap_rx.decrypt(&after.frame).unwrap();
+        assert_eq!(f.connection.state(),WifiState::Connected);
+    }
+    #[test]fn group_rekey_cannot_replace_initial_m4_delivery_confirmation(){
+        let mut f=fixture(true);f.associate();f.eapol(&message1());f.eapol(&message3());let m4=f.raw();
+        assert!(!f.connection.connected());let sent=f.shared.lock().unwrap().raw.len();
+        f.eapol(&group_message1(3,2,[0x88;16]));
+        assert_eq!(f.shared.lock().unwrap().raw.len(),sent);assert!(!f.connection.connected());
+        assert!(f.connection.send(&mut f.transport,&ethernet()).is_err());
+        f.tx_result(&m4,1);assert!(f.connection.connected());
+        // The dropped early group message must not consume its replay value.
+        f.eapol(&group_message1(3,2,[0x88;16]));
+        let mut ap_rx=CcmpKey::new(ptk()[32..48].try_into().unwrap(),0,STA).unwrap();
+        assert_group_message2(&f.raw(),&mut ap_rx,3);
+    }
+    #[test]fn group_rekey_rejects_same_material_moved_to_another_key_id(){
+        let mut f=fixture(true);f.associate();f.eapol(&message1());f.eapol(&message3());let m4=f.raw();f.tx_result(&m4,1);
+        let mut old_gtk=CcmpKey::new([0x77;16],1,STA).unwrap();
+        let first=old_gtk.encrypt(&multicast(0x71)).unwrap();f.frame(first.clone());assert!(f.connection.receive().is_some());
+        let sent=f.shared.lock().unwrap().raw.len();f.eapol(&group_message1(3,2,[0x77;16]));
+        assert_eq!(f.shared.lock().unwrap().raw.len(),sent);assert!(f.connection.connected());
+        let mut moved=CcmpKey::new([0x77;16],2,STA).unwrap();f.frame(moved.encrypt(&multicast(0x72)).unwrap());
+        assert!(f.connection.receive().is_none());f.frame(first);assert!(f.connection.receive().is_none());
+        f.frame(old_gtk.encrypt(&multicast(0x73)).unwrap());assert!(f.connection.receive().is_some());
+        // Rejection must leave the authenticated replay floor unchanged.
+        f.eapol(&group_message1(3,2,[0x88;16]));
+        let mut ap_rx=CcmpKey::new(ptk()[32..48].try_into().unwrap(),0,STA).unwrap();
+        assert_group_message2(&f.raw(),&mut ap_rx,3);
     }
     #[test]fn aggregate_sequence_alone_never_confirms_m4_descriptor(){
         let mut f=fixture(true);f.associate();f.eapol(&message1());f.eapol(&message3());let m4=f.raw();

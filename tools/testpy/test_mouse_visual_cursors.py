@@ -59,13 +59,6 @@ def main() -> None:
     atlas_static = re.search(r"^static ALPHA_ATLAS:.*?;$", atlas_source, re.MULTILINE)
     assert atlas_static
     font += atlas_static.group() + "\n"
-    cpu_static = re.search(r"^static CPU_ALPHA_ATLAS:.*?;$", atlas_source, re.MULTILINE)
-    assert cpu_static
-    font += cpu_static.group() + "\n"
-    font = font.replace("super::shell3_font_service::hex::", "crate::hex::")
-    font = font.replace("super::shell3_font_service::cpu_bitmap_fallback_enabled",
-                        "cpu_bitmap_fallback_enabled")
-    font += "fn cpu_bitmap_fallback_enabled() -> bool { false }\n"
     font += (FIXTURES / "atlas_fixture.rs").read_text()
 
     slot_path = "src/ui4/slot4_service.rs"

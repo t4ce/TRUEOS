@@ -157,7 +157,7 @@ fn screen_rect(w: &WindowSnapshot) -> Rect {
     }
 }
 fn rank(w: &WindowSnapshot) -> (usize, i32, WindowId) {
-    (w.plane.slot(), w.placement.z, w.id)
+    (w.plane.stack_rank(), w.placement.z, w.id)
 }
 fn tick(now: Instant) -> u64 {
     now.as_millis().saturating_mul(15) / 1000

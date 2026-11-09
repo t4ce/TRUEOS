@@ -247,7 +247,11 @@ pub(crate) fn init_once(dev: Dev) -> bool {
     mmio_write(dev, UNI_PLANE_BASE + UNI_PLANE_AUX_OFFSET_OFF, 0);
     mmio_write(dev, UNI_PLANE_BASE + UNI_PLANE_CUS_CTL_OFF, 0);
     mmio_write(dev, UNI_PLANE_BASE + UNI_PLANE_KEYMSK_OFF, 0);
-    mmio_write(dev, UNI_PLANE_BASE + UNI_PLANE_COLOR_CTL_OFF, PLANE_COLOR_PLANE_GAMMA_DISABLE);
+    mmio_write(
+        dev,
+        UNI_PLANE_BASE + UNI_PLANE_COLOR_CTL_OFF,
+        PLANE_COLOR_PLANE_GAMMA_DISABLE,
+    );
     mmio_write(dev, UNI_PLANE_BASE, PRIMARY_CTL);
     core::sync::atomic::fence(Ordering::SeqCst);
     mmio_write(dev, UNI_PLANE_BASE + UNI_PLANE_SURF_OFF, SURFACE_GPU as u32);
@@ -287,19 +291,20 @@ pub(crate) fn init_once(dev: Dev) -> bool {
         SPIRIT_RESEALED as u8,
     );
     if readback_ok {
-        // Reuse the proven allocation for a transparent CPU log layer. This
-        // publishes LastAP's reservation before secondary CPUs are started.
-        // Only the service writes these permanently retained pages afterwards.
+        // Retain the proven allocation for compact font-free diagnostics on
+        // hardware plane 6. UI4 interaction owns hardware plane 7 above it.
+        let (diagnostic_width, diagnostic_height) = super::display::laptop_diagnostic_extent();
+        let diagnostic_pitch = diagnostic_width * 4;
         let _ = unsafe {
             crate::r::services::microfont_log_service::install(
                 crate::r::services::microfont_log_service::Surface {
                     phys: frame.phys,
                     gpu: SURFACE_GPU,
                     virt: frame.virt,
-                    byte_len: FRAME_BYTES,
-                    width: WIDTH,
-                    height: HEIGHT,
-                    pitch_bytes: PITCH_BYTES,
+                    byte_len: (diagnostic_pitch * diagnostic_height) as usize,
+                    width: diagnostic_width,
+                    height: diagnostic_height,
+                    pitch_bytes: diagnostic_pitch,
                 },
             )
         };

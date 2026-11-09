@@ -721,7 +721,6 @@ fn with_warmed_atlas<T>(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AlphaAtlasSource {
     Native,
-    Bitmap,
 }
 
 pub(crate) struct OwnedAlphaAtlas {
@@ -747,8 +746,6 @@ impl OwnedAlphaAtlas {
                 }
                 glyph_slot(ch)?
             }
-            AlphaAtlasSource::Bitmap => super::shell3_font_service::hex::CODEPOINTS
-                .binary_search(&(ch as u32)).ok()?,
         };
         let bytes = self.glyph_width as usize * self.glyph_height as usize;
         self.pixels.get(slot * bytes..(slot + 1) * bytes)
@@ -790,76 +787,20 @@ impl OwnedAlphaAtlas {
                 .filter(|&ch| is_extra_line(ch)))
             .chain(microfont::raster_quad::GLYPH_CHARACTERS.iter().copied()
                 .filter(|&ch| is_extra_quad(ch)))
-            .filter(|_| self.source == AlphaAtlasSource::Native)
-            .chain(super::shell3_font_service::hex::CODEPOINTS.iter().copied()
-                .filter(|_| self.source == AlphaAtlasSource::Bitmap)
-                .filter_map(char::from_u32))
             .filter_map(|ch| self.glyph(ch).map(|pixels| (ch, pixels)))
     }
 }
 
 static ALPHA_ATLAS: spin::Once<OwnedAlphaAtlas> = spin::Once::new();
-static CPU_ALPHA_ATLAS: spin::Once<OwnedAlphaAtlas> = spin::Once::new();
 
 pub(crate) fn ready_atlas() -> Option<&'static OwnedAlphaAtlas> {
-    ALPHA_ATLAS.get().or_else(|| {
-        if super::shell3_font_service::cpu_bitmap_fallback_enabled() {
-            CPU_ALPHA_ATLAS.get()
-        } else {
-            None
-        }
-    })
+    ALPHA_ATLAS.get()
 }
 
-/// Expand the canonical bitmap cells once, without a GPU allocation, home-glyph
-/// warmup or native submission, only for the experimental laptop. These CPU
-/// tiles never replace native resources and survive native atlas quarantine.
-pub(crate) fn build_bitmap_alpha_atlas(em_height_px: u32) -> Result<&'static OwnedAlphaAtlas, &'static str> {
-    use super::shell3_font_service::hex;
-
-    if !super::shell3_font_service::cpu_bitmap_fallback_enabled() {
-        return Err("microfont-bitmap-atlas-disabled");
-    }
-    if !(11..=253).contains(&em_height_px) {
-        return Err("microfont-bitmap-atlas-size");
-    }
-    if let Some(atlas) = CPU_ALPHA_ATLAS.get() {
-        return if atlas.em_height_px == em_height_px { Ok(atlas) }
-            else { Err("microfont-bitmap-atlas-already-sized") };
-    }
-    let glyph_width = (em_height_px * 6 + 5) / 11;
-    let glyph_bytes = (glyph_width as usize).checked_mul(em_height_px as usize)
-        .ok_or("microfont-bitmap-atlas-size")?;
-    let bytes = glyph_bytes.checked_mul(hex::GLYPH_COUNT)
-        .ok_or("microfont-bitmap-atlas-size")?;
-    let mut pixels = Vec::new();
-    pixels.try_reserve_exact(bytes).map_err(|_| "microfont-bitmap-atlas-allocation")?;
-    for glyph in 0..hex::GLYPH_COUNT as u32 {
-        for y in 0..em_height_px {
-            let source_y = y * 11 / em_height_px;
-            for x in 0..glyph_width {
-                pixels.push(hex::native_coverage(glyph, x * 6 / glyph_width, source_y));
-            }
-        }
-    }
-    let atlas = CPU_ALPHA_ATLAS.call_once(|| OwnedAlphaAtlas {
-        em_height_px,
-        line_width_px: em_height_px as f32 / 11.0,
-        glyph_width,
-        glyph_height: em_height_px,
-        gutter_px: 0,
-        source: AlphaAtlasSource::Bitmap,
-        pixels,
-    });
-    // Another cold caller may have published a different physical size while
-    // this caller expanded its tiles. Never report that mismatched size ready.
-    if atlas.em_height_px != em_height_px {
-        return Err("microfont-bitmap-atlas-already-sized");
-    }
-    crate::log_important!(target: "microfont-mask";
-        "microfont-atlas: bitmap em_height_px={} glyph_size={}x{} glyph_slots={} format=r8 retained_cpu_mask_bytes={} source=canonical-bitmap gpu_submissions=0 retained=service-lifetime\n",
-        em_height_px, glyph_width, em_height_px, hex::GLYPH_COUNT, bytes);
-    Ok(atlas)
+/// Retired compatibility entry point. Native font failure never creates a
+/// second bitmap identity or publishes replacement coverage.
+pub(crate) fn build_bitmap_alpha_atlas(_em_height_px: u32) -> Result<&'static OwnedAlphaAtlas, &'static str> {
+    Err("microfont-bitmap-atlas-disabled")
 }
 
 /// One native line/quad production and R8 readback for every text consumer.

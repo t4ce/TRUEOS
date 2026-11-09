@@ -1,10 +1,9 @@
 //! Weighted hardware leases for indivisible one- or two-surface windows.
 //!
-//! Slot 0 composes windows without a lease. Slots 1..=3 hold whole groups in
-//! visual order. A group is never split between hardware and composition;
+//! Slot 0 composes windows without a lease. Advertised nonzero application
+//! slots hold whole groups in visual order, including across logical holes.
+//! A group is never split between hardware and composition;
 //! slot 4 remains exclusively owned by interaction chrome.
-
-pub(super) const REQUIRED_PLANE_MASK: u8 = 0b1111;
 
 pub(super) const fn layer_opacity(window: u8, layer: u8) -> u8 {
     ((window as u16 * layer as u16 + 127) / 255) as u8
@@ -19,7 +18,7 @@ pub(super) struct LeaseGroup {
     pub(super) last_hot_ms: u64,
 }
 
-pub(super) type GroupPlan = [Option<LeaseGroup>; 3];
+pub(super) type GroupPlan = [Option<LeaseGroup>; 4];
 
 /// Plan first, mutate later. Insufficient revocable capacity changes nothing.
 /// Input order is physical bottom-to-top order. A newly admitted window goes
@@ -74,7 +73,7 @@ pub(super) fn used(plan: GroupPlan) -> u8 {
 
 #[cfg(test)]
 fn compact(plan: &mut GroupPlan) {
-    let mut output = [None; 3];
+    let mut output = [None; 4];
     for (index, group) in plan.iter().flatten().copied().enumerate() {
         output[index] = Some(group);
     }
@@ -83,6 +82,7 @@ fn compact(plan: &mut GroupPlan) {
 
 /// First slot for a right-aligned group layout. Whole groups remain adjacent;
 /// any spare capacity is below them, never between their member surfaces.
+#[cfg(test)]
 pub(super) fn first_slot(plan: GroupPlan) -> usize {
     4 - usize::from(used(plan))
 }
@@ -117,50 +117,50 @@ mod tests {
     }
     #[test]
     fn dual_promotion_demotes_two_idle_singles_atomically() {
-        let initial = [Some(g(1, 1, 0)), Some(g(2, 1, 100)), Some(g(3, 1, 900))];
+        let initial = [Some(g(1, 1, 0)), Some(g(2, 1, 100)), Some(g(3, 1, 900)), None];
         let result = claim_group(initial, g(4, 2, 1000), 1000, 500, true).unwrap();
-        assert_eq!(result, [Some(g(3, 1, 900)), Some(g(4, 2, 1000)), None]);
+        assert_eq!(result, [Some(g(3, 1, 900)), Some(g(4, 2, 1000)), None, None]);
         assert_eq!(first_slot(result), 1);
     }
     #[test]
     fn dual_and_single_can_be_dragged_without_trading_slots() {
-        let initial = [Some(g(1, 2, 900)), Some(g(2, 1, 900)), None];
+        let initial = [Some(g(1, 2, 900)), Some(g(2, 1, 900)), None, None];
         let result = claim_group(initial, g(1, 2, 1000), 1000, 500, false).unwrap();
-        assert_eq!(result, [Some(g(1, 2, 1000)), Some(g(2, 1, 900)), None]);
+        assert_eq!(result, [Some(g(1, 2, 1000)), Some(g(2, 1, 900)), None, None]);
         assert!(claim_group(result, g(3, 1, 1001), 1001, 500, true).is_none());
     }
     #[test]
     fn not_enough_idle_capacity_never_revokes_a_prefix() {
-        let initial = [Some(g(1, 1, 0)), Some(g(2, 1, 900)), Some(g(3, 1, 900))];
+        let initial = [Some(g(1, 1, 0)), Some(g(2, 1, 900)), Some(g(3, 1, 900)), None];
         assert!(claim_group(initial, g(4, 2, 1000), 1000, 500, true).is_none());
         assert_eq!(used(initial), 3);
     }
     #[test]
     fn second_dual_waits_for_first_dual_to_be_revocable() {
-        let initial = [Some(g(1, 2, 900)), None, None];
+        let initial = [Some(g(1, 2, 900)), None, None, None];
         assert!(claim_group(initial, g(2, 2, 1000), 1000, 500, true).is_none());
         assert_eq!(
             claim_group(initial, g(2, 2, 1400), 1400, 500, true),
-            Some([Some(g(2, 2, 1400)), None, None])
+            Some([Some(g(2, 2, 1400)), None, None, None])
         );
     }
     #[test]
     fn focus_raises_both_members_over_the_other_dragged_window() {
-        let initial = [Some(g(1, 2, 900)), Some(g(2, 1, 900)), None];
+        let initial = [Some(g(1, 2, 900)), Some(g(2, 1, 900)), None, None];
         assert_eq!(
             claim_group(initial, g(1, 2, 1000), 1000, 500, true),
-            Some([Some(g(2, 1, 900)), Some(g(1, 2, 1000)), None])
+            Some([Some(g(2, 1, 900)), Some(g(1, 2, 1000)), None, None])
         );
     }
     #[test]
     fn one_free_slot_admits_a_single_but_not_half_a_dual() {
-        let initial = [Some(g(1, 2, 900)), None, None];
+        let initial = [Some(g(1, 2, 900)), None, None, None];
         assert!(claim_group(initial, g(2, 1, 1000), 1000, 500, true).is_some());
         assert!(claim_group(initial, g(2, 2, 1000), 1000, 500, true).is_none());
     }
     #[test]
     fn stale_time_or_invalid_width_cannot_steal_a_live_lease() {
-        let initial = [Some(g(1, 2, 1000)), Some(g(2, 1, 1000)), None];
+        let initial = [Some(g(1, 2, 1000)), Some(g(2, 1, 1000)), None, None];
         assert!(claim_group(initial, g(3, 2, 1), 1, 500, true).is_none());
         assert!(claim_group(initial, g(3, 0, 2000), 2000, 500, true).is_none());
         assert!(claim_group(initial, g(3, 3, 2000), 2000, 500, true).is_none());

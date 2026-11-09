@@ -2,7 +2,8 @@
 //!
 //! Supports RSN descriptor version 2 (HMAC-SHA1-128/AES key wrap), PSK AKM,
 //! CCMP-128, and ordinary unfragmented Data/QoS frames. WPA/TKIP, SAE, PMF,
-//! group rekey and pairwise rekey require a fresh, explicit station lifecycle.
+//! pairwise rekey require a fresh, explicit station lifecycle. RSN group-key
+//! updates retain the installed pairwise key and never reinstall a known GTK.
 //! Cryptographic building blocks are RustCrypto HMAC/SHA1/AES; wire contracts
 //! follow IEEE 802.11i and hostap wpa_supplicant/wpa.c. AES wrap is RFC 3394,
 //! CCM formatting RFC 3610. Authentication/replay failures never release data.
@@ -156,6 +157,8 @@ pub(crate) struct HandshakeAction {
     pub reply: Vec<u8>,
     /// Returned exactly once. Retransmitted M3 must not reinstall these keys.
     pub keys: Option<Keys>,
+    /// A new GTK only. An authenticated retry must preserve every installed PN.
+    pub group_key: Option<GroupKey>,
 }
 
 struct KeyPacket<'a> {
@@ -182,12 +185,14 @@ impl<'a> KeyPacket<'a> {
         }
         let info = u16::from_be_bytes([bytes[5], bytes[6]]);
         if info & 7 != 2
-            || info & PAIRWISE == 0
             || info & ((3 << 4) | (1 << 10) | (1 << 11) | (1 << 13) | (3 << 14)) != 0
         {
             return Err("WPA2 unsupported key descriptor flags");
         }
-        if u16::from_be_bytes([bytes[7], bytes[8]]) != 16 {
+        // RSN group-key messages use zero here; the authenticated GTK KDE
+        // supplies the CCMP key length. Pairwise messages retain their contract.
+        let key_length = u16::from_be_bytes([bytes[7], bytes[8]]);
+        if key_length != if info & PAIRWISE != 0 { 16 } else { 0 } {
             return Err("WPA2 requires CCMP-128");
         }
         Ok(Self {
@@ -213,6 +218,9 @@ pub(crate) struct Session {
     last_m3: Option<u64>,
     installed: bool,
     installed_gtk: Option<GroupKey>,
+    group_keys: [Option<GroupKey>; 4],
+    last_authenticated_replay: Option<u64>,
+    last_group_mic: Option<[u8; 16]>,
 }
 impl Session {
     pub fn new(
@@ -258,6 +266,9 @@ impl Session {
             last_m3: None,
             installed: false,
             installed_gtk: None,
+            group_keys: core::array::from_fn(|_| None),
+            last_authenticated_replay: None,
+            last_group_mic: None,
         })
     }
     pub fn established(&self) -> bool {
@@ -265,6 +276,9 @@ impl Session {
     }
     pub fn handle_eapol(&mut self, bytes: &[u8]) -> Result<HandshakeAction, &'static str> {
         let packet = KeyPacket::parse(bytes)?;
+        if packet.info & PAIRWISE == 0 {
+            return self.handle_group_key(packet);
+        }
         if packet.info & ACK == 0 {
             return Err("WPA2 expected authenticator ACK");
         }
@@ -298,7 +312,7 @@ impl Session {
                 &self.snonce,
                 &self.station_rsn,
             );
-            return Ok(HandshakeAction { reply, keys: None });
+            return Ok(HandshakeAction { reply, keys: None, group_key: None });
         }
         let m1 = self.m1_replay.ok_or("WPA2 message 3 before message 1")?;
         if packet.info & (INSTALL | SECURE | ENCRYPTED) != (INSTALL | SECURE | ENCRYPTED)
@@ -310,19 +324,16 @@ impl Session {
         if self
             .last_m3
             .is_some_and(|previous| packet.replay < previous)
+            || self.last_authenticated_replay.is_some_and(|previous| {
+                packet.replay < previous
+                    || packet.replay == previous && self.last_group_mic.is_some()
+            })
         {
             return Err("WPA2 replayed message 3");
         }
-        let mut authenticated = packet.bytes.to_vec();
-        authenticated[MIC].fill(0);
-        let mut tag = hmac(&self.ptk[..16], &[&authenticated]);
-        let valid = equal(&tag[..16], &packet.bytes[MIC]);
-        erase(&mut tag);
-        if !valid {
-            return Err("WPA2 EAPOL MIC mismatch");
-        }
+        self.verify_mic(&packet)?;
         let mut plain = unwrap_key(self.ptk[16..32].try_into().unwrap(), packet.data)?;
-        let parsed = parse_key_data(&plain, &self.ap_rsn);
+        let parsed = parse_key_data(&plain, &self.ap_rsn, true);
         erase(&mut plain);
         let mut gtk = parsed?;
         let rsc = u64::from_le_bytes(packet.bytes[65..73].try_into().unwrap());
@@ -346,10 +357,17 @@ impl Session {
                 temporal: gtk.temporal,
                 receive_pn: gtk.receive_pn,
             });
+            self.group_keys[usize::from(gtk.id)] = Some(GroupKey {
+                id: gtk.id,
+                temporal: gtk.temporal,
+                receive_pn: gtk.receive_pn,
+            });
             self.installed = true;
             Some(Keys { temporal, gtk })
         };
         self.last_m3 = Some(packet.replay);
+        self.last_authenticated_replay = Some(packet.replay);
+        self.last_group_mic = None;
         let reply = self.reply(
             packet.bytes[0],
             2 | PAIRWISE | HAS_MIC | SECURE,
@@ -357,7 +375,68 @@ impl Session {
             &[0; 32],
             &[],
         );
-        Ok(HandshakeAction { reply, keys })
+        Ok(HandshakeAction { reply, keys, group_key: None })
+    }
+    fn verify_mic(&self, packet: &KeyPacket<'_>) -> Result<(), &'static str> {
+        let mut authenticated = packet.bytes.to_vec();
+        authenticated[MIC].fill(0);
+        let mut tag = hmac(&self.ptk[..16], &[&authenticated]);
+        let valid = equal(&tag[..16], &packet.bytes[MIC]);
+        erase(&mut tag);
+        if valid { Ok(()) } else { Err("WPA2 EAPOL MIC mismatch") }
+    }
+    fn handle_group_key(&mut self, packet: KeyPacket<'_>) -> Result<HandshakeAction, &'static str> {
+        // RSN/CCMP group M1: descriptor v2, !Pairwise, ACK, MIC, Secure,
+        // encrypted GTK KDE. Pairwise INSTALL/nonce rules do not apply here.
+        if packet.info != (2 | ACK | HAS_MIC | SECURE | ENCRYPTED) {
+            return Err("WPA2 invalid group message 1 flags");
+        }
+        if !self.installed {
+            return Err("WPA2 group message 1 before pairwise keys");
+        }
+        let previous = self.last_authenticated_replay.ok_or("WPA2 missing replay counter")?;
+        if packet.replay < previous {
+            return Err("WPA2 replayed group message 1");
+        }
+        self.verify_mic(&packet)?;
+        if packet.replay == previous
+            && !self.last_group_mic.as_ref().is_some_and(|mic| equal(mic, &packet.bytes[MIC]))
+        {
+            return Err("WPA2 changed group replay counter");
+        }
+        let mut plain = unwrap_key(self.ptk[16..32].try_into().unwrap(), packet.data)?;
+        let parsed = parse_key_data(&plain, &self.ap_rsn, false);
+        erase(&mut plain);
+        let mut gtk = parsed?;
+        let rsc = u64::from_le_bytes(packet.bytes[65..73].try_into().unwrap());
+        if rsc > PN_MAX {
+            return Err("WPA2 invalid group receive sequence counter");
+        }
+        gtk.receive_pn = rsc;
+        let slot = usize::from(gtk.id);
+        // hostap can increment the replay counter when retrying the same GTK.
+        // Compare installed material in every key slot, not just the last G1:
+        // ACK retries without rebuilding CcmpKey or lowering its receive PN.
+        let known = self.group_keys[slot].as_ref()
+            .is_some_and(|key| equal(&key.temporal, &gtk.temporal));
+        if self.group_keys.iter().flatten()
+            .any(|key| key.id != gtk.id && equal(&key.temporal, &gtk.temporal))
+        {
+            return Err("WPA2 GTK material reused at another key ID");
+        }
+        let group_key = if known {
+            None
+        } else {
+            self.group_keys[slot] = Some(GroupKey {
+                id: gtk.id, temporal: gtk.temporal, receive_pn: gtk.receive_pn,
+            });
+            Some(gtk)
+        };
+        self.last_authenticated_replay = Some(packet.replay);
+        self.last_group_mic = Some(packet.bytes[MIC].try_into().unwrap());
+        let reply = self.reply(packet.bytes[0], 2 | HAS_MIC | SECURE,
+            packet.replay, &[0; 32], &[]);
+        Ok(HandshakeAction { reply, keys: None, group_key })
     }
     fn reply(&self, version: u8, info: u16, replay: u64, nonce: &[u8; 32], data: &[u8]) -> Vec<u8> {
         let mut bytes = vec![0; HEADER + data.len()];
@@ -406,7 +485,7 @@ fn validate_station_rsn(ie: &[u8]) -> Result<(), &'static str> {
     }
     Ok(())
 }
-fn parse_key_data(bytes: &[u8], expected_rsn: &[u8]) -> Result<GroupKey, &'static str> {
+fn parse_key_data(bytes: &[u8], expected_rsn: &[u8], require_rsn: bool) -> Result<GroupKey, &'static str> {
     let mut at = 0;
     let mut rsn = false;
     let mut gtk = None;
@@ -435,10 +514,10 @@ fn parse_key_data(bytes: &[u8], expected_rsn: &[u8]) -> Result<GroupKey, &'stati
         }
         at = end;
     }
-    if !rsn {
+    if require_rsn && !rsn {
         return Err("WPA2 message 3 has no matching RSN IE");
     }
-    gtk.ok_or("WPA2 message 3 has no GTK")
+    gtk.ok_or("WPA2 key data has no GTK")
 }
 
 /// RFC 3394 section 2.2.2; unwrap integrity is verified before returning keys.
@@ -879,6 +958,122 @@ mod tests {
         assert!(session.handle_eapol(&message).is_err());
         let mut unsolicited = fixture();
         assert!(unsolicited.handle_eapol(&m3(&session, 8)).is_err());
+    }
+    fn sign_eapol(session: &Session, bytes: &mut [u8]) {
+        bytes[MIC].fill(0);
+        let tag = hmac(&session.ptk[..16], &[bytes]);
+        bytes[MIC].copy_from_slice(&tag[..16]);
+    }
+    fn group_message_data(session: &Session, counter: u64, plain: &[u8], rsc: u64) -> Vec<u8> {
+        let wrapped = wrap(session.ptk[16..32].try_into().unwrap(), plain);
+        let mut bytes = vec![0; HEADER];
+        bytes[0] = 2;
+        bytes[1] = 3;
+        bytes[4] = 2;
+        bytes[5..7].copy_from_slice(&(2 | ACK | HAS_MIC | SECURE | ENCRYPTED).to_be_bytes());
+        bytes[9..17].copy_from_slice(&counter.to_be_bytes());
+        bytes[65..73].copy_from_slice(&rsc.to_le_bytes());
+        bytes[97..99].copy_from_slice(&(wrapped.len() as u16).to_be_bytes());
+        bytes.extend_from_slice(&wrapped);
+        let length = (bytes.len() - 4) as u16;
+        bytes[2..4].copy_from_slice(&length.to_be_bytes());
+        sign_eapol(session, &mut bytes);
+        bytes
+    }
+    fn group_message(session: &Session, counter: u64, id: u8, material: u8, rsc: u64) -> Vec<u8> {
+        // Group rekey carries a GTK KDE alone, without the initial M3 RSN IE.
+        let mut plain = vec![0xdd, 22, 0, 15, 172, 1, id, 0];
+        plain.extend_from_slice(&[material; 16]);
+        group_message_data(session, counter, &plain, rsc)
+    }
+    fn established_session() -> Session {
+        let mut session = fixture();
+        session.handle_eapol(&m1(1)).unwrap();
+        session.handle_eapol(&m3(&session, 2)).unwrap();
+        session
+    }
+    #[test]
+    fn group_rekey_authenticates_gtk_only_data_and_never_reinstalls_known_material() {
+        let mut session = established_session();
+        let ptk = session.ptk;
+        let message = group_message(&session, 3, 2, 0x88, 17);
+        let action = session.handle_eapol(&message).unwrap();
+        assert!(action.keys.is_none());
+        let gtk = action.group_key.unwrap();
+        assert_eq!((gtk.id, gtk.temporal, gtk.receive_pn), (2, [0x88; 16], 17));
+        assert_eq!(session.ptk, ptk);
+        assert!(session.established());
+        assert_eq!(action.reply.len(), HEADER);
+        assert_eq!(u16::from_be_bytes(action.reply[5..7].try_into().unwrap()), 0x0302);
+        assert_eq!(&action.reply[7..9], &[0; 2]);
+        assert_eq!(&action.reply[9..17], &3u64.to_be_bytes());
+        assert_eq!(&action.reply[17..81], &[0; 64]);
+        assert_eq!(&action.reply[97..], &[0; 2]);
+        session.verify_mic(&KeyPacket::parse(&action.reply).unwrap()).unwrap();
+        let repeated = session.handle_eapol(&message).unwrap();
+        assert!(repeated.keys.is_none() && repeated.group_key.is_none());
+        assert_eq!(action.reply, repeated.reply);
+        // Authenticators may use a fresh replay counter and a lower RSC for a
+        // retry; that must not rebuild either GTK slot or the pairwise key.
+        let retried = group_message(&session, 4, 2, 0x88, 0);
+        assert!(session.handle_eapol(&retried).unwrap().group_key.is_none());
+        assert_eq!(session.group_keys[2].as_ref().unwrap().receive_pn, 17);
+        assert!(session.handle_eapol(&message).is_err());
+        assert!(session.handle_eapol(&m3(&session, 2)).is_err());
+        // The initial key remains known even while a second key is active.
+        let old_slot = group_message(&session, 5, 1, 0x77, 0);
+        assert!(session.handle_eapol(&old_slot).unwrap().group_key.is_none());
+        let moved_material = group_message(&session, 6, 3, 0x88, 0);
+        assert_eq!(session.handle_eapol(&moved_material).err(),
+            Some("WPA2 GTK material reused at another key ID"));
+        let replacement = group_message(&session, 6, 2, 0x99, 23);
+        assert_eq!(session.handle_eapol(&replacement).unwrap().group_key.unwrap().temporal, [0x99; 16]);
+        assert_eq!(session.ptk, ptk);
+    }
+    #[test]
+    fn group_rekey_rejects_mic_wrap_flags_kde_and_replay_failures_without_advancing_state() {
+        let mut session = established_session();
+        let valid = group_message(&session, 3, 2, 0x88, 17);
+        let mut bad = valid.clone();
+        bad[82] ^= 1;
+        assert_eq!(session.handle_eapol(&bad).err(), Some("WPA2 EAPOL MIC mismatch"));
+        let mut bad = valid.clone();
+        bad[HEADER] ^= 1;
+        sign_eapol(&session, &mut bad);
+        assert_eq!(session.handle_eapol(&bad).err(), Some("WPA2 key wrap integrity failure"));
+        for flag in [ACK, HAS_MIC, SECURE, ENCRYPTED] {
+            let mut bad = valid.clone();
+            let info = u16::from_be_bytes(bad[5..7].try_into().unwrap()) & !flag;
+            bad[5..7].copy_from_slice(&info.to_be_bytes());
+            sign_eapol(&session, &mut bad);
+            assert!(session.handle_eapol(&bad).is_err());
+        }
+        for info in [0x1381u16, 0x13c2, 0x1782, 0x1b82, 0x3382] {
+            let mut bad = valid.clone();
+            bad[5..7].copy_from_slice(&info.to_be_bytes());
+            sign_eapol(&session, &mut bad);
+            assert!(session.handle_eapol(&bad).is_err());
+        }
+        let mut bad = valid.clone();
+        bad[7..9].copy_from_slice(&16u16.to_be_bytes());
+        sign_eapol(&session, &mut bad);
+        assert!(session.handle_eapol(&bad).is_err());
+        let mut malformed = vec![0xdd, 22, 0, 15, 172, 1, 2, 1];
+        malformed.extend_from_slice(&[0x88; 16]);
+        let malformed = group_message_data(&session, 3, &malformed, 0);
+        assert_eq!(session.handle_eapol(&malformed).err(), Some("WPA2 malformed GTK KDE"));
+        let bad_rsc = group_message(&session, 3, 2, 0x88, 1 << 48);
+        assert!(session.handle_eapol(&bad_rsc).is_err());
+        let old = group_message(&session, 1, 2, 0x88, 0);
+        assert!(session.handle_eapol(&old).is_err());
+        assert_eq!(session.last_authenticated_replay, Some(2));
+        assert!(session.group_keys[2].is_none());
+        session.handle_eapol(&valid).unwrap();
+        let changed = group_message(&session, 3, 2, 0x99, 17);
+        assert_eq!(session.handle_eapol(&changed).err(), Some("WPA2 changed group replay counter"));
+        assert_eq!(session.group_keys[2].as_ref().unwrap().temporal, [0x88; 16]);
+        let mut early = fixture();
+        assert_eq!(early.handle_eapol(&valid).err(), Some("WPA2 group message 1 before pairwise keys"));
     }
     fn frame(qos: bool) -> Vec<u8> {
         let mut f = vec![0; if qos { 26 } else { 24 }];

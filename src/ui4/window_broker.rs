@@ -22,12 +22,12 @@ const _: () = assert!(MAX_WINDOWS < super::layer_contract::BACKGROUND_TARGET_BIT
 // MAX_WINDOWS remains only the broker registry's hard storage bound.
 const MAX_WINDOWS_PER_SESSION: usize = 32;
 const MAX_SESSIONS: usize = MAX_WINDOWS;
-/// UI4 presents four hardware-blended application layers per output. Planes
-/// 1-3 are lease planes: one frame each, presented by the display engine and
+/// UI4 uses the application carriers advertised for each output. Nonzero
+/// application slots are lease planes: one frame each, presented by the display engine and
 /// eligible for direct scanout. Plane 0 is the stack, where every frame which
 /// holds no lease presents together through one ordered painter submission.
 ///
-/// Create/close rebalancing gives the highest three frames in broker-z order
+/// Create/close rebalancing gives the highest frames in broker-z order
 /// the lease planes, preserving that base order in the display engine; every
 /// lower frame shares Slot0. Focus moves one window to the top while preserving
 /// the relative order of every other window. Motion only refreshes its leases.
@@ -38,8 +38,8 @@ const MAX_SESSIONS: usize = MAX_WINDOWS;
 /// retains plane order; focus reassigns a complete top suffix transactionally.
 pub(super) const STACK_PLANE_SLOT: usize = super::PRIMARY_PLANE_SLOT;
 const FIRST_LEASE_PLANE_SLOT: usize = STACK_PLANE_SLOT + 1;
-pub(super) const LEASE_PLANE_COUNT: usize =
-    super::INTERACTION_OVERLAY_PLANE_SLOT - FIRST_LEASE_PLANE_SLOT;
+pub(super) const LEASE_PLANE_COUNT: usize = 3;
+const MAX_LEASE_PLANE_COUNT: usize = 4;
 pub(crate) const WINDOW_BROKER_SNAPSHOT_PERIOD_MS: u64 = 3_000;
 const WINDOW_BROKER_SNAPSHOT_RECEIVERS: usize = 8;
 const WINDOW_FIRST_PRESENTATION_QUEUE_CAP: usize = 32;
@@ -145,11 +145,17 @@ impl WindowPlane {
         !matches!(self, Self::Interaction)
     }
 
+    /// Interaction is above all application carriers despite its stable slot
+    /// number being below the optional application slot.
+    pub(crate) const fn stack_rank(self) -> usize {
+        if matches!(self, Self::Interaction) { usize::MAX } else { self.slot() }
+    }
+
     const fn valid(self) -> bool {
         match self {
             Self::Primary => true,
             Self::Universal(slot) => {
-                slot > 0 && (slot as usize) < super::INTERACTION_OVERLAY_PLANE_SLOT
+                slot > 0 && super::is_application_plane_slot(slot as usize)
             }
             Self::Interaction => true,
         }
@@ -158,7 +164,7 @@ impl WindowPlane {
     const fn from_slot(slot: usize) -> Option<Self> {
         match slot {
             super::PRIMARY_PLANE_SLOT => Some(Self::Primary),
-            1..super::INTERACTION_OVERLAY_PLANE_SLOT => Some(Self::Universal(slot as u8)),
+            slot if slot > 0 && super::is_application_plane_slot(slot) => Some(Self::Universal(slot as u8)),
             _ => None,
         }
     }
@@ -610,8 +616,8 @@ struct PlaneLease {
 struct WindowBroker {
     windows: Vec<WindowRecord>,
     sessions: Vec<SessionRecord>,
-    /// Indexed by lease plane, i.e. `FIRST_LEASE_PLANE_SLOT + index`.
-    leases: [Option<PlaneLease>; LEASE_PLANE_COUNT],
+    /// One lease table per output, in the supported order [1, 2, 3, 5].
+    leases: [[Option<PlaneLease>; MAX_LEASE_PLANE_COUNT]; super::OUTPUT_COUNT],
     /// Monotonic epoch for state which can change the compositor's plane plan.
     /// Damage acknowledgement deliberately does not advance this value.
     composition_revision: u64,
@@ -622,7 +628,7 @@ impl WindowBroker {
         Self {
             windows: Vec::new(),
             sessions: Vec::new(),
-            leases: [None; LEASE_PLANE_COUNT],
+            leases: [[None; MAX_LEASE_PLANE_COUNT]; super::OUTPUT_COUNT],
             composition_revision: 0,
         }
     }
@@ -674,22 +680,16 @@ impl WindowBroker {
         Ok(true)
     }
 
-    const fn lease_index(slot: usize) -> Option<usize> {
-        if slot >= FIRST_LEASE_PLANE_SLOT && slot < super::INTERACTION_OVERLAY_PLANE_SLOT {
-            Some(slot - FIRST_LEASE_PLANE_SLOT)
-        } else {
-            None
-        }
-    }
-
-    const fn lease_plane(index: usize) -> WindowPlane {
-        WindowPlane::Universal((FIRST_LEASE_PLANE_SLOT + index) as u8)
+    fn lease_index(slot: usize) -> Option<usize> {
+        super::application_plane_slots(super::SUPPORTED_APPLICATION_PLANE_MASK)
+            .filter(|&slot| slot != STACK_PLANE_SLOT)
+            .position(|supported| supported == slot)
     }
 
     /// Drop this window's lease if it holds one, freeing the plane for the
     /// next claimant. Safe to call for a window which never held a lease.
     fn release_lease_of(&mut self, id: WindowId) {
-        for lease in &mut self.leases {
+        for lease in self.leases.iter_mut().flatten() {
             if lease.is_some_and(|held| held.window == id) {
                 *lease = None;
             }
@@ -721,11 +721,17 @@ impl WindowBroker {
     }
 
     /// Give the visible application windows their deterministic base layout.
-    /// Up to three windows occupy Slots1-3. Once that capacity is exceeded,
-    /// the bottom windows share Slot0 in broker-z order and the highest three
+    /// Once the advertised lease capacity is exceeded, the bottom windows
+    /// share Slot0 in broker-z order and the highest windows
     /// retain the hardware planes. Since hardware planes blend in ascending
     /// slot order, this keeps physical and broker z-order consistent.
     fn rebalance_application_planes(&mut self, output: OutputId, now_ms: u64) {
+        self.rebalance_application_planes_with_mask(output, now_ms, super::application_plane_mask(output));
+    }
+
+    fn rebalance_application_planes_with_mask(&mut self, output: OutputId, now_ms: u64, mask: u8) {
+        let lease_slots: Vec<_> = super::application_plane_slots(mask)
+            .filter(|&slot| slot != STACK_PLANE_SLOT).collect();
         let mut ordered: Vec<(WindowId, i32, usize)> = self
             .windows
             .iter()
@@ -758,7 +764,7 @@ impl WindowBroker {
                 } else {
                     1
                 };
-                if used + slots > LEASE_PLANE_COUNT {
+                if used + slots > lease_slots.len() {
                     break;
                 }
                 used += slots;
@@ -768,20 +774,20 @@ impl WindowBroker {
                     last_hot_ms: now_ms,
                 });
             }
-            let mut plan = [None; 3];
+            let mut plan = [None; MAX_LEASE_PLANE_COUNT];
             for (index, group) in top.into_iter().rev().enumerate() {
                 plan[index] = Some(group);
             }
-            self.apply_group_plan(output, plan);
+            self.apply_group_plan(output, plan, &lease_slots);
             return;
         }
-        let stack_count = ordered.len().saturating_sub(LEASE_PLANE_COUNT);
-        self.leases = [None; LEASE_PLANE_COUNT];
+        let stack_count = ordered.len().saturating_sub(lease_slots.len());
+        self.leases[output.slot()] = [None; MAX_LEASE_PLANE_COUNT];
         for (rank, (id, _, slot)) in ordered.into_iter().enumerate() {
             let plane = if rank < stack_count {
                 WindowPlane::Primary
             } else {
-                Self::lease_plane(rank - stack_count)
+                WindowPlane::from_slot(lease_slots[rank - stack_count]).unwrap()
             };
             let window = &mut self.windows[slot];
             if window.plane != plane {
@@ -791,7 +797,7 @@ impl WindowBroker {
                 window.revision = next_serial(window.revision);
             }
             if let Some(index) = Self::lease_index(plane.slot()) {
-                self.leases[index] = Some(PlaneLease {
+                self.leases[output.slot()][index] = Some(PlaneLease {
                     window: id,
                     last_hot_ms: now_ms,
                 });
@@ -801,9 +807,9 @@ impl WindowBroker {
 
     #[cfg(test)]
     fn group_plan(&self, output: OutputId) -> super::layer_contract::GroupPlan {
-        let mut plan = [None; 3];
+        let mut plan = [None; MAX_LEASE_PLANE_COUNT];
         let mut next = 0;
-        for lease in self.leases.iter().flatten() {
+        for lease in self.leases[output.slot()].iter().flatten() {
             if plan
                 .iter()
                 .flatten()
@@ -833,7 +839,7 @@ impl WindowBroker {
         plan
     }
 
-    fn apply_group_plan(&mut self, output: OutputId, plan: super::layer_contract::GroupPlan) {
+    fn apply_group_plan(&mut self, output: OutputId, plan: super::layer_contract::GroupPlan, lease_slots: &[usize]) {
         let demoted: Vec<_> = self
             .windows
             .iter()
@@ -851,19 +857,19 @@ impl WindowBroker {
         for id in demoted {
             self.demote_to_stack(id);
         }
-        self.leases = [None; LEASE_PLANE_COUNT];
-        let mut plane_slot = super::layer_contract::first_slot(plan);
+        self.leases[output.slot()] = [None; MAX_LEASE_PLANE_COUNT];
+        let mut rank = lease_slots.len() - usize::from(super::layer_contract::used(plan));
         for group in plan.into_iter().flatten() {
             let id = WindowId::from_raw(group.window).unwrap();
-            for slot in plane_slot..plane_slot + usize::from(group.slots) {
-                self.leases[slot - FIRST_LEASE_PLANE_SLOT] = Some(PlaneLease {
+            for &slot in &lease_slots[rank..rank + usize::from(group.slots)] {
+                self.leases[output.slot()][Self::lease_index(slot).unwrap()] = Some(PlaneLease {
                     window: id,
                     last_hot_ms: group.last_hot_ms,
                 });
             }
-            plane_slot += usize::from(group.slots);
+            rank += usize::from(group.slots);
             // Foreground occupies the higher member of a two-slot grant.
-            self.set_window_plane(id, WindowPlane::from_slot(plane_slot - 1).unwrap());
+            self.set_window_plane(id, WindowPlane::from_slot(lease_slots[rank - 1]).unwrap());
             if group.slots == 2 {
                 let (slot, _) = unpack_handle(id.raw()).unwrap();
                 self.windows[slot].open_transition = None;
@@ -874,6 +880,10 @@ impl WindowBroker {
     /// Move only the focused window to the top of the visible order. Plane
     /// reassignment must preserve every other pair's relative z order.
     fn focus_window(&mut self, id: WindowId, output: OutputId, now_ms: u64) {
+        self.focus_window_with_mask(id, output, now_ms, super::application_plane_mask(output));
+    }
+
+    fn focus_window_with_mask(&mut self, id: WindowId, output: OutputId, now_ms: u64, mask: u8) {
         let mut ordered: Vec<_> = self.windows.iter().enumerate()
             .filter(|(_, window)| window.output == output
                 && window.state != WindowState::Closed
@@ -896,7 +906,7 @@ impl WindowBroker {
                 window.revision = next_serial(window.revision);
             }
         }
-        self.rebalance_application_planes(output, now_ms);
+        self.rebalance_application_planes_with_mask(output, now_ms, mask);
     }
 
     fn mark_composition_changed(&mut self) {
@@ -1215,6 +1225,10 @@ impl WindowBroker {
                     // Slot0 resolves pixel ownership with native-size BCS
                     // copies; whole-window fades and scaling need blending.
                     (0, 0, 0)
+                } else if window.plane.slot() == super::ADDITIONAL_APPLICATION_PLANE_SLOT {
+                    // The additional carrier has no assigned hardware scaler.
+                    // Keep source geometry while fading to the same retirement boundary.
+                    (0, DIRECT_PLANE_CLOSE_WAVE_DURATION_MS, 0)
                 } else if direct_plane_scaling {
                     let delay_ms = if window.plane.slot() == 3 && direct_first_wave_present {
                         DIRECT_PLANE_CLOSE_WAVE_DURATION_MS
@@ -1292,7 +1306,7 @@ impl WindowBroker {
             }
         }
         final_frames
-            .sort_unstable_by_key(|window| (window.plane.slot(), window.placement.z, window.id));
+            .sort_unstable_by_key(|window| (window.plane.stack_rank(), window.placement.z, window.id));
         if closed != 0 {
             self.mark_composition_changed();
         }
@@ -1896,8 +1910,8 @@ pub(super) fn attach_window_background_scaled(
         .plan;
     let capabilities =
         super::ui4_output_capabilities(plan.output).ok_or(WindowBrokerError::InvalidPlane)?;
-    if capabilities.application_plane_mask & super::layer_contract::REQUIRED_PLANE_MASK
-        != super::layer_contract::REQUIRED_PLANE_MASK
+    if !capabilities.supports_application_plane(STACK_PLANE_SLOT)
+        || capabilities.application_plane_count() < 3
     {
         return Err(WindowBrokerError::InvalidPlane);
     }
@@ -3139,7 +3153,7 @@ fn note_window_interaction(
     if !raise {
         // Motion maintains a window's leases; it never changes z order or
         // promotes a stacked window behind another cursor's selection.
-        for lease in broker.leases.iter_mut().flatten() {
+        for lease in broker.leases.iter_mut().flatten().flatten() {
             if lease.window == id {
                 lease.last_hot_ms = now_ms;
             }
@@ -3225,7 +3239,9 @@ pub(crate) fn application_windows_for_output_with_revision(
                 buffering: background.buffering,
                 background: None,
                 publish_serial: background.publish_serial,
-                plane: WindowPlane::from_slot(window.plane.slot().saturating_sub(1)).unwrap(),
+                plane: WindowPlane::from_slot(super::background_plane_slot(
+                    super::application_plane_mask(window.output), window.plane.slot()
+                ).expect("layered foreground has a lower application carrier")).unwrap(),
                 damage: Some(DamageRegion::FULL),
                 ..window
             });
@@ -3539,7 +3555,7 @@ fn open_transition(
     plane: WindowPlane,
     started_ms: u64,
 ) -> Option<WindowOpenTransition> {
-    if plane == WindowPlane::Primary {
+    if plane == WindowPlane::Primary || plane.slot() == super::ADDITIONAL_APPLICATION_PLANE_SLOT {
         return None;
     }
     let (duration_ms, shrink_per_mille) = if matches!(plane.slot(), 1..=3) {

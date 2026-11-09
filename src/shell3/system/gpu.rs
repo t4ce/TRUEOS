@@ -5,7 +5,7 @@ use crate::gpu::vgpu::{self as gpu, KernelClient};
 
 fn usage(io: &Output) {
     Output::line(io, "gpu status");
-    Output::line(io, "gpu test broker|abi|guc|compute|blit|all");
+    Output::line(io, "gpu test broker|abi|guc|compute|blit|font-r8|all");
     Output::line(io, "gpu material pbr|base|normal|uv|solid");
     Output::line(io, "gpu depth on|off (Picasso diagnostic)");
     Output::line(io, "gpu cull on|off (Picasso diagnostic)");
@@ -66,6 +66,7 @@ pub(super) fn execute(io: &Output, rest: &str) {
                 test if test.eq_ignore_ascii_case("guc") => test_guc(io),
                 test if test.eq_ignore_ascii_case("compute") => test_compute(io),
                 test if test.eq_ignore_ascii_case("blit") => test_blit(io),
+                test if test.eq_ignore_ascii_case("font-r8") => test_font_r8(io),
                 test if test.eq_ignore_ascii_case("all") => {
                     let broker = test_broker(io);
                     let abi = test_abi(io);
@@ -82,6 +83,26 @@ pub(super) fn execute(io: &Output, rest: &str) {
             Output::line(io, format!("gpu test {test}: pass={}", passed as u8).as_str());
         }
         _ => usage(io),
+    }
+}
+
+fn test_font_r8(io: &Output) -> bool {
+    match crate::intel::render::probe_native_microfont_r8() {
+        Ok(proof) => {
+            Output::line(io, format!(
+                "gpu font-r8: physical={:04X}:{:04X} rev={:02X} effective=8086:{:04X} rev={:02X} draws={} release={} retirement=marker-plus-guc-context-save gpu_poll_us={} white_inside={}/64 black_outside={}/192 mismatched={} resources_released={} pass={} scope=microfont-vs+ps-push+r8-quad no_line_aa_or_alphabet_proof=1",
+                proof.physical_vendor, proof.physical_device, proof.physical_revision,
+                proof.effective_device, proof.effective_revision, proof.completed_draws,
+                proof.release_sequence, proof.gpu_poll_us, proof.pixels.white_inside,
+                proof.pixels.black_outside, proof.pixels.mismatched,
+                proof.resources_released as u8, proof.passed() as u8,
+            ).as_str());
+            proof.passed()
+        }
+        Err(error) => {
+            Output::line(io, format!("gpu font-r8: pass=0 error={error}").as_str());
+            false
+        }
     }
 }
 
@@ -510,6 +531,7 @@ const ACTIONS: &[&str] = &[
     "test guc",
     "test compute",
     "test blit",
+    "test font-r8",
     "test all",
     "material pbr",
     "material base",

@@ -1171,7 +1171,7 @@ fn append_outline_arc(
 }
 
 fn window_stack_key(window: super::WindowSnapshot) -> (usize, i32, WindowId) {
-    (window.plane.slot(), window.placement.z, window.id)
+    (window.plane.stack_rank(), window.placement.z, window.id)
 }
 
 fn merge_horizontal_occluders(occluders: &mut alloc::vec::Vec<(u32, u32)>) {

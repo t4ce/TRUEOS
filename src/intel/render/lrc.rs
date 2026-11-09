@@ -130,7 +130,10 @@ pub(crate) fn init_gen12_lrc_context_image(
     state[idx] = mi_lri_context_cmd(13, MI_LRI_FORCE_POSTED);
     idx += 1;
     state[idx] = 0x2244;
-    state[idx + 1] = rcs_ctx_control_value(false);
+    // This builder is called only for a fresh/detached context, never a live
+    // resubmit. The physical TGL target has no golden engine image to restore.
+    // Hardware owns the saved image thereafter; tail publication preserves it.
+    state[idx + 1] = rcs_ctx_control_value(inhibit_uninitialized_tgl_engine_restore());
     state[idx + 2] = 0x2034;
     state[idx + 3] = 0;
     state[idx + 4] = 0x2030;

@@ -30,9 +30,9 @@ The sibling Blueprint API separates its retired `api/src/lumen.rs` response path
 
 ## MicroFont polling removed and panel retained
 
-The name `microfont_log_service` no longer described a generic log reader. Its current implementation paints the laptop IP-assignment verdict, Wi-Fi square/IP octet, and USB bring-up stage onto the retained native-panel surface. The native-panel and display code use that allocation and its plane-ownership rules; network, Wi-Fi, USB, and font code call its paint callbacks directly.
+The name `microfont_log_service` no longer describes a generic log reader. Its laptop diagnostic surface now paints only a Wi-Fi square and the eight-bit IP octet, without a font or atlas. The seven-plane laptop layout centers that compact surface on logical slot 6, below the interaction plane on physical plane 7. Logical slot 4 remains UI4's software-cursor and interaction carrier. The old assignment-verdict, USB-stage and font-ready callbacks remain compatibility no-ops.
 
-Those are real consumers, so the visible panel and allocation ownership remain. The redundant 25 ms polling task and boot entry were removed. IP assignment already publishes directly through `laptop_profile::record_assignment`, so a dedicated polling worker is unnecessary. [The module](../../src/r/services/microfont_log_service.rs) is now a callback authority with no executor task.
+The retained allocation and its display ownership remain. The redundant 25 ms polling task and boot entry were removed; Wi-Fi state and address changes publish directly through callbacks. [The module](../../src/r/services/microfont_log_service.rs) has no executor task.
 
 ## Validation
 

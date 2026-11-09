@@ -49,7 +49,12 @@ fn direct_rcs_init_lrc_context_image_with_root(
     lrc[idx] = direct_rcs_mi_lri_cmd(13, MI_LRI_FORCE_POSTED);
     idx += 1;
     lrc[idx] = 0x2244;
-    lrc[idx + 1] = direct_rcs_ctx_control_value(false);
+    // No golden engine image exists in this freshly zeroed allocation. Match
+    // the physical TGL cold-context policy without rewriting a live HWLRCA on
+    // later submissions, which publish only its tail.
+    lrc[idx + 1] = direct_rcs_ctx_control_value(
+        crate::intel::render::inhibit_uninitialized_tgl_engine_restore(),
+    );
     lrc[idx + 2] = 0x2034;
     lrc[idx + 3] = 0;
     lrc[idx + 4] = 0x2030;

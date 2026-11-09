@@ -33,7 +33,7 @@ static DIRTY_FONT_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRTY_FONT_DIRECT_ADMISSION_WARNED: AtomicBool = AtomicBool::new(false);
 static FONT_RUSH_PRIMARY_DIRECT_LOGGED: AtomicBool = AtomicBool::new(false);
 static VIDEO_SURFLIVE_RELEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-/// Latest broker revision whose slot 0-3 application state reached SURFLIVE
+/// Latest broker revision whose advertised application state reached SURFLIVE
 /// or required no plane update. Slot 4 advances and acknowledges separately.
 static PRESENTED_BROKER_REVISION: AtomicU64 = AtomicU64::new(0);
 
@@ -68,7 +68,7 @@ struct Runtime {
     profile: CompositorCpuProfile,
     /// Exact producer buffers currently owned by overlay scanout. A lease is
     /// replaced only after the corresponding new SURFLIVE value is observed.
-    live_direct: [Option<FrameReadLease>; 4],
+    live_direct: [Option<FrameReadLease>; super::MAX_APPLICATION_PLANE_SLOTS],
 }
 
 #[derive(Default)]
@@ -192,10 +192,7 @@ const fn average_us(total_ns: u64, samples: u64) -> u64 {
 }
 
 struct CompositionState {
-    primary: PlaneCompositionState,
-    alpha: PlaneCompositionState,
-    solara: PlaneCompositionState,
-    rgb_slot_3: PlaneCompositionState,
+    planes: [PlaneCompositionState; super::MAX_APPLICATION_PLANE_SLOTS],
 }
 
 struct PlaneCompositionState {
@@ -203,10 +200,20 @@ struct PlaneCompositionState {
     windows: Vec<CompositionWindowStamp>,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum CompositionTarget {
     Primary,
     Overlay(usize),
+}
+
+fn composition_targets(mask: u8) -> impl Iterator<Item = CompositionTarget> {
+    super::application_plane_slots(mask).map(|slot| {
+        if slot == super::PRIMARY_PLANE_SLOT {
+            CompositionTarget::Primary
+        } else {
+            CompositionTarget::Overlay(slot)
+        }
+    })
 }
 
 struct PlanePlan {
@@ -243,12 +250,12 @@ struct PlaneQueuePlan {
 struct PendingFrame {
     windows: Vec<WindowSnapshot>,
     leases: Vec<FrameReadLease>,
-    plans: [PlanePlan; 4],
+    plans: Vec<PlanePlan>,
     next_plane: usize,
     active: Option<crate::intel::Ui4AsyncComposition>,
     completed: Vec<crate::intel::Ui4AsyncComposition>,
-    direct_leases: [Option<FrameReadLease>; 4],
-    direct_windows: [Option<WindowId>; 4],
+    direct_leases: [Option<FrameReadLease>; super::MAX_APPLICATION_PLANE_SLOTS],
+    direct_windows: [Option<WindowId>; super::MAX_APPLICATION_PLANE_SLOTS],
     flip_submitted: bool,
     broker_revision: u64,
     started_ns: u64,
@@ -296,7 +303,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0-stack+slot1-3-lease/on-demand admission=never-fails lease=one-frame-per-plane/claim-lowest-free/focus-stable-move-to-top/motion-refresh-only stack=slot0/bcs0-copies-in-broker-z/topmost-wins/overflow-only lone-source=direct-scanout-when-eligible overlay=direct-only/error-on-unsupported shader-compositor=removed slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
+        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0-stack+advertised-application-leases/on-demand admission=never-fails lease=one-frame-per-plane/claim-lowest-free/focus-stable-move-to-top/motion-refresh-only stack=slot0/bcs0-copies-in-broker-z/topmost-wins/overflow-only lone-source=direct-scanout-when-eligible overlay=direct-only/error-on-unsupported shader-compositor=removed slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
         CLOSE_TRANSITION_PERIOD_MS,
         PENDING_POLL_PERIOD_MS,
     );
@@ -359,22 +366,10 @@ pub(crate) async fn ui4_compositor_service_task() {
 fn initialize() -> Runtime {
     Runtime {
         composition: CompositionState {
-            primary: PlaneCompositionState {
+            planes: core::array::from_fn(|_| PlaneCompositionState {
                 initialized: false,
                 windows: Vec::new(),
-            },
-            alpha: PlaneCompositionState {
-                initialized: false,
-                windows: Vec::new(),
-            },
-            solara: PlaneCompositionState {
-                initialized: false,
-                windows: Vec::new(),
-            },
-            rgb_slot_3: PlaneCompositionState {
-                initialized: false,
-                windows: Vec::new(),
-            },
+            }),
         },
         pending: None,
         immediate_rescan: false,
@@ -382,7 +377,7 @@ fn initialize() -> Runtime {
         observed_broker_revision: None,
         next_wake_deadline_ns: None,
         profile: CompositorCpuProfile::default(),
-        live_direct: [None; 4],
+        live_direct: [None; super::MAX_APPLICATION_PLANE_SLOTS],
     }
 }
 
@@ -446,7 +441,7 @@ fn prepare_async_frame(runtime: &mut Runtime) -> Result<Option<PendingFrame>, Ui
     // This epoch is both a safety gate for coalesced broker signals and the
     // cheap path after a close-animation timer tick which changed no pixels.
     // It avoids allocating a snapshot, acquiring every frame lease, rereading
-    // display topology, or constructing four plane plans.
+    // display topology, or constructing application plane plans.
     let broker_revision = window_composition_revision();
     if runtime.observed_broker_revision == Some(broker_revision) {
         runtime.profile.no_change_turns = runtime.profile.no_change_turns.saturating_add(1);
@@ -493,47 +488,23 @@ fn prepare_async_frame(runtime: &mut Runtime) -> Result<Option<PendingFrame>, Ui
 
     let phase_started_ns = crate::chronos::monotonic_nanos();
     // Resolve the display topology once for this broker snapshot. Calling the
-    // compatibility resolver independently for all four plane plans rereads
-    // every pipe's MMIO state four times on every unchanged compositor scan.
+    // compatibility resolver independently for every plane plan rereads
+    // every pipe's MMIO state repeatedly on every unchanged compositor scan.
     let (output_width, output_height) = crate::intel::active_scanout_dimensions().unwrap_or((0, 0));
     if resolve_close_scaler_conflicts(&mut windows, &views, output_width, output_height) != 0 {
         crate::log_once!(target: "render";
             "ui4 close-transition scaler contention resolved scope=output slots=1+3 shared_scaler=0 fallback=fade-at-source-size retirement=zero-alpha-surflive log=once\n");
     }
-    let plans = [
-        build_plane_plan(
-            &runtime.composition.primary,
+    let plans: Vec<_> = composition_targets(super::application_plane_mask(output))
+        .map(|target| build_plane_plan(
+            &runtime.composition.planes[target_plane_slot(target)],
             &windows,
             &views,
-            CompositionTarget::Primary,
+            target,
             output_width,
             output_height,
-        ),
-        build_plane_plan(
-            &runtime.composition.alpha,
-            &windows,
-            &views,
-            CompositionTarget::Overlay(super::ALPHA_OVERLAY_PLANE_SLOT),
-            output_width,
-            output_height,
-        ),
-        build_plane_plan(
-            &runtime.composition.solara,
-            &windows,
-            &views,
-            CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_2),
-            output_width,
-            output_height,
-        ),
-        build_plane_plan(
-            &runtime.composition.rgb_slot_3,
-            &windows,
-            &views,
-            CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_3),
-            output_width,
-            output_height,
-        ),
-    ];
+        ))
+        .collect();
     runtime.profile.plan_ns = runtime
         .profile
         .plan_ns
@@ -557,8 +528,8 @@ fn prepare_async_frame(runtime: &mut Runtime) -> Result<Option<PendingFrame>, Ui
         next_plane: 0,
         active: None,
         completed: Vec::new(),
-        direct_leases: [None; 4],
-        direct_windows: [None; 4],
+        direct_leases: [None; super::MAX_APPLICATION_PLANE_SLOTS],
+        direct_windows: [None; super::MAX_APPLICATION_PLANE_SLOTS],
         flip_submitted: false,
         broker_revision,
         started_ns: crate::chronos::monotonic_nanos(),
@@ -576,14 +547,10 @@ fn validate_window_snapshot(
         );
         return Err(Ui4CompositorError::PresentFailed);
     }
+    let mask = super::application_plane_mask(output);
     if windows.iter().any(|window| {
-        !matches!(
-            window.plane.slot(),
-            super::PRIMARY_PLANE_SLOT
-                | super::ALPHA_OVERLAY_PLANE_SLOT
-                | super::RGB_OVERLAY_PLANE_SLOT_2
-                | super::RGB_OVERLAY_PLANE_SLOT_3
-        )
+        !window.plane.is_application()
+            || !super::application_plane_slots(mask).any(|slot| slot == window.plane.slot())
     }) {
         return Err(Ui4CompositorError::PresentFailed);
     }
@@ -1156,7 +1123,7 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
     // no copy or CPU cache sweep is part of either transition.
     frame_snapshot(window.frame).is_ok_and(|snapshot| match release {
         FrameGpuRelease::ResidentScene(_) => {
-            window.plane.slot() < super::INTERACTION_OVERLAY_PLANE_SLOT
+            window.plane.is_application()
                 && resident_release_direct_contract(
                     snapshot.plan.content,
                     snapshot.plan.cadence,
@@ -1164,7 +1131,7 @@ fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool 
                 )
         }
         FrameGpuRelease::Compute(_) => {
-            window.plane.slot() < super::INTERACTION_OVERLAY_PLANE_SLOT
+            window.plane.is_application()
                 && compute_release_direct_contract(
                     snapshot.plan.content,
                     snapshot.plan.cadence,
@@ -1340,9 +1307,11 @@ pub(super) fn presentation_placement(
     backing_height: u32,
 ) -> WindowPlacement {
     let mut placement = window.presentation_placement;
-    if window.plane == WindowPlane::Primary {
-        // BCS copies have no scaler. A demoted producer keeps its native
-        // pixels, including while an older resize presentation is retained.
+    if window.plane == WindowPlane::Primary
+        || window.plane.slot() == super::ADDITIONAL_APPLICATION_PLANE_SLOT
+    {
+        // Stack BCS copies and the extra application carrier have no scaler.
+        // Retain native pixels while an older resize front is displayed.
         placement.width = backing_width;
         placement.height = backing_height;
     }
@@ -1422,19 +1391,7 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
         }
         let target = pending.plans[plan_index].target;
         let next_windows = core::mem::take(&mut pending.plans[plan_index].next_windows);
-        let state = match target {
-            CompositionTarget::Primary => &mut runtime.composition.primary,
-            CompositionTarget::Overlay(super::ALPHA_OVERLAY_PLANE_SLOT) => {
-                &mut runtime.composition.alpha
-            }
-            CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_2) => {
-                &mut runtime.composition.solara
-            }
-            CompositionTarget::Overlay(super::RGB_OVERLAY_PLANE_SLOT_3) => {
-                &mut runtime.composition.rgb_slot_3
-            }
-            CompositionTarget::Overlay(_) => continue,
-        };
+        let state = &mut runtime.composition.planes[target_plane_slot(target)];
         state.initialized = true;
         state.windows = next_windows;
         let slot = target_plane_slot(target);

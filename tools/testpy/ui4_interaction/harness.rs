@@ -63,7 +63,7 @@ mod ui4 {
     #[derive(Copy, Clone, Debug, Eq, PartialEq)] pub struct OutputId;
     impl OutputId { pub fn from_slot(_: usize) -> Option<Self> { Some(Self) } }
     #[derive(Copy, Clone, Debug, Eq, PartialEq)] pub struct Plane(pub usize);
-    impl Plane { pub fn slot(self) -> usize { self.0 } }
+    impl Plane { pub fn slot(self) -> usize { self.0 } pub fn stack_rank(self) -> usize { if self.0 == 4 { usize::MAX } else { self.0 } } }
     #[derive(Copy, Clone, Debug, Eq, PartialEq)] pub struct WindowPlacement { pub x: i32, pub y: i32, pub width: u32, pub height: u32, pub z: i32 }
     #[derive(Copy, Clone, Debug, Eq, PartialEq)] pub enum WindowState { Ready, Closing }
     #[derive(Copy, Clone, Debug, Eq, PartialEq)] pub struct Interaction { pub receives_input: bool }

@@ -20,7 +20,7 @@ mod ui4 {
     pub type WindowId=u32; pub type WindowOwner=u32; pub type WindowSessionId=u32; pub type Ui4CursorSource=u32;
     pub struct OutputId; impl OutputId {pub fn from_slot(_:u32)->Option<Self>{Some(Self)}}
     #[derive(Clone,Copy,Debug,PartialEq,Eq)] pub enum WindowState{Ready,Closing}
-    #[derive(Clone,Copy)] pub struct Plane(usize); impl Plane{pub fn slot(self)->usize{self.0}}
+    #[derive(Clone,Copy)] pub struct Plane(usize); impl Plane{pub fn slot(self)->usize{self.0}pub fn stack_rank(self)->usize{if self.0==4{usize::MAX}else{self.0}}}
     #[derive(Clone,Copy)] pub struct Placement{pub x:i32,pub y:i32,pub width:u32,pub height:u32,pub z:i32}
     #[derive(Clone,Copy)] pub struct Interaction{pub hit_testable:bool}
     #[derive(Clone,Copy)] pub struct WindowSnapshot{pub id:u32,pub owner:u32,pub session:u32,pub plane:Plane,pub placement:Placement,pub presentation_placement:Placement,pub state:WindowState,pub interaction:Interaction,pub arc:u16}

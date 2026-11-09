@@ -1,15 +1,83 @@
-//! Address reservations for the single native 3840x2160 Tiger Lake panel.
+//! Reservations and pipe-A contracts for the adopted 3840x2160 Tiger Lake panel.
 //!
-//! GGTT scanout addresses and compositor-private PPGTT addresses are distinct.
-//! Keep the retained panel probe at E0000000 intact, including after a failed
-//! handoff. These helpers do not publish readiness or imply GPU execution.
+//! Logical interaction slot 4 uses physical index 6. Extra application slot 5
+//! uses physical index 4, and diagnostic slot 6 uses physical index 5. Scanout
+//! GGTT and compositor PPGTT are separate; neither remaps the retained native
+//! panel probe at E0000000.
 
-pub(super) const SURFACE_SLOT_BYTES: u64 = 0x0400_0000;
+pub(super) const PRIMARY_SLOT_BYTES: u64 = 0x0400_0000;
+pub(super) const OVERLAY_SLOT_BYTES: u64 = 0x0200_0000;
 pub(super) const GGTT_BASE: u64 = 0xD000_0000;
 const PROBE_GPU: u64 = 0xE000_0000;
+const OVERLAY_BASE: u64 = 0xDC00_0000;
+const EXTRA_DIRECT_BASE: u64 = 0xF800_0000;
+const EXTRA_DIRECT_ALIAS_COUNT: usize = 4;
 const COMPOSE_BASE: u64 = 0x2000_0000;
+const OVERLAY_COMPOSE_BASE: u64 = COMPOSE_BASE + 2 * PRIMARY_SLOT_BYTES;
+const PRIMARY_SOURCE_GPU: u64 = 0x3800_0000;
 const GGTT_LIMIT: u64 = 0x1_0000_0000;
 const COMPOSE_LIMIT: u64 = 0x4000_0000;
+
+pub(super) const DIAGNOSTIC_WIDTH: u32 = 1024;
+pub(super) const DIAGNOSTIC_HEIGHT: u32 = 128;
+pub(super) const DBUF_CTL_S2: usize = 0x44FE8;
+pub(super) const DBUF_POWER_REQUEST: u32 = 1 << 31;
+pub(super) const DBUF_POWER_STATE: u32 = 1 << 30;
+const WATERMARK_LINES: u32 = 8;
+
+pub(super) const fn physical_slot(logical_slot: usize) -> Option<usize> {
+    match logical_slot {
+        0..=3 => Some(logical_slot),
+        4 => Some(6),
+        5 => Some(4),
+        6 => Some(5),
+        _ => None,
+    }
+}
+
+pub(super) const fn logical_slot(physical_slot: usize) -> Option<usize> {
+    match physical_slot {
+        0..=3 => Some(physical_slot),
+        4 => Some(5),
+        5 => Some(6),
+        6 => Some(4),
+        _ => None,
+    }
+}
+
+/// Both TGL DBUF slices belong to pipe A while it is the only enabled pipe.
+/// Preserve Spirit's cursor reservations 1008..1023 and 2032..2047.
+///
+/// Intel TGL Display PRM pp. 297-300 allows A to use S1+S2 alone, but A+C
+/// confines A to S1. Capture must reject this contract until it can reallocate
+/// both pipes' stacks; enabling a mirror must not borrow these ranges.
+/// https://cdrdv2-public.intel.com/705833/intel-gfx-prm-osrc-tgl-vol-12-display-engine.pdf
+pub(super) const fn dbuf_range(logical_slot: usize) -> Option<(u16, u16)> {
+    match logical_slot {
+        0 => Some((0, 274)),
+        1 => Some((275, 549)),
+        2 => Some((550, 824)),
+        6 => Some((825, 976)),
+        3 => Some((1024, 1298)),
+        5 => Some((1299, 1573)),
+        4 => Some((1574, 1848)),
+        _ => None,
+    }
+}
+
+/// Eight-scanline linear RGBA8 contract, sized for the actual plane width.
+/// TGL Display PRM pp. 423-424: blocks/line=ceil(width*4/512)+1, then add one
+/// result block. Full-width planes need 249; compact diagnostics need 73.
+/// Allocations strictly exceed those blocks plus the rounded-up 10% margin.
+pub(super) const fn watermark(logical_slot: usize) -> Option<u32> {
+    let width: u32 = match logical_slot {
+        0..=5 => 3840,
+        6 => DIAGNOSTIC_WIDTH,
+        _ => return None,
+    };
+    let blocks_per_line = (width * 4).div_ceil(512) + 1;
+    Some((1 << 31) | (WATERMARK_LINES << 14) | (WATERMARK_LINES * blocks_per_line + 1))
+}
 
 pub(super) const fn primary_gpu() -> u64 {
     GGTT_BASE
@@ -19,41 +87,61 @@ pub(super) const fn primary_swap_gpu(index: usize) -> Option<u64> {
     if index >= 2 {
         return None;
     }
-    Some(GGTT_BASE + (1 + index as u64) * SURFACE_SLOT_BYTES)
+    Some(GGTT_BASE + (1 + index as u64) * PRIMARY_SLOT_BYTES)
 }
 
-pub(super) const fn overlay_gpu(plane_slot: usize, index: usize) -> Option<u64> {
-    if plane_slot < 1 || plane_slot > 4 || index >= 2 {
+/// Linear overlays need 32 MiB each; only the primary needs guarded 64 MiB
+/// buffers. Diagnostic slot 6 retains the probe instead of using this pool.
+pub(super) const fn overlay_gpu(logical_slot: usize, index: usize) -> Option<u64> {
+    if logical_slot < 1 || logical_slot > 5 || index >= 2 {
         return None;
     }
-    // Slots 0..2 hold primary + its two swap surfaces. Skip slot 4, the
-    // still-retained E0000000 native-panel probe, rather than remapping it.
-    let packed_slot = 3 + (plane_slot as u64 - 1) * 2 + index as u64;
-    let slot = if packed_slot >= 4 {
-        packed_slot + 1
+    let packed = OVERLAY_BASE + ((logical_slot as u64 - 1) * 2 + index as u64) * OVERLAY_SLOT_BYTES;
+    Some(if packed >= PROBE_GPU {
+        packed + PRIMARY_SLOT_BYTES
     } else {
-        packed_slot
-    };
-    Some(GGTT_BASE + slot * SURFACE_SLOT_BYTES)
+        packed
+    })
 }
 
-pub(super) const fn compose_gpu(plane_slot: usize, index: usize) -> Option<u64> {
-    // Only application slots 0..3 use this isolated compositor PPGTT.
-    // Slot 4 remains the independently CPU-authored interaction overlay.
-    if plane_slot >= 4 || index >= 2 {
+/// Four display-owned imports for the extra application on adopted pipe A.
+/// Existing desktop/per-output import reservations stay unchanged below D000.
+pub(super) const fn extra_direct_scanout_gpu(index: usize) -> Option<u64> {
+    if index >= EXTRA_DIRECT_ALIAS_COUNT {
         return None;
     }
-    Some(COMPOSE_BASE + (plane_slot as u64 * 2 + index as u64) * SURFACE_SLOT_BYTES)
+    Some(EXTRA_DIRECT_BASE + index as u64 * OVERLAY_SLOT_BYTES)
+}
+
+pub(super) const fn compose_gpu(logical_slot: usize, index: usize) -> Option<u64> {
+    if index >= 2 {
+        return None;
+    }
+    let overlay_index = match logical_slot {
+        0 => return Some(COMPOSE_BASE + index as u64 * PRIMARY_SLOT_BYTES),
+        1..=3 => logical_slot - 1,
+        5 => 3,
+        _ => return None,
+    };
+    Some(OVERLAY_COMPOSE_BASE + (overlay_index as u64 * 2 + index as u64) * OVERLAY_SLOT_BYTES)
+}
+
+pub(super) const fn primary_source_gpu() -> u64 {
+    PRIMARY_SOURCE_GPU
 }
 
 const _: () = {
     let guarded_bytes = (3840u64 + 64) * 4 * (2160 + 64);
-    assert!(guarded_bytes > 0x0200_0000);
-    assert!(guarded_bytes <= SURFACE_SLOT_BYTES);
+    assert!(guarded_bytes > OVERLAY_SLOT_BYTES);
+    assert!(guarded_bytes <= PRIMARY_SLOT_BYTES);
+    assert!(3840 * 2160 * 4 <= OVERLAY_SLOT_BYTES);
     assert!(GGTT_BASE % 4096 == 0);
-    assert!(GGTT_BASE + 4 * SURFACE_SLOT_BYTES == PROBE_GPU);
-    assert!(GGTT_BASE + 12 * SURFACE_SLOT_BYTES == GGTT_LIMIT);
-    assert!(COMPOSE_BASE + 8 * SURFACE_SLOT_BYTES == COMPOSE_LIMIT);
+    assert!(GGTT_BASE + 3 * PRIMARY_SLOT_BYTES == OVERLAY_BASE);
+    assert!(OVERLAY_BASE + 2 * OVERLAY_SLOT_BYTES == PROBE_GPU);
+    assert!(OVERLAY_BASE + 10 * OVERLAY_SLOT_BYTES + PRIMARY_SLOT_BYTES <= EXTRA_DIRECT_BASE);
+    assert!(EXTRA_DIRECT_BASE + EXTRA_DIRECT_ALIAS_COUNT as u64 * OVERLAY_SLOT_BYTES == GGTT_LIMIT);
+    assert!(OVERLAY_COMPOSE_BASE + 8 * OVERLAY_SLOT_BYTES == PRIMARY_SOURCE_GPU);
+    assert!(PRIMARY_SOURCE_GPU + PRIMARY_SLOT_BYTES <= COMPOSE_LIMIT);
 };
 
 #[cfg(test)]
@@ -61,58 +149,122 @@ mod tests {
     use super::*;
 
     #[test]
-    fn guarded_native_surface_fits_without_overrunning_its_slot() {
+    fn physical_order_keeps_apps_below_diagnostics_and_interaction() {
+        for (physical, logical) in [0, 1, 2, 3, 5, 6, 4].into_iter().enumerate() {
+            assert_eq!(physical_slot(logical), Some(physical));
+            assert_eq!(logical_slot(physical), Some(logical));
+        }
+        assert_eq!(physical_slot(7), None);
+        assert_eq!(logical_slot(7), None);
+    }
+
+    #[test]
+    fn actual_native_geometries_fit_their_reservations() {
         let pitch = ((3840u64 + 64) * 4 + 63) & !63;
-        let bytes = pitch * (2160 + 64);
+        let guarded = pitch * (2160 + 64);
         assert_eq!(pitch, 15_616);
-        assert_eq!(bytes, 34_729_984);
-        assert!(bytes > 0x0200_0000);
-        assert!(bytes <= SURFACE_SLOT_BYTES);
+        assert_eq!(guarded, 34_729_984);
+        assert!(guarded > OVERLAY_SLOT_BYTES && guarded <= PRIMARY_SLOT_BYTES);
+        let overlay = ((3840u64 * 4 + 63) & !63) * 2160;
+        assert_eq!(overlay, 33_177_600);
+        assert!(overlay <= OVERLAY_SLOT_BYTES);
+        assert!(
+            u64::from(DIAGNOSTIC_WIDTH) * u64::from(DIAGNOSTIC_HEIGHT) * 4 <= PRIMARY_SLOT_BYTES
+        );
     }
 
     #[test]
-    fn all_scanout_reservations_are_disjoint_and_leave_probe_intact() {
-        let mut addresses = vec![
-            primary_gpu(),
-            primary_swap_gpu(0).unwrap(),
-            primary_swap_gpu(1).unwrap(),
+    fn scanout_imports_and_retained_probe_never_overlap() {
+        let mut ranges = vec![
+            (primary_gpu(), PRIMARY_SLOT_BYTES),
+            (primary_swap_gpu(0).unwrap(), PRIMARY_SLOT_BYTES),
+            (primary_swap_gpu(1).unwrap(), PRIMARY_SLOT_BYTES),
+            (PROBE_GPU, PRIMARY_SLOT_BYTES),
         ];
-        for plane in 1..=4 {
+        for plane in 1..=5 {
             for index in 0..2 {
-                addresses.push(overlay_gpu(plane, index).unwrap());
+                ranges.push((overlay_gpu(plane, index).unwrap(), OVERLAY_SLOT_BYTES));
             }
         }
-        assert_eq!(addresses.len(), 11);
-        addresses.push(PROBE_GPU);
-        addresses.sort_unstable();
-        for pair in addresses.windows(2) {
-            assert!(pair[0] + SURFACE_SLOT_BYTES <= pair[1]);
+        for index in 0..EXTRA_DIRECT_ALIAS_COUNT {
+            ranges.push((extra_direct_scanout_gpu(index).unwrap(), OVERLAY_SLOT_BYTES));
         }
-        assert_eq!(addresses[0], GGTT_BASE);
-        assert_eq!(addresses.last().unwrap() + SURFACE_SLOT_BYTES, GGTT_LIMIT);
+        assert_eq!(ranges.len(), 18);
+        ranges.sort_unstable();
+        for pair in ranges.windows(2) {
+            assert!(pair[0].0 + pair[0].1 <= pair[1].0);
+            assert_eq!(pair[0].0 % 4096, 0);
+        }
+        assert_eq!(ranges[0].0, GGTT_BASE);
+        let (last, bytes) = *ranges.last().unwrap();
+        assert_eq!(last + bytes, GGTT_LIMIT);
+        assert_eq!(overlay_gpu(1, 0), Some(0xDC00_0000));
+        assert_eq!(overlay_gpu(2, 0), Some(0xE400_0000));
+        assert_eq!(overlay_gpu(5, 1), Some(0xF200_0000));
     }
 
     #[test]
-    fn compositor_slots_are_private_nonoverlapping_and_below_one_gib() {
-        let mut previous_end = COMPOSE_BASE;
-        for plane in 0..4 {
+    fn compositor_destinations_and_primary_source_fit_below_one_gib() {
+        let mut end = COMPOSE_BASE;
+        for plane in [0, 1, 2, 3, 5] {
+            let bytes = if plane == 0 {
+                PRIMARY_SLOT_BYTES
+            } else {
+                OVERLAY_SLOT_BYTES
+            };
             for index in 0..2 {
-                let address = compose_gpu(plane, index).unwrap();
-                assert_eq!(address, previous_end);
-                previous_end = address + SURFACE_SLOT_BYTES;
+                assert_eq!(compose_gpu(plane, index), Some(end));
+                end += bytes;
             }
         }
-        assert_eq!(previous_end, COMPOSE_LIMIT);
-        assert!(previous_end <= 1 << 30);
+        assert_eq!(end, primary_source_gpu());
+        assert!(primary_source_gpu() + PRIMARY_SLOT_BYTES <= COMPOSE_LIMIT);
+        assert!(COMPOSE_LIMIT <= 1 << 30);
     }
 
     #[test]
-    fn invalid_slots_do_not_alias_valid_buffers() {
+    fn dbuf_ranges_preserve_every_cursor_reservation() {
+        let mut ranges = Vec::new();
+        for logical in 0..7 {
+            let (start, end) = dbuf_range(logical).unwrap();
+            assert!(start <= end && end < 2048);
+            for (cursor_start, cursor_end) in [(1008, 1023), (2032, 2047)] {
+                assert!(end < cursor_start || start > cursor_end);
+            }
+            ranges.push((start, end));
+        }
+        ranges.sort_unstable();
+        for pair in ranges.windows(2) {
+            assert!(pair[0].1 < pair[1].0);
+        }
+    }
+
+    #[test]
+    fn actual_width_watermarks_fit_with_strict_buffer_margin() {
+        for logical in 0..7 {
+            let raw = watermark(logical).unwrap();
+            let blocks = raw & 0x7FF;
+            assert_ne!(raw & (1 << 31), 0);
+            assert_eq!((raw >> 14) & 0x1F, 8);
+            let width = if logical == 6 { DIAGNOSTIC_WIDTH } else { 3840 };
+            assert_eq!(blocks, 8 * ((width * 4).div_ceil(512) + 1) + 1);
+            assert_eq!(blocks, if logical == 6 { 73 } else { 249 });
+            let (start, end) = dbuf_range(logical).unwrap();
+            assert!(blocks + blocks.div_ceil(10) < u32::from(end - start + 1));
+        }
+    }
+
+    #[test]
+    fn invalid_roles_and_buffer_indices_cannot_alias_valid_surfaces() {
         assert_eq!(primary_swap_gpu(2), None);
         assert_eq!(overlay_gpu(0, 0), None);
-        assert_eq!(overlay_gpu(5, 0), None);
+        assert_eq!(overlay_gpu(6, 0), None);
         assert_eq!(overlay_gpu(1, 2), None);
         assert_eq!(compose_gpu(4, 0), None);
-        assert_eq!(compose_gpu(0, 2), None);
+        assert_eq!(compose_gpu(6, 0), None);
+        assert_eq!(compose_gpu(5, 2), None);
+        assert_eq!(extra_direct_scanout_gpu(4), None);
+        assert_eq!(dbuf_range(7), None);
+        assert_eq!(watermark(7), None);
     }
 }

@@ -10,7 +10,7 @@ import re
 import subprocess
 import tempfile
 
-from test_clip_position3_uv_texture import item
+from test_clip_position3_uv_texture import constant, item
 from test_vgpu_batch_overlay import block
 
 
@@ -70,6 +70,7 @@ impl<T> TestMutex<T> {
     fn lock(&self) -> MutexGuard<'_, T> { self.0.lock().unwrap() }
 }
 mod ui4 {
+    @APPLICATION_PLANES@
     pub(crate) const PRIMARY_PLANE_SLOT: usize = 0;
     pub(crate) const INTERACTION_OVERLAY_PLANE_SLOT: usize = 4;
     pub(crate) type FrameHandle = u64;
@@ -294,7 +295,9 @@ mod ui4 {
         }
     }
 }
-'''.replace("@TITLE_CONSTANT@", title_constant).replace("@BROKER_CODE@", broker_code).replace(
+'''.replace("@APPLICATION_PLANES@", "\n".join(
+        constant("src/ui4/mod.rs", name) for name in ["MAX_APPLICATION_PLANE_SLOTS", "ADDITIONAL_APPLICATION_PLANE_SLOT", "DEFAULT_APPLICATION_PLANE_MASK", "SUPPORTED_APPLICATION_PLANE_MASK"]
+    ) + "\n" + item("src/ui4/mod.rs", "is_application_plane_slot")).replace("@TITLE_CONSTANT@", title_constant).replace("@BROKER_CODE@", broker_code).replace(
         "@COLLAPSE_CODE@", collapse_code).replace("@GEOMETRY_CONSTANTS@", geometry_constants).replace(
         "@GEOMETRY_CODE@", "\n".join(item(INPUT, name) for name in geometry_functions)).replace(
         "@GEOMETRY_TESTS@", geometry_tests).replace("@FOLLOW_BLOCK@", follow_block).replace(

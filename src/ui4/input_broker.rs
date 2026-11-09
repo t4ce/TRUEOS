@@ -3490,10 +3490,9 @@ fn topmost_window_at(x: u32, y: u32) -> Option<WindowSnapshot> {
         .filter(|window| window.state == WindowState::Ready)
         .filter(|window| window.interaction.hit_testable)
         .filter(|window| placement_contains(window.presentation_placement, window.arc, x, y))
-        // Plane slot is the hardware pipe-local stacking boundary. Only z
-        // order windows against peers in the same slot; a later slot remains
-        // above an earlier slot regardless of its local z value.
-        .max_by_key(|window| (window.plane.slot(), window.placement.z, window.id))
+        // Rank follows physical stacking, including interaction above the
+        // optional application carrier despite its lower logical slot number.
+        .max_by_key(|window| (window.plane.stack_rank(), window.placement.z, window.id))
 }
 
 fn window_snapshot_for_target(target: WindowTarget) -> Option<WindowSnapshot> {

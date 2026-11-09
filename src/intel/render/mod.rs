@@ -181,11 +181,15 @@ use joker_config::{
 
 include!("constants.rs");
 mod hiz;
+mod fresh_context;
+pub(crate) use fresh_context::inhibit_uninitialized_tgl_engine_restore;
 include!("picasso_carrier.rs");
 include!("state.rs");
 include!("warmup.rs");
 include!("primary.rs");
 include!("coverage_mask.rs");
+mod native_font_probe_contract;
+include!("native_font_probe.rs");
 include!("drawable_depth.rs");
 include!("picasso_vue_compare.rs");
 include!("pipeline.rs");
