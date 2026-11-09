@@ -4,7 +4,7 @@
 use crate::r::keyboard::TrueosKeyboardOutputEvent;
 use crate::usb2::hid::TrueosHidCursorEvent;
 use crate::usb3::hid::midi::MidiInputEventV1;
-use crate::usb3::hid::hut::TrueosHidHutKeyboardState;
+use crate::usb3::hid::hut::{TrueosHidHutKeyboardState, TrueosHidHutMouseState};
 use v::vinput::{KeyboardControlCommand, MouseMotionCommand, TrueosInputCombo};
 
 pub(crate) const CURSOR_EVENT_LEN: usize = 56;
@@ -13,10 +13,12 @@ pub(crate) const MIDI_INPUT_V1_LEN: usize = 24;
 pub(crate) const MOUSE_COMMAND_LEN: usize = 44;
 pub(crate) const KEYBOARD_COMMAND_LEN: usize = 16;
 pub(crate) const HUT_KEYBOARD_LEN: usize = 96;
+pub(crate) const HUT_MOUSE_LEN: usize = 72;
 pub(crate) const INPUT_COMBO_LEN: usize = 88;
 pub(crate) const HUT_SNAPSHOT_LIMIT: u32 = 32;
 pub(crate) const HUT_SNAPSHOT_KEYBOARDS: u32 = 1;
 pub(crate) const HUT_SNAPSHOT_COMBOS: u32 = 2;
+pub(crate) const HUT_SNAPSHOT_MICE: u32 = 3;
 
 macro_rules! field {
     ($ty:ty, $name:ident, $offset:expr, $width:expr, $field_ty:ty) => {
@@ -27,6 +29,19 @@ macro_rules! field {
 }
 
 const _: () = {
+    assert!(core::mem::size_of::<TrueosHidHutMouseState>() == HUT_MOUSE_LEN);
+    field!(TrueosHidHutMouseState, controller_id, 0, 4, u32);
+    field!(TrueosHidHutMouseState, slot_id, 4, 4, u32);
+    field!(TrueosHidHutMouseState, ep_target, 8, 4, u32);
+    field!(TrueosHidHutMouseState, buttons_down, 12, 4, u32);
+    field!(TrueosHidHutMouseState, combo_id, 16, 4, u32);
+    field!(TrueosHidHutMouseState, source_kind, 20, 1, u8);
+    field!(TrueosHidHutMouseState, virtual_device, 21, 1, u8);
+    field!(TrueosHidHutMouseState, source_tag_len, 22, 1, u8);
+    field!(TrueosHidHutMouseState, reserved0, 23, 1, u8);
+    field!(TrueosHidHutMouseState, source_tag, 24, 32, [u8; 32]);
+    field!(TrueosHidHutMouseState, x, 56, 8, f64);
+    field!(TrueosHidHutMouseState, y, 64, 8, f64);
     assert!(core::mem::size_of::<TrueosHidHutKeyboardState>() == HUT_KEYBOARD_LEN);
     field!(TrueosHidHutKeyboardState, controller_id, 0, 4, u32);
     field!(TrueosHidHutKeyboardState, slot_id, 4, 4, u32);
@@ -145,6 +160,7 @@ pub(crate) fn hut_snapshot_record_len(kind: u32) -> Option<usize> {
     match kind {
         HUT_SNAPSHOT_KEYBOARDS => Some(HUT_KEYBOARD_LEN),
         HUT_SNAPSHOT_COMBOS => Some(INPUT_COMBO_LEN),
+        HUT_SNAPSHOT_MICE => Some(HUT_MOUSE_LEN),
         _ => None,
     }
 }
@@ -168,6 +184,30 @@ pub(crate) fn hut_snapshot_response_valid(
         count as usize * record_len
     };
     reported_len == expected_len && reported_len <= available_len
+}
+
+pub(crate) fn hut_mouse(out: &mut [u8], mouse: &TrueosHidHutMouseState) -> bool {
+    if !begin(out, HUT_MOUSE_LEN) { return false; }
+    for (index, value) in [mouse.controller_id, mouse.slot_id, mouse.ep_target, mouse.buttons_down, mouse.combo_id].into_iter().enumerate() {
+        put(out, index * 4, value.to_le_bytes());
+    }
+    out[20..24].copy_from_slice(&[mouse.source_kind, mouse.virtual_device, mouse.source_tag_len, mouse.reserved0]);
+    put(out, 24, mouse.source_tag);
+    put(out, 56, mouse.x.to_le_bytes());
+    put(out, 64, mouse.y.to_le_bytes());
+    true
+}
+
+pub(crate) fn decode_hut_mouse(bytes: &[u8]) -> Option<TrueosHidHutMouseState> {
+    if bytes.len() != HUT_MOUSE_LEN { return None; }
+    let word = |at| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    Some(TrueosHidHutMouseState {
+        controller_id: word(0), slot_id: word(4), ep_target: word(8), buttons_down: word(12), combo_id: word(16),
+        source_kind: bytes[20], virtual_device: bytes[21], source_tag_len: bytes[22], reserved0: bytes[23],
+        source_tag: bytes[24..56].try_into().unwrap(),
+        x: f64::from_le_bytes(bytes[56..64].try_into().unwrap()),
+        y: f64::from_le_bytes(bytes[64..72].try_into().unwrap()),
+    })
 }
 
 pub(crate) fn hut_keyboard(out: &mut [u8], keyboard: &TrueosHidHutKeyboardState) -> bool {
@@ -332,6 +372,29 @@ mod tests {
 
     #[test]
     fn hut_snapshot_records_roundtrip_all_fields_in_little_endian() {
+        let mouse = TrueosHidHutMouseState {
+            controller_id: 0x0102_0304, slot_id: 0x1112_1314, ep_target: 0x2122_2324,
+            buttons_down: 0x3132_3334, combo_id: 0x4142_4344, source_kind: 2,
+            virtual_device: 1, source_tag_len: 32, reserved0: 0xa5,
+            source_tag: core::array::from_fn(|i| i as u8), x: 0.25, y: -0.5,
+        };
+        let mut bytes = [0xaa; HUT_MOUSE_LEN + 2];
+        assert!(hut_mouse(&mut bytes, &mouse));
+        assert_eq!(&bytes[..4], &[4, 3, 2, 1]);
+        assert_eq!(&bytes[12..20], &[0x34, 0x33, 0x32, 0x31, 0x44, 0x43, 0x42, 0x41]);
+        assert_eq!(&bytes[20..24], &[2, 1, 32, 0xa5]);
+        assert_eq!(&bytes[24..56], &mouse.source_tag);
+        assert_eq!(&bytes[56..64], &0.25f64.to_le_bytes());
+        assert_eq!(&bytes[64..72], &(-0.5f64).to_le_bytes());
+        assert_eq!(&bytes[72..], &[0xaa; 2]);
+        let decoded = decode_hut_mouse(&bytes[..72]).unwrap();
+        let mut encoded_again = [0; HUT_MOUSE_LEN];
+        assert!(hut_mouse(&mut encoded_again, &decoded));
+        assert_eq!(&encoded_again, &bytes[..72]);
+        assert!(decode_hut_mouse(&bytes[..71]).is_none());
+        assert!(decode_hut_mouse(&bytes).is_none());
+        assert_short_buffer_preserved(HUT_MOUSE_LEN, |out| hut_mouse(out, &mouse));
+
         let keyboard = TrueosHidHutKeyboardState {
             controller_id: 0x0102_0304, slot_id: 0x1112_1314, ep_target: 0x2122_2324, combo_id: 0x3132_3334,
             modifiers: 0x41, source_kind: 0x42, virtual_device: 1, source_tag_len: 32,
@@ -380,7 +443,7 @@ mod tests {
 
     #[test]
     fn hut_snapshot_rejects_truncated_oversized_and_inconsistent_responses() {
-        for kind in [HUT_SNAPSHOT_KEYBOARDS, HUT_SNAPSHOT_COMBOS] {
+        for kind in [HUT_SNAPSHOT_KEYBOARDS, HUT_SNAPSHOT_COMBOS, HUT_SNAPSHOT_MICE] {
             let size = hut_snapshot_record_len(kind).unwrap();
             let bytes = 32 * size;
             assert!(bytes <= 4040);
@@ -398,7 +461,7 @@ mod tests {
             assert!(!hut_snapshot_response_valid(kind, 32, u64::MAX, bytes, bytes));
         }
         assert!(!hut_snapshot_response_valid(0, 0, 0, 0, 0));
-        assert!(!hut_snapshot_response_valid(3, 32, 0, 0, 0));
+        assert!(!hut_snapshot_response_valid(4, 32, 0, 0, 0));
     }
 
     #[test]

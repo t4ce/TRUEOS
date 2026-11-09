@@ -808,6 +808,9 @@ pub unsafe extern "C" fn trueos_cabi_hid_hut_read_mice(
     out: *mut hut::TrueosHidHutMouseState,
     out_cap: u32,
 ) -> u32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { crate::r::io::input_cabi::guest_hid_hut_read_mice(out, out_cap) };
+    }
     if out_cap == 0 {
         return hut::mice_snapshot().len() as u32;
     }
