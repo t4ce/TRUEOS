@@ -2639,6 +2639,25 @@ pub(crate) fn native_guest_terminated(vm_id: u8, generation: u64) {
     force_stop(vm_id, vm);
 }
 
+/// A whole-process exit bypasses guest runtime destructors. Once the Hull has
+/// actually returned, retire its remaining native threads through their normal
+/// control boundaries instead of waiting for idle pools to expire naturally.
+fn cancel_native_jobs_after_clean_hull_exit(vm_id: u8, generation: u64) {
+    let Some(vm) = vm_slot(vm_id) else { return };
+    let _control = vm.lifecycle_control.lock();
+    if vm.run_generation.load(Ordering::Acquire) != generation
+        || !vm.running.load(Ordering::Acquire)
+        || !vm.clean_exit.load(Ordering::Acquire)
+        || vm.pause_latched.load(Ordering::Acquire)
+        || vm.preserve_req.load(Ordering::Acquire)
+        || vm.preserve_exit.load(Ordering::Acquire)
+        || crate::r::blocking::guest_jobs_in_flight(vm_id) == 0
+    {
+        return;
+    }
+    force_stop(vm_id, vm);
+}
+
 fn stop_matching_generation(vm_id: u8, generation: Option<u64>) -> Result<bool, StopError> {
     stop_matching_control(vm_id, generation, None)
 }
@@ -4494,7 +4513,8 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     // No guest code can execute before admission is tied to this run. An
     // outstanding reservation here is an invariant failure, never permission
     // to replace live executable/heap state with a new generation.
-    assert!(crate::r::blocking::open_guest_jobs(vm_id, vm.run_generation.load(Ordering::Acquire)));
+    let launched_generation = vm.run_generation.load(Ordering::Acquire);
+    assert!(crate::r::blocking::open_guest_jobs(vm_id, launched_generation));
     assert!(crate::r::fs::request_broker::open_vm(vm_id));
     // Publish pause eligibility only after native admission belongs to this
     // incarnation. Earlier requests must see a starting VM, not a live Hull.
@@ -4509,7 +4529,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     let launch_result = vmx_launch_once_with_ept(
         lineage_record,
         lane_lease.slot() as usize,
-        vm.run_generation.load(Ordering::Acquire),
+        launched_generation,
         &mut vm_boot_span,
     )
     .await;
@@ -4521,8 +4541,9 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     crate::log!("app-vm-run-queue: vm launch returned vm={} mode={:?}\n", vm_id, boot_mode);
     clear_current_vm_id();
     teardown_diagnostics::set(vm_id, TeardownStage::NativeDrain);
+    cancel_native_jobs_after_clean_hull_exit(vm_id, launched_generation);
     crate::r::blocking::acknowledge_guest_hull_stopped(
-        vm_id, vm.run_generation.load(Ordering::Acquire),
+        vm_id, launched_generation,
     );
     if !vm.pause_latched.load(Ordering::Acquire) {
         crate::r::fs::request_broker::request_release_vm(vm_id);

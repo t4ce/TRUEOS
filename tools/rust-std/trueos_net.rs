@@ -137,6 +137,15 @@ impl Drop for Inner {
 #[derive(Clone, Debug)]
 pub struct NativeSocket(Arc<Inner>);
 impl NativeSocket {
+    /// Borrow the native capability identity for readiness registration.
+    ///
+    /// Keep this socket or a clone alive for the entire registration. The
+    /// returned value is not a Unix descriptor and transfers no ownership;
+    /// consumers must not close it independently of this capability.
+    pub fn registration_id(&self) -> u32 {
+        self.0.id
+    }
+
     fn owned(id: u32) -> io::Result<Self> {
         if id == 0 {
             return Err(io::Error::new(

@@ -81,6 +81,10 @@ unsafe extern "C" {
 pub(crate) struct Socket {
     id: u32,
     registration: Option<crate::sys::SocketRegistration>,
+    // Retain the original std capability; registration_id is borrowed only.
+    // Its Arc also keeps independently held std listener clones alive.
+    #[cfg(all(target_os = "trueos", feature = "std-compat"))]
+    std_owner: Option<std::net::NativeSocket>,
 }
 
 impl Drop for Socket {
@@ -88,16 +92,47 @@ impl Drop for Socket {
         // Remove local readiness state before releasing the kernel ID. A later
         // socket can therefore never inherit this source's token on ID reuse.
         drop(self.registration.take());
-        let _ = unsafe { trueos_mio_socket_close(self.id) };
+        #[cfg(all(target_os = "trueos", feature = "std-compat"))]
+        if self.std_owner.is_some() {
+            return; // NativeSocket's final Arc owns the close.
+        }
+        if self.id != 0 {
+            let _ = unsafe { trueos_mio_socket_close(self.id) };
+        }
     }
 }
 
 impl Socket {
+    fn owned(id: u32) -> Self {
+        Self { id, registration: None,
+            #[cfg(all(target_os = "trueos", feature = "std-compat"))]
+            std_owner: None,
+        }
+    }
+
+    #[cfg(all(target_os = "trueos", feature = "std-compat"))]
+    pub(crate) fn from_std_native(owner: std::net::NativeSocket) -> Self {
+        Self { id: owner.registration_id(), registration: None, std_owner: Some(owner) }
+    }
+
+    #[cfg(all(target_os = "trueos", feature = "std-compat"))]
+    pub(crate) fn into_std_native(mut self) -> io::Result<std::net::NativeSocket> {
+        // Removing the reactor token must precede returning ownership to std.
+        drop(self.registration.take());
+        match self.std_owner.take() {
+            Some(owner) => {
+                self.id = 0; // the returned NativeSocket owns this capability
+                Ok(owner)
+            }
+            None => Err(io::Error::new(io::ErrorKind::Unsupported,
+                "native-created Mio sockets have no retained std capability to return")),
+        }
+    }
     pub(crate) fn tcp_socket(family: u32) -> io::Result<Self> {
         let mut id = 0;
         let status = unsafe { trueos_mio_tcp_socket_create(family, &mut id) };
         status_to_result(status, "native TCP socket creation failed")?;
-        Ok(Self { id, registration: None })
+        Ok(Self::owned(id))
     }
 
     pub(crate) fn bind(&self, addr: SocketAddr) -> io::Result<()> {
@@ -119,21 +154,21 @@ impl Socket {
         let mut id = 0u32;
         let status = unsafe { trueos_mio_tcp_listener_bind(socket_addr_to_raw(addr)?, &mut id) };
         status_to_result(status, "mio zkvm TCP listener bind failed")?;
-        Ok(Self { id, registration: None })
+        Ok(Self::owned(id))
     }
 
     pub(crate) fn tcp_stream_connect(addr: SocketAddr) -> io::Result<Self> {
         let mut id = 0u32;
         let status = unsafe { trueos_mio_tcp_stream_connect(socket_addr_to_raw(addr)?, &mut id) };
         status_to_result(status, "mio zkvm TCP stream connect failed")?;
-        Ok(Self { id, registration: None })
+        Ok(Self::owned(id))
     }
 
     pub(crate) fn udp_bind(addr: SocketAddr) -> io::Result<Self> {
         let mut id = 0u32;
         let status = unsafe { trueos_mio_udp_socket_bind(socket_addr_to_raw(addr)?, &mut id) };
         status_to_result(status, "mio zkvm UDP bind failed")?;
-        Ok(Self { id, registration: None })
+        Ok(Self::owned(id))
     }
 
     pub(crate) fn accept(&self) -> io::Result<(Self, SocketAddr)> {
@@ -142,7 +177,7 @@ impl Socket {
         let status = unsafe { trueos_mio_tcp_listener_accept(self.id, &mut id, &mut addr) };
         self.rearm_if_blocked(status as isize, READY_READABLE);
         status_to_result(status, "mio zkvm TCP accept failed")?;
-        Ok((Self { id, registration: None }, raw_to_socket_addr(addr)?))
+        Ok((Self::owned(id), raw_to_socket_addr(addr)?))
     }
 
     pub(crate) fn local_addr(&self) -> io::Result<SocketAddr> {

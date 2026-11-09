@@ -13,6 +13,18 @@ pub struct TcpStream {
 }
 
 impl TcpStream {
+    /// Move an existing native std capability without converting a Unix fd.
+    #[cfg(all(target_os = "trueos", feature = "std-compat"))]
+    pub fn from_std(socket: std::net::TcpStream) -> Self {
+        Self { inner: Socket::from_std_native(socket.into_native_socket()) }
+    }
+
+    /// Return a retained std capability after reactor deregistration.
+    /// A socket created directly by Mio has no std owner and is Unsupported.
+    #[cfg(all(target_os = "trueos", feature = "std-compat"))]
+    pub fn into_std(self) -> io::Result<std::net::TcpStream> {
+        self.inner.into_std_native().map(std::net::TcpStream::from_native_socket)
+    }
     pub fn connect(addr: SocketAddr) -> io::Result<TcpStream> {
         Ok(TcpStream {
             inner: Socket::tcp_stream_connect(addr)?,

@@ -4,6 +4,9 @@
 The complete production libraries run against the existing in-memory socket ABI
 simulator. Native readiness, cancellation, partial I/O and ownership are real
 library code; packets, guest identity and the kernel scheduler are simulated.
+The std-facing capability types are explicit host aliases around the actual
+production trueos_net.rs provider. Only their type paths in staged Mio/Tokio
+conversion signatures are adapted; no Unix descriptor is reinterpreted.
 A separate ordinary-host control exercises the opt-in feature on Linux.
 """
 from __future__ import annotations
@@ -14,6 +17,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import shutil
 
 from test_native_mio import ROOT, TOOLCHAIN, environment, manifest, info
 
@@ -58,12 +62,6 @@ TOKIO_BOUNDARY_CASES = r'''
   let udp=UdpSocket::bind("127.0.0.1:0").await.unwrap();
   assert_eq!(udp.into_std().unwrap_err().kind(),std::io::ErrorKind::Unsupported);
  });});
- test("std-facing native sockets reject imported Unix descriptors",||{
-  let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-  assert_eq!(TcpListener::from_std(listener).unwrap_err().kind(),std::io::ErrorKind::Unsupported);
-  let udp=std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-  assert_eq!(UdpSocket::from_std(udp).unwrap_err().kind(),std::io::ErrorKind::Unsupported);
- });
 '''
 
 
@@ -95,6 +93,34 @@ def main():
             return log.read_text()
 
         native = work / 'native'
+        # Host std does not expose the target-specific NativeSocket type. Use
+        # actual production capability ownership behind explicit test aliases,
+        # adapting only the type paths in the copied conversion surfaces.
+        fixture = work / 'std-net-fixture'
+        manifest(fixture, '[package]\nname="native-std-net-fixture"\nversion="0.0.0"\nedition="2024"\n[lib]\npath="lib.rs"\n')
+        provider = (ROOT / 'tools/rust-std/trueos_net.rs').read_text().replace('//!', '//')
+        fixture_source = (FIXTURES / 'std_net_fixture.rs').read_text()
+        assert fixture_source.count('NATIVE_PROVIDER') == 1
+        (fixture / 'lib.rs').write_text(fixture_source.replace('NATIVE_PROVIDER', provider))
+        staged_mio = work / 'mio-sources'
+        staged_tokio = work / 'tokio-sources'
+        for source, staged in [(mio, staged_mio), (tokio, staged_tokio)]:
+            shutil.copytree(source, staged, ignore=shutil.ignore_patterns('target', '.git'))
+        adaptations = []
+        for staged, files in [
+            (staged_mio, ['src/zkvm_net.rs', 'src/net/tcp/listener_zkvm.rs', 'src/net/tcp/stream_zkvm.rs', 'src/net/udp_zkvm.rs']),
+            (staged_tokio, ['src/net/tcp/listener.rs', 'src/net/tcp/stream.rs', 'src/net/udp.rs']),
+        ]:
+            for relative in files:
+                path = staged / relative
+                before = path.read_text()
+                after, count = re.subn(r'(?<![A-Za-z0-9_:])(?:std::)?net::(NativeSocket|TcpListener|TcpStream|UdpSocket)\b', r'native_std_net_fixture::\1', before)
+                assert count, path
+                path.write_text(after)
+                adaptations.append({'file': relative, 'aliases': count})
+        tokio_manifest = staged_tokio / 'Cargo.toml'
+        tokio_manifest_text = re.sub(r'path\s*=\s*"(\.\.[^"]+)"', lambda match: 'path=' + json.dumps(str((tokio / match[1]).resolve())), tokio_manifest.read_text())
+        tokio_manifest.write_text(tokio_manifest_text + '\n[dependencies.native-std-net-fixture]\npath=' + json.dumps(str(fixture)) + '\n')
         # Explicit trueos cfg is applied after Cargo's host dependency selection.
         # Supply native target dependencies without replacing production sources.
         manifest(native / 'mio', f'''[package]
@@ -102,7 +128,7 @@ name="mio"
 version="1.2.0"
 edition="2024"
 [lib]
-path={json.dumps(str(mio / 'src/lib.rs'))}
+path={json.dumps(str(staged_mio / 'src/lib.rs'))}
 [features]
 default=[]
 std-compat=["dep:libc"]
@@ -116,6 +142,7 @@ core3={{version="0.1.2",default-features=false,features=["alloc"]}}
 trueos-io={{path={json.dumps(str(ROOT / 'crates/trueos-io'))}}}
 spin="0.10"
 libc={{version="0.2.183",optional=true}}
+native-std-net-fixture={{path={json.dumps(str(fixture))}}}
 log={{version="0.4.8",optional=true}}
 [lints.rust]
 unexpected_cfgs={{level="warn",check-cfg=['cfg(mio_unsupported_force_poll_poll)','cfg(mio_unsupported_force_waker_pipe)']}}
@@ -130,7 +157,8 @@ full-signal-check=["tokio/process","tokio/signal"]
 native-fd-check=[]
 [dependencies]
 mio={{path="mio",default-features=false,features=["std-compat","native-net","os-poll","os-ext","net","log"]}}
-tokio={{path={json.dumps(str(tokio))},default-features=false,features=["native-net","net","rt","rt-multi-thread","io-util","sync","time"]}}
+tokio={{path={json.dumps(str(staged_tokio))},default-features=false,features=["native-net","net","rt","rt-multi-thread","io-util","sync","time"]}}
+native-std-net-fixture={{path={json.dumps(str(fixture))}}}
 trueos-runtime={{path={json.dumps(str(ROOT / 'crates/trueos-runtime'))}}}
 [patch.crates-io]
 mio={{path="mio"}}
@@ -159,6 +187,15 @@ panic="abort"
         # std host threads are not created by the native simulator's thread
         # spawn hook. Assert the real current thread is the Tokio worker.
         boundary = boundary.replace(old, 'std::thread::current().name().is_some_and(|name|name.starts_with("tokio-rt-worker"))')
+        boundary = boundary.replace('fn trueos_mio_socket_close(id:u32)->i32{', 'fn trueos_mio_socket_close(id:u32)->i32{record_close(id);')
+        boundary += r'''
+static CLOSE_COUNTS:OnceLock<Mutex<HashMap<u32,usize>>>=OnceLock::new();
+type CloseHook=Box<dyn Fn(u32)+Send+Sync>;
+static CLOSE_HOOK:OnceLock<Mutex<Option<CloseHook>>>=OnceLock::new();
+pub fn close_count(id:u32)->usize{*CLOSE_COUNTS.get_or_init(Default::default).lock().unwrap().get(&id).unwrap_or(&0)}
+pub fn set_close_hook(hook:Option<CloseHook>){*CLOSE_HOOK.get_or_init(Default::default).lock().unwrap()=hook;}
+fn record_close(id:u32){*CLOSE_COUNTS.get_or_init(Default::default).lock().unwrap().entry(id).or_default()+=1;if let Some(hook)=CLOSE_HOOK.get_or_init(Default::default).lock().unwrap().as_ref(){hook(id);}}
+'''
         (native / 'network_boundary.rs').write_text(boundary)
         behavior = (FIXTURES / 'network_behavior.rs').read_text().replace('trueos_runtime::io::ErrorKind::', 'std::io::ErrorKind::')
         marker = ' println!("16 native-network behavior cases passed (host ABI simulation)");'
@@ -176,11 +213,13 @@ panic="abort"
   assert_eq!(tokio::signal::ctrl_c().await.unwrap_err().kind(),std::io::ErrorKind::Unsupported);
  });});
 '''
-        behavior = behavior.replace(marker, TOKIO_BOUNDARY_CASES + signal_case + marker)
+        behavior = behavior.replace(marker, TOKIO_BOUNDARY_CASES + (FIXTURES / 'std_net_ownership_cases.rs').read_text() + signal_case + marker)
         (native / 'network_behavior.rs').write_text(behavior)
         (native / 'fd_trait.rs').write_text('#[cfg(feature="native-fd-check")]\nfn main() { fn fd<T:std::os::fd::AsRawFd>() {} fd::<tokio::net::TcpStream>(); }\n#[cfg(not(feature="native-fd-check"))]\nfn main() {}\n')
         counts = {}
         env = environment(output / 'native-host-target', native_host=True)
+        env['CARGO_BUILD_JOBS'] = '2'
+        env['RUSTC_BOOTSTRAP'] = '1'
         for mode, flags in [('debug', []), ('release', ['--release'])]:
             text = run('mio-native-std-' + mode, cargo + ['test', '--offline', *flags,
                 '--manifest-path', str(native / 'Cargo.toml'), '--target', 'x86_64-unknown-linux-gnu',
@@ -191,7 +230,7 @@ panic="abort"
                 '--manifest-path', str(native / 'Cargo.toml'), '--target', 'x86_64-unknown-linux-gnu',
                 '--bin', 'tokio-native-std'], env)
             counts['tokio-' + mode] = len(re.findall(r'^ok ', text, re.M))
-            assert counts['tokio-' + mode] == 20
+            assert counts['tokio-' + mode] == 24
         text = run('native-id-is-not-fd', cargo + ['check', '--offline', '--manifest-path',
             str(native / 'Cargo.toml'), '--target', 'x86_64-unknown-linux-gnu',
             '--features', 'native-fd-check', '--bin', 'native-fd-trait-rejection'], env, expected=1)
@@ -201,7 +240,7 @@ panic="abort"
                 str(native / 'Cargo.toml'), '--target', 'x86_64-unknown-linux-gnu', '--features',
                 'full-signal-check', '--bin', 'tokio-native-std'], env)
             counts['tokio-full'] = len(re.findall(r'^ok ', text, re.M))
-            assert counts['tokio-full'] == 21
+            assert counts['tokio-full'] == 25
         host = work / 'host'
         manifest(host, f'''[package]
 name="native-net-host-control"
@@ -229,7 +268,8 @@ path={json.dumps(str(FIXTURES / 'std_behavior.rs'))}
             digest.update(str(path.relative_to(source_root)).encode())
             digest.update(path.read_bytes())
         sources.append({'root': str(source_root), 'files': len(files), 'sha256': digest.hexdigest()})
-    receipt = {'scope': __doc__, 'checks': checks, 'behavior_cases': counts, 'sources': sources,
+    receipt = {'scope': __doc__, 'checks': checks, 'behavior_cases': counts, 'sources': sources, 'host_type_adaptations': adaptations,
+               'native_std_provider': info(ROOT / 'tools/rust-std/trueos_net.rs'), 'host_std_alias_fixture': info(FIXTURES / 'std_net_fixture.rs'), 'ownership_cases': info(FIXTURES / 'std_net_ownership_cases.rs'),
                'limits': ['Socket service and native waits are simulated. No live packets, VM or rig reset.',
                           'Ordinary host control uses real Linux TCP/filesystem/process behavior.',
                           'Synthetic native process/signal fixture excludes Tokio fs; native std Metadata methods need the actual TRUEOS sysroot.']}
