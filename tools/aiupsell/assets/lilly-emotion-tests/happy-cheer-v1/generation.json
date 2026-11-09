@@ -1,0 +1,14 @@
+{
+  "emotion": "Happy / cheer",
+  "kind": "reference-based reinterpretation, not pixel-for-pixel upscaling",
+  "tool": "image_gen.imagegen",
+  "date": "2026-11-09",
+  "reference": {
+    "archive": "tools/Lilly.tar.lz4",
+    "member": "Lilly/Happy/cheer_frames/frame_07.png",
+    "copy": "reference.png"
+  },
+  "style_reference": "tools/aiupsell/assets/hull-wikipedia-concept.png",
+  "output": "lilly-happy-cheer.png",
+  "prompt": "Use case: stylized-concept\nAsset type: high-resolution standalone Lilly mascot emotion test, transparent PNG.\nPrimary request: Reinterpret the HAPPY / CHEER emotion of the small original sprite as a beautifully detailed large anime illustration. This is newly drawn art with the same conceptual emotion, not a pixel-for-pixel upscale.\nInput images: Image 1 is the character and emotion reference: Lilly smiling joyfully with both fists raised beside her head in a celebratory cheer. Image 2 is a style reference ONLY: match the polished detailed anime rendering of Lilly at the bottom right of the TRUEOS concept illustration; do not reproduce the page, panels, text, or background.\nSubject: One Lilly, unmistakably the same mascot: long flowing deep indigo-purple hair with lavender highlights, purple eyes, distinctive small X-shaped hair clip, dark navy jacket with gold piping and buttons, white collared shirt, red necktie, matching dark outfit. Cheerful open-mouth smile, both eyes open, both hands in small raised celebratory fists beside her head. Friendly exuberant accomplishment, readable immediately as happy cheering.\nStyle/medium: Crisp premium 2D anime character illustration, expressive eyes, confident clean fine linework, nuanced cel shading, carefully drawn hands, detailed hair strands and fabric folds, similar proportions and finish to Lilly in image 2. Preserve character identity from image 1.\nComposition/framing: Single centered character from the top of her hair to mid-thigh, both arms and hands fully visible; long hair fully inside the canvas. Generous small transparent margin all around; straight-on view. Large square canvas, aim for 1536 by 1536 pixels or larger native detail.\nScene/backdrop: Actual transparent background with clean alpha edges, suitable for a desktop mascot asset.\nConstraints: Only the character. No scene, text, logos, border, frame, duplicate characters, extra arms, extra fingers, props, confetti, glow halo, checkerboard pattern, or cast shadow. Do not embed the original sprite or draw a comparison sheet."
+}
