@@ -51,14 +51,16 @@ def main() -> None:
         "TrueosHidHutMouseState": item("src/usb3/hid/hut.rs", "TrueosHidHutMouseState").replace(
             "#[derive(Copy, Clone, Debug)]", "#[derive(Copy, Clone, Debug, Default)]"
         ),
+        "TrueosHidHutTabletState": item("src/usb3/hid/hut.rs", "TrueosHidHutTabletState").replace("#[derive(Copy, Clone, Debug)]", "#[derive(Copy, Clone, Debug, Default)]"),
         "TrueosInputCombo": item("crates/trueos-v/src/bp_abi.rs", "TrueosInputCombo"),
     }
     bridge = "\n".join(function(name) for name in [
         "host_input_hut_snapshot_v1", "guest_input_hut_snapshot_v1",
-        "guest_hid_hut_read_keyboards", "guest_hid_hut_read_mice", "guest_input_combo_read", "trueos_cabi_input_combo_read",
+        "guest_hid_hut_read_keyboards", "guest_hid_hut_read_mice", "guest_hid_hut_read_tablets", "guest_input_combo_read", "trueos_cabi_input_combo_read",
     ])
     keyboard_cabi = function("trueos_cabi_hid_hut_read_keyboards", "src/usb3/hid/mod.rs")
     mouse_cabi = function("trueos_cabi_hid_hut_read_mice", "src/usb3/hid/mod.rs")
+    tablet_cabi = function("trueos_cabi_hid_hut_read_tablets", "src/usb3/hid/mod.rs")
     harness = f'''#![allow(dead_code)]
 extern crate alloc;
 extern crate self as v;
@@ -69,7 +71,7 @@ pub mod vinput {{ {records["TrueosHidCursorEvent"]}
 {records["TrueosInputCombo"]} }}
 mod usb2 {{ pub mod hid {{ pub use crate::vinput::TrueosHidCursorEvent; pub use crate::usb3::hid::hut; }} }}
 mod r {{ pub mod keyboard {{ {records["TrueosKeyboardOutputEvent"]} }}
-pub mod io {{ pub mod input_cabi {{ pub(crate) use crate::{{guest_hid_hut_read_keyboards, guest_hid_hut_read_mice}}; }} }} }}
+pub mod io {{ pub mod input_cabi {{ pub(crate) use crate::{{guest_hid_hut_read_keyboards, guest_hid_hut_read_mice, guest_hid_hut_read_tablets}}; }} }} }}
 mod usb3 {{ pub mod hid {{
 pub mod midi {{ {records["MidiInputEventV1"]} }}
 pub mod hut {{
@@ -78,6 +80,15 @@ std::thread_local! {{ pub static KEYBOARD_COUNT: std::cell::Cell<u32> = const {{
 std::thread_local! {{ pub static MOUSE_COUNT: std::cell::Cell<u32> = const {{ std::cell::Cell::new(32) }}; }}
 {records["TrueosHidHutKeyboardState"]}
 {records["TrueosHidHutMouseState"]}
+{records["TrueosHidHutTabletState"]}
+std::thread_local! {{ pub static TABLET_COUNT: std::cell::Cell<u32> = const {{ std::cell::Cell::new(32) }}; }}
+pub fn tablets_snapshot() -> Vec<TrueosHidHutTabletState> {{
+    (1..=TABLET_COUNT.with(|count| count.get())).map(|slot_id| TrueosHidHutTabletState {{ controller_id: 9, slot_id, ep_target: 3, combo_id: slot_id, virtual_device: 1, x: 0.25, y: -0.5, ..Default::default() }}).collect()
+}}
+pub fn read_tablets_snapshot(out: &mut [TrueosHidHutTabletState]) -> usize {{
+    let snapshot = tablets_snapshot(); let count = out.len().min(snapshot.len());
+    out[..count].copy_from_slice(&snapshot[..count]); count
+}}
 pub fn mice_snapshot() -> Vec<TrueosHidHutMouseState> {{
     (1..=MOUSE_COUNT.with(|count| count.get())).map(|slot_id| TrueosHidHutMouseState {{ controller_id: 7, slot_id, ep_target: 3, combo_id: slot_id, virtual_device: (slot_id % 2) as u8, x: 0.25, y: -0.5, ..Default::default() }}).collect()
 }}
@@ -100,6 +111,7 @@ pub fn combos_snapshot() -> Vec<crate::vinput::TrueosInputCombo> {{
 }}
 {keyboard_cabi}
 {mouse_cabi}
+{tablet_cabi}
 }} }}
 #[path = "{ROOT / 'src/r/io/input_wire.rs'}"] mod input_wire;
 {bridge}
@@ -118,7 +130,7 @@ pub mod vmcall {
     }
     pub fn call_with_payload_reported_len(op: u32, kind: u64, cap: u64, req: &[u8], out: &mut [u8]) -> (u32, u64, usize) {
         assert_eq!(op, OP_BP_INPUT_HUT_SNAPSHOT_V1);
-        assert!(kind == 1 || kind == 2 || kind == 3);
+        assert!((1..=4).contains(&kind));
         assert!(cap <= 32);
         assert!(req.is_empty());
         CALLS.with(|value| value.set(value.get() + 1));
@@ -192,8 +204,30 @@ fn public_mouse_cabi_reaches_host_for_physical_virtual_and_hotplugged_mice() {
 }
 
 #[test]
+fn public_tablet_cabi_follows_host_device_creation_and_removal() {
+    vmcall::SERVE_HOST.with(|value| value.set(true));
+    vmcall::CALLS.with(|value| value.set(0));
+    let mut calls = 0;
+    for count in [0, 2, 32, 1, 0] {
+        usb3::hid::hut::TABLET_COUNT.with(|v| v.set(count));
+        assert_eq!(unsafe { usb3::hid::trueos_cabi_hid_hut_read_tablets(std::ptr::null_mut(), 0) }, count);
+        calls += 1;
+        assert_eq!(vmcall::CALLS.with(|v| v.get()), calls);
+        if count != 0 {
+            let mut tablets = vec![usb3::hid::hut::TrueosHidHutTabletState::default(); count as usize];
+            assert_eq!(unsafe { usb3::hid::trueos_cabi_hid_hut_read_tablets(tablets.as_mut_ptr(), count) }, count);
+            calls += 1;
+            assert_eq!(vmcall::CALLS.with(|v| v.get()), calls);
+            assert_eq!(tablets[count as usize - 1].slot_id, count);
+            assert_eq!(tablets[0].controller_id, 9);
+        }
+    }
+    vmcall::SERVE_HOST.with(|value| value.set(false));
+}
+
+#[test]
 fn host_snapshots_keep_zero_probe_output_untouched_and_admit_all_32_records() {
-    for (kind, size) in [(1, 96), (2, 88), (3, 72)] {
+    for (kind, size) in [(1, 96), (2, 88), (3, 72), (4, 80)] {
         let mut bytes = vec![0xa5; 4040];
         assert_eq!(host_input_hut_snapshot_v1(kind, 0, &mut bytes), Ok((32, 0)));
         assert!(bytes.iter().all(|byte| *byte == 0xa5));
@@ -202,7 +236,8 @@ fn host_snapshots_keep_zero_probe_output_untouched_and_admit_all_32_records() {
         for (index, record) in bytes[..32 * size].chunks_exact(size).enumerate() {
             let id = if kind == 1 { input_wire::decode_hut_keyboard(record).unwrap().slot_id }
                      else if kind == 2 { input_wire::decode_input_combo(record).unwrap().combo_id }
-                     else { input_wire::decode_hut_mouse(record).unwrap().slot_id };
+                     else if kind == 3 { input_wire::decode_hut_mouse(record).unwrap().slot_id }
+                     else { input_wire::decode_hut_tablet(record).unwrap().slot_id };
             assert_eq!(id, index as u32 + 1);
         }
         assert_eq!(host_input_hut_snapshot_v1(kind, 1, &mut bytes), Ok((1, size)));
@@ -216,7 +251,7 @@ fn host_snapshots_keep_zero_probe_output_untouched_and_admit_all_32_records() {
 
 #[test]
 fn guest_reads_all_32_records_and_count_probes_without_writing() {
-    for (kind, size) in [(1, 96), (2, 88), (3, 72)] {
+    for (kind, size) in [(1, 96), (2, 88), (3, 72), (4, 80)] {
         let mut bytes = vec![0; 32 * size];
         let (count, len) = host_input_hut_snapshot_v1(kind, 32, &mut bytes).unwrap();
         vmcall::set(0, count as u64, bytes, len);
@@ -229,9 +264,13 @@ fn guest_reads_all_32_records_and_count_probes_without_writing() {
             let mut out = vec![vinput::TrueosInputCombo::default(); 32];
             assert_eq!(unsafe { guest_input_combo_read(out.as_mut_ptr(), u32::MAX) }, 32);
             assert_eq!(out[31].combo_id, 32);
-        } else {
+        } else if kind == 3 {
             let mut out = vec![usb3::hid::hut::TrueosHidHutMouseState::default(); 32];
             assert_eq!(unsafe { guest_hid_hut_read_mice(out.as_mut_ptr(), u32::MAX) }, 32);
+            assert_eq!(out[31].slot_id, 32);
+        } else {
+            let mut out = vec![usb3::hid::hut::TrueosHidHutTabletState::default(); 32];
+            assert_eq!(unsafe { guest_hid_hut_read_tablets(out.as_mut_ptr(), u32::MAX) }, 32);
             assert_eq!(out[31].slot_id, 32);
         }
     }
@@ -248,6 +287,17 @@ fn guest_reads_all_32_records_and_count_probes_without_writing() {
 
 #[test]
 fn malformed_guest_responses_never_write_caller_records() {
+    for (status, count, len) in [(1,1,80), (0,1,79), (0,1,81), (0,2,160), (0,33,2640), (0,u64::MAX,80)] {
+        vmcall::set(status, count, vec![0; 4040], len);
+        let mut tablet = usb3::hid::hut::TrueosHidHutTabletState { slot_id: 99, ..Default::default() };
+        assert_eq!(unsafe { guest_hid_hut_read_tablets(&mut tablet, 1) }, 0);
+        assert_eq!(tablet.slot_id, 99);
+    }
+    vmcall::set(0, 32, vec![], 0);
+    let mut tablet = usb3::hid::hut::TrueosHidHutTabletState { slot_id: 99, ..Default::default() };
+    assert_eq!(unsafe { guest_hid_hut_read_tablets(&mut tablet, 0) }, 32);
+    assert_eq!(tablet.slot_id, 99);
+    assert_eq!(unsafe { guest_hid_hut_read_tablets(std::ptr::null_mut(), 1) }, 0);
     for (status, count, len) in [(1,1,72), (0,1,71), (0,1,73), (0,2,144), (0,33,2376), (0,u64::MAX,72)] {
         vmcall::set(status, count, vec![0; 4040], len);
         let mut mouse = usb3::hid::hut::TrueosHidHutMouseState { slot_id: 99, ..Default::default() };

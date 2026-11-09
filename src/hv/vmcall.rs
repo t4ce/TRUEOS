@@ -119,7 +119,7 @@ pub const OP_BP_SHELL_ATTACHED_READ: u32 = 0xCB; // arg0 cap -> attached-shell i
 pub const OP_BP_INPUT_KEYBOARD_OUTPUT_POP: u32 = 0xCC; // response payload is one keyboard event
 pub const OP_BP_INPUT_KEYBOARD_OUTPUT_SINCE: u32 = 0xCD; // arg0 read seq,arg1 cap -> payload events
 pub const OP_BP_INPUT_MIDI_READ_V1: u32 = 0x200; // arg0 read seq,arg1 cap -> MIDI edge payload
-pub const OP_BP_INPUT_HUT_SNAPSHOT_V1: u32 = 0x257; // arg0 keyboard(1)/combo(2)/mouse(3),arg1 cap(0=count) -> bounded records
+pub const OP_BP_INPUT_HUT_SNAPSHOT_V1: u32 = 0x257; // arg0 keyboard(1)/combo(2)/mouse(3)/tablet(4),arg1 cap(0=count) -> bounded records
 pub const OP_BP_MIO_SOCKET_POLL_READY: u32 = 0x201; // arg0 native socket,arg1 interests -> readiness/status
 pub const OP_BP_MIO_SOCKET_OPTION: u32 = 0x247; // arg0 socket,arg1 option:u32/value:i32; -1 reads
 pub const OP_BP_MIO_TCP_SOCKET_CREATE: u32 = 0x248; // arg0 family -> owned socket/status

@@ -4,7 +4,7 @@
 use crate::r::keyboard::TrueosKeyboardOutputEvent;
 use crate::usb2::hid::TrueosHidCursorEvent;
 use crate::usb3::hid::midi::MidiInputEventV1;
-use crate::usb3::hid::hut::{TrueosHidHutKeyboardState, TrueosHidHutMouseState};
+use crate::usb3::hid::hut::{TrueosHidHutKeyboardState, TrueosHidHutMouseState, TrueosHidHutTabletState};
 use v::vinput::{KeyboardControlCommand, MouseMotionCommand, TrueosInputCombo};
 
 pub(crate) const CURSOR_EVENT_LEN: usize = 56;
@@ -14,11 +14,13 @@ pub(crate) const MOUSE_COMMAND_LEN: usize = 44;
 pub(crate) const KEYBOARD_COMMAND_LEN: usize = 16;
 pub(crate) const HUT_KEYBOARD_LEN: usize = 96;
 pub(crate) const HUT_MOUSE_LEN: usize = 72;
+pub(crate) const HUT_TABLET_LEN: usize = 80;
 pub(crate) const INPUT_COMBO_LEN: usize = 88;
 pub(crate) const HUT_SNAPSHOT_LIMIT: u32 = 32;
 pub(crate) const HUT_SNAPSHOT_KEYBOARDS: u32 = 1;
 pub(crate) const HUT_SNAPSHOT_COMBOS: u32 = 2;
 pub(crate) const HUT_SNAPSHOT_MICE: u32 = 3;
+pub(crate) const HUT_SNAPSHOT_TABLETS: u32 = 4;
 
 macro_rules! field {
     ($ty:ty, $name:ident, $offset:expr, $width:expr, $field_ty:ty) => {
@@ -29,6 +31,21 @@ macro_rules! field {
 }
 
 const _: () = {
+    assert!(core::mem::size_of::<TrueosHidHutTabletState>() == HUT_TABLET_LEN);
+    field!(TrueosHidHutTabletState, controller_id, 0, 4, u32);
+    field!(TrueosHidHutTabletState, slot_id, 4, 4, u32);
+    field!(TrueosHidHutTabletState, ep_target, 8, 4, u32);
+    field!(TrueosHidHutTabletState, x_raw, 12, 2, u16);
+    field!(TrueosHidHutTabletState, y_raw, 14, 2, u16);
+    field!(TrueosHidHutTabletState, buttons_down, 16, 4, u32);
+    field!(TrueosHidHutTabletState, report_id, 20, 1, u8);
+    field!(TrueosHidHutTabletState, source_kind, 21, 1, u8);
+    field!(TrueosHidHutTabletState, virtual_device, 22, 1, u8);
+    field!(TrueosHidHutTabletState, source_tag_len, 23, 1, u8);
+    field!(TrueosHidHutTabletState, combo_id, 24, 4, u32);
+    field!(TrueosHidHutTabletState, source_tag, 28, 32, [u8; 32]);
+    field!(TrueosHidHutTabletState, x, 64, 8, f64);
+    field!(TrueosHidHutTabletState, y, 72, 8, f64);
     assert!(core::mem::size_of::<TrueosHidHutMouseState>() == HUT_MOUSE_LEN);
     field!(TrueosHidHutMouseState, controller_id, 0, 4, u32);
     field!(TrueosHidHutMouseState, slot_id, 4, 4, u32);
@@ -161,6 +178,7 @@ pub(crate) fn hut_snapshot_record_len(kind: u32) -> Option<usize> {
         HUT_SNAPSHOT_KEYBOARDS => Some(HUT_KEYBOARD_LEN),
         HUT_SNAPSHOT_COMBOS => Some(INPUT_COMBO_LEN),
         HUT_SNAPSHOT_MICE => Some(HUT_MOUSE_LEN),
+        HUT_SNAPSHOT_TABLETS => Some(HUT_TABLET_LEN),
         _ => None,
     }
 }
@@ -184,6 +202,33 @@ pub(crate) fn hut_snapshot_response_valid(
         count as usize * record_len
     };
     reported_len == expected_len && reported_len <= available_len
+}
+
+pub(crate) fn hut_tablet(out: &mut [u8], tablet: &TrueosHidHutTabletState) -> bool {
+    if !begin(out, HUT_TABLET_LEN) { return false; }
+    for (at, value) in [(0, tablet.controller_id), (4, tablet.slot_id), (8, tablet.ep_target), (16, tablet.buttons_down), (24, tablet.combo_id)] {
+        put(out, at, value.to_le_bytes());
+    }
+    put(out, 12, tablet.x_raw.to_le_bytes());
+    put(out, 14, tablet.y_raw.to_le_bytes());
+    out[20..24].copy_from_slice(&[tablet.report_id, tablet.source_kind, tablet.virtual_device, tablet.source_tag_len]);
+    put(out, 28, tablet.source_tag);
+    put(out, 64, tablet.x.to_le_bytes());
+    put(out, 72, tablet.y.to_le_bytes());
+    true
+}
+
+pub(crate) fn decode_hut_tablet(bytes: &[u8]) -> Option<TrueosHidHutTabletState> {
+    if bytes.len() != HUT_TABLET_LEN { return None; }
+    let word = |at| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    Some(TrueosHidHutTabletState {
+        controller_id: word(0), slot_id: word(4), ep_target: word(8), buttons_down: word(16), combo_id: word(24),
+        x_raw: u16::from_le_bytes(bytes[12..14].try_into().unwrap()), y_raw: u16::from_le_bytes(bytes[14..16].try_into().unwrap()),
+        report_id: bytes[20], source_kind: bytes[21], virtual_device: bytes[22], source_tag_len: bytes[23],
+        source_tag: bytes[28..60].try_into().unwrap(),
+        x: f64::from_le_bytes(bytes[64..72].try_into().unwrap()),
+        y: f64::from_le_bytes(bytes[72..80].try_into().unwrap()),
+    })
 }
 
 pub(crate) fn hut_mouse(out: &mut [u8], mouse: &TrueosHidHutMouseState) -> bool {
@@ -372,6 +417,29 @@ mod tests {
 
     #[test]
     fn hut_snapshot_records_roundtrip_all_fields_in_little_endian() {
+        let tablet = TrueosHidHutTabletState {
+            controller_id: 0x01020304, slot_id: 9, ep_target: 3, x_raw: 0x1234, y_raw: 0x5678,
+            buttons_down: 0x31415926, report_id: 7, source_kind: 2, virtual_device: 1, source_tag_len: 32,
+            combo_id: 0x41424344, source_tag: [0xa5; 32], x: 0.25, y: -0.5,
+        };
+        let mut bytes = [0xaa; HUT_TABLET_LEN + 2];
+        assert!(hut_tablet(&mut bytes, &tablet));
+        assert_eq!(&bytes[..4], &[4,3,2,1]);
+        assert_eq!(&bytes[12..16], &[0x34,0x12,0x78,0x56]);
+        assert_eq!(&bytes[16..24], &[0x26,0x59,0x41,0x31,7,2,1,32]);
+        assert_eq!(&bytes[24..28], &[0x44,0x43,0x42,0x41]);
+        assert_eq!(&bytes[28..60], &[0xa5; 32]);
+        assert_eq!(&bytes[60..64], &[0;4]);
+        assert_eq!(&bytes[64..72], &0.25f64.to_le_bytes());
+        assert_eq!(&bytes[72..80], &(-0.5f64).to_le_bytes());
+        assert_eq!(&bytes[80..], &[0xaa;2]);
+        let mut again = [0; HUT_TABLET_LEN];
+        assert!(hut_tablet(&mut again, &decode_hut_tablet(&bytes[..80]).unwrap()));
+        assert_eq!(&again, &bytes[..80]);
+        assert!(decode_hut_tablet(&bytes[..79]).is_none());
+        assert!(decode_hut_tablet(&bytes).is_none());
+        assert_short_buffer_preserved(HUT_TABLET_LEN, |out| hut_tablet(out, &tablet));
+
         let mouse = TrueosHidHutMouseState {
             controller_id: 0x0102_0304, slot_id: 0x1112_1314, ep_target: 0x2122_2324,
             buttons_down: 0x3132_3334, combo_id: 0x4142_4344, source_kind: 2,
@@ -443,7 +511,7 @@ mod tests {
 
     #[test]
     fn hut_snapshot_rejects_truncated_oversized_and_inconsistent_responses() {
-        for kind in [HUT_SNAPSHOT_KEYBOARDS, HUT_SNAPSHOT_COMBOS, HUT_SNAPSHOT_MICE] {
+        for kind in [HUT_SNAPSHOT_KEYBOARDS, HUT_SNAPSHOT_COMBOS, HUT_SNAPSHOT_MICE, HUT_SNAPSHOT_TABLETS] {
             let size = hut_snapshot_record_len(kind).unwrap();
             let bytes = 32 * size;
             assert!(bytes <= 4040);
@@ -461,7 +529,7 @@ mod tests {
             assert!(!hut_snapshot_response_valid(kind, 32, u64::MAX, bytes, bytes));
         }
         assert!(!hut_snapshot_response_valid(0, 0, 0, 0, 0));
-        assert!(!hut_snapshot_response_valid(4, 32, 0, 0, 0));
+        assert!(!hut_snapshot_response_valid(5, 32, 0, 0, 0));
     }
 
     #[test]

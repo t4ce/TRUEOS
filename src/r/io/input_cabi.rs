@@ -61,6 +61,16 @@ pub fn host_input_hut_snapshot_v1(
     }
     let cap = core::cmp::min(out_cap as usize, payload.len() / record_len);
     match kind {
+        input_wire::HUT_SNAPSHOT_TABLETS => {
+            let total = crate::usb2::hid::hut::tablets_snapshot().len();
+            if out_cap == 0 { return Ok((total, 0)); }
+            let mut tablets = alloc::vec![crate::usb2::hid::hut::TrueosHidHutTabletState::default(); cap];
+            let wrote = crate::usb2::hid::hut::read_tablets_snapshot(&mut tablets);
+            for (record, bytes) in tablets[..wrote].iter().zip(payload.chunks_exact_mut(record_len)) {
+                input_wire::hut_tablet(bytes, record);
+            }
+            Ok((wrote, wrote * record_len))
+        }
         input_wire::HUT_SNAPSHOT_MICE => {
             let total = crate::usb2::hid::hut::mice_snapshot().len();
             if out_cap == 0 { return Ok((total, 0)); }
@@ -108,6 +118,23 @@ fn guest_input_hut_snapshot_v1(kind: u32, out_cap: u32, payload: &mut [u8]) -> O
         return None;
     }
     Some(count as u32)
+}
+
+pub(crate) unsafe fn guest_hid_hut_read_tablets(
+    out: *mut crate::usb2::hid::hut::TrueosHidHutTabletState,
+    out_cap: u32,
+) -> u32 {
+    if out_cap != 0 && out.is_null() { return 0; }
+    let cap = out_cap.min(input_wire::HUT_SNAPSHOT_LIMIT);
+    let mut payload = [0; input_wire::HUT_TABLET_LEN * input_wire::HUT_SNAPSHOT_LIMIT as usize];
+    let Some(count) = guest_input_hut_snapshot_v1(input_wire::HUT_SNAPSHOT_TABLETS, cap, &mut payload) else { return 0; };
+    if cap != 0 {
+        for (index, bytes) in payload[..count as usize * input_wire::HUT_TABLET_LEN].chunks_exact(input_wire::HUT_TABLET_LEN).enumerate() {
+            let Some(record) = input_wire::decode_hut_tablet(bytes) else { return 0; };
+            unsafe { out.add(index).write(record); }
+        }
+    }
+    count
 }
 
 pub(crate) unsafe fn guest_hid_hut_read_mice(
