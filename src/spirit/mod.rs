@@ -1235,6 +1235,22 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
         );
         Timer::after(Duration::from_millis(SPIRIT_RETRY_MS)).await;
     }
+    if crate::r::services::shell3_font_service::native_font_first_bringup_enabled() {
+        bringup_diag::stage(id, "waiting-for-native-font");
+        crate::log_important!(target: "gfx";
+            "trueos-spirit: native-font-first fence={} producer=held cursor_task=independent input=active\n",
+            fence_index);
+        if let Err(reason) = crate::r::services::shell3_font_service::prepare().await {
+            bringup_diag::failed(id, "native-font-first-failed");
+            crate::log_important!(target: "gfx";
+                "trueos-spirit: native-font-first fence={} result=failed reason={} action=hold-gpu-producer-until-reboot cursor_task=independent\n",
+                fence_index, reason);
+            return;
+        }
+        crate::log_important!(target: "gfx";
+            "trueos-spirit: native-font-first fence={} result=ready next=first-spirit-gpu-submit source=native-gpu fallback=none\n",
+            fence_index);
+    }
     bringup_diag::stage(id, "waiting-for-resident-source");
 
     let mut retained_normal: Option<QueuedFrame> = None;

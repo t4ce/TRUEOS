@@ -236,20 +236,26 @@ fn real_guest_bootstrap_skips_disk_for_paper_but_preserves_ordinary_roots() {
 }
 
 #[test]
-fn paper_still_consumes_the_original_launch_and_grid_font_vfiles() {
+fn paper_startup_is_font_free_and_keeps_demand_glyph_vfiles() {
     SCRIPT.with(|script| *script.borrow_mut() = Some(
         b"mode gridpaper\nsize 190x90\nstep 2\nwrap on\n".to_vec()));
     assert_eq!(paper_startup(),Ok(()));
     assert_eq!(READS.with(|reads| reads.borrow().clone()),
-               [b"vFile:launch".to_vec(),b"vFile:microfont-grid/2/3f".to_vec()]);
+               [b"vFile:launch".to_vec()]);
     assert_eq!(EXTENTS.with(|extents| extents.borrow().clone()),[(190,90)]);
     assert!(SCRIPT.with(|script| script.borrow().is_none()));
+    glyph_pixels(2,'A').unwrap();
+    assert_eq!(READS.with(|reads| reads.borrow().clone()),
+               [b"vFile:launch".to_vec(),b"vFile:microfont-grid/2/41".to_vec()]);
     READS.with(|reads| reads.borrow_mut().clear());
     EXTENTS.with(|extents| extents.borrow_mut().clear());
     assert_eq!(paper_startup(),Ok(()));
     assert_eq!(READS.with(|reads| reads.borrow().clone()),
-               [b"vFile:launch".to_vec(),b"vFile:microfont-grid/1/3f".to_vec()]);
+               [b"vFile:launch".to_vec()]);
     assert_eq!(EXTENTS.with(|extents| extents.borrow().clone()),[(210,297)]);
+    glyph_pixels(1,'§').unwrap();
+    assert_eq!(READS.with(|reads| reads.borrow().clone()),
+               [b"vFile:launch".to_vec(),b"vFile:microfont-grid/1/a7".to_vec()]);
 }
 '''.replace("@INDEPENDENT@", str(independent).lower()).replace(
         "@PAPER_SETTINGS@", settings

@@ -126,6 +126,16 @@ async fn exercise(
     owned: &mut Option<WindowSnapshot>,
     target: &mut Option<crate::shell3::MatrixTarget>,
 ) -> Result<(), &'static str> {
+    if crate::r::services::shell3_font_service::native_font_first_bringup_enabled() {
+        // This automatic greeting draws and types immediately. Keep its RCS
+        // work out of the laptop's isolated font proof; ordinary empty Paper
+        // windows do not acquire a font dependency from this diagnostic order.
+        crate::log_important!(target: "gfx";
+            "trueos-spirit: Paper boot native-font-first state=waiting automatic-demo=held\n");
+        crate::r::services::shell3_font_service::prepare().await?;
+        crate::log_important!(target: "gfx";
+            "trueos-spirit: Paper boot native-font-first state=ready next=launch\n");
+    }
     // AppDB and the ordinary launcher provide the same early admission as other
     // built-ins. There is no catalog/network fetch and no kernel paper renderer.
     let bytes = loop {

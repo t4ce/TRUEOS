@@ -245,7 +245,7 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
         retry_needed = true;
     }
     crate::r::services::microfont_log_service::usb_controller_stage(
-        "USB discovered: waiting for RTL8153",
+        "USB: normal device discovery and class handoff",
     );
 
     // The first root-hub pass can only *start* a USB2 port reset. Its

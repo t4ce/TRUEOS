@@ -23,7 +23,8 @@ impl NativeMicrofontR8Proof {
     }
 }
 
-/// Run only on explicit diagnostic request. This uses the production font
+/// Run on an explicit diagnostic request or the physical laptop's temporary
+/// font-first boot preflight. This uses the production font
 /// pipeline, push constants, R8 render-target and Render0 GuC retirement path.
 /// It neither selects a font fallback nor touches a display plane. Success
 /// does not validate native line AA, a complete alphabet, or display scanout.

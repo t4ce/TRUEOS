@@ -45,6 +45,7 @@ pub(crate) fn grid_cell_extent(scale: u32) -> Option<(u32, u32)> {
 }
 static FONT: spin::Once<Font> = spin::Once::new();
 static PREPARING: AtomicBool = AtomicBool::new(false);
+static NATIVE_BOOT_PREFLIGHT: spin::Once<Result<(), &'static str>> = spin::Once::new();
 type Reply = Signal<crate::wait::EmbassySpinRawMutex, Result<(), &'static str>>;
 
 struct Font {
@@ -62,6 +63,47 @@ pub(crate) fn cpu_bitmap_fallback_enabled() -> bool {
 
 fn effective_face(_face: FontFace) -> FontFace {
     FontFace::Raster
+}
+
+/// Temporary ordering for the physical laptop bring-up: prove the native font
+/// producer before Spirit can submit its first competing RCS workload. This
+/// does not gate input, UI4 scanout, or Spirit's independent cursor task.
+pub(crate) fn native_font_first_bringup_enabled() -> bool {
+    crate::pci::experimental_tgl_9a49_active()
+}
+
+fn native_boot_preflight() -> Result<(), &'static str> {
+    if !native_font_first_bringup_enabled() { return Ok(()); }
+    // The warm task already waits for these conditions. Paper can also demand
+    // a glyph, so do not turn early demand into a cached failed GPU attempt.
+    if !crate::intel::guc_submission_ready() || crate::intel::render::warm_state().is_none() {
+        return Err("render-busy");
+    }
+    *NATIVE_BOOT_PREFLIGHT.call_once(|| {
+        crate::log_important!(target: "microfont-mask";
+            "microfont: native-r8-preflight begin target=16x16 pixels=256 scope=font-first-laptop-bringup spirit_gpu=held fallback=none\n");
+        match crate::intel::render::probe_native_microfont_r8() {
+            Ok(proof) => {
+                let passed = proof.passed();
+                crate::log_important!(target: "microfont-mask";
+                    "microfont: native-r8-preflight result pass={} draws={} release={} white_inside={}/64 black_outside={}/192 mismatched={} resources_released={} gpu_poll_us={} next={}\n",
+                    passed as u8, proof.completed_draws, proof.release_sequence,
+                    proof.pixels.white_inside, proof.pixels.black_outside,
+                    proof.pixels.mismatched, proof.resources_released as u8,
+                    proof.gpu_poll_us, if passed { "full-native-atlas" } else { "hold-spirit-gpu" });
+                if passed { Ok(()) } else { Err("microfont-native-r8-preflight-failed") }
+            }
+            Err(reason) => {
+                // An allocation/admission error is not evidence of bad shader
+                // output. Retain the precise cause and never retry uncertain
+                // GPU work just to obtain a more convenient boot result.
+                crate::log_important!(target: "microfont-mask";
+                    "microfont: native-r8-preflight error={} pass=0 action=hold-spirit-gpu attempts=1 fallback=none\n",
+                    reason);
+                Err("microfont-native-r8-preflight-failed")
+            }
+        }
+    })
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
@@ -124,6 +166,7 @@ fn prepare_once() -> Result<(), &'static str> {
     if FONT.get().is_some() { return Ok(()); }
     let (_, height) = cell_extent(DEFAULT_UI4_FONT_SCALE)
         .ok_or("shell3-font-physical-size-unavailable")?;
+    native_boot_preflight()?;
     let alpha = build_shell3_alpha_atlas(height)?;
     alpha.glyph('?').ok_or("shell3-font-missing-question-mark")?;
     let glyphs = alpha.glyphs().count();
