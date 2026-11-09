@@ -82,9 +82,30 @@ pub(crate) struct Connection {
     failure_diagnostic_stage: Option<&'static str>,
     eapol_rejected: u64,
     ccmp_rejected: u64,
+    ccmp_rejected_by_class: [u64; 2],
+    ccmp_group_key_missing: u64,
 }
 fn now() -> u64 {
     trueos_time::Instant::now().as_millis()
+}
+
+fn log_ccmp_rx_drop(
+    stage: &'static str,
+    count: u64,
+    class_count: u64,
+    frame: &[u8],
+    iv: &[u8],
+    reason: &'static str,
+) {
+    // Only public MAC/CCMP header metadata. Never log ciphertext, plaintext,
+    // installed key material, or decrypted EAPOL key data.
+    let fc = u16::from_le_bytes([frame[0], frame[1]]);
+    let class = if frame[4] & 1 == 0 { "unicast" } else { "group" };
+    let key_id = iv[3] >> 6;
+    let pn = u64::from_le_bytes([iv[0], iv[1], iv[4], iv[5], iv[6], iv[7], 0, 0]);
+    crate::log_warn!(target: "net";
+        "iwl-ax201: stage={} count={} class={} class_count={} key_id={} fc=0x{:04x} pn=0x{:012x} bytes={} reason={}\n",
+        stage, count, class, class_count, key_id, fc, pn, frame.len(), reason);
 }
 
 impl Connection {
@@ -163,6 +184,8 @@ impl Connection {
             failure_diagnostic_stage: None,
             eapol_rejected: 0,
             ccmp_rejected: 0,
+            ccmp_rejected_by_class: [0; 2],
+            ccmp_group_key_missing: 0,
         })
     }
     pub(super) fn transport_failed(&mut self, reason: &'static str) {
@@ -412,6 +435,17 @@ impl Connection {
             }
             return self.management(transport, fw, &raw.frame);
         }
+        // Firmware admission is not proof that a unicast data frame belongs
+        // to this station. Filter its receiver before PTK decryption or replay
+        // accounting; foreign traffic must not masquerade as our key failure.
+        // Management frame handling above keeps its existing address checks.
+        if raw.frame[0] & 0x0c == 8
+            && raw.frame[4] & 1 == 0
+            && raw.frame[4..10] != self.config.mac
+        {
+            self.dropped += 1;
+            return Ok(());
+        }
         if raw.hw_decrypted {
             self.dropped += 1;
             return Ok(());
@@ -425,15 +459,24 @@ impl Connection {
             let Some(iv) = raw.frame.get(header..header + 8) else {
                 return Ok(());
             };
+            let group = raw.frame[4] & 1 != 0;
             // The receiver address selects the security association. A GTK
             // must never authenticate a unicast packet, even if its IV names
             // an installed group key. decrypt() validates that key's IV ID.
-            let key = if raw.frame[4] & 1 == 0 {
+            let key = if !group {
                 self.pairwise.as_mut()
             } else {
                 self.group[usize::from(iv[3] >> 6)].as_mut()
             };
             let Some(key) = key else {
+                if group {
+                    self.dropped += 1;
+                    self.ccmp_group_key_missing = self.ccmp_group_key_missing.saturating_add(1);
+                    if self.ccmp_group_key_missing.is_power_of_two() {
+                        log_ccmp_rx_drop("ccmp-key-missing", self.ccmp_group_key_missing,
+                            self.ccmp_group_key_missing, &raw.frame, iv, "GTK not installed");
+                    }
+                }
                 return Ok(());
             };
             match key.decrypt(&raw.frame) {
@@ -441,9 +484,13 @@ impl Connection {
                 Err(reason) => {
                     self.dropped += 1;
                     self.ccmp_rejected = self.ccmp_rejected.saturating_add(1);
-                    if self.ccmp_rejected.is_power_of_two() {
-                        crate::log_warn!(target: "net"; "iwl-ax201: stage=ccmp-rejected count={} reason={}\n",
-                            self.ccmp_rejected, reason);
+                    let class_count = &mut self.ccmp_rejected_by_class[usize::from(group)];
+                    *class_count = class_count.saturating_add(1);
+                    // Independent budgets keep unicast traffic from
+                    // hiding the first evidence of a group-key failure.
+                    if class_count.is_power_of_two() {
+                        log_ccmp_rx_drop("ccmp-rejected", self.ccmp_rejected,
+                            *class_count, &raw.frame, iv, reason);
                     }
                     return Ok(());
                 }

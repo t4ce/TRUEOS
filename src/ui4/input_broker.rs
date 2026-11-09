@@ -295,7 +295,6 @@ struct CursorRoute {
     selection_serial: u64,
     visible_after_motion: bool,
     visual_only: bool,
-    color: crate::graphics::primitives::Rgba8,
     secondary_anchor: Option<(u32, u32)>,
     secondary_start_placement: Option<WindowPlacement>,
     secondary_dragged: bool,
@@ -319,6 +318,12 @@ struct CursorRoute {
 }
 
 impl CursorRoute {
+    /// Resolve the live combo palette; binding and palette edits can happen
+    /// after the route is created, without another pointer motion event.
+    fn color(&self) -> crate::graphics::primitives::Rgba8 {
+        super::cursor_frame_inout::cursor_color(self.source)
+    }
+
     fn new(source: Ui4CursorSource, x: u32, y: u32, buttons_down: u32) -> Self {
         Self {
             source,
@@ -330,7 +335,6 @@ impl CursorRoute {
             selection_serial: 0,
             visible_after_motion: false,
             visual_only: false,
-            color: super::cursor_frame_inout::cursor_color(source),
             secondary_anchor: None,
             secondary_start_placement: None,
             secondary_dragged: false,
@@ -515,7 +519,7 @@ impl InputBroker {
         if self.cursors[cursor_index].visual_only || visual_only_cursor(source) {
             return false;
         }
-        let color = self.cursors[cursor_index].color;
+        let color = self.cursors[cursor_index].color();
         let change = super::cursor_frame_inout::select_frame(
             next.map(WindowTarget::cursor_frame_key),
             source,
@@ -1022,7 +1026,7 @@ impl InputBroker {
                 // is to say where the click landed; it does not own the menu.
                 // The kernel desktop menu is therefore the no-frame case, plus
                 // frames which registered nothing.
-                let color = self.cursors[index].color;
+                let color = self.cursors[index].color();
                 let frame_menu = hit.and_then(|window| {
                     super::context_menu::registered_request(window.owner, window.id)
                         .map(|request| (window.owner, window.id, request))
@@ -1838,7 +1842,7 @@ impl InputBroker {
                 Some(Ui4WindowInputRoute {
                     source: route.source,
                     combo_id,
-                    color: route.color,
+                    color: route.color(),
                     vcursor,
                     selected_for_window: super::selected_frame_for_source(route.source)
                         == Some(target.cursor_frame_key()),
@@ -1945,7 +1949,7 @@ impl InputBroker {
             if route.visual_only {
                 let _ = visuals.push(Ui4SoftwareCursorVisual {
                     drag_preview: None, x: route.x, y: route.y,
-                    color: metadata.as_ref().and_then(|visual| visual.color).unwrap_or(route.color),
+                    color: metadata.as_ref().and_then(|visual| visual.color).unwrap_or_else(|| route.color()),
                     text_color: metadata.as_ref().and_then(|visual| visual.text_color),
                     interactive: false,
                     glyph: metadata.and_then(|visual| visual.glyph),
@@ -1968,7 +1972,7 @@ impl InputBroker {
                 drag_preview,
                 x,
                 y,
-                color: metadata.as_ref().and_then(|visual| visual.color).unwrap_or(route.color),
+                color: metadata.as_ref().and_then(|visual| visual.color).unwrap_or_else(|| route.color()),
                 text_color: metadata.as_ref().and_then(|visual| visual.text_color),
                 interactive: true,
                 glyph: metadata.and_then(|visual| visual.glyph),
@@ -2397,7 +2401,7 @@ pub(super) fn quad_resize_visual() -> Option<QuadResizeVisual> {
                         })
                         .flatten()
                         .and_then(|visual| visual.color)
-                        .unwrap_or(route.color),
+                        .unwrap_or_else(|| route.color()),
                     selected: true,
                 });
             }

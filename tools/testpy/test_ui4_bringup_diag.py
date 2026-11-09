@@ -40,7 +40,14 @@ mod spin {
 mod intel {
     #[derive(Clone, Copy)] pub struct Dev { pub bus: u8, pub slot: u8, pub function: u8 }
     pub static GENERATION: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    pub static DBUF_S1: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0xC0000000);
+    pub static DBUF_S2: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0x80000000);
+    pub static DBUF_READS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
     pub fn mmio_read(_: Dev, offset: usize) -> u32 {
+        if let Some(control) = match offset { 0x45008 => Some(&DBUF_S1), 0x44FE8 => Some(&DBUF_S2), _ => None } {
+            DBUF_READS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            return control.load(core::sync::atomic::Ordering::Acquire);
+        }
         offset as u32 + GENERATION.load(core::sync::atomic::Ordering::Acquire)
     }
     pub mod tgl_native_panel {
@@ -85,8 +92,15 @@ fn failed_bootstrap_retains_attempted_pipe_and_failure_time_registers() {
     bringup_diag::capture_firmware(dev);
     bringup_diag::failed("dbuf-readback", dev);
     intel::GENERATION.store(0x10, Ordering::Release);
+    intel::DBUF_S1.store(0x40000000, Ordering::Release);
+    intel::DBUF_S2.store(0xC0000000, Ordering::Release);
     let mut current = String::new();
+    let dbuf_reads_before = intel::DBUF_READS.load(Ordering::Relaxed);
     bringup_diag::append(&mut current, dev);
+    assert_eq!(intel::DBUF_READS.load(Ordering::Relaxed) - dbuf_reads_before, 2,
+        "each DBUF control must be read once without polling");
+    assert!(current.contains("display_dbuf slice=s1 register=0x45008 raw=0x40000000 power_request=false power_state=true capture=read-only-no-poll"));
+    assert!(current.contains("display_dbuf slice=s2 register=0x44FE8 raw=0xC0000000 power_request=true power_state=true capture=read-only-no-poll"));
     assert!(current.contains("stage=static-contract-and-dbuf failure=dbuf-readback plane_slot=4 pipe_slot=2"));
     assert!(current.contains("pipe=pipe-c"));
     assert!(current.contains("last_live_mask=0xF last_polls=5000000"));
@@ -96,6 +110,9 @@ fn failed_bootstrap_retains_attempted_pipe_and_failure_time_registers() {
     assert!(current.contains("physical_plane pipe=pipe-c slot=6 hardware_plane=7 logical_ui4_slot=None enabled=false base=0x72780 ctl=0x00072790"));
     let mut retained = String::new();
     bringup_diag::append_retained(&mut retained);
+    assert!(retained.contains("display_dbuf slice=s1 register=0x45008 raw=0xC0000000 power_request=true power_state=true"));
+    assert!(retained.contains("display_dbuf slice=s2 register=0x44FE8 raw=0x80000000 power_request=true power_state=false"));
+    assert!(!retained.contains("raw=0x40000000 power_request=false power_state=true"));
     assert!(retained.contains("base=0x72580 ctl=0x00072580"));
     assert!(!retained.contains("ctl=0x00072590"));
 

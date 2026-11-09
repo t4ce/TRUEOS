@@ -114,29 +114,53 @@ fn wait_frame(dev: Dev) -> bool {
     false
 }
 
-fn detach_primary_scalers(dev: Dev) {
+fn detach_scalers(dev: Dev, bindings: u8) -> bool {
+    let mut armed = false;
     for ctrl in [PIPE_SCALER_0_A_CTRL, PIPE_SCALER_1_A_CTRL] {
         let value = mmio_read(dev, ctrl);
         let binding = (value & PIPE_SCALER_BINDING_MASK) >> 25;
-        // Binding 0 is the pipe scaler; 1 is hardware primary plane 1.
-        // Do not steal a scaler bound to a different plane.
-        if value & PIPE_SCALER_ENABLE != 0 && binding <= 1 {
+        if bindings & (1 << binding) != 0 {
+            // PS_CTRL reads the staged value, not the live scaler state.
+            // Arm a disable even when that staged enable bit is already zero.
             mmio_write(dev, ctrl, 0);
-            mmio_write(dev, ctrl + PIPE_SCALER_WIN_POS_FROM_CTRL, 0);
+            // PS_WIN_POS and PS_WIN_SZ precede PS_CTRL. Adding these
+            // displacements would write HSCALE/reserved registers instead.
+            mmio_write(dev, ctrl - PIPE_SCALER_WIN_POS_FROM_CTRL, 0);
             // WIN_SZ is the scaler arming write, so it must be last.
-            mmio_write(dev, ctrl + PIPE_SCALER_WIN_SIZE_FROM_CTRL, 0);
+            mmio_write(dev, ctrl - PIPE_SCALER_WIN_SIZE_FROM_CTRL, 0);
+            armed = true;
         }
     }
+    armed
 }
 
-fn primary_scalers_detached(dev: Dev) -> bool {
+fn scalers_detached(dev: Dev, bindings: u8) -> bool {
     [PIPE_SCALER_0_A_CTRL, PIPE_SCALER_1_A_CTRL]
         .into_iter()
         .all(|ctrl| {
             let value = mmio_read(dev, ctrl);
             let binding = (value & PIPE_SCALER_BINDING_MASK) >> 25;
-            value & PIPE_SCALER_ENABLE == 0 || binding > 1
+            value & PIPE_SCALER_ENABLE == 0 || bindings & (1 << binding) == 0
         })
+}
+
+fn detach_primary_scalers(dev: Dev) {
+    // This earlier native-primary handoff does not yet own the overlays.
+    let _ = detach_scalers(dev, 0b11);
+}
+
+fn primary_scalers_detached(dev: Dev) -> bool {
+    scalers_detached(dev, 0b11)
+}
+
+/// The seven-plane UI4 bootstrap takes every Pipe A plane at native size.
+/// Retire all inherited scaler bindings before publishing that contract.
+pub(super) fn detach_ui4_scalers(dev: Dev) -> bool {
+    if !is_target(dev) || !native_scanout_ready() {
+        return false;
+    }
+    let armed = detach_scalers(dev, u8::MAX);
+    (!armed || wait_frame(dev)) && scalers_detached(dev, u8::MAX)
 }
 
 fn prepare_frame(dev: Dev) -> Option<Frame> {

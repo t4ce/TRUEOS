@@ -181,7 +181,7 @@ fn fresh_render_context_for_test(device:u16)->Vec<u32> {
 
 #[test]
 fn physical_target_is_exact_and_does_not_follow_the_effective_alias() {
-    use fresh_context::requires_initial_engine_restore_inhibit as policy;
+    use fresh_context::physical_tgl_rev01_context_target as policy;
     assert!(policy(0x8086,0x9a49,1));
     for (vendor,device,revision) in [(0x8086,0x4680,12),(0x8086,0xa780,4),
         (0x8086,0x9a49,0),(0x8086,0x9a49,2),(0x1234,0x9a49,1)] {
@@ -372,6 +372,7 @@ fn unaffected_generations_do_not_get_gen12_restore_workaround() {
 
 #[test]
 fn post_restore_masks_only_3d_preemption_and_preserves_compute_granularity() {
+    physical(0x8086,0x4680,12);
     let mut context = vec![0u32; 16 * 1024];
     assert_eq!(init_gen12_rcs_restore_wa(&mut context, GPU_VA_CONTEXT_BASE, 0x4680),
         Some(((GPU_VA_CONTEXT_BASE + 14 * 4096) as u32 | 2, 0x340,
@@ -386,6 +387,7 @@ fn post_restore_masks_only_3d_preemption_and_preserves_compute_granularity() {
         assert_eq!(after & 6, old & 6); // Media/GPGPU preemption bits2:1.
     }
 }
+
 """
     with tempfile.TemporaryDirectory(prefix="trueos-lrc-restore-wa-") as temporary:
         directory = Path(temporary)

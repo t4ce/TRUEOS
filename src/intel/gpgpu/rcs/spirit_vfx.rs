@@ -1,3 +1,6 @@
+const SPIRIT_VFX_STATE_COMPUTE_MODE_CMD: u32 = 0x6105_0000;
+const SPIRIT_VFX_FORCE_GPU_NON_COHERENT: u32 = (0b11 << 19) | (0b10 << 3);
+
 fn direct_rcs_write_spirit_vfx_binding(
     state: DirectRcsState,
     binding_table_offset: usize,
@@ -217,6 +220,17 @@ fn direct_rcs_encode_spirit_vfx_batch(
             | PIPE_CONTROL_DEPTH_STALL
             | PIPE_CONTROL_CS_STALL,
     );
+    if crate::intel::render::tgl_spirit_force_noncoherent() {
+        // Actual Spirit ISA reads control via A64 BTI 255 (IA coherent).
+        // TGL Vol2a pp1267--1268 requires Force Non-Coherent=2 for coherent
+        // dataport messages; Intel NEO's Gen12LP encoder programs this mode:
+        // https://github.com/intel/compute-runtime/blob/e94049d49fcf0418a934077aeac3aa9978036276/shared/source/gen12lp/command_encoder_gen12lp.cpp
+        // Program after the stalling flush while 3D is selected: TGL Vol14
+        // p44 requires the same 3D interval as SBA for non-pipelined state.
+        // This repairs that contract; hardware retirement is still unproven.
+        ok &= direct_rcs_push(batch, &mut cursor, SPIRIT_VFX_STATE_COMPUTE_MODE_CMD);
+        ok &= direct_rcs_push(batch, &mut cursor, SPIRIT_VFX_FORCE_GPU_NON_COHERENT);
+    }
     let instruction_base = background_upload
         .map(|upload| upload.gpu)
         .unwrap_or(sprite_upload.gpu);

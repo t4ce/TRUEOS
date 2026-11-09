@@ -29,6 +29,7 @@ pub mod ui4 {
     impl WindowTarget { fn cursor_frame_key(self)->Self {self} }
     #[derive(Clone, Copy)]
     struct CursorRoute { source:Ui4CursorSource, visual_only:bool, color:Rgba8, selection_serial:u64 }
+    impl CursorRoute { fn color(&self)->Rgba8 { self.color } }
     impl CursorRoute { fn clear_frame_interaction(&mut self) {} }
     struct InputBroker { cursors:heapless::Vec<CursorRoute,64>, selection_serial:u64 }
     impl InputBroker {

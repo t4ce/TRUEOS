@@ -17,13 +17,14 @@ extern crate alloc;
 extern crate self as trueos_time;
 use std::cell::Cell;
 thread_local! {static NOW:Cell<u64>=const {Cell::new(0)};}
+thread_local! {static WARNINGS:std::cell::RefCell<Vec<String>>=const {std::cell::RefCell::new(Vec::new())};}
 pub struct Instant(u64);
 impl Instant {
     pub fn now()->Self {Self(NOW.with(|value|value.get()))}
     pub fn as_millis(&self)->u64 {self.0}
 }
 #[macro_export] macro_rules! log_warn {
-    (target:$target:literal; $($args:tt)*)=>{{ let _=format_args!($($args)*); }}
+    (target:$target:literal; $($args:tt)*)=>{{ crate::WARNINGS.with(|warnings|warnings.borrow_mut().push(format!($($args)*))); }}
 }
 mod tyche {
     pub fn fill_bytes(bytes:&mut[u8])->bool {bytes.fill(0x22);true}
@@ -514,6 +515,7 @@ mod link_lifecycle_tests {
     struct Fixture { fw:fw::Firmware<'static>,config:station::StationConfig,connection:Connection,transport:Transport,shared:Shared }
     fn fixture(protected:bool)->Fixture {
         crate::NOW.with(|clock|clock.set(0));
+        crate::WARNINGS.with(|warnings|warnings.borrow_mut().clear());
         let firmware=fw::parse(fw::EMBEDDED).unwrap();
         let config=station::StationConfig{mac:STA,bss:station::Bss{
             ssid:"easyeasy".into(),bssid:AP,channel:6,beacon_interval:100,capability:0x431,
@@ -634,6 +636,10 @@ mod link_lifecycle_tests {
         let mut authenticated=packet.to_vec();authenticated[81..97].fill(0);
         assert_eq!(&packet[81..97],&hmac(&ptk()[..16],&[&authenticated])[..16]);
     }
+    fn ccmp_diagnostics()->Vec<String>{
+        crate::WARNINGS.with(|warnings|warnings.borrow().iter()
+            .filter(|line|line.contains("stage=ccmp-")).cloned().collect())
+    }
     #[test]fn failed_station_command_submission_keeps_exact_pending_stage(){
         let mut f=fixture(false);
         crate::net::wifi::SEND_ERROR.with(|v|v.set(Some("command queue unavailable")));
@@ -729,6 +735,57 @@ mod link_lifecycle_tests {
         let mut multicast=downlink([8,0],AP,&[0x88;46]);multicast[4..10].fill(0xff);
         f.frame(gtk.encrypt(&multicast).unwrap());let ethernet=f.connection.receive().unwrap();
         assert_eq!(&ethernet[..6],&[0xff;6]);assert_eq!(&ethernet[14..],&[0x88;46]);
+    }
+    #[test]fn foreign_unicast_is_filtered_before_pairwise_authentication_and_replay(){
+        let mut f=fixture(true);f.associate();f.eapol(&message1());f.eapol(&message3());let m4=f.raw();f.tx_result(&m4,1);
+        let temporal:[u8;16]=ptk()[32..48].try_into().unwrap();
+        let mut foreign=downlink([8,0],AP,&[0xa5;46]);foreign[4..10].copy_from_slice(&[2,0,0,0,0,3]);
+        // Even an otherwise authentic packet for another receiver must not
+        // consume our PTK's PN; a wrong-key packet must not pollute its errors.
+        let mut same_key=CcmpKey::new(temporal,0,STA).unwrap();
+        f.frame(same_key.encrypt(&foreign).unwrap());assert!(f.connection.receive().is_none());
+        let mut other_key=CcmpKey::new([0x55;16],0,STA).unwrap();
+        f.frame(other_key.encrypt(&foreign).unwrap());assert!(f.connection.receive().is_none());
+        assert!(ccmp_diagnostics().is_empty());
+        let mut own_key=CcmpKey::new(temporal,0,STA).unwrap();
+        f.frame(own_key.encrypt(&downlink([8,0],AP,&[0x66;46])).unwrap());
+        assert_eq!(&f.connection.receive().unwrap()[14..],&[0x66;46]);
+        assert!(f.connection.connected());assert!(ccmp_diagnostics().is_empty());
+    }
+    #[test]fn ccmp_rejection_metadata_is_header_only_and_bounded_per_receiver_class(){
+        let mut f=fixture(true);f.associate();f.eapol(&message1());f.eapol(&message3());let m4=f.raw();f.tx_result(&m4,1);
+        let mut wrong=CcmpKey::new([0x55;16],0,STA).unwrap();
+        for _ in 0..2{f.frame(wrong.encrypt(&downlink([8,0],AP,&[0xab;46])).unwrap());assert!(f.connection.receive().is_none());}
+        let mut gtk=CcmpKey::new([0x77;16],1,STA).unwrap();let valid=gtk.encrypt(&multicast(0xab)).unwrap();
+        let mut corrupt=valid.clone();
+        corrupt[24]=6;corrupt[25]=5;corrupt[28..32].copy_from_slice(&[4,3,2,1]); // PN010203040506; MIC intentionally invalid.
+        for _ in 0..9{f.frame(corrupt.clone());assert!(f.connection.receive().is_none());}
+        let logs=ccmp_diagnostics();assert_eq!(logs.len(),6);
+        for (index,(total,class_count)) in [(1,1),(2,2)].into_iter().enumerate(){
+            assert_eq!(logs[index],format!("iwl-ax201: stage=ccmp-rejected count={total} class=unicast class_count={class_count} key_id=0 fc=0x4208 pn=0x{class_count:012x} bytes=94 reason=CCMP authentication failure\n"));
+        }
+        for (index,class_count) in [1,2,4,8].into_iter().enumerate(){
+            assert_eq!(logs[index+2],format!("iwl-ax201: stage=ccmp-rejected count={} class=group class_count={class_count} key_id=1 fc=0x4208 pn=0x010203040506 bytes=94 reason=CCMP authentication failure\n",class_count+2));
+        }
+        // Failed MICs never advance the genuine group's receive floor.
+        f.frame(valid.clone());assert_eq!(&f.connection.receive().unwrap()[14..],&[0xab;46]);
+        f.frame(valid);assert!(f.connection.receive().is_none());assert!(f.connection.connected());
+    }
+    #[test]fn missing_group_key_reports_header_metadata_without_pairwise_fallback(){
+        let mut f=fixture(true);f.associate();f.eapol(&message1());f.eapol(&message3());let m4=f.raw();f.tx_result(&m4,1);
+        // Matching PTK material still cannot authorize a multicast receiver
+        // whose IV names an uninstalled GTK slot.
+        let temporal:[u8;16]=ptk()[32..48].try_into().unwrap();
+        let mut absent=CcmpKey::new(temporal,2,STA).unwrap();let packet=absent.encrypt(&multicast(0xab)).unwrap();
+        for _ in 0..17{f.frame(packet.clone());assert!(f.connection.receive().is_none());}
+        let logs=ccmp_diagnostics();assert_eq!(logs.len(),5);
+        for (index,count) in [1,2,4,8,16].into_iter().enumerate(){
+            assert_eq!(logs[index],format!("iwl-ax201: stage=ccmp-key-missing count={count} class=group class_count={count} key_id=2 fc=0x4208 pn=0x000000000001 bytes=94 reason=GTK not installed\n"));
+        }
+        let mut gtk=CcmpKey::new([0x77;16],1,STA).unwrap();f.frame(gtk.encrypt(&multicast(0x77)).unwrap());
+        assert_eq!(&f.connection.receive().unwrap()[14..],&[0x77;46]);
+        let mut own_key=CcmpKey::new(temporal,0,STA).unwrap();f.frame(own_key.encrypt(&downlink([8,0],AP,&[0x66;46])).unwrap());
+        assert_eq!(&f.connection.receive().unwrap()[14..],&[0x66;46]);assert!(f.connection.connected());
     }
     #[test]fn group_key_id_zero_is_selected_by_multicast_receiver(){
         let mut f=fixture(true);f.associate();f.eapol(&message1());f.eapol(&message3_with_gtk(0));let m4=f.raw();f.tx_result(&m4,1);

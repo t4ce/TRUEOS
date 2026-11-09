@@ -344,6 +344,34 @@ pub(crate) fn poll_spirit_vfx_submission(handle: SpiritVfxSubmission) -> SpiritV
             // cannot prove anything about Spirit's HWLRCA, destination, or
             // producer lease; contain only Spirit's own execution lane while
             // retaining the exact pending job for a possible late proof.
+            let pre_marker = direct_rcs_read_result_slot(
+                pending.submitted.state,
+                SPIRIT_VFX_PRE_MARKER_SLOT,
+            );
+            if let Some(dev) = crate::intel::claimed_device() {
+                // Capture before disabling the context can change which
+                // carrier owns the live registers. This is one observation
+                // per timed-out job, with no recovery or register writes.
+                const CS_CHICKEN1: usize = RCS_RING_BASE + 0x580;
+                const FF_SLICE_CS_CHICKEN1: usize = RCS_RING_BASE + 0xE0;
+                let preemption = crate::intel::mmio_read(dev, CS_CHICKEN1);
+                crate::log_error!(target: "gpgpu";
+                    "intel/gpgpu: spirit-vfx timeout-frontier tag={} pre_marker=0x{:08X} pre_marker_observed={:?} post_marker=0x{:08X} ring_start=0x{:08X} ring_head=0x{:08X} ring_tail=0x{:08X} cs_chicken1=0x{:08X} compute_preemption={} ff_slice_cs_chicken1=0x{:08X} capture=before-context-disable\n",
+                    handle.tag,
+                    pre_marker,
+                    // The QWord POST store overwrites the neighboring PRE
+                    // slot. Interpret PRE only while POST is absent.
+                    (marker != SPIRIT_VFX_POST_MARKER)
+                        .then_some(pre_marker == SPIRIT_VFX_PRE_MARKER),
+                    marker,
+                    crate::intel::mmio_read(dev, RCS_RING_START),
+                    crate::intel::mmio_read(dev, RCS_RING_HEAD),
+                    crate::intel::mmio_read(dev, RCS_RING_TAIL),
+                    preemption,
+                    (preemption >> 1) & 3,
+                    crate::intel::mmio_read(dev, FF_SLICE_CS_CHICKEN1),
+                );
+            }
             quarantine_execution_rcs_context(reason);
             crate::log_error!(target: "gpgpu";
                 "intel/gpgpu: spirit-vfx retirement timeout tag={} frame={} marker=0x{:08X} marker_observed={} saved_head={} published_tail={} pending=retained detached_tag=retained timeline=retained producer_lease=retained backing=retained render_peer_dependency=none action=quarantine-execution-lane-and-keep-polling\n",

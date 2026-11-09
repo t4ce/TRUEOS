@@ -6,7 +6,6 @@
 
 use spin::Mutex;
 
-use crate::graphics::primitives::Rgba8;
 use crate::r::services::mouse_motion_service::{
     MOUSE_CONTROL_EASING_LINEAR, MOUSE_CONTROL_EASING_NATURAL, MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
     MOUSE_CONTROL_OPCODE_BUTTONS, MOUSE_CONTROL_OPCODE_STROKE, MOUSE_CONTROL_PATH_LINE,
@@ -16,7 +15,6 @@ use crate::r::services::mouse_motion_service::{
 
 const LILLY_CURSOR_LABEL: &str = "Spirit/Lilly";
 const LILLY_HUT_COMBO_ID: u32 = 0x4C49_4C59;
-const LILLY_CURSOR_COLOR: Rgba8 = Rgba8::new(255, 55, 255, 255);
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const LILLY_INITIAL_APPROACH_MS: u32 = 420;
 const LILLY_OUTLINE_EDGE_MS: u32 = 240;
@@ -45,18 +43,17 @@ impl LillyCursorState {
         let cursor = crate::r::services::mouse_motion_service::request_cursor(
             MouseControlPrincipal::Kernel,
             LILLY_CURSOR_LABEL,
-            Some(LILLY_CURSOR_COLOR),
+            // The HUT combo owns her color, shared with Link and Link3D.
+            // A fixed visual override would bypass later combo palette edits.
+            None,
         )?;
         self.cursor = Some(cursor);
         crate::log_info!(
             target: "gfx";
-            "trueos-spirit: Lilly vcursor registered tag={} handle={} slot={} color={},{},{} owner=Spirit cardinality=one presentation=ui4-slot4\n",
+            "trueos-spirit: Lilly vcursor registered tag={} handle={} slot={} color=combo-palette owner=Spirit cardinality=one presentation=ui4-slot4\n",
             LILLY_CURSOR_LABEL,
             cursor.handle,
             cursor.slot_id,
-            LILLY_CURSOR_COLOR.r,
-            LILLY_CURSOR_COLOR.g,
-            LILLY_CURSOR_COLOR.b,
         );
         Ok(cursor)
     }
@@ -440,7 +437,7 @@ pub(super) fn queue_initial_outline_once(
     state.initial_outline_queued = true;
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: Lilly vcursor initial program queued tag={} handle={} slot={} commands={} approach={}x{} outline={}x{}..{}x{} spirit_rect={}x{}+{},{} clipped_to_screen={} color={},{},{}\n",
+        "trueos-spirit: Lilly vcursor initial program queued tag={} handle={} slot={} commands={} approach={}x{} outline={}x{}..{}x{} spirit_rect={}x{}+{},{} clipped_to_screen={} color=combo-palette\n",
         LILLY_CURSOR_LABEL,
         cursor.handle,
         cursor.slot_id,
@@ -456,9 +453,6 @@ pub(super) fn queue_initial_outline_once(
         spirit_left,
         spirit_top,
         (left != spirit_left || top != spirit_top) as u8,
-        LILLY_CURSOR_COLOR.r,
-        LILLY_CURSOR_COLOR.g,
-        LILLY_CURSOR_COLOR.b,
     );
     Ok(true)
 }

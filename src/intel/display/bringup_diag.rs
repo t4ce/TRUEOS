@@ -116,6 +116,22 @@ pub(super) fn append(out: &mut String, dev: crate::intel::Dev) {
         evidence.polls,
         evidence.wanted
     );
+    // The seven-plane laptop layout needs both slices. Preserve request and
+    // power-state bits independently: a plane/WM readback cannot prove that a
+    // requested slice is powered. Addresses match Spirit's existing DBUF path.
+    // Read each control once; this snapshot never requests power or polls it.
+    const DBUF_CTL_S1: usize = 0x45008;
+    for (slice, register) in [
+        ("s1", DBUF_CTL_S1),
+        ("s2", tgl_ui4_layout::DBUF_CTL_S2),
+    ] {
+        let raw = crate::intel::mmio_read(dev, register);
+        let _ = writeln!(out,
+            "display_dbuf slice={} register=0x{:X} raw=0x{:08X} power_request={} power_state={} capture=read-only-no-poll",
+            slice, register, raw,
+            raw & tgl_ui4_layout::DBUF_POWER_REQUEST != 0,
+            raw & tgl_ui4_layout::DBUF_POWER_STATE != 0);
+    }
     // A failed bootstrap may have disabled the very primary plane needed by
     // active_pipe(). Retain the attempted pipe so failures still expose it.
     let Some(pipe) = PIPES

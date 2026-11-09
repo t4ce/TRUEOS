@@ -3614,6 +3614,10 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
         surface_regs[index + 1] = surface_reg;
     }
 
+    if native_ui4_for_pipe(pipe) && !super::tgl_native_panel::detach_ui4_scalers(dev) {
+        return fail("native-inherited-scaler-detach");
+    }
+
     // PLANE_SURF is the double-buffered commit trigger. Stage every disabled
     // CTL and static register without issuing an interim SURF=0 commit, so the
     // firmware front remains visible until the complete UI4 stack replaces it
