@@ -2213,7 +2213,8 @@ impl Shell3 {
             return false;
         };
         let lease = MatrixSlotLease::from_identity(app.slot.clone(), app.lifetime);
-        MatrixSlots::echo(Some(&app.slot), Some(app.lifetime), lifecycle::control("stop", &lease, None));
+        let actor = tui::frontend_access_account(self.tui_frontend());
+        MatrixSlots::echo(Some(&app.slot), Some(app.lifetime), lifecycle::control("stop", &lease, actor));
         true
     }
 

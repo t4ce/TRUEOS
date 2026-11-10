@@ -49,7 +49,7 @@ pub(crate) fn is_virtual_write(path: &str) -> bool {
 
 
 pub(crate) fn is_virtual_read(path: &str) -> bool {
-    matches!(path, VMX_LAUNCH_SCRIPT_VFILE | STARTUP_MANIFEST_VFILE | TERMINAL_FRONTEND_VFILE | "vFile:appbundle.json")
+    matches!(path, VMX_LAUNCH_SCRIPT_VFILE | STARTUP_MANIFEST_VFILE | TERMINAL_FRONTEND_VFILE | "vFile:appdb" | "vFile:appbundle.json")
         || path.starts_with(crate::r::services::hull_download_service::PREFIX)
         || path.starts_with("vFile:hull-navigation/")
         || path.starts_with("vFile:microfont-grid/")
@@ -1184,6 +1184,18 @@ async fn install_appdb(request: &Request, bytes: &[u8]) -> OperationState {
     }
 }
 
+fn appdb_virtual_read(path: &str) -> Option<OperationState> {
+    let result = match path {
+        "vFile:appdb" => crate::app_db::catalog_json(),
+        "vFile:appbundle.json" => crate::app_db::appbundle_json(),
+        _ => return None,
+    };
+    Some(match result {
+        Ok(bytes) => OperationState::Read(bytes),
+        Err(_) => OperationState::Failed(FS_ERR_IO),
+    })
+}
+
 async fn process(request: &Request) -> OperationState {
     let actor = request.actor;
     if let Err(error) = crate::r::fs::trueosfs::authorized::authorize_keys(actor, &[]) { return OperationState::Failed(map_block_error(error)); }
@@ -1200,11 +1212,8 @@ async fn process(request: &Request) -> OperationState {
         return match result { Ok(bytes) => OperationState::Read(bytes), Err(code) => OperationState::Failed(code) };
     }
     if let RequestKind::Read { path } = &request.kind {
-        if path == "vFile:appbundle.json" {
-            return match crate::app_db::appbundle_json() {
-                Ok(bytes) => OperationState::Read(bytes),
-                Err(_) => OperationState::Failed(FS_ERR_IO),
-            };
+        if let Some(state) = appdb_virtual_read(path) {
+            return state;
         }
         if path.starts_with(crate::r::services::hull_download_service::PREFIX) {
             return match crate::r::services::hull_download_service::read_for_owner(request.owner, path) {

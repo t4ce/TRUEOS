@@ -64,7 +64,7 @@ mod tests {
                 assert_eq!(unsafe { read(path.as_ptr(), path.len()) }, 123);
                 LAST.with(|last| assert_eq!(*last.borrow(), Some((guest, path))));
             }
-            for path in ["vFile:launch", "vFile:hulldownloads/next/18446744073709551615"] {
+            for path in ["vFile:launch", "vFile:appdb", "vFile:appbundle.json", "vFile:hulldownloads/next/18446744073709551615"] {
                 assert_eq!(unsafe { read(path.as_ptr(), path.len()) }, 123);
                 LAST.with(|last| assert_eq!(*last.borrow(), Some((guest, path.to_owned()))));
             }

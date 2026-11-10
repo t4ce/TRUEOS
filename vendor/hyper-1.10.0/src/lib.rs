@@ -105,8 +105,10 @@
 //!   what the default options are set to, also in efforts to protect the
 //!   most people possible.
 
-#[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate alloc;
+// Shared protocol code uses these crate-local paths on every target.
+#[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
+pub use std::{io, time, vec};
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 extern crate self as std;
 #[cfg(feature = "std-compat")]

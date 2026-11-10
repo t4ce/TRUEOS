@@ -150,6 +150,19 @@ pub(crate) fn list() -> Result<Vec<AppEntry>, String> {
     Ok(entries)
 }
 
+/// Machine-readable names from the same live catalog used by Shell3.
+pub(crate) fn catalog_json() -> Result<Vec<u8>, String> {
+    let apps: Vec<_> = list()?
+        .into_iter()
+        .map(|entry| {
+            let name = entry.archive.strip_suffix(".bp").unwrap_or(&entry.archive);
+            serde_json::json!({ "name": name, "archive": entry.archive })
+        })
+        .collect();
+    serde_json::to_vec(&serde_json::json!({ "version": 1, "apps": apps }))
+        .map_err(|error| alloc::format!("encode AppDB catalog: {error}"))
+}
+
 pub(crate) fn get(archive: &str) -> Result<Option<Vec<u8>>, String> {
     let guard = APP_DB.lock();
     let database = guard

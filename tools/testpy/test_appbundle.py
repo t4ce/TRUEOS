@@ -73,10 +73,18 @@ mod io {
         const FS_ERR_BAD_PARAM: i32 = -9;
         const FS_ERR_IO: i32 = -2;
         struct Request { owner: u32, actor: u8 }
-        #[derive(Debug, PartialEq)] enum OperationState { Unit, Failed(i32) }
+        #[derive(Debug, PartialEq)] enum OperationState { Read(Vec<u8>), Unit, Failed(i32) }
         fn selected_disk(path: &str) -> Result<(u8, &str), i32> { Ok((0, path)) }
         fn map_block_error(_: ()) -> i32 { FS_ERR_IO }
         @INSTALL@
+        @APPDB_VIRTUAL_READ@
+        pub fn read(path: &str) -> Option<Result<Vec<u8>, i32>> {
+            appdb_virtual_read(path).map(|state| match state {
+                OperationState::Read(bytes) => Ok(bytes),
+                OperationState::Failed(code) => Err(code),
+                _ => panic!("AppDB virtual files must be read-only"),
+            })
+        }
         pub fn run(paths: &[u8]) -> Result<(), i32> {
             let request = Request { owner: 0x8000_0001, actor: 1 };
             let mut future = std::pin::pin!(install_appdb(&request, paths));
@@ -105,6 +113,28 @@ fn seeded_metadata_matches_source_and_is_not_a_launchable_app() {
     assert_eq!(app_db::appbundle_json().unwrap(), include_bytes!(@JSON@));
     assert_eq!(app_db::list().unwrap().len(), 1);
     assert!(app_db::get("appbundle.json").unwrap().is_none());
+}
+#[test]
+fn live_appdb_virtual_catalog_tracks_imports_without_changing_the_catalog() {
+    reset();
+    let before = app_db::list().unwrap();
+    let read = |path: &str| io::install::read(path).unwrap().unwrap();
+    let catalog: serde_json::Value = serde_json::from_slice(&read("vFile:appdb")).unwrap();
+    assert_eq!(catalog, serde_json::json!({
+        "version": 1, "apps": [{ "name": "apps", "archive": "apps.bp" }]
+    }));
+    assert_eq!(app_db::list().unwrap(), before);
+    assert_eq!(REFRESHES.load(Ordering::SeqCst), 0);
+    assert_eq!(read("vFile:appbundle.json"), include_bytes!(@JSON@));
+    assert!(io::install::read("vFile:unknown").is_none());
+
+    app_db::insert_downloads(&[download("sqlite.bp")]).unwrap();
+    let catalog: serde_json::Value = serde_json::from_slice(&read("vFile:appdb")).unwrap();
+    assert_eq!(catalog["apps"], serde_json::json!([
+        { "name": "apps", "archive": "apps.bp" },
+        { "name": "sqlite", "archive": "sqlite.bp" }
+    ]));
+    assert_eq!(REFRESHES.load(Ordering::SeqCst), 1);
 }
 #[test]
 fn incomplete_bundle_rolls_back_all_bytes_hashes_and_dates() {
@@ -270,6 +300,7 @@ def main():
         text = HARNESS.replace('@APPDB@', json.dumps(str(ROOT / 'src/app_db.rs')))
         text = text.replace('@JSON@', json.dumps(str(BP / 'appbundle.json')))
         text = text.replace('@INSTALL@', function(ROOT / 'src/r/io/async_fs_cabi.rs', 'async fn install_appdb('))
+        text = text.replace('@APPDB_VIRTUAL_READ@', function(ROOT / 'src/r/io/async_fs_cabi.rs', 'fn appdb_virtual_read('))
         (path / 'src/lib.rs').write_text(text)
         (path / 'build.rs').write_text('''fn main() {
             let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
@@ -285,6 +316,7 @@ edition="2024"
 [dependencies]
 redb={version="=4.4.0",default-features=false,features=["std","experimental-api-5"]}
 sha2={version="=0.10.9",default-features=false}
+serde_json={version="1.0",default-features=false,features=["alloc"]}
 spin="0.10"
 trueos-appbundle={path=''' + json.dumps(str(BP / 'crates/trueos-appbundle')) + '}\n')
         subprocess.run(['cargo', '+nightly-2026-07-10', 'test', '--offline', '--', '--test-threads=1'], cwd=path, env=env, check=True)
