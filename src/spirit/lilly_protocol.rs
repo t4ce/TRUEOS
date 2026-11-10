@@ -33,30 +33,38 @@ const AI_REASONING_START_ANIMATION: &str = "agree.firm_nod";
 const AI_REASONING_FINISH_ANIMATION: &str = "idea.finger_up";
 const SPEECH_TALK_ANIMATION: &str = "talk.calm.uncrossed";
 const FAILED_ANIMATIONS: [&str; 2] = ["angry.fists_clenched", "reaction.facepalm"];
-const FAILED_FRAME_PERIOD_MS: u16 = 80;
 const RUNNING_ANIMATION: &str = "idea.finger_up";
 const WAITING_ANIMATIONS: [&str; 3] = ["confused.question", "wave.neutral", "wave.excited"];
 const REVIEW_ANIMATION: &str = "gesture.finger_guns";
 const ACTIVITY_GESTURE_AVERAGE_MS: u64 = 15_000;
 const ACTIVITY_GESTURE_WINDOW_MS: u64 = 10_000;
 const ACTIVITY_GESTURE_EXPIRY_MS: u64 = 3_000;
-const IDLE_WINK_VARIANTS: [&str; 5] = [
-    "wink.playful",
-    "flirt.finger_heart",
-    "blush.evil",
-    IDLE_UNCROSSED_SOFT_BLINK,
+const IDLE_CROSSED_VARIANTS: [&str; 7] = [
     IDLE_CROSSED_SOFT_BLINK,
+    "idle.crossed.pensive_blink",
+    "idle.crossed.soft_smile",
+    "idle.crossed.skeptical",
+    "idle.crossed.content_blink",
+    "idle.crossed.neutral_breath",
+    "idle.crossed.alert_breath",
+];
+const IDLE_UNCROSSED_VARIANTS: [&str; 5] = [
+    IDLE_UNCROSSED_SOFT_BLINK,
+    "idle.uncrossed.happy_breath",
+    "idle.uncrossed.evil_smirk",
+    "idle.uncrossed.quiet_laugh",
+    "idle.uncrossed.scheming",
 ];
 const IDLE_CONTROL_POLL_MS: u64 = 100;
-const IDLE_BLINK_AVERAGE_MS: u64 = 5_000;
+const IDLE_BLINK_AVERAGE_MS: u64 = 8_500;
 const IDLE_BLINK_WINDOW_MS: u64 = 5_000;
 const IDLE_ARMS_AVERAGE_MS: u64 = 15_000;
 const IDLE_ARMS_WINDOW_MS: u64 = 30_000;
-const IDLE_WINK_AVERAGE_MS: u64 = 60_000;
-const IDLE_WINK_WINDOW_MS: u64 = 60_000;
+const IDLE_VARIATION_AVERAGE_MS: u64 = 35_000;
+const IDLE_VARIATION_WINDOW_MS: u64 = 30_000;
 const _: () = assert!(IDLE_BLINK_WINDOW_MS <= IDLE_BLINK_AVERAGE_MS * 2);
 const _: () = assert!(IDLE_ARMS_WINDOW_MS <= IDLE_ARMS_AVERAGE_MS * 2);
-const _: () = assert!(IDLE_WINK_WINDOW_MS <= IDLE_WINK_AVERAGE_MS * 2);
+const _: () = assert!(IDLE_VARIATION_WINDOW_MS <= IDLE_VARIATION_AVERAGE_MS * 2);
 
 const ANGER_VARIANTS: [&str; 3] = [
     "angry.fists_clenched",
@@ -469,8 +477,8 @@ fn admit_gesture(
 }
 
 /// Resident idle policy. The steady state is one eyes-open frame; Tyche only
-/// chooses when an existing soft-blink clip runs and when the resident
-/// crossed/uncrossed posture changes.
+/// chooses when soft blinks, posture-matched idle variations, and resident
+/// crossed/uncrossed posture changes run.
 struct LillyIdleStrategy {
     rng: crate::tyche::SoftRng,
     active: bool,
@@ -478,8 +486,8 @@ struct LillyIdleStrategy {
     pending_crossed: Option<bool>,
     next_blink: Instant,
     next_arms_change: Instant,
-    next_wink: Instant,
-    last_wink_variant: Option<usize>,
+    next_variation: Instant,
+    last_idle_variant: [Option<usize>; 2],
 }
 
 impl LillyIdleStrategy {
@@ -497,11 +505,11 @@ impl LillyIdleStrategy {
                 IDLE_ARMS_AVERAGE_MS,
                 IDLE_ARMS_WINDOW_MS,
             ));
-        let next_wink = now
+        let next_variation = now
             + Duration::from_millis(centered_interval_ms(
                 &mut rng,
-                IDLE_WINK_AVERAGE_MS,
-                IDLE_WINK_WINDOW_MS,
+                IDLE_VARIATION_AVERAGE_MS,
+                IDLE_VARIATION_WINDOW_MS,
             ));
         Self {
             rng,
@@ -510,8 +518,8 @@ impl LillyIdleStrategy {
             pending_crossed: None,
             next_blink,
             next_arms_change,
-            next_wink,
-            last_wink_variant: None,
+            next_variation,
+            last_idle_variant: [None; 2],
         }
     }
 
@@ -554,24 +562,33 @@ impl LillyIdleStrategy {
 
         self.settle_posture();
 
-        if now >= self.next_wink {
-            let next_ms =
-                centered_interval_ms(&mut self.rng, IDLE_WINK_AVERAGE_MS, IDLE_WINK_WINDOW_MS);
-            self.next_wink = now + Duration::from_millis(next_ms);
+        if now >= self.next_variation {
+            let next_ms = centered_interval_ms(
+                &mut self.rng,
+                IDLE_VARIATION_AVERAGE_MS,
+                IDLE_VARIATION_WINDOW_MS,
+            );
+            self.next_variation = now + Duration::from_millis(next_ms);
+            let variants: &[&str] = if self.crossed {
+                &IDLE_CROSSED_VARIANTS
+            } else {
+                &IDLE_UNCROSSED_VARIANTS
+            };
+            let posture = usize::from(self.crossed);
             let variant = next_distinct_variant(
                 &mut self.rng,
-                self.last_wink_variant,
-                IDLE_WINK_VARIANTS.len(),
+                self.last_idle_variant[posture],
+                variants.len(),
             );
-            self.last_wink_variant = Some(variant);
-            let animation_key = IDLE_WINK_VARIANTS[variant];
+            self.last_idle_variant[posture] = Some(variant);
+            let animation_key = variants[variant];
             crate::log_info!(
                 target: "gfx";
-                "trueos-spirit: idle strategy event=wink variant={} clip={} next_average_ms={} next_window_ms={}\n",
+                "trueos-spirit: idle strategy event=variation variant={} clip={} next_average_ms={} next_window_ms={}\n",
                 variant + 1,
                 animation_key,
-                IDLE_WINK_AVERAGE_MS,
-                IDLE_WINK_WINDOW_MS,
+                IDLE_VARIATION_AVERAGE_MS,
+                IDLE_VARIATION_WINDOW_MS,
             );
             return resolve(animation_key, rgba);
         }
@@ -615,10 +632,10 @@ impl LillyIdleStrategy {
             .next_arms_change
             .saturating_duration_since(now)
             .as_millis();
-        let until_wink_ms = self.next_wink.saturating_duration_since(now).as_millis();
+        let until_variation_ms = self.next_variation.saturating_duration_since(now).as_millis();
         let boundary_ms = until_blink_ms
             .min(until_arms_ms)
-            .min(until_wink_ms)
+            .min(until_variation_ms)
             .min(IDLE_CONTROL_POLL_MS)
             .max(1);
         resolve_static_idle(idle_animation_key(self.crossed), rgba, boundary_ms)
@@ -715,9 +732,7 @@ pub(crate) fn schedule_failed_reaction(
         *last = Some(variant);
         variant
     };
-    let mut scheduled = resolve(FAILED_ANIMATIONS[variant], SpiritRgba8::WHITE)?;
-    scheduled.animation.frame_period_ms = FAILED_FRAME_PERIOD_MS;
-    scheduled.boundary_ms = scheduled.animation.cycle_duration_ms();
+    let scheduled = resolve(FAILED_ANIMATIONS[variant], SpiritRgba8::WHITE)?;
     *FAILED_REACTION.lock() = Some(LillyFailedReaction::new(started_ms, duration_ms, scheduled));
     Ok(())
 }

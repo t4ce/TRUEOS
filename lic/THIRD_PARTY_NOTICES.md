@@ -9,6 +9,9 @@ Known third-party/provenance areas include:
 
 - `vendor/`: vendored Rust crates and external projects, with their license
   files preserved inside each vendored package.
+- Lilly character artwork: Storyteller's Toolkit: Pixel Art - Lily by Two Orcs,
+  including `tools/Lilly.tar.lz4`. See [Lilly.LICENSE](Lilly.LICENSE) for the
+  upstream terms and source. These assets remain under their own license.
 - Intel processor microcode update binaries, if bundled with a TRUEOS image or
   boot medium, must remain unmodified and are governed by Intel's microcode
   license. See `licenses/intel-microcode.txt`.

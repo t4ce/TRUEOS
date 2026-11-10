@@ -8,7 +8,7 @@ use spin::Mutex;
 mod carrier;
 mod thread_stack;
 pub(crate) use carrier::CarrierAddressSpace;
-pub(crate) use thread_stack::{map_thread_stack, unmap_thread_stack};
+pub(crate) use thread_stack::{map_thread_stack, unmap_thread_stack, release_thread_stack_tables_for_vm};
 
 #[inline]
 fn current_vm_id_for_log() -> u8 {
@@ -1430,6 +1430,7 @@ pub fn build_guest_cr3_for_vm_with_mode(
             return Err("guest dynamic pt slot");
         };
         *next_pt.lock() = pt_slot;
+        thread_stack::restore_root_for_vm(vm_id, guest_pml4)?;
         reapply_active_guest_rel_exec(vm_id)?;
         hvlogf(format_args!(
             "hv: vm{} reporting: heap map done pt_used={}",

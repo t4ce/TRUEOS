@@ -35,7 +35,7 @@ fn admission_rejected(vm_id: Option<u8>, id: usize, stack: usize, reason: &'stat
     // without exposing a thread name, closure, argument, or guest stack data.
     let sequence = ADMISSION_FAILURE_COUNT.fetch_add(1, Ordering::Relaxed);
     if sequence < 32 || sequence % 64 == 0 {
-        crate::log_info!(target: "blueprint";
+        crate::log_warn!(target: "blueprint";
             "thread-admission vm={} thread={} reason={} rc=11 live={} limit={} stack_bytes={} failure_seq={}\n",
             vm_id.map_or(usize::MAX, usize::from), id, reason,
             THREAD_COUNT.load(Ordering::Acquire), THREAD_LIMIT, stack, sequence);

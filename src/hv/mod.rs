@@ -2840,6 +2840,17 @@ fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError>
     clear_active_eptp_for_vm(vm_id);
     let _ = memory::release_guest_hull_rw_for_vm(vm_id);
     let _ = memory::release_guest_stack_for_vm(vm_id);
+    // Stack aliases retain their page tables for the entire VM incarnation.
+    // The native-job barrier above makes it safe to retire those tables before
+    // releasing the private heap that backs them.
+    if let Err(reason) = unsafe { memory::release_thread_stack_tables_for_vm(vm_id) } {
+        vm.pause_latched.store(true, Ordering::Release);
+        hvwarnf(format_args!(
+            "hv: vm{} lifecycle: resource release retained reason=thread-stack-tables detail={}",
+            vm_id, reason
+        ));
+        return Err(EjectError::VmBusy);
+    }
     let heap_configured = crate::allocators::hv_guest_heap_stats_if_configured(vm_id).is_some();
     if heap_configured && !crate::allocators::release_hv_guest_heap_for_vm(vm_id) {
         // Keep pause/store state latched so this VM slot cannot be selected for
