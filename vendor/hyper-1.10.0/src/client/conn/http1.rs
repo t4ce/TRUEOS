@@ -189,6 +189,7 @@ where
     /// Sends a `Request` on the associated connection.
     ///
     /// Returns a future that if successful, yields the `Response`.
+    /// The returned future does not borrow this sender.
     ///
     /// `req` must have a `Host` header.
     ///
@@ -214,7 +215,7 @@ where
     pub fn send_request(
         &mut self,
         req: Request<B>,
-    ) -> impl Future<Output = crate::Result<Response<IncomingBody>>> {
+    ) -> impl Future<Output = crate::Result<Response<IncomingBody>>> + use<B> {
         let sent = self.dispatch.send(req);
 
         async move {
@@ -244,7 +245,8 @@ where
     pub fn try_send_request(
         &mut self,
         req: Request<B>,
-    ) -> impl Future<Output = Result<Response<IncomingBody>, TrySendError<Request<B>>>> {
+    ) -> impl Future<Output = Result<Response<IncomingBody>, TrySendError<Request<B>>>> + use<B>
+    {
         let sent = self.dispatch.try_send(req);
         async move {
             match sent {
