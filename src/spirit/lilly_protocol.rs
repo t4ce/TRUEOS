@@ -33,6 +33,7 @@ const AI_REASONING_START_ANIMATION: &str = "agree.firm_nod";
 const AI_REASONING_FINISH_ANIMATION: &str = "idea.finger_up";
 const SPEECH_TALK_ANIMATION: &str = "talk.calm.uncrossed";
 const FAILED_ANIMATIONS: [&str; 2] = ["angry.fists_clenched", "reaction.facepalm"];
+const FAILED_FRAME_PERIOD_MS: u16 = 80;
 const RUNNING_ANIMATION: &str = "idea.finger_up";
 const WAITING_ANIMATIONS: [&str; 3] = ["confused.question", "wave.neutral", "wave.excited"];
 const REVIEW_ANIMATION: &str = "gesture.finger_guns";
@@ -66,31 +67,8 @@ const _: () = assert!(IDLE_BLINK_WINDOW_MS <= IDLE_BLINK_AVERAGE_MS * 2);
 const _: () = assert!(IDLE_ARMS_WINDOW_MS <= IDLE_ARMS_AVERAGE_MS * 2);
 const _: () = assert!(IDLE_VARIATION_WINDOW_MS <= IDLE_VARIATION_AVERAGE_MS * 2);
 
-const ANGER_VARIANTS: [&str; 3] = [
-    "angry.fists_clenched",
-    "angry.fists_raised",
-    "threaten.fists",
-];
-const DISGUST_VARIANTS: [&str; 4] = [
-    "disapprove.head_shake",
-    "disapprove.tsk",
-    "disapprove.arms_crossed",
-    "reaction.facepalm",
-];
-const FEAR_VARIANTS: [&str; 1] = ["scared.panic"];
-const JOY_VARIANTS: [&str; 3] = ["happy.cheer", "idle.uncrossed.quiet_laugh", "silly.teehee"];
-const SADNESS_VARIANTS: [&str; 3] = ["cry.two_hands", "cry.wipe", "cry.tears"];
-// Lilly does not have an archive category literally named `Surprise`.
-// Realization and puzzled surprise are the two catalog-native expressions of
-// that base emotion, so the high-level API does not leak this asset detail.
-const SURPRISE_VARIANTS: [&str; 2] = ["idea.finger_up", "confused.question"];
-
-/// The deliberately small emotion vocabulary exposed to local reasoning.
-///
-/// Spirit owns the mapping from these base themes to Lilly's catalog. An AI
-/// producer therefore emits only a word such as `anger`; it never needs to
-/// know animation tags, archive names, frame counts, or which visual variant
-/// was selected.
+/// Compact expression families exposed to producers. Spirit owns variant
+/// selection and arm preparation; callers never choose transition/static assets.
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum LillyEmotion {
@@ -100,32 +78,75 @@ pub(crate) enum LillyEmotion {
     Joy,
     Sadness,
     Surprise,
+    Affection,
+    Blush,
+    Confused,
+    Disapprove,
+    Eat,
+    Facepalm,
+    FingerGuns,
+    Pout,
+    Flirt,
+    Idle,
+    Agree,
+    Idea,
+    Silly,
+    Talk,
+    Taunt,
+    Tired,
+    Wave,
+    Wink,
 }
 
 impl LillyEmotion {
-    const COUNT: usize = 6;
+    const COUNT: usize = 24;
+    const ALL: [Self; Self::COUNT] = [
+        Self::Anger,
+        Self::Disgust,
+        Self::Fear,
+        Self::Joy,
+        Self::Sadness,
+        Self::Surprise,
+        Self::Affection,
+        Self::Blush,
+        Self::Confused,
+        Self::Disapprove,
+        Self::Eat,
+        Self::Facepalm,
+        Self::FingerGuns,
+        Self::Pout,
+        Self::Flirt,
+        Self::Idle,
+        Self::Agree,
+        Self::Idea,
+        Self::Silly,
+        Self::Talk,
+        Self::Taunt,
+        Self::Tired,
+        Self::Wave,
+        Self::Wink,
+    ];
 
-    /// Parse one model-facing base-emotion word. Common one-word inflections
-    /// are accepted, but phrases and arbitrary animation tags are not.
+    /// Retain the original six emotion words and their common aliases.
     pub(crate) fn from_word(word: &str) -> Option<Self> {
         let word = word.trim();
-        if word.eq_ignore_ascii_case("anger") || word.eq_ignore_ascii_case("angry") {
+        if let Some(emotion) = Self::ALL
+            .into_iter()
+            .find(|emotion| word.eq_ignore_ascii_case(emotion.as_word()))
+        {
+            return Some(emotion);
+        }
+        if word.eq_ignore_ascii_case("angry") {
             Some(Self::Anger)
-        } else if word.eq_ignore_ascii_case("disgust") || word.eq_ignore_ascii_case("disgusted") {
+        } else if word.eq_ignore_ascii_case("disgusted") {
             Some(Self::Disgust)
-        } else if word.eq_ignore_ascii_case("fear")
-            || word.eq_ignore_ascii_case("afraid")
-            || word.eq_ignore_ascii_case("scared")
-        {
+        } else if word.eq_ignore_ascii_case("afraid") || word.eq_ignore_ascii_case("scared") {
             Some(Self::Fear)
-        } else if word.eq_ignore_ascii_case("joy")
-            || word.eq_ignore_ascii_case("happy")
-            || word.eq_ignore_ascii_case("happiness")
-        {
+        } else if word.eq_ignore_ascii_case("happy") || word.eq_ignore_ascii_case("happiness") {
             Some(Self::Joy)
-        } else if word.eq_ignore_ascii_case("sad") || word.eq_ignore_ascii_case("sadness") {
+        } else if word.eq_ignore_ascii_case("sad") {
             Some(Self::Sadness)
-        } else if word.eq_ignore_ascii_case("surprise") || word.eq_ignore_ascii_case("surprised") {
+        } else if word.eq_ignore_ascii_case("surprised") {
             Some(Self::Surprise)
         } else {
             None
@@ -140,6 +161,24 @@ impl LillyEmotion {
             Self::Joy => "joy",
             Self::Sadness => "sadness",
             Self::Surprise => "surprise",
+            Self::Affection => "affection",
+            Self::Blush => "blush",
+            Self::Confused => "confused",
+            Self::Disapprove => "disapprove",
+            Self::Eat => "eat",
+            Self::Facepalm => "facepalm",
+            Self::FingerGuns => "finger_guns",
+            Self::Pout => "pout",
+            Self::Flirt => "flirt",
+            Self::Idle => "idle",
+            Self::Agree => "agree",
+            Self::Idea => "idea",
+            Self::Silly => "silly",
+            Self::Talk => "talk",
+            Self::Taunt => "taunt",
+            Self::Tired => "tired",
+            Self::Wave => "wave",
+            Self::Wink => "wink",
         }
     }
 
@@ -149,12 +188,90 @@ impl LillyEmotion {
 
     const fn variants(self) -> &'static [&'static str] {
         match self {
-            Self::Anger => &ANGER_VARIANTS,
-            Self::Disgust => &DISGUST_VARIANTS,
-            Self::Fear => &FEAR_VARIANTS,
-            Self::Joy => &JOY_VARIANTS,
-            Self::Sadness => &SADNESS_VARIANTS,
-            Self::Surprise => &SURPRISE_VARIANTS,
+            Self::Anger => &[
+                "angry.fists_clenched",
+                "angry.fists_raised",
+                "threaten.fists",
+            ],
+            Self::Disgust => &[
+                "disapprove.head_shake",
+                "disapprove.tsk",
+                "disapprove.arms_crossed",
+                "reaction.facepalm",
+            ],
+            Self::Fear => &["scared.panic"],
+            Self::Joy => &["happy.cheer", "idle.uncrossed.quiet_laugh", "silly.teehee"],
+            Self::Sadness => &["cry.two_hands", "cry.wipe", "cry.tears"],
+            Self::Surprise => &["idea.finger_up", "confused.question"],
+            Self::Affection => &["affection.blow_kiss"],
+            Self::Blush => &[
+                "blush.evil",
+                "blush.flustered",
+                "blush.shy",
+                "blush.teasing",
+                "blush.warm",
+            ],
+            Self::Confused => &["confused.question"],
+            Self::Disapprove => &[
+                "disapprove.head_shake",
+                "disapprove.tsk",
+                "disapprove.arms_crossed",
+            ],
+            Self::Eat => &["eat.cookie", "eat.onigiri"],
+            Self::Facepalm => &["reaction.facepalm"],
+            Self::FingerGuns => &["gesture.finger_guns"],
+            Self::Pout => &["fish_face.annoyed", "fish_face.pout"],
+            Self::Flirt => &[
+                "flirt.come_here",
+                "flirt.finger_heart",
+                "flirt.hair_tuck",
+                "flirt.heart_hands",
+                "flirt.lean_in",
+            ],
+            Self::Idle => &[
+                "idle.crossed.soft_blink",
+                "idle.crossed.pensive_blink",
+                "idle.crossed.soft_smile",
+                "idle.crossed.skeptical",
+                "idle.crossed.content_blink",
+                "idle.crossed.neutral_breath",
+                "idle.crossed.alert_breath",
+                "idle.uncrossed.soft_blink",
+                "idle.uncrossed.happy_breath",
+                "idle.uncrossed.evil_smirk",
+                "idle.uncrossed.quiet_laugh",
+                "idle.uncrossed.scheming",
+            ],
+            Self::Agree => &["agree.firm_nod"],
+            Self::Idea => &["idea.finger_up"],
+            Self::Silly => &[
+                "silly.cat_mouth",
+                "silly.puffed_cheeks",
+                "silly.roar",
+                "silly.teehee",
+                "silly.tongue_out",
+            ],
+            Self::Talk => &[
+                "talk.annoyed.uncrossed",
+                "talk.annoyed.crossed",
+                "talk.calm.uncrossed",
+                "talk.calm.crossed",
+                "talk.excited.uncrossed",
+                "talk.excited.crossed",
+                "talk.shy.uncrossed",
+                "talk.shy.crossed",
+                "talk.waving",
+            ],
+            Self::Taunt => &["taunt.beckon", "taunt.tongue_out"],
+            Self::Tired => &["tired.rub_eyes", "tired.sleepy", "tired.yawn"],
+            Self::Wave => &[
+                "wave.excited",
+                "wave.neutral",
+                "wave.shy",
+                "wave.smile",
+                "wave.two_hands",
+            ],
+            Self::Wink => &["wink.playful"],
         }
     }
 }
@@ -335,7 +452,6 @@ impl LillyActivity {
 #[derive(Copy, Clone)]
 struct LillySuggestedGesture {
     scheduled: LillyScheduledAnimation,
-    crossed: bool,
     expires_ms: u64,
 }
 
@@ -395,10 +511,10 @@ impl LillyActivityGestures {
         if self.rng.usize_below(2) != 0 {
             return Ok(());
         }
-        let (tag, crossed) = match activity {
+        let tag = match activity {
             // This is the sole idea.* clip in the resident catalog, and its
             // authored start/end pose has crossed arms.
-            LillyActivity::Running => (RUNNING_ANIMATION, true),
+            LillyActivity::Running => RUNNING_ANIMATION,
             LillyActivity::Waiting => {
                 let variant = next_distinct_variant(
                     &mut self.rng,
@@ -406,13 +522,12 @@ impl LillyActivityGestures {
                     WAITING_ANIMATIONS.len(),
                 );
                 self.last_waiting_variant = Some(variant);
-                (WAITING_ANIMATIONS[variant], false)
+                WAITING_ANIMATIONS[variant]
             }
-            LillyActivity::Review => (REVIEW_ANIMATION, false),
+            LillyActivity::Review => REVIEW_ANIMATION,
         };
         self.pending = Some(LillySuggestedGesture {
             scheduled: resolve(tag, SpiritRgba8::WHITE)?,
-            crossed,
             expires_ms: now_ms.saturating_add(ACTIVITY_GESTURE_EXPIRY_MS),
         });
         Ok(())
@@ -422,12 +537,7 @@ impl LillyActivityGestures {
         let Some(gesture) = self.pending else {
             return Ok(None);
         };
-        match admit_gesture(
-            gesture.scheduled,
-            gesture.crossed,
-            gesture.expires_ms,
-            now_ms,
-        )? {
+        match admit_gesture(gesture.scheduled, gesture.expires_ms, now_ms)? {
             LillyGestureAdmission::Expired => {
                 self.pending = None;
                 Ok(None)
@@ -452,7 +562,6 @@ enum LillyGestureAdmission {
 /// actual endpoint posture rather than snapping back to an old arm position.
 fn admit_gesture(
     scheduled: LillyScheduledAnimation,
-    crossed: bool,
     expires_ms: u64,
     now_ms: u64,
 ) -> Result<LillyGestureAdmission, LillyProtocolError> {
@@ -461,10 +570,12 @@ fn admit_gesture(
     }
     let mut idle = IDLE_STRATEGY.lock();
     let idle = idle.get_or_insert_with(|| LillyIdleStrategy::new(Instant::now()));
-    if idle.crossed == crossed {
+    let (start_crossed, end_crossed) = animation_postures(scheduled.animation.key);
+    if idle.crossed == start_crossed {
+        idle.pending_crossed = Some(end_crossed);
         return Ok(LillyGestureAdmission::Play(scheduled));
     }
-    let preparation = resolve(idle_transition_key(crossed), scheduled.rgba)?;
+    let preparation = resolve(idle_transition_key(start_crossed), scheduled.rgba)?;
     if preparation
         .boundary_ms
         .saturating_add(scheduled.boundary_ms)
@@ -472,8 +583,38 @@ fn admit_gesture(
     {
         return Ok(LillyGestureAdmission::Expired);
     }
-    idle.pending_crossed = Some(crossed);
+    idle.pending_crossed = Some(start_crossed);
     Ok(LillyGestureAdmission::Prepare(preparation))
+}
+
+/// Reviewed against the authored first/last poses. Raised/gesturing arms use
+/// the uncrossed baseline. Some gestures unfold their arms inside the clip.
+fn animation_postures(tag: &str) -> (bool, bool) {
+    match tag {
+        "transition.neutral_to_crossed" => (false, true),
+        "transition.uncross_arms" | "cry.two_hands" | "happy.cheer" | "threaten.fists" => {
+            (true, false)
+        }
+        "affection.blow_kiss"
+        | "cry.wipe"
+        | "disapprove.arms_crossed"
+        | "idea.finger_up"
+        | "tired.sleepy"
+        | "wink.playful" => (true, true),
+        _ if tag.starts_with("idle.crossed.")
+            || tag.starts_with("talk.") && tag.ends_with(".crossed") =>
+        {
+            (true, true)
+        }
+        _ => (false, false),
+    }
+}
+
+/// Untimed producer/native gestures use the same preparation as expiring cues.
+fn prepare_animation(
+    scheduled: LillyScheduledAnimation,
+) -> Result<LillyGestureAdmission, LillyProtocolError> {
+    admit_gesture(scheduled, u64::MAX, Instant::now().as_millis())
 }
 
 /// Resident idle policy. The steady state is one eyes-open frame; Tyche only
@@ -525,10 +666,13 @@ impl LillyIdleStrategy {
 
     fn settle_posture(&mut self) {
         if let Some(crossed) = self.pending_crossed.take() {
+            if self.crossed == crossed {
+                return;
+            }
             self.crossed = crossed;
             crate::log_info!(
                 target: "gfx";
-                "trueos-spirit: idle strategy event=arms-transition-complete posture={}\n",
+                "trueos-spirit: idle strategy event=posture-settled posture={}\n",
                 idle_posture_name(self.crossed),
             );
         }
@@ -632,7 +776,10 @@ impl LillyIdleStrategy {
             .next_arms_change
             .saturating_duration_since(now)
             .as_millis();
-        let until_variation_ms = self.next_variation.saturating_duration_since(now).as_millis();
+        let until_variation_ms = self
+            .next_variation
+            .saturating_duration_since(now)
+            .as_millis();
         let boundary_ms = until_blink_ms
             .min(until_arms_ms)
             .min(until_variation_ms)
@@ -667,6 +814,10 @@ impl SpiritPackageRing {
         self.write = (self.write + 1) % PACKAGE_RING_CAPACITY;
         self.len += 1;
         Ok(self.len)
+    }
+
+    fn front(&self) -> Option<&SpiritPackage> {
+        self.slots[self.read].as_ref()
     }
 
     fn pop(&mut self) -> Option<(SpiritPackage, usize)> {
@@ -707,6 +858,7 @@ impl SpiritPackageRing {
 }
 
 static PACKAGE_RING: Mutex<SpiritPackageRing> = Mutex::new(SpiritPackageRing::new());
+static REASONING_GESTURE: Mutex<Option<LillyScheduledAnimation>> = Mutex::new(None);
 static LAST_RGBA: Mutex<SpiritRgba8> = Mutex::new(SpiritRgba8::WHITE);
 static IDLE_STRATEGY: Mutex<Option<LillyIdleStrategy>> = Mutex::new(None);
 static EMOTION_SELECTOR: Mutex<Option<LillyEmotionSelector>> = Mutex::new(None);
@@ -732,7 +884,9 @@ pub(crate) fn schedule_failed_reaction(
         *last = Some(variant);
         variant
     };
-    let scheduled = resolve(FAILED_ANIMATIONS[variant], SpiritRgba8::WHITE)?;
+    let mut scheduled = resolve(FAILED_ANIMATIONS[variant], SpiritRgba8::WHITE)?;
+    scheduled.animation.frame_period_ms = FAILED_FRAME_PERIOD_MS;
+    scheduled.boundary_ms = scheduled.animation.cycle_duration_ms();
     *FAILED_REACTION.lock() = Some(LillyFailedReaction::new(started_ms, duration_ms, scheduled));
     Ok(())
 }
@@ -751,7 +905,7 @@ fn take_failed_reaction(
     if now_ms < reaction.ready_ms {
         return Ok(None);
     }
-    match admit_gesture(reaction.scheduled, false, reaction.expires_ms, now_ms)? {
+    match admit_gesture(reaction.scheduled, reaction.expires_ms, now_ms)? {
         LillyGestureAdmission::Expired => {
             *pending = None;
             Ok(None)
@@ -981,25 +1135,39 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
         }
     }
     loop {
-        if let Some(event) = crate::ai::ai_activity::try_take_reasoning_event() {
-            pause_idle_strategy();
-            let (event_name, animation_key) = match event.phase {
-                crate::ai::ai_activity::AiReasoningPhase::Started => {
-                    ("reasoning-start", AI_REASONING_START_ANIMATION)
+        {
+            let mut pending = REASONING_GESTURE.lock();
+            if pending.is_none() {
+                if let Some(event) = crate::ai::ai_activity::try_take_reasoning_event() {
+                    let (event_name, animation_key) = match event.phase {
+                        crate::ai::ai_activity::AiReasoningPhase::Started => {
+                            ("reasoning-start", AI_REASONING_START_ANIMATION)
+                        }
+                        crate::ai::ai_activity::AiReasoningPhase::Finished => {
+                            ("reasoning-finish", AI_REASONING_FINISH_ANIMATION)
+                        }
+                    };
+                    crate::log_info!(
+                        target: "gfx";
+                        "trueos-spirit: ai animation event={} source={:?} turn={} clip={}\n",
+                        event_name, event.source, event.turn, animation_key,
+                    );
+                    *pending = Some(resolve(animation_key, *LAST_RGBA.lock())?);
                 }
-                crate::ai::ai_activity::AiReasoningPhase::Finished => {
-                    ("reasoning-finish", AI_REASONING_FINISH_ANIMATION)
+            }
+            if let Some(scheduled) = *pending {
+                pause_idle_strategy();
+                match prepare_animation(scheduled)? {
+                    LillyGestureAdmission::Prepare(preparation) => return Ok(preparation),
+                    LillyGestureAdmission::Play(scheduled) => {
+                        *pending = None;
+                        return Ok(scheduled);
+                    }
+                    LillyGestureAdmission::Expired => {
+                        return Err(LillyProtocolError::CatalogInvariant);
+                    }
                 }
-            };
-            crate::log_info!(
-                target: "gfx";
-                "trueos-spirit: ai animation event={} source={:?} turn={} clip={}\n",
-                event_name,
-                event.source,
-                event.turn,
-                animation_key,
-            );
-            return resolve(animation_key, *LAST_RGBA.lock());
+            }
         }
 
         if crate::ai::ai_activity::reasoning_active() {
@@ -1008,7 +1176,12 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
 
         if SPEECH_PLAYING.load(Ordering::Acquire) {
             pause_idle_strategy();
-            return resolve(SPEECH_TALK_ANIMATION, *LAST_RGBA.lock());
+            let scheduled = resolve(SPEECH_TALK_ANIMATION, *LAST_RGBA.lock())?;
+            return match prepare_animation(scheduled)? {
+                LillyGestureAdmission::Prepare(scheduled)
+                | LillyGestureAdmission::Play(scheduled) => Ok(scheduled),
+                LillyGestureAdmission::Expired => Err(LillyProtocolError::CatalogInvariant),
+            };
         }
 
         if let Some(scheduled) = take_failed_reaction(Instant::now().as_millis())? {
@@ -1023,36 +1196,51 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
             return Ok(scheduled);
         }
 
-        let Some((package, ring_remaining)) = PACKAGE_RING.lock().pop() else {
-            let scheduled = ACTIVITY_GESTURES
-                .lock()
-                .as_mut()
-                .map(|activity| activity.take(Instant::now().as_millis()))
-                .transpose()?
-                .flatten();
+        // Hold the ring while preparing/consuming its head so replacement or
+        // stop cannot race with a stale copied gesture. A preparation leaves the
+        // package queued and the next boundary re-evaluates the current timeline.
+        let mut ring = PACKAGE_RING.lock();
+        if let Some(package) = ring.front() {
+            let scheduled = if let Some(gesture) = &package.gesture {
+                let scheduled = resolve(gesture.tag.as_str(), gesture.rgba)?;
+                match prepare_animation(scheduled)? {
+                    LillyGestureAdmission::Prepare(preparation) => {
+                        drop(ring);
+                        pause_idle_strategy();
+                        return Ok(preparation);
+                    }
+                    LillyGestureAdmission::Play(scheduled) => Some(scheduled),
+                    LillyGestureAdmission::Expired => {
+                        return Err(LillyProtocolError::CatalogInvariant);
+                    }
+                }
+            } else {
+                None
+            };
+            let (package, ring_remaining) =
+                ring.pop().ok_or(LillyProtocolError::CatalogInvariant)?;
+            drop(ring);
+            log_drained_package(&package, ring_remaining);
             if let Some(scheduled) = scheduled {
                 pause_idle_strategy();
+                *LAST_RGBA.lock() = scheduled.rgba;
                 return Ok(scheduled);
             }
-            return next_idle_animation(*LAST_RGBA.lock());
-        };
-        log_drained_package(&package, ring_remaining);
-
-        let Some(gesture) = package.gesture else {
-            // Text has been logged; no generic presenter is available. Keep
-            // draining so a later gesture can flow normally in this turn.
+            // Text is logged and drained; continue to the next gesture.
             continue;
-        };
-        pause_idle_strategy();
-        let animation = lilly::resident_animation(gesture.tag.as_str())
-            .ok_or(LillyProtocolError::CatalogInvariant)?;
-        *LAST_RGBA.lock() = gesture.rgba;
-        return Ok(LillyScheduledAnimation {
-            rgba: gesture.rgba,
-            boundary_ms: animation.cycle_duration_ms(),
-            animation,
-            static_frame: None,
-        });
+        }
+        drop(ring);
+        let scheduled = ACTIVITY_GESTURES
+            .lock()
+            .as_mut()
+            .map(|activity| activity.take(Instant::now().as_millis()))
+            .transpose()?
+            .flatten();
+        if let Some(scheduled) = scheduled {
+            pause_idle_strategy();
+            return Ok(scheduled);
+        }
+        return next_idle_animation(*LAST_RGBA.lock());
     }
 }
 
@@ -1072,10 +1260,7 @@ fn log_drained_package(package: &SpiritPackage, ring_remaining: usize) {
     );
 }
 
-fn resolve(
-    tag: &'static str,
-    rgba: SpiritRgba8,
-) -> Result<LillyScheduledAnimation, LillyProtocolError> {
+fn resolve(tag: &str, rgba: SpiritRgba8) -> Result<LillyScheduledAnimation, LillyProtocolError> {
     let animation = lilly::resident_animation(tag).ok_or_else(|| {
         if lilly::resident_frame_count() == 0 {
             LillyProtocolError::AssetsNotReady
@@ -1166,9 +1351,73 @@ const fn idle_transition_key(target_crossed: bool) -> &'static str {
 }
 
 const fn idle_posture_name(crossed: bool) -> &'static str {
-    if crossed {
-        "crossed"
-    } else {
-        "uncrossed"
+    if crossed { "crossed" } else { "uncrossed" }
+}
+
+#[cfg(test)]
+mod expression_tests {
+    use super::*;
+    use alloc::collections::BTreeSet;
+
+    #[test]
+    fn families_cover_the_full_catalog_except_transitions() {
+        let mut exposed = BTreeSet::new();
+        for family in LillyEmotion::ALL {
+            assert_eq!(LillyEmotion::from_word(family.as_word()), Some(family));
+            assert!(family.as_word().len() <= 16);
+            for tag in family.variants() {
+                assert!(lilly::resident_animation(tag).is_some(), "missing {tag}");
+                assert!(!tag.starts_with("transition.") && !tag.starts_with("static"));
+                exposed.insert(*tag);
+            }
+        }
+        let expected: BTreeSet<_> = include_str!("../../tools/Lilly.catalog")
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(|line| line.split('|').next().unwrap())
+            .filter(|tag| !tag.starts_with("transition.") && !tag.starts_with("static"))
+            .collect();
+        assert_eq!(exposed, expected);
+    }
+
+    #[test]
+    fn family_variants_do_not_repeat_and_legacy_aliases_still_work() {
+        let mut selector = LillyEmotionSelector::new();
+        for family in LillyEmotion::ALL {
+            let mut previous = None;
+            for _ in 0..20 {
+                let (tag, _, count) = selector.select(family);
+                if count > 1 {
+                    assert_ne!(previous, Some(tag));
+                }
+                previous = Some(tag);
+            }
+        }
+        for (alias, expected) in [
+            ("angry", LillyEmotion::Anger),
+            ("happy", LillyEmotion::Joy),
+            ("sad", LillyEmotion::Sadness),
+            ("scared", LillyEmotion::Fear),
+            ("disgusted", LillyEmotion::Disgust),
+            ("surprised", LillyEmotion::Surprise),
+        ] {
+            assert_eq!(LillyEmotion::from_word(alias), Some(expected));
+        }
+    }
+
+    #[test]
+    fn authored_gestures_can_change_posture_inside_the_clip() {
+        for tag in ["cry.two_hands", "happy.cheer", "threaten.fists"] {
+            assert_eq!(animation_postures(tag), (true, false));
+        }
+        for tag in [
+            "cry.wipe",
+            "wink.playful",
+            "idea.finger_up",
+            "talk.calm.crossed",
+        ] {
+            assert_eq!(animation_postures(tag), (true, true));
+        }
+        assert_eq!(animation_postures("talk.calm.uncrossed"), (false, false));
     }
 }

@@ -134,22 +134,22 @@ mod tests {
     fn status(value: Option<program_status::ProgramStatus>) { *shell3::tui::STATUS.lock() = value; }
 
     #[test]
-    fn centers_once_and_uses_catalog_frame_timing() {
+    fn centers_once_and_uses_existing_retimed_frame_helper() {
         let _lock = reset(0);
         protocol::schedule_failed_reaction(0, 3000).unwrap();
-        now(1009);
+        now(1219);
         assert_ne!(next().animation.key, "angry.fists_clenched");
-        now(1010);
+        now(1220);
         let scheduled = next();
         assert_eq!(scheduled.animation.key, "angry.fists_clenched");
-        assert_eq!(scheduled.animation.frame_period_ms, 140);
-        assert_eq!(scheduled.boundary_ms, 980);
+        assert_eq!(scheduled.animation.frame_period_ms, 80);
+        assert_eq!(scheduled.boundary_ms, 560);
         assert_eq!(scheduled.frame_at_elapsed(0).unwrap().semantic, "tense");
-        assert_eq!(scheduled.frame_at_elapsed(139).unwrap().semantic, "tense");
-        assert_eq!(scheduled.frame_at_elapsed(140).unwrap().semantic, "tense_to_raise_fists");
-        assert_eq!(scheduled.frame_at_elapsed(979).unwrap().semantic, "hold_fists");
-        assert!(scheduled.frame_at_elapsed(980).is_none());
-        now(1990);
+        assert_eq!(scheduled.frame_at_elapsed(79).unwrap().semantic, "tense");
+        assert_eq!(scheduled.frame_at_elapsed(80).unwrap().semantic, "tense_to_raise_fists");
+        assert_eq!(scheduled.frame_at_elapsed(559).unwrap().semantic, "hold_fists");
+        assert!(scheduled.frame_at_elapsed(560).is_none());
+        now(1780);
         assert_ne!(next().animation.key, "angry.fists_clenched");
     }
 
@@ -157,9 +157,9 @@ mod tests {
     fn centers_for_long_envelope_without_another_duration_selection() {
         let _lock = reset(10000);
         protocol::schedule_failed_reaction(10000, 5000).unwrap();
-        now(12009);
+        now(12219);
         assert_ne!(next().animation.key, "angry.fists_clenched");
-        now(12010);
+        now(12220);
         assert_eq!(next().animation.key, "angry.fists_clenched");
     }
 
@@ -168,7 +168,7 @@ mod tests {
         let _lock = reset(20000);
         protocol::schedule_failed_reaction(20000, 3000).unwrap();
         protocol::enqueue_animation("wave.shy", protocol::SpiritRgba8::WHITE).unwrap();
-        now(22021);
+        now(22441);
         assert_eq!(next().animation.key, "wave.shy");
         now(23000);
         assert_ne!(next().animation.key, "angry.fists_clenched");
@@ -178,7 +178,7 @@ mod tests {
     fn full_clip_can_end_exactly_at_expiry() {
         let _lock = reset(30000);
         protocol::schedule_failed_reaction(30000, 3000).unwrap();
-        now(32020);
+        now(32440);
         assert_eq!(next().animation.key, "angry.fists_clenched");
     }
 
@@ -187,9 +187,9 @@ mod tests {
         let _lock = reset(40000);
         protocol::enqueue_animation("wave.shy", protocol::SpiritRgba8::WHITE).unwrap();
         protocol::schedule_failed_reaction(40000, 3000).unwrap();
-        now(41010);
+        now(41220);
         assert_eq!(next().animation.key, "angry.fists_clenched");
-        now(41990);
+        now(41780);
         assert_eq!(next().animation.key, "wave.shy");
     }
 
@@ -230,7 +230,7 @@ mod tests {
         protocol::schedule_failed_reaction(70000, 3000).unwrap();
         now(73000);
         assert_ne!(next().animation.key, "angry.fists_clenched");
-        protocol::schedule_failed_reaction(73000, 979).unwrap();
+        protocol::schedule_failed_reaction(73000, 559).unwrap();
         assert_ne!(next().animation.key, "angry.fists_clenched");
     }
 
@@ -246,10 +246,10 @@ mod tests {
         now(15000);
         let prep = next();
         assert_eq!(prep.animation.key, "transition.neutral_to_crossed");
-        assert_eq!(prep.boundary_ms, 980);
-        now(15980);
+        assert_eq!(prep.boundary_ms, 399);
+        now(15399);
         assert_eq!(next().animation.key, "idea.finger_up");
-        now(16960);
+        now(15924);
         assert_eq!(next().animation.key, "idle.crossed.soft_blink");
     }
 
@@ -272,7 +272,7 @@ mod tests {
         now(30000);
         let first = next();
         if first.animation.key == "transition.neutral_to_crossed" {
-            now(30980);
+            now(30399);
             assert_eq!(next().animation.key, "idea.finger_up");
         } else {
             assert_eq!(first.animation.key, "idea.finger_up");
@@ -288,7 +288,7 @@ mod tests {
         assert_ne!(next().animation.key, "idea.finger_up");
         now(10000);
         assert_eq!(next().animation.key, "transition.neutral_to_crossed");
-        now(10980);
+        now(10399);
         assert_eq!(next().animation.key, "idea.finger_up");
         status(None); now(11000); next();
         tyche::RUNNING_OFFSET.store(10000, Ordering::Relaxed);
@@ -297,6 +297,9 @@ mod tests {
         protocol::set_speech_playing(true); next();
         protocol::set_speech_playing(false);
         now(31000);
+        // The preceding speech returned Lilly to uncrossed arms.
+        assert_eq!(next().animation.key, "transition.neutral_to_crossed");
+        now(31399);
         assert_eq!(next().animation.key, "idea.finger_up");
     }
 
@@ -305,7 +308,7 @@ mod tests {
         let _lock = reset(0);
         status(Some(program_status::ProgramStatus::Blocked(program_status::ProgramStatusKind::Question)));
         assert_eq!(next().animation.key, "wave.neutral");
-        now(980);
+        now(455);
         assert!(next().animation.key.starts_with("idle."));
         status(Some(program_status::ProgramStatus::Blocked(program_status::ProgramStatusKind::Permission)));
         assert!(next().animation.key.starts_with("idle."));
@@ -325,14 +328,14 @@ mod tests {
         let _lock = reset(0);
         status(Some(program_status::ProgramStatus::Done));
         assert_eq!(next().animation.key, "gesture.finger_guns");
-        now(980);
+        now(385);
         assert!(next().animation.key.starts_with("idle."));
         status(None); next();
         tyche::GATE.store(1, Ordering::Relaxed);
         status(Some(program_status::ProgramStatus::Done));
         assert!(next().animation.key.starts_with("idle."));
         tyche::GATE.store(0, Ordering::Relaxed);
-        now(1000);
+        now(400);
         assert!(next().animation.key.starts_with("idle."));
     }
 
@@ -342,16 +345,16 @@ mod tests {
         protocol::enqueue_animation("wave.shy", protocol::SpiritRgba8::WHITE).unwrap();
         status(Some(program_status::ProgramStatus::Done));
         assert_eq!(next().animation.key, "wave.shy");
-        now(980);
+        now(490);
         assert_eq!(next().animation.key, "gesture.finger_guns");
         status(None); next();
         status(Some(program_status::ProgramStatus::Done));
         for index in 0..8 {
             protocol::enqueue_animation("wave.shy", protocol::SpiritRgba8::WHITE).unwrap();
-            now(1000 + index * 980);
+            now(1000 + index * 490);
             assert_eq!(next().animation.key, "wave.shy");
         }
-        now(9000);
+        now(5000);
         assert_ne!(next().animation.key, "gesture.finger_guns");
     }
 
@@ -373,14 +376,14 @@ mod tests {
     fn failed_variant_alternates_without_changing_burst_or_frame_duration() {
         let _lock = reset(0);
         protocol::schedule_failed_reaction(0, 3000).unwrap();
-        now(1010);
+        now(1220);
         assert_eq!(next().animation.key, "angry.fists_clenched");
         protocol::schedule_failed_reaction(3000, 5000).unwrap();
-        now(5010);
+        now(5220);
         let second = next();
         assert_eq!(second.animation.key, "reaction.facepalm");
-        assert_eq!(second.boundary_ms, 980);
-        assert_eq!(second.animation.frame_period_ms, 140);
+        assert_eq!(second.boundary_ms, 560);
+        assert_eq!(second.animation.frame_period_ms, 80);
     }
 
     #[test]
@@ -389,15 +392,15 @@ mod tests {
         status(Some(program_status::ProgramStatus::Working)); next();
         now(15000);
         assert_eq!(next().animation.key, "transition.neutral_to_crossed");
-        now(15980);
+        now(15399);
         assert_eq!(next().animation.key, "idea.finger_up");
         status(None);
         protocol::schedule_failed_reaction(16000, 3000).unwrap();
-        now(17010);
+        now(17220);
         assert_eq!(next().animation.key, "transition.uncross_arms");
-        now(17990);
+        now(17619);
         assert_eq!(next().animation.key, "angry.fists_clenched");
-        now(18970);
+        now(18179);
         assert_eq!(next().animation.key, "idle.uncrossed.soft_blink");
     }
 
@@ -406,10 +409,10 @@ mod tests {
         let _lock = reset(0);
         status(Some(program_status::ProgramStatus::Working)); next();
         now(15000); next();
-        now(15980); assert_eq!(next().animation.key, "idea.finger_up");
+        now(15399); assert_eq!(next().animation.key, "idea.finger_up");
         status(None);
         protocol::schedule_failed_reaction(16000, 3000).unwrap();
-        now(18200); // 800ms remains; 980ms transition +980ms gesture do not fit.
+        now(18200); // 800ms remains; 399ms transition +560ms gesture do not fit.
         assert_eq!(next().animation.key, "idle.crossed.soft_blink");
         now(18300);
         assert!(!failure(next().animation.key));
@@ -427,4 +430,90 @@ mod tests {
             next();
         }
     }
+    fn advance(scheduled: protocol::LillyScheduledAnimation) {
+        now(NOW.load(Ordering::Relaxed) + scheduled.boundary_ms);
+    }
+
+    #[test]
+    fn mixed_expression_queue_prepares_each_start_and_inherits_each_end() {
+        let _lock = reset(0);
+        for tag in ["wink.playful", "wave.neutral", "happy.cheer", "idea.finger_up"] {
+            protocol::enqueue_animation(tag, protocol::SpiritRgba8::WHITE).unwrap();
+        }
+        for key in [
+            "transition.neutral_to_crossed", "wink.playful",
+            "transition.uncross_arms", "wave.neutral",
+            "transition.neutral_to_crossed", "happy.cheer",
+            "transition.neutral_to_crossed", "idea.finger_up",
+        ] {
+            let scheduled = next();
+            assert_eq!(scheduled.animation.key, key);
+            advance(scheduled);
+        }
+        assert_eq!(next().animation.key, "idle.crossed.soft_blink");
+    }
+
+    #[test]
+    fn timeline_replacement_during_preparation_cannot_play_stale_gesture() {
+        let _lock = reset(0);
+        protocol::enqueue_animation("wink.playful", protocol::SpiritRgba8::WHITE).unwrap();
+        let prep = next();
+        assert_eq!(prep.animation.key, "transition.neutral_to_crossed");
+        let replacement = protocol::SpiritPackage::new(None, Some(protocol::SpiritGesture {
+            tag: "wave.neutral".into(), rgba: protocol::SpiritRgba8::WHITE,
+        }));
+        protocol::replace_timeline(&[replacement]).unwrap();
+        advance(prep);
+        let prep = next();
+        assert_eq!(prep.animation.key, "transition.uncross_arms");
+        advance(prep);
+        let wave = next();
+        assert_eq!(wave.animation.key, "wave.neutral");
+        advance(wave);
+        assert_eq!(next().animation.key, "idle.uncrossed.soft_blink");
+    }
+
+    #[test]
+    fn stopping_during_preparation_keeps_completed_posture_without_playing_gesture() {
+        let _lock = reset(0);
+        protocol::enqueue_animation("wink.playful", protocol::SpiritRgba8::WHITE).unwrap();
+        let prep = next();
+        assert_eq!(prep.animation.key, "transition.neutral_to_crossed");
+        assert_eq!(protocol::stop_after_boundary(), 1);
+        advance(prep);
+        assert_eq!(next().animation.key, "idle.crossed.soft_blink");
+    }
+
+    #[test]
+    fn reasoning_and_speech_prepare_without_losing_reasoning_event() {
+        let _lock = reset(0);
+        *ai::ai_activity::EVENT.lock() = Some(ai::ai_activity::AiReasoningEvent {
+            phase: ai::ai_activity::AiReasoningPhase::Finished, source: "test", turn: 1,
+        });
+        let prep = next();
+        assert_eq!(prep.animation.key, "transition.neutral_to_crossed");
+        advance(prep);
+        let cue = next();
+        assert_eq!(cue.animation.key, "idea.finger_up");
+        advance(cue);
+        protocol::set_speech_playing(true);
+        let prep = next();
+        assert_eq!(prep.animation.key, "transition.uncross_arms");
+        advance(prep);
+        let speech = next();
+        assert_eq!(speech.animation.key, "talk.calm.uncrossed");
+        advance(speech);
+        protocol::set_speech_playing(false);
+        assert_eq!(next().animation.key, "idle.uncrossed.soft_blink");
+    }
+
+    #[test]
+    fn unknown_or_internal_expression_rejects_whole_request() {
+        let _lock = reset(0);
+        for word in ["static", "transition", "wink.playful", "unknown"] {
+            assert_eq!(protocol::enqueue_emotion_words(&["flirt", word]), Err(protocol::LillyProtocolError::UnknownEmotion));
+        }
+        assert_eq!(next().animation.key, "idle.uncrossed.soft_blink");
+    }
+
 }
