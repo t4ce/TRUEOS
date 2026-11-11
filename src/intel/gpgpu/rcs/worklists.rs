@@ -85,18 +85,11 @@ fn direct_rcs_encode_rect_worklist_command_stream(
     let mut cursor = 0usize;
     let mut ok = true;
 
-    ok &= direct_rcs_push_pipe_control_full(
+    ok &= direct_rcs_push_compute_3d_entry(
         batch,
         &mut cursor,
         (1 << 9) | (1 << 11),
         PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
-    );
-    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
-    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
-    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
-    ok &= direct_rcs_push_pipe_control_full(
-        batch,
-        &mut cursor,
         (1 << 9) | (1 << 11),
         PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
     );
@@ -194,6 +187,54 @@ fn direct_rcs_push_gpgpu_dispatch_prologue_with_vfe_dw5(
     direct_rcs_push_gpgpu_prologue_with_instruction_base(batch, cursor, batch_gpu, upload.gpu, vfe_dw5)
 }
 
+fn direct_rcs_push_compute_3d_entry(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    legacy_initial_dw0: u32,
+    legacy_initial_dw1: u32,
+    legacy_3d_dw0: u32,
+    legacy_3d_dw1: u32,
+) -> bool {
+    let tgl = crate::intel::render::tgl_spirit_compute_contract();
+    if !tgl
+        && !(direct_rcs_push_pipe_control_full(
+            batch,
+            cursor,
+            legacy_initial_dw0,
+            legacy_initial_dw1,
+        ) && direct_rcs_push(batch, cursor, PIPELINE_SELECT_GPGPU))
+    {
+        return false;
+    }
+    // The starting RCS mode may be restored GPGPU. Wa_1606932921 (TGL
+    // Vol14 p6) forbids relying on RT/depth PIPE_CONTROL bits to wake the
+    // fixed-function clock there. HDC+CS stall works in either mode; select
+    // 3D explicitly before its cache flushes and non-pipelined state.
+    // Mesa Iris deliberately omits Generic Media State Clear because it
+    // hangs gfx12. Gen12.0 also has no DW0 bit11 untyped-flush field:
+    // https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/drivers/iris/iris_state.c
+    // Other targets retain each caller's exact existing prefix.
+    direct_rcs_push_pipe_control_full(
+        batch,
+        cursor,
+        PIPE_CONTROL_HDC_PIPELINE_FLUSH,
+        PIPE_CONTROL_CS_STALL,
+    ) && direct_rcs_push(batch, cursor, PIPELINE_SELECT_3D)
+        && direct_rcs_push_pipe_control_full(
+            batch,
+            cursor,
+            if tgl { PIPE_CONTROL_HDC_PIPELINE_FLUSH } else { legacy_3d_dw0 },
+            if tgl {
+                PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
+                    | PIPE_CONTROL_DEPTH_CACHE_FLUSH
+                    | PIPE_CONTROL_DEPTH_STALL
+                    | PIPE_CONTROL_CS_STALL
+            } else {
+                legacy_3d_dw1
+            },
+        )
+}
+
 fn direct_rcs_push_gpgpu_prologue_with_instruction_base(
     batch: &mut [u32],
     cursor: &mut usize,
@@ -201,7 +242,7 @@ fn direct_rcs_push_gpgpu_prologue_with_instruction_base(
     instruction_gpu: u64,
     vfe_dw5: u32,
 ) -> bool {
-    direct_rcs_push_pipe_control_full(
+    direct_rcs_push_compute_3d_entry(
         batch,
         cursor,
         PIPE_CONTROL_HDC_PIPELINE_FLUSH,
@@ -209,26 +250,12 @@ fn direct_rcs_push_gpgpu_prologue_with_instruction_base(
             | PIPE_CONTROL_DEPTH_CACHE_FLUSH
             | PIPE_CONTROL_DEPTH_STALL
             | PIPE_CONTROL_CS_STALL,
-    ) && direct_rcs_push(batch, cursor, PIPELINE_SELECT_GPGPU)
-        // Mesa deliberately omits Generic Media State Clear because it hangs
-        // gfx12. Gen12.0 also has no DW0 bit11 untyped-flush field, so the
-        // supported transition is HDC+CS only.
-        && direct_rcs_push_pipe_control_full(
-            batch,
-            cursor,
-            PIPE_CONTROL_HDC_PIPELINE_FLUSH,
-            PIPE_CONTROL_CS_STALL,
-        )
-        && direct_rcs_push(batch, cursor, PIPELINE_SELECT_3D)
-        && direct_rcs_push_pipe_control_full(
-            batch,
-            cursor,
-            PIPE_CONTROL_HDC_PIPELINE_FLUSH,
-            PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
-                | PIPE_CONTROL_DEPTH_CACHE_FLUSH
-                | PIPE_CONTROL_DEPTH_STALL
-                | PIPE_CONTROL_CS_STALL,
-        )
+        PIPE_CONTROL_HDC_PIPELINE_FLUSH,
+        PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH
+            | PIPE_CONTROL_DEPTH_CACHE_FLUSH
+            | PIPE_CONTROL_DEPTH_STALL
+            | PIPE_CONTROL_CS_STALL,
+    )
         && direct_rcs_push_state_base_address(batch, cursor, batch_gpu, batch_gpu, instruction_gpu)
         && direct_rcs_push_pipe_control(batch, cursor, PIPE_CONTROL_INVALIDATE_BITS)
         && direct_rcs_push(batch, cursor, PIPELINE_SELECT_GPGPU)

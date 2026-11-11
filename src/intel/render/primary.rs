@@ -313,12 +313,9 @@ static RESIDENT_CHURN_FORWARD_GPU_EXPANDED_PATH_LOGGED: AtomicBool = AtomicBool:
 static RESIDENT_CHURN_FORWARD_CPU_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_NATIVE_FLUSHED_PACKET_LOGGED: AtomicBool = AtomicBool::new(false);
 
-// The entry packet sits before either opening PIPE_CONTROL. Slot 14 proves
-// secondary fetch; slot 15 proves both opening controls plus PIPELINE_SELECT.
+// The entry packet sits before the complete opening contract. Slot 14 proves
+// secondary fetch; slot 15 proves the selected opening fences and 3D mode.
 const RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS: usize = 4;
-const RESIDENT_SECONDARY_OPENING_PIPE_CONTROL_DWORDS: usize = 6;
-const RESIDENT_SECONDARY_POST_OPENING_MARKER_DWORD: usize =
-    RESIDENT_SECONDARY_OPENING_PIPE_CONTROL_DWORDS * 2 + 1;
 const RESULT_SLOT_POST_OPENING_DWORD: usize = 15;
 const RCS_EXEC_RESULT_DRAW_POST_OPENING: u32 = 0xC0DE_772B;
 const RESULT_SLOT_SECONDARY_RETURN_DWORD: usize = 30;
@@ -347,24 +344,12 @@ fn finish_resident_secondary_breadcrumbs(
     let result_post_opening_gpu =
         result_ggtt_gpu + (RESULT_SLOT_POST_OPENING_DWORD * core::mem::size_of::<u32>()) as u64;
     let payload = &mut batch[RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS..payload_end];
-    let marker = RESIDENT_SECONDARY_POST_OPENING_MARKER_DWORD;
-    // Validate the complete packets for this device. Gen12 VF invalidation
-    // also carries a DW0 L3 invalidate flag; matching only the opcode would
-    // either reject that required flag or admit an unrelated header bit.
-    let gfx12 = device_is_gfx12(device_id);
-    let opening_flush = render_pipe_control_packet(
-        gfx12,
-        PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
-        PIPE_CONTROL_FLUSH_BITS,
-        0,
-        0,
-    );
-    let opening_invalidate =
-        render_pipe_control_packet(gfx12, 0, PIPE_CONTROL_INVALIDATE_BITS, 0, 0);
+    // Validate the exact same prefix that the encoder emits. The native TGL
+    // entry has one extra common fence; desktop keeps its historical layout.
+    let (opening, marker) =
+        render_3d_entry_packets(device_id, PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER);
     if payload.len() < marker + RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS
-        || payload[..RESIDENT_SECONDARY_OPENING_PIPE_CONTROL_DWORDS] != opening_flush
-        || payload[RESIDENT_SECONDARY_OPENING_PIPE_CONTROL_DWORDS..marker - 1] != opening_invalidate
-        || payload[marker - 1] != PIPELINE_SELECT_3D
+        || payload[..marker] != opening[..marker]
         || payload[marker] != MI_STORE_DATA_IMM_GGTT_DW1
         || payload[marker + 1] != result_entry_gpu as u32
         || payload[marker + 2] != (result_entry_gpu >> 32) as u32

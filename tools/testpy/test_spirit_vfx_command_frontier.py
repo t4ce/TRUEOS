@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decode actual Spirit batches and check the TGL compute-state boundaries.
+"""Decode actual Spirit batches and all live RCS compute-entry boundaries.
 
 Compile the complete production encoder, descriptor/payload writers and command
 helpers. Artifact bytes and DMA cache maintenance are host fixtures; commands,
@@ -17,6 +17,42 @@ import test_clip_position3_uv_texture as production
 
 ROOT = Path(__file__).resolve().parents[2]
 production.ROOT = ROOT
+
+
+def compute_entry_calls() -> str:
+    sites = (
+        ("effects", "direct_rcs_encode_skybox_sample_rgb565_batch"),
+        ("two_d", "direct_rcs_finish_two_buffer_dispatch_batch"),
+        ("shadertoy", "direct_rcs_encode_shadertoy_batch"),
+        ("cpp_audio_visualizer", "direct_rcs_encode_cpp_audio_visualizer_rgba8_batch"),
+        ("particle_craft", "direct_rcs_encode_particle_craft_batch"),
+        ("cpp_demo", "direct_rcs_encode_cpp_demo_rgba8_batch"),
+        ("lz4_blocks", "encode_lz4_batch"),
+        ("worklists", "direct_rcs_encode_rect_worklist_command_stream"),
+        ("worklists", "direct_rcs_push_gpgpu_prologue_with_instruction_base"),
+        ("spirit_vfx", "direct_rcs_encode_spirit_vfx_batch"),
+    )
+    wrappers = []
+    entries = []
+    for index, (file, name) in enumerate(sites):
+        source = production.item(f"src/intel/gpgpu/rcs/{file}.rs", name)
+        marker = "direct_rcs_push_compute_3d_entry("
+        assert source.count(marker) == 1, f"{name} must use one explicit mode entry"
+        start = source.index(marker)
+        prefix = source[:start]
+        assert "PIPELINE_SELECT_GPGPU" not in prefix, name
+        assert "direct_rcs_push_pipe_control_full(" not in prefix, name
+        depth, end = 1, start + len(marker)
+        while depth:
+            depth += (source[end] == "(") - (source[end] == ")")
+            end += 1
+        call = source[start:end].replace("&mut cursor", "cursor")
+        wrappers.append(f"fn entry_{index}(batch:&mut[u32],cursor:&mut usize)->bool {{{call}}}")
+        full_flush = file == "spirit_vfx" or name == "direct_rcs_push_gpgpu_prologue_with_instruction_base"
+        entries.append(f'("{name}",entry_{index} as Entry,{str(full_flush).lower()})')
+    return "\n".join(wrappers) + "\ntype Entry=fn(&mut[u32],&mut usize)->bool;\n" + (
+        f"fn entry_sites()->[(&'static str,Entry,bool);{len(entries)}] {{[" + ",".join(entries) + "]}"
+    )
 
 
 def harness_source() -> str:
@@ -42,6 +78,11 @@ def harness_source() -> str:
         "direct_rcs_push_spirit_vfx_idd_load", "direct_rcs_push_spirit_vfx_dependency",
         "direct_rcs_encode_spirit_vfx_batch",
     ))
+    declarations.append(production.item("src/intel/gpgpu/rcs/worklists.rs",
+        "direct_rcs_push_compute_3d_entry"))
+    declarations.append(production.item("src/intel/gpgpu/rcs/worklists.rs",
+        "direct_rcs_push_gpgpu_prologue_with_instruction_base"))
+    declarations.append(compute_entry_calls())
     declarations.append(production.item(constants, "direct_rcs_encode_mocs_index"))
     declarations.extend(production.constant(spirit, name) for name in (
         "SPIRIT_VFX_STATE_COMPUTE_MODE_CMD", "SPIRIT_VFX_FORCE_GPU_NON_COHERENT",
@@ -224,16 +265,17 @@ fn sprite_only_keeps_one_walker_and_uses_sprite_instruction_base() {
 }
 
 #[test]
-fn tgl_contract_changes_only_compute_mode_and_vfe_urb() {
+fn tgl_contract_changes_only_entry_sequence_compute_mode_and_vfe_urb() {
     for background in [false,true] {
         super::physical(0x8086,0x4680,12);let legacy=encoded(background);
         let legacy_offsets=command_offsets(&legacy);
         let sba=*legacy_offsets.iter().find(|&&i|legacy[i]==STATE_BASE_ADDRESS_CMD).unwrap();
         super::physical(0x8086,0x9a49,1);let tgl=encoded(background);
         let offsets=command_offsets(&tgl);
-        assert_eq!(&tgl[sba..sba+2],&[0x61050000,0x00180010]);
-        assert_eq!(tgl[sba+2],STATE_BASE_ADDRESS_CMD);
-        let position=offsets.iter().position(|&i|i==sba).unwrap();
+        let scm=sba-7;
+        assert_eq!(&tgl[scm..scm+2],&[0x61050000,0x00180010]);
+        assert_eq!(tgl[scm+2],STATE_BASE_ADDRESS_CMD);
+        let position=offsets.iter().position(|&i|i==scm).unwrap();
         let flush=offsets[position-1];let select=offsets[position-2];
         assert_eq!(tgl[select],PIPELINE_SELECT_3D);
         assert_eq!(tgl[flush]&0xffff0000,PIPE_CONTROL_CMD&0xffff0000);
@@ -241,20 +283,68 @@ fn tgl_contract_changes_only_compute_mode_and_vfe_urb() {
         assert_ne!(tgl[flush+1]&PIPE_CONTROL_CS_STALL,0);
         let end=*legacy_offsets.last().unwrap()+1;
         let mut expected=legacy.clone();
-        expected.copy_within(sba..end,sba+2);
-        expected[sba..sba+2].copy_from_slice(&[0x61050000,0x00180010]);
+        expected[..end].fill(0);
+        // Omit the unsafe leading RT/depth flush and forced GPGPU select.
+        // Everything from the common HDC stall through 3D is retained.
+        expected[..scm].copy_from_slice(&legacy[7..sba]);
+        expected[scm..scm+2].copy_from_slice(&[0x61050000,0x00180010]);
+        expected[scm+2..scm+2+end-sba].copy_from_slice(&legacy[sba..end]);
         let vfe=*offsets.iter().find(|&&i|tgl[i]==MEDIA_VFE_STATE_CMD).unwrap();
         expected[vfe+5]=0x04000000;
         assert_eq!(tgl,expected,"all other commands, descriptors and payload bytes stay identical");
         let first_walker=*offsets.iter().find(|&&i|tgl[i]==GPGPU_WALKER_CMD).unwrap();
-        assert_eq!(first_walker*4,0x128,"TGL's extra state adds exactly8bytes before the walker");
+        assert_eq!(first_walker*4,0x10c,"known-mode entry removes7DWORDs from the prior TGL stream");
         // STATE_COMPUTE_MODE is masked: change only ForceNonCoherent bits4:3.
-        let write=tgl[sba+1];let mask=write>>16;
+        let write=tgl[scm+1];let mask=write>>16;
         assert_eq!(mask,0x18);
         for old in 0..=u16::MAX as u32 {
             let after=(old&!mask)|(write&mask);
             assert_eq!((after>>3)&3,2);
             assert_eq!(after&!mask,old&!mask);
+        }
+    }
+}
+
+#[test]
+fn tgl_entry_is_valid_from_cold_3d_and_restored_gpgpu_without_3d_flush_in_compute() {
+    super::physical(0x8086,0x9a49,1);
+    for background in [false,true] {
+        let batch=encoded(background);let offsets=command_offsets(&batch);
+        assert_eq!(batch[0]&0xffff0000,PIPE_CONTROL_CMD&0xffff0000);
+        assert_ne!(batch[0]&PIPE_CONTROL_HDC_PIPELINE_FLUSH,0);
+        assert_eq!(batch[1],PIPE_CONTROL_CS_STALL);
+        assert_eq!(batch[6],PIPELINE_SELECT_3D);
+        for initial in [PIPELINE_SELECT_3D,PIPELINE_SELECT_GPGPU] {
+            let mut mode=initial;let mut entered_3d=false;let mut flushed_3d=false;
+            let mut compute_entries=0;
+            for &offset in &offsets {
+                let header=batch[offset];
+                if header&0xffff0000==PIPE_CONTROL_CMD&0xffff0000 {
+                    let flags=batch[offset+1];
+                    let graphics=PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH|
+                        PIPE_CONTROL_DEPTH_CACHE_FLUSH|PIPE_CONTROL_DEPTH_STALL;
+                    if mode==PIPELINE_SELECT_GPGPU {
+                        assert_eq!(flags&graphics,0,"3D flush in restored GPGPU at{offset:#x}");
+                    }
+                    if flags&graphics!=0 {
+                        assert!(entered_3d,"initial mode must never be assumed");
+                        assert_eq!(mode,PIPELINE_SELECT_3D);
+                        assert_ne!(flags&PIPE_CONTROL_CS_STALL,0);
+                        assert_ne!(header&PIPE_CONTROL_HDC_PIPELINE_FLUSH,0);
+                        flushed_3d=true;
+                    }
+                } else if header==PIPELINE_SELECT_3D {
+                    entered_3d=true;mode=header;
+                } else if header==PIPELINE_SELECT_GPGPU {
+                    assert!(entered_3d&&flushed_3d,"3D caches drain before entering compute");
+                    compute_entries+=1;mode=header;
+                } else if matches!(header,STATE_BASE_ADDRESS_CMD|SPIRIT_VFX_STATE_COMPUTE_MODE_CMD) {
+                    assert!(entered_3d);assert_eq!(mode,PIPELINE_SELECT_3D);
+                } else if matches!(header,MEDIA_VFE_STATE_CMD|MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD|GPGPU_WALKER_CMD) {
+                    assert_eq!(mode,PIPELINE_SELECT_GPGPU);
+                }
+            }
+            assert_eq!(compute_entries,1,"no speculative initial compute roundtrip");
         }
     }
 }
@@ -311,6 +401,87 @@ fn desktop_and_other_physical_targets_preserve_complete_legacy_batch_bytes() {
             super::physical(vendor,device,revision);
             assert_eq!(encoded(background),legacy);
         }
+    }
+}
+
+fn entry_bytes(entry:Entry)->Vec<u32> {
+    let mut words=vec![0xf00dcafe;64];let mut cursor=0;
+    assert!(entry(&mut words,&mut cursor));
+    assert!(words[cursor..].iter().all(|&word|word==0xf00dcafe));
+    words.truncate(cursor);words
+}
+
+#[test]
+fn every_live_compute_entry_is_safe_from_both_initial_modes() {
+    super::physical(0x8086,0x9a49,1);
+    for (name,entry,_) in entry_sites() {
+        let words=entry_bytes(entry);
+        assert_eq!(words.len(),13,"{name}: no speculative GPGPU roundtrip");
+        assert_eq!(words[0],0x7a000204,"{name}: HDC flush, no reserved bit11");
+        assert_eq!(words[1],0x00100000,"{name}: initial CS stall only");
+        assert_eq!(words[6],0x69041310,"{name}: explicit 3D select");
+        assert_eq!(words[7],0x7a000204);
+        assert_eq!(words[8],0x00103001,"{name}: full RT/depth/HDC stalled flush");
+        for initial in [PIPELINE_SELECT_3D,PIPELINE_SELECT_GPGPU] {
+            let mut mode=initial;let mut explicit=false;let mut cursor=0;
+            while cursor<words.len() {
+                if words[cursor]==PIPELINE_SELECT_3D {
+                    mode=PIPELINE_SELECT_3D;explicit=true;cursor+=1;continue;
+                }
+                assert_eq!(words[cursor]&0xffff0000,PIPE_CONTROL_CMD&0xffff0000);
+                assert_eq!(words[cursor]&(1<<11),0,"{name}: Gen12 reserved bit11");
+                assert_ne!(words[cursor+1]&PIPE_CONTROL_CS_STALL,0);
+                if words[cursor+1]&(PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH|
+                    PIPE_CONTROL_DEPTH_CACHE_FLUSH|PIPE_CONTROL_DEPTH_STALL)!=0 {
+                    assert!(explicit,"{name}: cannot assume initial 3D");
+                    assert_eq!(mode,PIPELINE_SELECT_3D);
+                }
+                cursor+=6;
+            }
+            assert_eq!(mode,PIPELINE_SELECT_3D);
+        }
+    }
+}
+
+#[test]
+fn every_legacy_compute_prefix_preserves_its_exact_original_words() {
+    for (name,entry,full) in entry_sites() {
+        // Original hardware command words, including legacy callers' bit11.
+        let (header,first,last)=if full {(0x7a000204,0x00103001,0x00103001)}
+            else {(0x7a000a04,0x00101001,0x00101000)};
+        let expected=[header,first,0,0,0,0,0x69041312,
+            0x7a000204,0x00100000,0,0,0,0,0x69041310,header,last,0,0,0,0];
+        for (vendor,device,revision) in [(0x8086,0x4680,12),(0x8086,0xa780,4),
+            (0x8086,0x9a49,0),(0x8086,0x9a49,2),(0x1234,0x9a49,1)] {
+            super::physical(vendor,device,revision);
+            assert_eq!(entry_bytes(entry),expected,"{name}: legacy target changed");
+        }
+    }
+}
+
+#[test]
+fn native_shared_prologue_enters_compute_only_after_3d_sba_and_cache_release() {
+    for tgl in [false,true] {
+        super::physical(0x8086,if tgl {0x9a49}else{0x4680},if tgl {1}else{12});
+        let mut words=vec![0;1024];let mut cursor=0;
+        assert!(direct_rcs_push_gpgpu_prologue_with_instruction_base(&mut words,&mut cursor,
+            0x08900000,0x0d900000,GPGPU_VFE_DW5_UOS));
+        words[cursor]=MI_BATCH_BUFFER_END;
+        let offsets=command_offsets(&words);
+        let sba=*offsets.iter().find(|&&i|words[i]==STATE_BASE_ADDRESS_CMD).unwrap();
+        let entry=if tgl {13}else{20};
+        assert_eq!(sba,entry);
+        assert_eq!(words[sba+10]&0xfffff000,0x0d900000);
+        let end=offsets.iter().position(|&i|words[i]==MEDIA_VFE_STATE_CMD).unwrap();
+        let vfe=offsets[end];
+        assert_eq!(words[vfe+5],GPGPU_VFE_DW5_UOS,"no VFE change outside Spirit");
+        let select=offsets[end-2];let stall=offsets[end-1];
+        assert_eq!(words[select],PIPELINE_SELECT_GPGPU);
+        assert_eq!(words[stall+1],PIPE_CONTROL_CS_STALL);
+        assert_ne!(words[stall]&PIPE_CONTROL_HDC_PIPELINE_FLUSH,0);
+        assert_eq!(words[offsets[end-3]+1],PIPE_CONTROL_INVALIDATE_BITS);
+        assert_eq!(offsets.iter().filter(|&&i|words[i]==PIPELINE_SELECT_GPGPU).count(),
+            if tgl {1}else{2});
     }
 }
 }

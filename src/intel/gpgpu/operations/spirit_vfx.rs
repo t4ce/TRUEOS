@@ -1,5 +1,6 @@
 const SPIRIT_VFX_INITIAL_TRACE_FRAMES: u32 = 30;
 const SPIRIT_VFX_PERIODIC_TRACE_FRAMES: u32 = 60;
+const SPIRIT_VFX_ENCODING_LOG_LIMIT: u32 = 2;
 /// One invariant footprint for every Spirit procedural background. Keeping
 /// this at the control-page writer makes scale non-negotiable for all callers.
 pub(crate) const SPIRIT_VFX_BACKGROUND_PRESENT_SCALE: f32 = 1.171875;
@@ -83,7 +84,7 @@ struct SpiritVfxSubmitted {
     background_mode: u32,
     shader_mode: u32,
     started_tick: u64,
-    first_encoding_evidence: bool,
+    encoding_evidence_logged: bool,
 }
 
 #[derive(Copy, Clone)]
@@ -111,6 +112,9 @@ struct SpiritVfxEncodingEvidence {
     preemption_20e4: u32,
     ff_slice_cs_chicken1: u32,
     l3alloc_b134: u32,
+    global_mocs4_4010: u32,
+    l3cc_pair_b028: u32,
+    cs_debug_mode2_20d8: u32,
     background_idd: Option<[u32; 8]>,
     background_cross_thread: Option<[u32; 16]>,
     background_local_ids: Option<[u32; 24]>,
@@ -161,6 +165,9 @@ fn spirit_vfx_capture_encoding_evidence(
     let preemption_20e4 = super::mmio_read(dev, 0x20E4);
     let ff_slice_cs_chicken1 = super::mmio_read(dev, RCS_RING_BASE + 0xE0);
     let l3alloc_b134 = super::mmio_read(dev, 0xB134);
+    let global_mocs4_4010 = super::mmio_read(dev, 0x4010);
+    let l3cc_pair_b028 = super::mmio_read(dev, 0xB028);
+    let cs_debug_mode2_20d8 = super::mmio_read(dev, 0x20D8);
     let batch = state.batch_virt;
     let background_idd = if background {
         spirit_vfx_owned_dwords(batch, DIRECT_RCS_BATCH_BYTES, SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES)
@@ -183,6 +190,7 @@ fn spirit_vfx_capture_encoding_evidence(
     Some(SpiritVfxEncodingEvidence {
         ring_before, ring_after, pdp_hi_before, pdp_lo, pdp_hi_after,
         preemption_20e4, ff_slice_cs_chicken1, l3alloc_b134,
+        global_mocs4_4010, l3cc_pair_b028, cs_debug_mode2_20d8,
         background_idd, background_cross_thread, background_local_ids,
         sprite_idd, sprite_cross_thread, sprite_local_ids, control,
     })
@@ -210,11 +218,12 @@ fn spirit_vfx_log_encoding_evidence(
         submitted.source.gpu, submitted.dst.gpu,
     );
     crate::log_info!(target: "gpgpu";
-        "intel/gpgpu: spirit-vfx encoding-live tag={} phase={} pdp0=0x{:016X} pdp_hi_before=0x{:08X} pdp_stable={} ring_before=0x{:08X} ring_after=0x{:08X} expected_ring=0x{:X} spirit_ring={} root_matches={:?} preemption_20e4=0x{:08X} ff_slice_cs_chicken1=0x{:08X} l3alloc_b134=0x{:08X} capture=observational\n",
+        "intel/gpgpu: spirit-vfx encoding-live tag={} phase={} pdp0=0x{:016X} pdp_hi_before=0x{:08X} pdp_stable={} ring_before=0x{:08X} ring_after=0x{:08X} expected_ring=0x{:X} spirit_ring={} root_matches={:?} preemption_20e4=0x{:08X} ff_slice_cs_chicken1=0x{:08X} l3alloc_b134=0x{:08X} global_mocs4_4010=0x{:08X} l3cc_pair_b028=0x{:08X} cs_debug_mode2_20d8=0x{:08X} capture=observational\n",
         tag, phase, pdp0, evidence.pdp_hi_before, pdp_stable,
         evidence.ring_before, evidence.ring_after, state.gpu_va.ring, spirit_ring,
         root_matches, evidence.preemption_20e4, evidence.ff_slice_cs_chicken1,
-        evidence.l3alloc_b134,
+        evidence.l3alloc_b134, evidence.global_mocs4_4010,
+        evidence.l3cc_pair_b028, evidence.cs_debug_mode2_20d8,
     );
     crate::log_info!(target: "gpgpu";
         "intel/gpgpu: spirit-vfx encoding-owned tag={} phase={} resource=background-idd offset=0x{:X} dwords={:08X?}\n",
@@ -359,7 +368,7 @@ static SPIRIT_VFX_RUNTIME: Mutex<Option<SpiritVfxRuntime>> = Mutex::new(None);
 static SPIRIT_VFX_PENDING: Mutex<Option<SpiritVfxPending>> = Mutex::new(None);
 static SPIRIT_VFX_NEXT_TAG: AtomicU64 = AtomicU64::new(1);
 static SPIRIT_VFX_NEXT_FRAME: AtomicU32 = AtomicU32::new(0);
-static SPIRIT_VFX_FIRST_ENCODING_LOGGED: AtomicBool = AtomicBool::new(false);
+static SPIRIT_VFX_ENCODING_LOGS: AtomicU32 = AtomicU32::new(0);
 static SPIRIT_VFX_SAVED_CONTEXT_LOGS: AtomicU32 = AtomicU32::new(0);
 
 fn spirit_vfx_runtime_once() -> Option<SpiritVfxRuntime> {
@@ -547,11 +556,15 @@ pub(crate) fn submit_spirit_vfx_frame(
         frame: submitted.frame,
     };
     // Capture precedes publication; log only after accepted or ambiguous
-    // admission, when this exact job has a tag. Busy/rejected attempts leave
-    // the first-job capture available for the next attempt.
+    // admission, when this exact job has a tag. Busy/rejected attempts do not
+    // consume either initial capture slot. The submit lock serializes
+    // admission and the bounded counter update.
     if let Some(evidence) = encoding_evidence {
-        if !SPIRIT_VFX_FIRST_ENCODING_LOGGED.swap(true, Ordering::AcqRel) {
-            submitted.first_encoding_evidence = true;
+        if SPIRIT_VFX_ENCODING_LOGS.fetch_update(
+            Ordering::AcqRel, Ordering::Acquire,
+            |count| (count < SPIRIT_VFX_ENCODING_LOG_LIMIT).then_some(count + 1),
+        ).is_ok() {
+            submitted.encoding_evidence_logged = true;
             spirit_vfx_log_encoding_evidence(tag, submitted, "before-commit", evidence);
         }
     }
@@ -648,7 +661,7 @@ pub(crate) fn poll_spirit_vfx_submission(handle: SpiritVfxSubmission) -> SpiritV
                     (preemption >> 1) & 3,
                     crate::intel::mmio_read(dev, FF_SLICE_CS_CHICKEN1),
                 );
-                if pending.submitted.first_encoding_evidence {
+                if pending.submitted.encoding_evidence_logged {
                     if let Some(evidence) = spirit_vfx_capture_encoding_evidence(
                         dev, pending.submitted.state, pending.submitted.control,
                         pending.submitted.first_kernel.gpu == SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU,
@@ -795,7 +808,8 @@ fn submit_spirit_vfx_batch(
     if !batch_ok {
         return None;
     }
-    let encoding_evidence = (!SPIRIT_VFX_FIRST_ENCODING_LOGGED.load(Ordering::Acquire)).then(|| {
+    let encoding_evidence = (SPIRIT_VFX_ENCODING_LOGS.load(Ordering::Acquire)
+        < SPIRIT_VFX_ENCODING_LOG_LIMIT).then(|| {
         spirit_vfx_capture_encoding_evidence(dev, state, runtime.control, background_upload.is_some())
     }).flatten();
     let submitted_to_guc = execution_rcs_submit_batch(dev, state);
@@ -822,7 +836,7 @@ fn submit_spirit_vfx_batch(
         background_mode: control.background_mode,
         shader_mode: control.shader_mode,
         started_tick,
-        first_encoding_evidence: false,
+        encoding_evidence_logged: false,
     }, encoding_evidence))
 }
 

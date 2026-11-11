@@ -48,6 +48,7 @@ def main() -> None:
     dispatch = function(native, "dispatch")
     rows = function(native, "edit_life_dispatch_rows")
     prologue = function(worklists, "direct_rcs_push_gpgpu_prologue_with_instruction_base")
+    entry = function(worklists, "direct_rcs_push_compute_3d_entry")
     packet_helpers = "\n".join(function(commands, name) for name in (
         "direct_rcs_push", "direct_rcs_push_pipe_control_full", "direct_rcs_push_pipe_control"))
     arithmetic = "\n".join(function(native, name) for name in (
@@ -57,7 +58,7 @@ def main() -> None:
     timing = "#[derive(Default)]\n" + block(native, "struct EditLifePassTiming")
     native_constants = constant_closure(native, dispatch + rows + arithmetic
         + "EDIT_LIFE_MAX_PAGE_PIXELS EDIT_LIFE_BATCH_USED_BYTES EDIT_LIFE_RESULT_USED_BYTES")
-    packet_constants = constant_closure(constants, prologue + packet_helpers)
+    packet_constants = constant_closure(constants, prologue + entry + packet_helpers)
     encoder = function(native, "encode_edit_life_batch")
     assert "direct_rcs_push_gpgpu_prologue_with_instruction_base" in encoder
     assert "direct_rcs_push_pipe_control_full" not in encoder, "Edit must use the supported shared prologue"
@@ -93,6 +94,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[macro_export] macro_rules! log_error { ($($token:tt)*) => {}; }
 #[derive(Clone, Copy)] struct Dev;
+mod intel { pub mod render { pub fn tgl_spirit_compute_contract() -> bool { false } } }
 mod native {
 use super::*;
 #[derive(Clone, Copy)] struct DirectRcsState { ppgtt_phys: u64 }
@@ -372,7 +374,7 @@ pub(super) fn run() {
 }
 }
 mod packets {
-''' + packet_constants + "\n" + packet_helpers + "\n" + prologue + r'''
+''' + packet_constants + "\n" + packet_helpers + "\n" + entry + "\n" + prologue + r'''
 fn direct_rcs_push_state_base_address(batch: &mut [u32], cursor: &mut usize,
     surface: u64, dynamic: u64, instruction: u64) -> bool {
     assert_eq!(surface, 0x0890_0000);

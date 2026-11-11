@@ -249,18 +249,11 @@ fn direct_rcs_encode_shadertoy_batch(
     let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
     let mut cursor = 0usize;
     let mut ok = true;
-    ok &= direct_rcs_push_pipe_control_full(
+    ok &= direct_rcs_push_compute_3d_entry(
         batch,
         &mut cursor,
         (1 << 9) | (1 << 11),
         PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL | 1,
-    );
-    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_GPGPU);
-    ok &= direct_rcs_push_pipe_control_full(batch, &mut cursor, 1 << 9, PIPE_CONTROL_CS_STALL);
-    ok &= direct_rcs_push(batch, &mut cursor, PIPELINE_SELECT_3D);
-    ok &= direct_rcs_push_pipe_control_full(
-        batch,
-        &mut cursor,
         (1 << 9) | (1 << 11),
         PIPE_CONTROL_RENDER_TARGET_CACHE_FLUSH | PIPE_CONTROL_CS_STALL,
     );

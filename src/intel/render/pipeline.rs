@@ -56,6 +56,43 @@ fn render_pipe_control_packet(
     ]
 }
 
+// Keep one explicit opening contract for the encoders and secondary-marker
+// validator. A restore-inhibited TGL context can inherit GPGPU mode, and a
+// saved context can restore it. Wa_1606932921 forbids the RT flush in that
+// mode: enter 3D with common HDC/CS controls before the existing 3D fences.
+// See TGL Vol2a PIPELINE_SELECT p1131 and Mesa genX_cmd_buffer.c's workaround.
+const RENDER_3D_ENTRY_MAX_DWORDS: usize = 19;
+
+fn render_3d_entry_packets(
+    device_id: u16,
+    flush_header: u32,
+) -> ([u32; RENDER_3D_ENTRY_MAX_DWORDS], usize) {
+    let gfx12 = device_is_gfx12(device_id);
+    let tgl = crate::intel::render::tgl_spirit_compute_contract();
+    let mut words = [0; RENDER_3D_ENTRY_MAX_DWORDS];
+    let mut cursor = 0;
+    if tgl {
+        words[..6].copy_from_slice(&render_pipe_control_packet(
+            gfx12, PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER, PIPE_CONTROL_CS_STALL, 0, 0,
+        ));
+        words[6] = PIPELINE_SELECT_3D;
+        cursor = 7;
+    }
+    words[cursor..cursor + 6].copy_from_slice(&render_pipe_control_packet(
+        gfx12, flush_header, PIPE_CONTROL_FLUSH_BITS, 0, 0,
+    ));
+    cursor += 6;
+    words[cursor..cursor + 6].copy_from_slice(&render_pipe_control_packet(
+        gfx12, 0, PIPE_CONTROL_INVALIDATE_BITS, 0, 0,
+    ));
+    cursor += 6;
+    if !tgl {
+        words[cursor] = PIPELINE_SELECT_3D;
+        cursor += 1;
+    }
+    (words, cursor)
+}
+
 #[cfg(test)]
 mod render_pipe_control_tests {
     use super::*;
@@ -3610,19 +3647,12 @@ fn encode_triangle_probe_batch(
 
     batch_dwords.fill(0);
 
-    log_batch_offset(cursor, "PIPE_CONTROL flush");
-    push_pipe_control_full(
-        warm.device_id,
-        batch_dwords,
-        &mut cursor,
-        PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER,
-        PIPE_CONTROL_FLUSH_BITS,
-    )?;
-    log_batch_offset(cursor, "PIPE_CONTROL invalidate");
-    push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
-
-    log_batch_offset(cursor, "PIPELINE_SELECT");
-    push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
+    log_batch_offset(cursor, "3D pipeline entry");
+    let (entry, entry_dwords) =
+        render_3d_entry_packets(warm.device_id, PIPE_CONTROL_HDC_PIPELINE_FLUSH_HEADER);
+    for &word in &entry[..entry_dwords] {
+        push(batch_dwords, &mut cursor, word)?;
+    }
     log_batch_offset(cursor, "MI_STORE_DATA_IMM batch-entry");
     push_store_data_imm(
         batch_dwords,
@@ -6426,13 +6456,11 @@ fn encode_minimal_streamout_proof_batch(
 
     batch_dwords.fill(0);
 
-    log_batch_offset(cursor, "PIPE_CONTROL flush");
-    push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_FLUSH_BITS)?;
-    log_batch_offset(cursor, "PIPE_CONTROL invalidate");
-    push_pipe_control(warm.device_id, batch_dwords, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS)?;
-
-    log_batch_offset(cursor, "PIPELINE_SELECT");
-    push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
+    log_batch_offset(cursor, "3D pipeline entry");
+    let (entry, entry_dwords) = render_3d_entry_packets(warm.device_id, 0);
+    for &word in &entry[..entry_dwords] {
+        push(batch_dwords, &mut cursor, word)?;
+    }
     log_batch_offset(cursor, "MI_STORE_DATA_IMM batch-entry");
     push_store_data_imm(
         batch_dwords,
@@ -7088,15 +7116,10 @@ fn encode_3d_no_draw_probe_batch(
     }
 
     batch_dwords.fill(0);
-    push_pipe_control_full(warm.device_id, batch_dwords, &mut cursor, 0, PIPE_CONTROL_FLUSH_BITS)?;
-    push_pipe_control_full(
-        warm.device_id,
-        batch_dwords,
-        &mut cursor,
-        0,
-        PIPE_CONTROL_INVALIDATE_BITS,
-    )?;
-    push(batch_dwords, &mut cursor, PIPELINE_SELECT_3D)?;
+    let (entry, entry_dwords) = render_3d_entry_packets(warm.device_id, 0);
+    for &word in &entry[..entry_dwords] {
+        push(batch_dwords, &mut cursor, word)?;
+    }
     push(batch_dwords, &mut cursor, STATE_BASE_ADDRESS_CMD)?;
     push_sba_address(batch_dwords, &mut cursor, true, RENDER_MOCS, GPU_VA_DRAW_STATE_BASE)?;
     push(batch_dwords, &mut cursor, 0)?;
