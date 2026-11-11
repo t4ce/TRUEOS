@@ -58,7 +58,7 @@ impl Slot4State {
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_slot4_service_task() {
     crate::log_info!(target: "ui4/slot4";
-        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=color-picker-rgba8+static-color-crosshairs+selected-frame-strips+selection-outline-1px+dpi-elliptic-dock-fields-33pct+dock-destination-outline+context-menu hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=ordered-linear-diff+window-old-new gpu_submits=0 synthetic-motion=off\n",
+        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=color-picker-rgba8+static-color-crosshairs+selected-frame-strips+selection-outline-1px+dpi-elliptic-dock-fields-33pct+spirit-access-circle-150px+frame-ai-badges+dock-destination-outline+context-menu hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=ordered-linear-diff+window-old-new gpu_submits=0 synthetic-motion=off\n",
         super::INTERACTION_CADENCE_HZ,
     );
 
@@ -453,11 +453,15 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
             };
             push_dock_zone_mask(&mut rects, zone, color);
         }
-        if let Some(circle) = super::input_broker::spirit_dock_circle() {
-            let preview = visuals.iter().filter_map(|visual| visual.dock_preview)
-                .find(|preview| preview.target == super::WindowDockTarget::SpiritAccess);
+    }
+    for visual in &visuals {
+        if let Some(circle) = visual.spirit_dock_circle {
+            let reference = visual.drag_preview.is_some() && !visual.dock_fields_visible;
+            let preview = visual.dock_preview
+                .filter(|preview| preview.target == super::WindowDockTarget::SpiritAccess);
             let granted = preview.is_some_and(|preview| preview.spirit_access_granted);
-            let color = if granted { Rgba8::new(235, 100, 115, DOCK_FIELD_ALPHA) }
+            let color = if reference { Rgba8::new(95, 170, 240, DOCK_FIELD_ALPHA) }
+                else if granted { Rgba8::new(235, 100, 115, DOCK_FIELD_ALPHA) }
                 else { Rgba8::new(70, 205, 160, DOCK_FIELD_ALPHA) };
             let top = i64::from(circle.center_y).saturating_sub(i64::from(circle.radius)).max(0) as u32;
             let bottom = (i64::from(circle.center_y) + i64::from(circle.radius) + 1)
@@ -467,9 +471,9 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
                     push_visual_rect(&mut rects, span, color);
                 }
             }
-            let label = preview.map_or("AI ACCESS", |preview| {
+            let label = if reference { "ATTACH TO CODEX" } else { preview.map_or("AI ACCESS", |preview| {
                 super::input_broker::spirit_dock_label(preview.spirit_access_granted)
-            });
+            }) };
             let text_width = (label.len() as u32).saturating_mul((microfont::FWIDTH * 2) as u32);
             let text_x = (i64::from(circle.center_x) - i64::from(text_width / 2))
                 .clamp(0, i64::from(screen_w.saturating_sub(text_width))) as u32;
@@ -482,7 +486,8 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
 
     // This badge belongs to the brokered frame, not to app pixels or an app-wide
     // permission. It disappears as soon as that exact grant is revoked/retired.
-    for window in slot4_windows() {
+    for window in super::OutputId::from_slot(0)
+        .map(super::visible_windows_for_output).unwrap_or_default() {
         let frame = super::CursorFrameKey::new(window.owner, window.id);
         if !super::spirit_access::is_granted(frame) {
             continue;
@@ -1474,6 +1479,7 @@ mod tests {
             context_menu: None,
             selection: None,
             dock_fields_visible: false,
+            spirit_dock_circle: None,
             dock_preview: None,
         };
         let mut rects = Slot4Rects::new();
@@ -1617,6 +1623,7 @@ mod tests {
             context_menu: None,
             selection: None,
             dock_fields_visible: false,
+            spirit_dock_circle: None,
             dock_preview: None,
         };
         let mut rects = Slot4Rects::new();

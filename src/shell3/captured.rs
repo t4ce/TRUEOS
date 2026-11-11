@@ -270,6 +270,7 @@ impl Captured {
             }
             ["cmd", name] => return self.terminal_required(name),
             ["link"] => return self.terminal_required("link"),
+            ["keys"] => return self.terminal_required("keys"),
             ["adm", name]
                 if matches!(
                     *name,
@@ -278,6 +279,7 @@ impl Captured {
                         | "tlb"
                         | "vcpy"
                         | "font"
+                        | "keys"
                         | "link"
                         | "log"
                         | "sh3"

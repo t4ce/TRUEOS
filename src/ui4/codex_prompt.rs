@@ -107,6 +107,7 @@ pub(crate) fn request_open(source: Ui4CursorSource, anchor: (u32, u32)) {
 pub(super) fn request_attachments(
     source: Ui4CursorSource,
     anchor: (u32, u32),
+    expected: codex::Target,
     data: &[u8],
     preview: Arc<super::drag_drop::DragPreview>,
 ) -> bool {
@@ -117,7 +118,7 @@ pub(super) fn request_attachments(
     let Some(target) = retained.or_else(codex::current_target) else {
         return false;
     };
-    if !codex::is_target_live(&target) {
+    if target != expected || !codex::is_target_live(&target) {
         return false;
     }
     let mut pending = OPEN_REQUEST.lock();
@@ -189,7 +190,16 @@ pub(crate) async fn ui4_codex_prompt_service_task() {
             if !close {
                 if prompt.seed_tick.elapsed().as_millis() >= 48 {
                     if let Some(seed) = prompt.seed {
-                        if crate::spirit::introduce_attachments(prompt.window, seed) {
+                        if !super::spirit_access::is_granted(super::CursorFrameKey::new(OWNER, prompt.window)) {
+                            // The user opened this attachment editor. Its default
+                            // question is host UI content; it must not implicitly
+                            // grant AI input to a newly created human frame.
+                            for character in seed.chars() {
+                                let _ = prompt.editor.insert(character);
+                            }
+                            prompt.seed = None;
+                            prompt.dirty = true;
+                        } else if crate::spirit::introduce_attachments(prompt.window, seed) {
                             prompt.seed = None;
                         }
                     }

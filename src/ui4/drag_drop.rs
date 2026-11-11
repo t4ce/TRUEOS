@@ -65,6 +65,8 @@ struct Drag {
     preview: Arc<DragPreview>,
     kind: u32,
     data: Vec<u8>,
+    authority: Option<super::spirit_access::InputStamp>,
+    codex_target: Option<crate::r::services::codex_input_service::Target>,
 }
 struct Drop {
     recipient: WindowOwner,
@@ -124,6 +126,8 @@ impl Registry {
             preview,
             kind,
             data: data.to_vec(),
+            authority: None,
+            codex_target: None,
         });
         Ok(token)
     }
@@ -214,9 +218,17 @@ pub(crate) fn begin(
     label: &str,
     data: &[u8],
 ) -> Result<i32, i32> {
-    let token = REGISTRY
-        .lock()
-        .begin(producer, origin, source, kind, label, data)?;
+    let authority = super::spirit_access::stamp_cursor(source, origin).ok_or(-5)?;
+    let codex_target = (kind == v::vdrag::PATH_LIST_V1)
+        .then(live_codex_target).flatten();
+    let token = {
+        let mut registry = REGISTRY.lock();
+        let token = registry.begin(producer, origin, source, kind, label, data)?;
+        let drag = registry.drags.last_mut().ok_or(-5)?;
+        drag.authority = Some(authority);
+        drag.codex_target = codex_target;
+        token
+    };
     super::input_broker::claim_drag_gesture(source);
     super::input_broker::notify_slot4_visual_change();
     Ok(token)
@@ -234,11 +246,39 @@ pub(crate) fn cursor_preview(source: Ui4CursorSource) -> Option<Arc<DragPreview>
         .find(|drag| drag.source == source)
         .map(|drag| drag.preview.clone())
 }
+
+fn live_codex_target() -> Option<crate::r::services::codex_input_service::Target> {
+    use crate::r::services::codex_input_service as codex;
+    codex::current_target().filter(codex::is_target_live)
+}
+
+pub(super) fn codex_receiver_ready() -> bool { live_codex_target().is_some() }
+
+fn codex_reference_target(drag: &Drag) -> Option<crate::r::services::codex_input_service::Target> {
+    let target = drag.codex_target?;
+    (drag.kind == v::vdrag::PATH_LIST_V1
+        && super::spirit_access::cursor_is_human(drag.source)
+        && drag.authority.is_some_and(|authority| super::spirit_access::stamp_valid(authority, drag.origin))
+        && live_codex_target() == Some(target)).then_some(target)
+}
+
+/// The receiver and source grant are captured at drag admission. A replacement
+/// conversation or a renewed grant cannot acquire an older reference gesture.
+pub(super) fn codex_reference_drag(source: Ui4CursorSource) -> bool {
+    REGISTRY.lock().drags.iter().find(|drag| drag.source == source)
+        .and_then(codex_reference_target).is_some()
+}
 pub(crate) fn pointer_released(
     source: Ui4CursorSource,
     target: Option<(WindowOwner, CursorFrameKey, i32, i32)>,
 ) {
-    REGISTRY.lock().finish(source, target);
+    let mut registry = REGISTRY.lock();
+    let allowed = registry.drags.iter().find(|drag| drag.source == source)
+        .is_some_and(|drag| drag.authority.is_some_and(|stamp| super::spirit_access::stamp_valid(stamp, drag.origin)));
+    let target = target.filter(|(_, frame, _, _)| allowed
+        && super::spirit_access::cursor_target_allowed(source, *frame));
+    registry.finish(source, target);
+    drop(registry);
     super::input_broker::notify_slot4_visual_change();
 }
 /// Called only on a primary release. Acceptance transfers the copied payload
@@ -249,8 +289,8 @@ pub(crate) fn release_to_codex(source: Ui4CursorSource, anchor: (u32, u32)) -> b
         return false;
     };
     let drag = &registry.drags[index];
-    if drag.kind != v::vdrag::PATH_LIST_V1
-        || !super::codex_prompt::request_attachments(source, anchor, &drag.data, drag.preview.clone())
+    let Some(target) = codex_reference_target(drag) else { return false; };
+    if !super::codex_prompt::request_attachments(source, anchor, target, &drag.data, drag.preview.clone())
     {
         return false;
     }

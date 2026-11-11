@@ -5,6 +5,8 @@ mod gpu;
 mod font;
 #[path = "system/link.rs"]
 mod link;
+#[path = "system/keys.rs"]
+mod keys;
 mod helper;
 mod lifecycle;
 mod local_account;
@@ -1630,7 +1632,7 @@ impl Shell3 {
         } else if self.mode == Mode::ADM
             && matches!(
                 text.as_str(),
-                "cry" | "disc" | "ram" | "smp" | "net" | "gpu" | "vcpy" | "tlb" | "font" | "link"
+                "cry" | "disc" | "ram" | "smp" | "net" | "gpu" | "vcpy" | "tlb" | "font" | "link" | "keys"
             )
         {
             let frontend = self.tui_frontend();
@@ -1644,6 +1646,7 @@ impl Shell3 {
                 "vcpy" => vcpy::start(frontend),
                 "font" => font::start(frontend),
                 "link" => link::start(frontend),
+                "keys" => keys::start(frontend),
                 _ => {
                     let origin = output::DumpTarget(
                         self.active_matrix_slot

@@ -15,6 +15,9 @@ use trueos_fs::{
     access::{AccessDenied, AccessKeyDb, AppId, ContainerId, ContainerPolicy, GrantScope},
 };
 
+// Explicit host-managed grants are separate from provisioned ownership, so
+// revocation never removes a native owner/dependency grant.
+static ADMIN_KEY_DB: Mutex<AccessKeyDb> = Mutex::new(AccessKeyDb::new());
 static ACCESS_KEY_DB: Mutex<AccessKeyDb> = Mutex::new(AccessKeyDb::new());
 const MAX_WARNINGS_PER_VM: usize = 32;
 
@@ -23,7 +26,7 @@ const MAX_WARNINGS_PER_VM: usize = 32;
 pub(crate) fn authorize_record(vm_id: u8, key: RecordKey) -> Result<(), AccessDenied> {
     if key == RecordKey::Ffa { return Ok(()); }
     let subject = principal(vm_id).ok_or(AccessDenied::MissingIdentity)?;
-    ACCESS_KEY_DB.lock().check_file(subject.account, &subject.container, key)
+    authorize_principal_record(&subject, key)
 }
 
 /// Install only a durably provisioned owner/key relation. This trusted entry
@@ -124,12 +127,56 @@ static VM_BINDINGS: [Mutex<Option<Binding>>; crate::allcaps::hv::VM_ID_LIMIT] =
 pub(crate) fn configure_policy(update: impl FnOnce(&mut AccessKeyDb)) {
     crate::allocators::with_host_alloc_domain_strong(|| {
         update(&mut ACCESS_KEY_DB.lock());
+        *ADMIN_KEY_DB.lock() = AccessKeyDb::new();
         for slot in &VM_BINDINGS {
             if let Some(binding) = slot.lock().as_mut() {
                 binding.warnings.clear();
             }
         }
     });
+}
+
+/// Trusted System keys inspection; no guest ABI exposes these mutations.
+pub(crate) fn policy_snapshot() -> trueos_fs::access::PolicySnapshot {
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let mut state = ACCESS_KEY_DB.lock().snapshot();
+        let admin = ADMIN_KEY_DB.lock().snapshot();
+        for key in admin.keys { if !state.keys.contains(&key) { state.keys.push(key); } }
+        for (id, policy, members) in admin.containers {
+            if let Some((_, _, users)) = state.containers.iter_mut().find(|(c, _, _)| c == &id) {
+                for user in members { if !users.contains(&user) { users.push(user); } }
+            } else { state.containers.push((id, policy, members)); }
+        }
+        for grant in admin.grants { if !state.grants.contains(&grant) { state.grants.push(grant); } }
+        state
+    })
+}
+
+static LAUNCHED_APPS: Mutex<Vec<(ContainerId, Option<AccountId>)>> = Mutex::new(Vec::new());
+
+pub(crate) fn launched_apps() -> Vec<(ContainerId, Option<AccountId>)> {
+    crate::allocators::with_host_alloc_domain_strong(|| LAUNCHED_APPS.lock().clone())
+}
+
+/// System keys is currently unrestricted trusted host management. Its explicit
+/// grants admit the selected account to this app's default container only.
+pub(crate) fn install_admin_grants(grants: &[(AccountId, String, RecordKey)]) -> Result<(), AccessDenied> {
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let mut database = AccessKeyDb::new();
+        for (account, app, key) in grants {
+            let id = ContainerId::default_for_app(AppId::new(app.clone()));
+            match database.register_container(id.clone(), ContainerPolicy::Shared) {
+                Ok(()) | Err(trueos_fs::access::PolicyError::ContainerAlreadyRegistered) => {},
+                Err(_) => return Err(AccessDenied::UnknownContainer),
+            }
+            database.add_member(&id, *account).map_err(|_| AccessDenied::NotMember)?;
+            database.register_key(*key);
+            database.grant(*account, GrantScope::Container(id), *key)
+                .map_err(|_| AccessDenied::MissingGrant)?;
+        }
+        *ADMIN_KEY_DB.lock() = database;
+        Ok(())
+    })
 }
 
 /// Resolve the loader's path to an app-prefixed container identity. The bare
@@ -176,12 +223,18 @@ pub(crate) fn bind_launch(vm_id: u8, archive: &str, workspace: &str, account: Op
             vm_id, account.map(AccountId::raw));
         return;
     };
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let mut launched = LAUNCHED_APPS.lock();
+        let entry = (principal.container.clone(), principal.account);
+        if !launched.contains(&entry) { launched.push(entry); }
+    });
     let decision = {
         let mut database = ACCESS_KEY_DB.lock();
         // The existing Ffa header tag names the standard key. Registering its
         // identity grants neither membership nor file access to anyone.
         crate::allocators::with_host_alloc_domain_strong(|| database.register_key(RecordKey::Ffa));
         database.check_launch(principal.account, &principal.container)
+            .or_else(|reason| ADMIN_KEY_DB.lock().check_launch(principal.account, &principal.container).map_err(|_| reason))
     };
     if let Err(reason) = decision {
         warn_denial(vm_id, &principal, None, "launch", reason);
@@ -225,6 +278,7 @@ fn with_principal_at<T>(vm_id: u8, epoch: u64, check: impl FnOnce(&Principal) ->
 fn authorize_principal_record(subject: &Principal, key: RecordKey) -> Result<(), AccessDenied> {
     if key == RecordKey::Ffa { return Ok(()); }
     ACCESS_KEY_DB.lock().check_file(subject.account, &subject.container, key)
+        .or_else(|reason| ADMIN_KEY_DB.lock().check_file(subject.account, &subject.container, key).map_err(|_| reason))
 }
 
 pub(crate) fn authorize_record_at(vm_id: u8, epoch: u64, key: RecordKey) -> Result<(), AccessDenied> {
@@ -420,9 +474,11 @@ fn warn_denial_as(
 }
 
 fn audit_for_principal(vm_id: u8, principal: &Principal, key: RecordKey, operation: &'static str) {
-    let decision = ACCESS_KEY_DB
-        .lock()
-        .check_file(principal.account, &principal.container, key);
+    // Audit retains the legacy FFA policy diagnostic. Keyed records use the
+    // same native + explicit administrative policy as enforced file access.
+    let decision = if key == RecordKey::Ffa {
+        ACCESS_KEY_DB.lock().check_file(principal.account, &principal.container, key)
+    } else { authorize_principal_record(principal, key) };
     if let Err(reason) = decision {
         warn_denial(vm_id, principal, Some(key), operation, reason);
     }
@@ -437,7 +493,9 @@ pub(crate) fn audit_resume(vm_id: u8, actor: Option<AccountId>) {
     let decision =
         ACCESS_KEY_DB
             .lock()
-            .check_resume(actor, principal.account, &principal.container);
+            .check_resume(actor, principal.account, &principal.container)
+            .or_else(|reason| ADMIN_KEY_DB.lock()
+                .check_resume(actor, principal.account, &principal.container).map_err(|_| reason));
     if let Err(reason) = decision {
         warn_denial_as(vm_id, &principal, actor, None, "resume", reason);
     }

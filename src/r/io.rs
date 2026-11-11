@@ -83,6 +83,10 @@ pub mod kfs {
         wait_for_filesystem(crate::r::fs::request_broker::prepare_codex_sqlite(String::from(root), String::from(archive), account))
     }
 
+    pub(crate) fn load_access_policy() -> Result<()> {
+        wait_for_filesystem(crate::r::fs::request_broker::load_access_policy())
+    }
+
     pub(crate) fn prepare_private_app_files(root: &str, archive: &str, account: Option<trueos_crypto::AccountId>) -> Result<()> {
         wait_for_filesystem(crate::r::fs::request_broker::prepare_private_app_files(String::from(root), String::from(archive), account))
     }

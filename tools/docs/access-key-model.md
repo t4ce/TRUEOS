@@ -52,6 +52,44 @@ not attach a second key to a file. Splitting access between files that share a
 key requires assigning a distinct key through a trusted metadata transaction.
 There is no guest operation for inventing an account or granting itself a key.
 
+## System keys
+
+Open `keys` from the Shell3 System command group. This native host panel is
+currently unrestricted. It shows key row IDs, aliases and full references,
+workspace roots and owners, known user IDs, apps launched this boot, memberships,
+and effective user/app/key assignments. Arrow keys and PageUp/PageDown scroll;
+Escape returns to Shell3. `refresh` reloads the catalog.
+
+Use the command line at the bottom of the panel:
+
+```text
+grant apps/codex termdir
+alias 1 codex-workspace
+grant codex-workspace termdir
+revoke codex-workspace termdir
+```
+
+`KEY` accepts the displayed row number, a single-word alias, or a workspace root
+such as `apps/codex`. The example alias row `1` must be replaced with the Codex
+key's displayed row if different. Names may contain spaces, in which case use the
+row number or workspace root to select that key. Optional final `USER` is a
+numeric account ID; omitting it selects this terminal's captured account. For an
+anonymous terminal, supply the intended account ID from the table. Anonymous app
+runs still need to be relaunched under that account.
+
+App names are canonical lowercase strings, such as `termdir`, without `apps/`
+or `.bp`. An app need not be in AppDB or have launched yet. A grant admits that
+account to the named app's default container 0 and gives it the selected key;
+additional containers are outside this panel's initial scope. Already-running
+apps with that captured account see changes on their next filesystem operation.
+
+Aliases and administrative grants use versioned tables in the existing
+`users/configuration.redb` image. Saves share the workspace-provisioning lock,
+use a checked image replacement, and read back the result before changing live
+policy. Launch preparation restores saved grants before app entry. Revoking an
+administrative grant preserves independently provisioned owner or SQLite grants.
+FFA remains public and its accessibility cannot be revoked in this panel.
+
 ## Captured identity
 
 A human frontend normally receives an account after successful Cry sign-in, an
@@ -166,8 +204,8 @@ AppDB content hashes and recyclable VM IDs are not permission identities.
 The same user may start two Codex instances against the same stored workspace;
 they receive the same key. Separate workspaces can hold different persisted
 state while sharing the same AppDB code entry. The generic policy supports
-explicit app/container grants, but a permission-management UI, account-driven
-container selection, and broader app provisioning are future work. Existing
+explicit app/container grants. System keys manages default-container grants;
+account-driven container selection and broader app provisioning are future work. Existing
 public development apps do not acquire private-container launch requirements.
 
 `users/configuration.redb` is a separate durable image beside Cry profiles,

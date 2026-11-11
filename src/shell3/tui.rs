@@ -661,6 +661,16 @@ pub(super) fn cancel_native_attach(target: &MatrixTarget) {
         routes.changed(route.frontend);
     }
 }
+/// Station recording helpers consume only human input, even when their Shell3
+/// frame was admitted to AI interaction. Opening a helper is not a capture grant.
+pub(super) fn native_requires_human_input(frontend: u64, name: Option<&str>) -> bool {
+    ROUTES.lock().routes.iter().any(|route| {
+        route.frontend == Some(frontend) && Some(route.lease.name()) == name
+            && route.native.as_ref().is_some_and(|native| native.active)
+            && super::capture::recognizes(route.lease.name())
+    })
+}
+
 pub(super) fn native_slot(name: &str) -> bool {
     ROUTES
         .lock()

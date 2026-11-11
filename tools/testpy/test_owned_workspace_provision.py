@@ -143,10 +143,64 @@ fn bound_key(root:&str)->RecordKey{KEYS.lock().unwrap()[root]}
  assert!(!FILES.lock().unwrap().contains_key(&format!("{OLD}/db-0123456789abcdef.sqlite")));
  let events=EVENTS.lock().unwrap().clone();assert!(events.iter().rposition(|e|*e=="stamp").unwrap()<events.iter().position(|e|*e=="rename").unwrap());
  access_key_db::bind_launch(0,"sqlite.bp","apps/sqlite",Some(ALICE));access_key_db::bind_codex_sqlite(0).unwrap();assert_eq!(access_key_db::authorize_protected_workspace(0,bound_key(NEW)),Ok(()));
+ // Revoking an explicit administrative copy must preserve this native dependency grant.
+ for enabled in [true,false]{run(access_key_workspace::save_admin_change(&access_key_store::AdminChange::Grant{account:ALICE,app:"sqlite".into(),key:bound_key(NEW),enabled})).unwrap();}
+ assert_eq!(access_key_db::authorize_record(0,bound_key(NEW)),Ok(()));
+ assert_eq!(access_key_db::authorize_protected_workspace(0,bound_key(NEW)),Ok(()));
  let before=FILES.lock().unwrap().clone();KEYS.lock().unwrap().insert(OLD.into(),RecordKey::Ffa);
  assert_eq!(run(access_key_workspace::prepare_sqlite("sqlite.bp","apps/sqlite",Some(ALICE))).unwrap_err(),r::io::kfs::FsError::AlreadyExists);assert_eq!(*FILES.lock().unwrap(),before);
  assert_eq!(run(access_key_workspace::prepare_sqlite("sqlite.bp","apps/sqlite",Some(BOB))).unwrap_err(),r::io::kfs::FsError::PermissionDenied);assert_eq!(*FILES.lock().unwrap(),before);
  assert!(run(access_key_workspace::prepare_sqlite("other.bp","apps/other",Some(ALICE))).is_err());
+}
+
+#[path="@ROOT@/src/shell3/system/keys_model.rs"] mod keys_model;
+#[test]fn keys_command_resolves_rows_aliases_and_explicit_users(){
+ use keys_model::command;use access_key_store::AdminChange;
+ let keys=[RecordKey::Ffa,access_key_store::software_key([9;32]).unwrap()];
+ let aliases=vec![(keys[1],String::from("codex"))];
+ match command("grant codex termdir",&keys,&aliases,Some(ALICE)).unwrap().unwrap(){
+  AdminChange::Grant{account,app,key,enabled}=>{assert_eq!(account,ALICE);assert_eq!(app,"termdir");assert_eq!(key,keys[1]);assert!(enabled)},_=>panic!()
+ }
+ assert!(matches!(command("revoke 1 termdir 2",&keys,&aliases,None).unwrap(),Some(AdminChange::Grant{account:BOB,enabled:false,..})));
+ for text in ["grant 9 termdir", "grant 1 ../termdir", "grant 1 termdir 2 extra", "alias 1 123", "grant 1 apps/termdir"]{assert!(command(text,&keys,&aliases,Some(ALICE)).is_err(),"{text}");}
+ assert!(command("grant 1 termdir",&keys,&aliases,None).is_err());
+ assert!(command("refresh",&keys,&aliases,None).unwrap().is_none());
+}
+#[test]fn keys_input_handles_split_reports_text_crlf_utf8_backspace_and_escape(){
+ use keys_model::{Input,Event};let mut input=Input::default();
+ assert!(input.feed(b"alias 1 caf",0).is_empty());assert!(input.feed("é".as_bytes(),0).is_empty());
+ input.feed(&[127],0);assert_eq!(input.text(),"alias 1 caf");
+ assert!(input.feed(b"\x1b[",1).is_empty());assert_eq!(input.feed(b"B",2),vec![Event::Scroll(1)]);
+ assert!(input.feed(b"\x1b[<0;1;2M",2).is_empty());assert_eq!(input.text(),"alias 1 caf");
+ assert_eq!(input.feed(b"\r\n",3),vec![Event::Submit(String::from("alias 1 caf"))]);
+ input.feed(b"\x1b",4);assert_eq!(input.timeout(80_000_000),Some(Event::Quit));
+}
+#[test]fn keys_termdir_grant_is_durable_immediate_and_revocable(){
+ use access_key_store::{AdminChange,Catalog};reset();
+ prepare("apps/codex_keys_admin",Some(ALICE)).unwrap();let key=bound_key("apps/codex_keys_admin");
+ access_key_db::bind_launch(1,"termdir.bp","apps/termdir",Some(ALICE));
+ assert!(access_key_db::authorize_record(1,key).is_err());
+ let alias=AdminChange::Alias{key,name:"codex-workspace".into()};
+ run(access_key_workspace::save_admin_change(&alias)).unwrap();
+ let grant=AdminChange::Grant{account:ALICE,app:"termdir".into(),key,enabled:true};
+ run(access_key_workspace::save_admin_change(&grant)).unwrap();
+ assert_eq!(access_key_db::authorize_record(1,key),Ok(()));
+ let Catalog{workspaces,aliases,grants}=run(access_key_workspace::load_admin_catalog()).unwrap();
+ assert_eq!(workspaces.len(),1);assert_eq!(aliases,vec![(key,String::from("codex-workspace"))]);assert_eq!(grants,vec![(ALICE,String::from("termdir"),key)]);
+ access_key_db::configure_policy(|db|*db=trueos_fs::access::AccessKeyDb::new());
+ assert!(access_key_db::authorize_record(1,key).is_err());
+ run(access_key_workspace::load_admin_catalog()).unwrap();assert_eq!(access_key_db::authorize_record(1,key),Ok(()));
+ access_key_db::bind_launch(2,"termdir.bp","apps/termdir",Some(BOB));assert!(access_key_db::authorize_record(2,key).is_err());
+ access_key_db::bind_launch(3,"termdir.bp","apps/termdir_other",Some(ALICE));assert!(access_key_db::authorize_record(3,key).is_err());
+ let revoke=AdminChange::Grant{account:ALICE,app:"termdir".into(),key,enabled:false};
+ run(access_key_workspace::save_admin_change(&revoke)).unwrap();assert!(access_key_db::authorize_record(1,key).is_err());
+}
+#[test]fn keys_failed_publication_never_installs_grants_or_overwrites_other_tables(){
+ use access_key_store::AdminChange;reset();prepare("apps/codex_keys_fail",Some(ALICE)).unwrap();let key=bound_key("apps/codex_keys_fail");
+ access_key_db::bind_launch(1,"termdir.bp","apps/termdir",Some(ALICE));let before=FILES.lock().unwrap().clone();
+ FAIL_PUBLISH.store(true,Ordering::SeqCst);
+ assert!(run(access_key_workspace::save_admin_change(&AdminChange::Grant{account:ALICE,app:"termdir".into(),key,enabled:true})).is_err());
+ assert!(access_key_db::authorize_record(1,key).is_err());assert_eq!(*FILES.lock().unwrap(),before);
 }
 '''
 def main():

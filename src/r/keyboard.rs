@@ -158,6 +158,14 @@ impl KeyboardOutputRing {
 static KEYBOARD_OUTPUT_RING: Mutex<KeyboardOutputRing> = Mutex::new(KeyboardOutputRing::new());
 static KEYBOARD_PHYSICAL_OUTPUT_RING: Mutex<KeyboardOutputRing> =
     Mutex::new(KeyboardOutputRing::new());
+/// Capture both output rings before binding the shared AI keyboard to a frame.
+/// Events already emitted by a previous command cannot acquire the new grant.
+pub(crate) fn output_event_frontiers() -> (u32, u32) {
+    let output = KEYBOARD_OUTPUT_RING.lock().write_seq as u32;
+    let physical = KEYBOARD_PHYSICAL_OUTPUT_RING.lock().write_seq as u32;
+    (output, physical)
+}
+
 static KEYBOARD_OUTPUT_POP_SEQ: Mutex<u64> = Mutex::new(0);
 static NEXT_KEYBOARD_TEXT_BURST_ID: AtomicU32 = AtomicU32::new(1);
 

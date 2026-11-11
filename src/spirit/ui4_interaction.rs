@@ -194,6 +194,7 @@ static LILLY_IO: Mutex<LillyIoState> = Mutex::new(LillyIoState::new());
 
 struct ObservationCache {
     owner: Option<BlueprintUiOwner>,
+    permit: Option<crate::ui4::spirit_access::Permit>,
     window_id: u32,
     placement: Option<WindowPlacement>,
     broker_placement: Option<WindowPlacement>,
@@ -208,6 +209,7 @@ impl ObservationCache {
     const fn new() -> Self {
         Self {
             owner: None,
+            permit: None,
             window_id: 0,
             placement: None,
             broker_placement: None,
@@ -221,6 +223,7 @@ impl ObservationCache {
 
     fn clear(&mut self) {
         self.owner = None;
+        self.permit = None;
         self.window_id = 0;
         self.placement = None;
         self.broker_placement = None;
@@ -315,6 +318,7 @@ fn observed_input_window(
     }
     let window = selected_lilly_window()?;
     let cache = observation_slot(owner.vm)?.lock();
+    if !cache.permit.is_some_and(crate::ui4::spirit_access::valid) { return Err(ERROR_DENIED); }
     if !cache_belongs_to(&cache, owner) || !cache_matches_window(&cache, window) {
         return Err(ERROR_BAD_STATE);
     }
@@ -391,6 +395,8 @@ pub(crate) fn windows(owner: u8, out: &mut [u8]) -> isize {
     let selected = super::lilly_cursor::selection_source()
         .ok()
         .and_then(crate::ui4::selected_frame_for_source);
+    let all: Vec<_> = all.into_iter().filter(|window| crate::ui4::spirit_access::is_granted(
+        CursorFrameKey::new(window.owner, window.id))).collect();
     let truncated = all.len() > INVENTORY_WINDOW_LIMIT;
     let windows = all
         .into_iter()
@@ -515,8 +521,10 @@ pub(crate) fn focus(owner: u8, window_id: u64) -> i32 {
     };
     let result = (|| {
         let window = live_window(window_id)?;
+        let permit = crate::ui4::spirit_access::authorize(CursorFrameKey::new(window.owner, window.id)).ok_or(ERROR_DENIED)?;
         let source = super::lilly_cursor::selection_source().map_err(|_| ERROR_UNAVAILABLE)?;
         io.require_live()?;
+        if !crate::ui4::spirit_access::bind_input(source, io.keyboard.slot_id, permit, io.owner().vm, io.owner().run) { return Err(ERROR_DENIED); }
         crate::ui4::select_window_for_cursor(source, window.owner, window.id)
             .map_err(|_| ERROR_BAD_STATE)?;
         if let Ok(slot) = observation_slot(owner) {
@@ -537,6 +545,7 @@ pub(crate) fn observe_prepare(owner: u8) -> isize {
         io.require_live()?;
         slot.lock().clear();
         let window = selected_lilly_window()?;
+        let permit = crate::ui4::spirit_access::authorize(CursorFrameKey::new(window.owner, window.id)).ok_or(ERROR_DENIED)?;
         let observation = crate::ui4::capture_compact_window_observation(window)
             .map_err(|_| ERROR_UNAVAILABLE)?;
         if observation.png.len() > crate::ui4::COMPACT_WINDOW_OBSERVATION_MAX_PNG_BYTES {
@@ -563,7 +572,9 @@ pub(crate) fn observe_prepare(owner: u8) -> isize {
         let png_len = isize::try_from(observation.png.len()).map_err(|_| ERROR_UNAVAILABLE)?;
         let mut cache = slot.lock();
         io.require_live()?;
+        if !crate::ui4::spirit_access::valid(permit) { return Err(ERROR_DENIED); }
         cache.owner = Some(io.owner());
+        cache.permit = Some(permit);
         cache.window_id = observation.window_id.raw();
         cache.placement = Some(observation.placement);
         cache.broker_placement = Some(window.placement);
@@ -587,6 +598,7 @@ pub(crate) fn observe_metadata(owner: u8, out: &mut [u8]) -> isize {
         Err(error) => return error as isize,
     };
     let cache = slot.lock();
+    if !cache.permit.is_some_and(crate::ui4::spirit_access::valid) { return ERROR_DENIED as isize; }
     if !cache_belongs_to(&cache, identity) || cache.window_id == 0 || cache.metadata.is_empty() {
         return ERROR_BAD_STATE as isize;
     }
@@ -603,6 +615,7 @@ pub(crate) fn observe_read(owner: u8, offset: usize, out: &mut [u8]) -> isize {
         Err(error) => return error as isize,
     };
     let cache = slot.lock();
+    if !cache.permit.is_some_and(crate::ui4::spirit_access::valid) { return ERROR_DENIED as isize; }
     if !cache_belongs_to(&cache, identity) || cache.window_id == 0 || cache.png.is_empty() {
         return ERROR_BAD_STATE as isize;
     }
@@ -613,6 +626,17 @@ pub(crate) fn observe_read(owner: u8, offset: usize, out: &mut [u8]) -> isize {
     let copied = available.min(out.len());
     out[..copied].copy_from_slice(&cache.png[offset..offset + copied]);
     isize::try_from(copied).unwrap_or(ERROR_UNAVAILABLE as isize)
+}
+
+fn bind_observed_input(io: &LillyIoGuard, window: WindowSnapshot) -> Result<(), i32> {
+    let permit = observation_slot(io.owner().vm)?.lock().permit.ok_or(ERROR_DENIED)?;
+    let source = super::lilly_cursor::selection_source().map_err(|_| ERROR_UNAVAILABLE)?;
+    if !crate::ui4::spirit_access::valid(permit)
+        || !crate::ui4::spirit_access::bind_input(source, io.keyboard.slot_id, permit, io.owner().vm, io.owner().run)
+        || !crate::ui4::spirit_access::is_granted(CursorFrameKey::new(window.owner, window.id)) {
+        return Err(ERROR_DENIED);
+    }
+    Ok(())
 }
 
 fn normalized_axis(origin: i32, extent: u32, normalized: u16) -> Result<i32, i32> {
@@ -683,6 +707,7 @@ pub(crate) fn pointer(owner: u8, x: u16, y: u16, action: u32) -> i32 {
     };
     let result = (|| {
         let (window, placement) = observed_input_window(io.owner())?;
+        bind_observed_input(&io, window)?;
         if action == POINTER_ACTION_PRIMARY_CLICK && !window.interaction.receives_input {
             return Err(ERROR_BAD_STATE);
         }
@@ -833,7 +858,9 @@ pub(crate) fn type_text(owner: u8, bytes: &[u8]) -> i32 {
         Err(error) => return error,
     };
     match observed_input_window(io.owner()) {
-        Ok((window, _)) if window.interaction.receives_input => {}
+        Ok((window, _)) if window.interaction.receives_input => {
+            if let Err(error) = bind_observed_input(&io, window) { return error; }
+        }
         Ok(_) => return ERROR_BAD_STATE,
         Err(error) => return error,
     }
@@ -884,7 +911,9 @@ pub(crate) fn key(owner: u8, key: u32) -> i32 {
         Err(error) => return error,
     };
     match observed_input_window(io.owner()) {
-        Ok((window, _)) if window.interaction.receives_input => {}
+        Ok((window, _)) if window.interaction.receives_input => {
+            if let Err(error) = bind_observed_input(&io, window) { return error; }
+        }
         Ok(_) => return ERROR_BAD_STATE,
         Err(error) => return error,
     }

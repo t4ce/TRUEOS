@@ -183,6 +183,10 @@ fn runtime_mut_or_insert(
 }
 
 #[inline]
+pub(crate) fn cursor_event_frontier() -> u64 {
+    CURSOR_EVENT_RING.lock().write_seq
+}
+
 fn push_cursor_event(event: TrueosHidCursorEvent) {
     let mut ring = CURSOR_EVENT_RING.lock();
     ring.write_seq = ring.write_seq.wrapping_add(1);
@@ -854,7 +858,7 @@ pub unsafe extern "C" fn trueos_cabi_hid_hut_read_keyboards(
         return 0;
     }
     let out_slice = core::slice::from_raw_parts_mut(out, out_cap as usize);
-    hut::read_keyboards_snapshot(out_slice) as u32
+    crate::r::io::input_cabi::read_keyboard_snapshot_for_caller(out_slice) as u32
 }
 
 /// Rebase relative motion for exactly one HID cursor without a button event.

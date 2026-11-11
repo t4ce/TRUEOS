@@ -48,6 +48,10 @@ pub mod ui4 {
             panic!("visual-only route reached frame selection")
         }
     }
+    // This fixture tests visual routing; real grant policy has its own host suite.
+    pub mod spirit_access {
+        pub fn cursor_target_allowed(_:super::Ui4CursorSource,_:super::WindowTarget)->bool {true}
+    }
     pub mod context_menu {pub fn dismiss_for_source(_:super::Ui4CursorSource) {}}
     pub mod window_broker {pub fn note_window_focused(_:u8,_:u32)->Result<(),()> {Ok(())}}
     mod routing { use super::*; include!("routing.rs"); }

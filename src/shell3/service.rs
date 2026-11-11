@@ -663,6 +663,11 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
             for index in 0..owned_shells.len() {
                 if let Some(shell) = owned_shells.get_mut(index) {
                     if shell.show_handles_window(event.window) {
+                        if !crate::ui4::spirit_access::keyboard_is_human(&event.event)
+                            && super::tui::native_requires_human_input(shell.tui_frontend,
+                                shell.active_matrix_slot_name().as_deref()) {
+                            continue;
+                        }
                         if !super::tui::active(
                             shell.tui_frontend,
                             shell.active_matrix_slot_name().as_deref(),
@@ -696,6 +701,11 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
             let Some(event) = event else { break };
             for shell in &mut owned_shells.shells {
                 if shell.show_handles_window(event.window) {
+                    if !crate::ui4::spirit_access::cursor_is_human(event.source)
+                        && super::tui::native_requires_human_input(shell.tui_frontend,
+                            shell.active_matrix_slot_name().as_deref()) {
+                        continue;
+                    }
                     let scale = super::tui::font_scale_for_window(event.window)
                         .unwrap_or_else(|| shell.show.font_scale());
                     if super::tui::active(

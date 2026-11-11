@@ -126,3 +126,38 @@ pub(crate) async fn prepare_sqlite(archive: &str, workspace: &str, account: Opti
     crate::access_key_db::grant_codex_sqlite(archive, workspace, account)
         .map_err(|_| FsError::PermissionDenied)
 }
+
+/// BSP-only load before launch and System keys refresh. Shares provisioning's
+/// serialization so an alias/grant update cannot overwrite a new workspace.
+pub(crate) async fn load_admin_catalog() -> Result<crate::access_key_store::Catalog> {
+    let _guard = PREPARE.lock().await;
+    let Some(disk) = fs::primary_root_handle() else {
+        return Ok(crate::access_key_store::Catalog::default());
+    };
+    let image = fs::file_out_async(disk, CONFIGURATION_DB_PATH).await?;
+    let state = crate::access_key_store::catalog(image.as_deref().unwrap_or_default())
+        .map_err(|_| FsError::Device(crate::disc::block::Error::Corrupted))?;
+    crate::access_key_db::install_admin_grants(&state.grants).map_err(|_| FsError::PermissionDenied)?;
+    Ok(state)
+}
+
+pub(crate) async fn save_admin_change(change: &crate::access_key_store::AdminChange) -> Result<()> {
+    let _guard = PREPARE.lock().await;
+    let disk = fs::primary_root_handle().ok_or(FsError::NoRoot)?;
+    let image = fs::file_out_async(disk, CONFIGURATION_DB_PATH).await?;
+    let next = crate::access_key_store::edit_admin(image.as_deref().unwrap_or_default(), change)
+        .map_err(|_| FsError::BadPath)?;
+    if !fs::dir_create_all_async(disk, "users").await? { return Err(FsError::NoSpace); }
+    let digest = image.as_ref().map(|bytes| <[u8; 32]>::from(Sha256::digest(bytes)));
+    if !fs::file_in_typed_checked_async(disk, CONFIGURATION_DB_PATH, &next,
+        fs::ContentTypeId::BLOB, image.is_none(), digest, false).await
+        .map_err(|_| FsError::Device(crate::disc::block::Error::Io))? {
+        return Err(FsError::NoSpace);
+    }
+    if fs::file_out_async(disk, CONFIGURATION_DB_PATH).await?.as_deref() != Some(next.as_slice()) {
+        return Err(FsError::Device(crate::disc::block::Error::Io));
+    }
+    let state = crate::access_key_store::catalog(&next)
+        .map_err(|_| FsError::Device(crate::disc::block::Error::Corrupted))?;
+    crate::access_key_db::install_admin_grants(&state.grants).map_err(|_| FsError::PermissionDenied)
+}

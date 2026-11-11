@@ -16,7 +16,7 @@ use spin::Mutex;
 use trueos_time::{Duration, with_timeout};
 
 use super::{
-    OutputId, Ui4CursorSource, WindowId, WindowOwner, WindowPlacement, WindowSnapshot, WindowState,
+    CursorFrameKey, OutputId, Ui4CursorSource, WindowId, WindowOwner, WindowPlacement, WindowSnapshot, WindowState,
 };
 
 // Keep the existing input allowance alongside the trusted 32-marker budget.
@@ -210,6 +210,7 @@ pub(super) struct Ui4SpiritDockCircle {
 }
 
 pub(super) fn spirit_dock_circle() -> Option<Ui4SpiritDockCircle> {
+    if !super::drag_drop::codex_receiver_ready() { return None; }
     // marker_anchor reports the applied hardware-cursor-plane geometry, rather
     // than Spirit's queued destination. Its center is the cursor hotspot.
     let (_, _, left, top, width, height) = crate::spirit::marker_anchor()?;
@@ -259,6 +260,7 @@ pub(crate) struct Ui4SoftwareCursorVisual {
     pub(crate) context_menu: Option<(u32, u32)>,
     pub(crate) selection: Option<Ui4VisualRect>,
     pub(crate) dock_fields_visible: bool,
+    pub(super) spirit_dock_circle: Option<Ui4SpiritDockCircle>,
     pub(crate) dock_preview: Option<Ui4DockPreview>,
 }
 
@@ -345,6 +347,7 @@ struct CursorRoute {
     /// or jumping directly into a different field re-arms docking.
     secondary_restore_origin: Option<super::WindowDockTarget>,
     dock_fields_visible: bool,
+    spirit_dock_circle: Option<Ui4SpiritDockCircle>,
     dock_preview: Option<Ui4DockPreview>,
     context_menu: Option<(u32, u32)>,
     context_menu_owns_gesture: bool,
@@ -383,6 +386,7 @@ impl CursorRoute {
             secondary_dragged: false,
             secondary_restore_origin: None,
             dock_fields_visible: false,
+            spirit_dock_circle: None,
             dock_preview: None,
             context_menu: None,
             context_menu_owns_gesture: false,
@@ -404,6 +408,7 @@ impl CursorRoute {
         self.capture = None;
         self.keyboard_source = None;
         self.secondary_anchor = None;
+        self.spirit_dock_circle = None;
         self.secondary_start_placement = None;
         self.secondary_dragged = false;
         self.secondary_restore_origin = None;
@@ -449,7 +454,15 @@ impl CursorRoute {
 
 struct OwnerQueue {
     owner: WindowOwner,
-    events: Vec<Ui4InputEvent, MAX_OWNER_EVENTS>,
+    events: Vec<QueuedOwnerEvent, MAX_OWNER_EVENTS>,
+}
+
+/// Retain the permit that admitted the event, rather than borrowing a later
+/// binding for the same shared input device after revocation or regrant.
+#[derive(Clone, Copy)]
+struct QueuedOwnerEvent {
+    event: Ui4InputEvent,
+    stamp: super::spirit_access::InputStamp,
 }
 
 #[derive(Copy, Clone)]
@@ -562,6 +575,9 @@ impl InputBroker {
         if self.cursors[cursor_index].visual_only || visual_only_cursor(source) {
             return false;
         }
+        if next.is_some_and(|target| !super::spirit_access::cursor_target_allowed(source, target.cursor_frame_key())) {
+            return false;
+        }
         let color = self.cursors[cursor_index].color();
         let change = super::cursor_frame_inout::select_frame(
             next.map(WindowTarget::cursor_frame_key),
@@ -646,7 +662,7 @@ impl InputBroker {
         (retired_routes, retired_keyboards)
     }
 
-    fn process_cursor(&mut self, event: crate::usb2::hid::TrueosHidCursorEvent) {
+    fn process_cursor(&mut self, event: crate::usb2::hid::TrueosHidCursorEvent, ring_sequence: u64) {
         if event.flags & crate::usb2::hid::HID_CURSOR_EVENT_FLAG_DEVICE_LOST != 0 {
             let (routes, keyboards) = self.retire_hid_slot(event.controller_id, event.slot_id);
             crate::log_info!(target: "ui4";
@@ -714,6 +730,10 @@ impl InputBroker {
             self.cursors[index].x,
             self.cursors[index].y,
         );
+        if !super::spirit_access::cursor_is_human(source) {
+            self.process_restricted_cursor(index, event, x, y, buttons_down, pressed, released, dx, dy, ring_sequence);
+            return;
+        }
         // The shared handle takes precedence over frame hit testing. Other
         // sources can keep using UI4 but cannot take this gesture's ownership.
         let quad = current_quad_layout(width, height);
@@ -812,12 +832,8 @@ impl InputBroker {
                     signed_local(y, window.presentation_placement.y),
                 )
             });
-            let on_lilly = crate::spirit::marker_anchor().is_some_and(
-                |(_, _, left, top, width, height)| {
-                    i64::from(x) >= i64::from(left) && i64::from(y) >= i64::from(top)
-                        && i64::from(x) < i64::from(left) + i64::from(width)
-                        && i64::from(y) < i64::from(top) + i64::from(height)
-                });
+            let on_lilly = self.cursors[index].spirit_dock_circle
+                .is_some_and(|circle| spirit_circle_contains(circle, x, y));
             let on_prompt = hit.is_some_and(|window| window.owner == WindowOwner::CODEX_PROMPT_SERVICE);
             if !(on_lilly || on_prompt)
                 || !super::drag_drop::release_to_codex(source, (x, y))
@@ -1044,6 +1060,7 @@ impl InputBroker {
         }
         if pressed & SECONDARY_BUTTON_MASK != 0 {
             self.cursors[index].secondary_anchor = Some((x, y));
+            self.cursors[index].spirit_dock_circle = spirit_dock_circle();
             self.cursors[index].secondary_start_placement = hit.map(|window| window.placement);
             self.cursors[index].secondary_dragged = false;
             self.cursors[index].secondary_restore_origin = None;
@@ -1200,17 +1217,19 @@ impl InputBroker {
             // it came from. Leaving that field, including a direct absolute
             // jump into another one, re-arms docking for the same gesture.
             if let Some(origin) = self.cursors[index].secondary_restore_origin
-                && dock_target_at(x, y, width, height) != Some(origin)
+                && dock_target_at(x, y, width, height, self.cursors[index].spirit_dock_circle) != Some(origin)
             {
                 self.cursors[index].secondary_restore_origin = None;
             }
-            let docking_gesture = target.interaction.maximizable
+            let docking_gesture = target.interaction.movable
                 && target.dock_target.is_none()
                 && self.cursors[index].secondary_restore_origin.is_none()
                 && (self.cursors[index].secondary_dragged || secondary_drop);
             let dock_target = docking_gesture
-                .then(|| dock_target_at(x, y, width, height))
-                .flatten();
+                .then(|| dock_target_at(x, y, width, height, self.cursors[index].spirit_dock_circle))
+                .flatten()
+                .filter(|dock| *dock != super::WindowDockTarget::SpiritAccess || super::drag_drop::codex_receiver_ready())
+                .filter(|dock| target.interaction.maximizable || *dock == super::WindowDockTarget::SpiritAccess);
             if docking_gesture && buttons_down & SECONDARY_BUTTON_MASK != 0 {
                 self.cursors[index].dock_fields_visible = true;
                 if let Some(dock_target) = dock_target {
@@ -1261,6 +1280,7 @@ impl InputBroker {
                 let route = &mut self.cursors[index];
                 route.capture = None;
                 route.secondary_anchor = None;
+                route.spirit_dock_circle = None;
                 route.secondary_start_placement = None;
                 route.secondary_restore_origin = None;
                 route.secondary_dragged = false;
@@ -1484,15 +1504,91 @@ impl InputBroker {
         self.cursors[index].y = y;
         self.cursors[index].buttons_down = event.buttons_down;
         if secondary_released {
+            self.cursors[index].spirit_dock_circle = None;
             self.cursors[index].secondary_start_placement = None;
             self.cursors[index].secondary_restore_origin = None;
             self.cursors[index].dock_fields_visible = false;
             self.cursors[index].dock_preview = None;
         }
         if buttons_down == 0 {
+            self.cursors[index].spirit_dock_circle = None;
             self.cursors[index].capture = None;
             self.cursors[index].suppress_context_menu_open = false;
         }
+    }
+
+    /// AI/remote input never enters desktop menus, global dock actions, capture
+    /// hotkeys or resize handles. Its whole route stays on an admitted frame.
+    #[allow(clippy::too_many_arguments)]
+    fn process_restricted_cursor(&mut self, index: usize,
+        event: crate::usb2::hid::TrueosHidCursorEvent, x: u32, y: u32,
+        buttons_down: u32, pressed: u32, released: u32, dx: i32, dy: i32, ring_sequence: u64,
+    ) {
+        let source = self.cursors[index].source;
+        let (combo_id, vcursor) = cursor_hut_metadata(source);
+        let target = self.cursors[index].capture.and_then(window_snapshot_for_target)
+            .or_else(|| topmost_window_at(x, y));
+        let route = &mut self.cursors[index];
+        route.x = x; route.y = y; route.buttons_down = buttons_down;
+        route.visible_after_motion = true;
+        route.context_menu = None; route.dock_fields_visible = false; route.dock_preview = None;
+        let Some(mut target) = target.filter(|target| super::spirit_access::cursor_target_allowed(
+            source, WindowTarget::from(*target).cursor_frame_key())) else {
+            self.cursors[index].capture = None;
+            return;
+        };
+        let key = WindowTarget::from(target).cursor_frame_key();
+        if !super::spirit_access::cursor_sequence_allowed(source, key, ring_sequence) { return; }
+        if pressed != 0 && self.select_frame(index, Some(WindowTarget::from(target)), combo_id, vcursor) {
+            self.cursors[index].absorb_select = true;
+        }
+        if self.cursors[index].absorb_select {
+            if buttons_down == 0 { self.cursors[index].absorb_select = false; }
+            return;
+        }
+        if super::selected_frame_for_source(source) != Some(key) { return; }
+        if pressed != 0 { self.cursors[index].capture = Some(WindowTarget::from(target)); }
+        // A permitted frame may be moved, without opening global docking fields.
+        if target.interaction.movable && buttons_down & SECONDARY_BUTTON_MASK != 0
+            && (dx != 0 || dy != 0) {
+            if let Some((width, height)) = super::output_dimensions()
+                && let Some(next) = translated_frame_placement(target.placement, dx, dy, width, height)
+                && super::move_window(target.owner, target.id, next).is_ok() {
+                target = window_snapshot_for_target(WindowTarget::from(target)).unwrap_or(target);
+            }
+        }
+        if target.interaction.receives_input {
+            let local_x = signed_local(x, target.presentation_placement.x);
+            let local_y = signed_local(y, target.presentation_placement.y);
+            enqueue_owner_event(target.owner, Ui4InputEvent::Pointer(Ui4PointerEvent {
+                source, window: target.id, x, y, local_x, local_y, dx, dy,
+                wheel: event.wheel, buttons_down, buttons_pressed: pressed,
+                buttons_released: released, combo_id, vcursor,
+            }));
+            for (changed_buttons, phase) in [(pressed, Ui4ButtonPhase::Down), (released, Ui4ButtonPhase::Up)] {
+                if changed_buttons != 0 {
+                    enqueue_owner_event(target.owner, Ui4InputEvent::Button(Ui4ButtonEvent {
+                        source, window: target.id, phase, changed_buttons, buttons_down,
+                        x, y, local_x, local_y, combo_id, vcursor,
+                    }));
+                }
+            }
+        }
+        if buttons_down == 0 { self.cursors[index].capture = None; }
+    }
+
+    fn process_restricted_keyboard(&mut self, event: crate::r::keyboard::TrueosKeyboardOutputEvent) {
+        let (combo_id, _) = keyboard_hut_metadata(&event);
+        // An unpaired AI keyboard cannot borrow the human's recent selector.
+        if combo_id == 0 { return; }
+        let Some(index) = self.keyboard_route_index(&event, combo_id, true) else { return; };
+        let Some(frame) = super::selected_frame_for_source(self.cursors[index].source) else { return; };
+        if !super::spirit_access::keyboard_target_allowed(&event, frame)
+            || !super::spirit_access::cursor_target_allowed(self.cursors[index].source, frame) { return; }
+        let Some(window) = window_snapshot_for_target(WindowTarget::from(frame)) else { return; };
+        if !window.interaction.receives_input { return; }
+        self.cursors[index].keyboard_source = Some(event.into());
+        enqueue_owner_event(frame.owner, Ui4InputEvent::Keyboard(Ui4KeyboardEvent { window: frame.window, event }));
     }
 
     fn retire_keyboard_source(
@@ -1529,6 +1625,10 @@ impl InputBroker {
                 event.ep_target,
                 routes
             );
+            return;
+        }
+        if !super::spirit_access::keyboard_is_human(&event) {
+            self.process_restricted_keyboard(event);
             return;
         }
         // Own Escape through release: the normal selected-frame path also
@@ -1788,10 +1888,12 @@ impl InputBroker {
         }) else {
             return;
         };
-        if !window.interaction.receives_input {
+        if !window.interaction.receives_input
+            || !super::spirit_access::keyboard_target_allowed(&event, key)
+            || !super::spirit_access::cursor_target_allowed(route_source, key) {
             return;
         }
-        if event.key_code == 0x19 && event.modifiers & 0x11 != 0 {
+        if super::spirit_access::keyboard_is_human(&event) && event.key_code == 0x19 && event.modifiers & 0x11 != 0 {
             super::blueprint_ui4::clipboard_api::trusted_paste(key.owner, key.window);
         }
         let routed = Ui4KeyboardEvent {
@@ -1864,6 +1966,8 @@ impl InputBroker {
             .cursors
             .iter()
             .filter(|route| super::cursor_frame_inout::source_selected(route.source))
+            .filter(|route| super::selected_frame_for_source(route.source) == Some(target.cursor_frame_key())
+                && super::spirit_access::cursor_target_allowed(route.source, target.cursor_frame_key()))
             .filter_map(|route| {
                 route
                     .keyboard_source
@@ -1877,6 +1981,7 @@ impl InputBroker {
                 keyboard.controller_id == source.controller_id
                     && keyboard.slot_id == source.slot_id
                     && keyboard.ep_target == source.ep_target
+                    && super::spirit_access::keyboard_state_target_allowed(keyboard, target.cursor_frame_key())
             })
     }
 
@@ -1892,6 +1997,7 @@ impl InputBroker {
         self.cursors
             .iter()
             .filter(|route| !route.visual_only)
+            .filter(|route| super::spirit_access::cursor_target_allowed(route.source, target.cursor_frame_key()))
             .filter_map(|route| {
                 let (combo_id, vcursor) = cursor_hut_metadata(route.source);
                 let keyboard = if combo_id != 0 {
@@ -1911,13 +2017,19 @@ impl InputBroker {
                             .cloned()
                     })
                 };
+                // Route discovery may describe other human cursors, but only
+                // the frame selected by this route receives its keyboard data.
+                // Otherwise a guest could poll key state typed into another app.
+                let selected_for_window = super::selected_frame_for_source(route.source)
+                    == Some(target.cursor_frame_key());
+                let keyboard = keyboard.filter(|keyboard| selected_for_window
+                    && super::spirit_access::keyboard_state_target_allowed(keyboard, target.cursor_frame_key()));
                 Some(Ui4WindowInputRoute {
                     source: route.source,
                     combo_id,
                     color: route.color(),
                     vcursor,
-                    selected_for_window: super::selected_frame_for_source(route.source)
-                        == Some(target.cursor_frame_key()),
+                    selected_for_window,
                     app_focus,
                     keyboard,
                 })
@@ -1945,8 +2057,9 @@ impl InputBroker {
             }
             cursor_activity = true;
             self.cursor_read_seq = next;
-            for event in cursor_events.iter().take(wrote).copied() {
-                self.process_cursor(event);
+            let first_sequence = next - wrote as u64 + 1;
+            for (offset, event) in cursor_events.iter().take(wrote).copied().enumerate() {
+                self.process_cursor(event, first_sequence + offset as u64);
             }
             if wrote < cursor_events.len() {
                 break;
@@ -2027,12 +2140,16 @@ impl InputBroker {
                     glyph: metadata.and_then(|visual| visual.glyph),
                     icon: super::Ui4CursorIcon::Default, custom_cursor: None,
                     stepped_cell: None, context_menu: None, selection: None,
-                    dock_fields_visible: false, dock_preview: None,
+                    dock_fields_visible: false, spirit_dock_circle: None, dock_preview: None,
                 });
                 continue;
             }
             let (x, y, icon, custom_cursor, stepped_cell) = cursor_visual_presentation(route);
             let drag_preview = super::drag_drop::cursor_preview(route.source);
+            let reference_drag = super::drag_drop::codex_reference_drag(route.source);
+            let spirit_dock_circle = (route.dock_fields_visible || reference_drag)
+                .then_some(route.spirit_dock_circle).flatten()
+                .filter(|_| super::drag_drop::codex_receiver_ready());
             let selection = route
                 .selection_anchor
                 .filter(|_| drag_preview.is_none())
@@ -2053,6 +2170,7 @@ impl InputBroker {
                 stepped_cell,
                 context_menu: route.context_menu,
                 dock_fields_visible: route.dock_fields_visible,
+                spirit_dock_circle,
                 dock_preview: route.dock_preview,
                 selection,
             });
@@ -2344,11 +2462,12 @@ pub(crate) fn take_owner_input_events(owner: WindowOwner) -> Vec<Ui4InputEvent, 
     };
     let mut events = Vec::new();
     core::mem::swap(&mut events, &mut queue.events);
-    for event in events {
+    for queued in events {
+        if !queued_owner_event_allowed(owner, &queued) { continue; }
         if out.is_full() {
-            let _ = queue.events.push(event);
+            let _ = queue.events.push(queued);
         } else {
-            let _ = out.push(event);
+            let _ = out.push(queued.event);
         }
     }
     out
@@ -2382,6 +2501,7 @@ pub(super) fn drag_source(frame: super::CursorFrameKey) -> Option<Ui4CursorSourc
         .find(|route| {
             route.buttons_down & PRIMARY_BUTTON_MASK != 0
                 && super::selected_frame_for_source(route.source) == Some(frame)
+                && super::spirit_access::cursor_target_allowed(route.source, frame)
                 && !route.absorb_select
         })
         .map(|route| route.source)
@@ -2396,6 +2516,7 @@ pub(super) fn claim_drag_gesture(source: Ui4CursorSource) {
         .find(|route| route.source == source)
     {
         route.selection_anchor = None;
+        route.spirit_dock_circle = spirit_dock_circle();
     }
 }
 
@@ -2505,7 +2626,10 @@ pub(crate) fn select_window_for_cursor(
     owner: WindowOwner,
     window: WindowId,
 ) -> Result<bool, Ui4ProgrammaticSelectionError> {
-    if visual_only_cursor(source) { return Err(Ui4ProgrammaticSelectionError::NotReady); }
+    if visual_only_cursor(source)
+        || !super::spirit_access::cursor_target_allowed(source, CursorFrameKey::new(owner, window)) {
+        return Err(Ui4ProgrammaticSelectionError::NotReady);
+    }
     let snapshot = super::window_broker::window_snapshot(owner, window)
         .ok_or(Ui4ProgrammaticSelectionError::NotFound)?;
     if snapshot.state != WindowState::Ready || !snapshot.placement.visible {
@@ -2537,7 +2661,10 @@ pub(crate) fn reselect_window_for_cursor(
     owner: WindowOwner,
     window: WindowId,
 ) -> Result<bool, Ui4ProgrammaticSelectionError> {
-    if visual_only_cursor(source) { return Err(Ui4ProgrammaticSelectionError::NotReady); }
+    if visual_only_cursor(source)
+        || !super::spirit_access::cursor_target_allowed(source, CursorFrameKey::new(owner, window)) {
+        return Err(Ui4ProgrammaticSelectionError::NotReady);
+    }
     let snapshot = super::window_broker::window_snapshot(owner, window)
         .ok_or(Ui4ProgrammaticSelectionError::NotFound)?;
     if snapshot.state != WindowState::Ready || !snapshot.placement.visible {
@@ -2563,7 +2690,10 @@ pub(crate) fn select_window_for_cursor_at(
     x: u32,
     y: u32,
 ) -> Result<bool, Ui4ProgrammaticSelectionError> {
-    if visual_only_cursor(source) { return Err(Ui4ProgrammaticSelectionError::NotReady); }
+    if visual_only_cursor(source)
+        || !super::spirit_access::cursor_target_allowed(source, CursorFrameKey::new(owner, window)) {
+        return Err(Ui4ProgrammaticSelectionError::NotReady);
+    }
     let snapshot = super::window_broker::window_snapshot(owner, window)
         .ok_or(Ui4ProgrammaticSelectionError::NotFound)?;
     if snapshot.state != WindowState::Ready || !snapshot.placement.visible {
@@ -2641,13 +2771,21 @@ fn enqueue_pan_event(
 
 struct PhysicalOwnerQueue {
     owner: WindowOwner,
-    events: Vec<Ui4KeyboardEvent, MAX_OWNER_EVENTS>,
+    events: Vec<QueuedKeyboardEvent, MAX_OWNER_EVENTS>,
     reset: bool,
+}
+
+#[derive(Clone, Copy)]
+struct QueuedKeyboardEvent {
+    event: Ui4KeyboardEvent,
+    stamp: super::spirit_access::InputStamp,
 }
 static PHYSICAL_OWNER_QUEUES: Mutex<Vec<PhysicalOwnerQueue, MAX_OWNER_QUEUES>> =
     Mutex::new(Vec::new());
 
 fn enqueue_physical_owner_event(owner: WindowOwner, event: Ui4KeyboardEvent) {
+    let Some(stamp) = super::spirit_access::stamp_keyboard(&event.event,
+        CursorFrameKey::new(owner, event.window)) else { return; };
     if super::window_broker::collapse_state(owner, event.window) == Some(true) {
         return;
     }
@@ -2672,7 +2810,7 @@ fn enqueue_physical_owner_event(owner: WindowOwner, event: Ui4KeyboardEvent) {
         queue.events.clear();
         queue.reset = true;
     }
-    let _ = queue.events.push(event);
+    let _ = queue.events.push(QueuedKeyboardEvent { event, stamp });
 }
 
 pub(super) fn take_physical_owner_events(
@@ -2682,17 +2820,60 @@ pub(super) fn take_physical_owner_events(
     let Some(queue) = queues.iter_mut().find(|queue| queue.owner == owner) else {
         return (false, Vec::new());
     };
-    (core::mem::take(&mut queue.reset), core::mem::take(&mut queue.events))
+    let reset = core::mem::take(&mut queue.reset);
+    let events = core::mem::take(&mut queue.events);
+    let mut out = Vec::new();
+    for queued in events {
+        let frame = CursorFrameKey::new(owner, queued.event.window);
+        if super::spirit_access::stamp_valid(queued.stamp, frame)
+            && super::spirit_access::keyboard_target_allowed(&queued.event.event, frame) {
+            let _ = out.push(queued.event);
+        }
+    }
+    (reset, out)
+}
+
+fn owner_event_stamp(owner: WindowOwner, event: &Ui4InputEvent) -> Option<super::spirit_access::InputStamp> {
+    match event {
+        Ui4InputEvent::Pointer(event) => super::spirit_access::stamp_cursor(event.source, CursorFrameKey::new(owner, event.window)),
+        Ui4InputEvent::Button(event) => super::spirit_access::stamp_cursor(event.source, CursorFrameKey::new(owner, event.window)),
+        Ui4InputEvent::Pan(event) => super::spirit_access::stamp_cursor(event.source, CursorFrameKey::new(owner, event.window)),
+        Ui4InputEvent::Keyboard(event) => super::spirit_access::stamp_keyboard(&event.event, CursorFrameKey::new(owner, event.window)),
+        Ui4InputEvent::Resize(_) => None,
+    }
+}
+
+fn queued_owner_event_allowed(owner: WindowOwner, queued: &QueuedOwnerEvent) -> bool {
+    let window = match &queued.event {
+        Ui4InputEvent::Pointer(event) => event.window,
+        Ui4InputEvent::Button(event) => event.window,
+        Ui4InputEvent::Pan(event) => event.window,
+        Ui4InputEvent::Keyboard(event) => event.window,
+        Ui4InputEvent::Resize(_) => return false,
+    };
+    super::spirit_access::stamp_valid(queued.stamp, CursorFrameKey::new(owner, window))
+        && owner_event_allowed(owner, &queued.event)
+}
+
+fn owner_event_allowed(owner: WindowOwner, event: &Ui4InputEvent) -> bool {
+    match event {
+        Ui4InputEvent::Pointer(event) => super::spirit_access::cursor_target_allowed(event.source, CursorFrameKey::new(owner, event.window)),
+        Ui4InputEvent::Button(event) => super::spirit_access::cursor_target_allowed(event.source, CursorFrameKey::new(owner, event.window)),
+        Ui4InputEvent::Pan(event) => super::spirit_access::cursor_target_allowed(event.source, CursorFrameKey::new(owner, event.window)),
+        Ui4InputEvent::Keyboard(event) => super::spirit_access::keyboard_target_allowed(&event.event, CursorFrameKey::new(owner, event.window)),
+        Ui4InputEvent::Resize(_) => true,
+    }
 }
 
 fn enqueue_owner_event(owner: WindowOwner, event: Ui4InputEvent) {
+    if let Ui4InputEvent::Resize(incoming) = event {
+        enqueue_owner_resize(owner, incoming);
+        return;
+    }
+    let Some(stamp) = owner_event_stamp(owner, &event) else { return; };
     if let Ui4InputEvent::Keyboard(key) = event
         && super::window_broker::collapse_state(owner, key.window) == Some(true)
     {
-        return;
-    }
-    if let Ui4InputEvent::Resize(incoming) = event {
-        enqueue_owner_resize(owner, incoming);
         return;
     }
     let mut queues = OWNER_QUEUES.lock();
@@ -2712,11 +2893,12 @@ fn enqueue_owner_event(owner: WindowOwner, event: Ui4InputEvent) {
     };
     let queue = &mut queues[queue_index].events;
     if let Some(queued) = queue.last_mut() {
-        if coalesce_owner_state_sample(queued, event) {
+        if queued.stamp == stamp && coalesce_owner_state_sample(&mut queued.event, event) {
             return;
         }
     }
-    if queue.push(event).is_ok() {
+    let queued = QueuedOwnerEvent { event, stamp };
+    if queue.push(queued).is_ok() {
         return;
     }
 
@@ -2728,11 +2910,11 @@ fn enqueue_owner_event(owner: WindowOwner, event: Ui4InputEvent) {
     // text frontend need the complete signed wheel distance, not every raw
     // HID report as a separately queued event.
     if !owner_event_is_state_sample(&event)
-        && let Some(index) = queue.iter().position(owner_event_is_state_sample)
+        && let Some(index) = queue.iter().position(|queued| owner_event_is_state_sample(&queued.event))
     {
         let evicted = queue.remove(index);
-        note_owner_queue_drop(owner, evicted, "evict-state-for-transition");
-        if queue.push(event).is_ok() {
+        note_owner_queue_drop(owner, evicted.event, "evict-state-for-transition");
+        if queue.push(queued).is_ok() {
             return;
         }
     }
@@ -3269,12 +3451,10 @@ fn dock_zones_with_reference(
 }
 
 fn dock_target_at(
-    x: u32,
-    y: u32,
-    screen_width: u32,
-    screen_height: u32,
+    x: u32, y: u32, screen_width: u32, screen_height: u32,
+    spirit_circle: Option<Ui4SpiritDockCircle>,
 ) -> Option<super::WindowDockTarget> {
-    if spirit_dock_circle().is_some_and(|circle| spirit_circle_contains(circle, x, y)) {
+    if spirit_circle.is_some_and(|circle| spirit_circle_contains(circle, x, y)) {
         return Some(super::WindowDockTarget::SpiritAccess);
     }
     dock_target_at_in_zones(x, y, &dock_zones(screen_width, screen_height))
@@ -3738,6 +3918,7 @@ mod tests {
     use super::{
         DesktopContextMenuAction, Ui4CursorSource, Ui4InputEvent, Ui4PointerEvent, WindowId,
         coalesce_owner_state_sample, desktop_context_menu_action_at, dock_target_at_in_zones,
+        Ui4SpiritDockCircle, spirit_circle_contains, spirit_circle_row_span,
         dock_zone_column_span, dock_zone_contains, dock_zone_metrics, dock_zone_row_span,
         dock_zones_with_reference, owner_event_is_state_sample, resize_epoch_is_newer,
     };
@@ -3817,6 +3998,32 @@ mod tests {
         assert!(!resize_epoch_is_newer(3, 3));
         assert!(resize_epoch_is_newer(1, u64::MAX));
         assert!(!resize_epoch_is_newer(u64::MAX, 1));
+    }
+
+    #[test]
+    fn dock_spirit_circle_has_a_150_pixel_radius() {
+        let circle = Ui4SpiritDockCircle { center_x: 500, center_y: 400, radius: 150 };
+        for (x, y) in [(500, 400), (350, 400), (650, 400), (500, 250), (500, 550), (590, 520)] {
+            assert!(spirit_circle_contains(circle, x, y));
+        }
+        for (x, y) in [(349, 400), (651, 400), (500, 249), (500, 551), (650, 550)] {
+            assert!(!spirit_circle_contains(circle, x, y));
+        }
+    }
+
+    #[test]
+    fn dock_spirit_circle_paint_matches_hitbox_at_screen_edges() {
+        for (center_x, center_y) in [(-100, -40), (0, 0), (320, 240), (639, 479), (900, 700)] {
+            let circle = Ui4SpiritDockCircle { center_x, center_y, radius: 150 };
+            for y in 0..480 {
+                let span = spirit_circle_row_span(circle, y, 640);
+                for x in 0..640 {
+                    let painted = span.is_some_and(|span| x >= span.x && x < span.x + span.width);
+                    assert_eq!(painted, spirit_circle_contains(circle, x, y), "center={center_x},{center_y} pixel={x},{y}");
+                }
+            }
+            assert!(spirit_circle_row_span(circle, 0, 0).is_none());
+        }
     }
 
     #[test]

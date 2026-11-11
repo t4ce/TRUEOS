@@ -47,6 +47,7 @@ def harness_source():
         "dock_zone_row_span", "dock_zone_column_span", "last_true_prefix", "first_true_suffix",
         "dock_zone_local_contains", "normalized_ellipse_contains", "visual_rect_contains",
         "Ui4VisualRect", "Ui4DockZone",
+        "Ui4SpiritDockCircle", "spirit_circle_contains", "spirit_circle_row_span",
     ]
     geometry_tests = "\n".join(re.findall(
         r"    #\[test\]\n    fn (?:dock_|bottom_dock_).*?^    }\n",

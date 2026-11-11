@@ -213,6 +213,7 @@ pub(crate) fn request_release_vm(vm_id: u8) -> usize {
 }
 
 enum Request {
+    LoadAccessPolicy { id: u64, completion: Completion<()> },
     PreparePrivateAppFiles {
         id: u64,
         root: String,
@@ -362,6 +363,7 @@ impl Request {
             Self::WriteFileChunk { .. }
             | Self::WriteFileFinish { .. }
             | Self::WriteFileAbort { .. }
+            | Self::LoadAccessPolicy { .. }
             | Self::PrepareCodexSqlite { .. }
             | Self::PreparePrivateAppFiles { .. }
             | Self::PrepareVolatileFiles { .. }
@@ -381,6 +383,7 @@ impl Request {
 
     fn metadata(&self) -> (u64, &'static str) {
         match self {
+            Self::LoadAccessPolicy { id, .. } => (*id, "load-access-policy"),
             Self::PreparePrivateAppFiles { id, .. } => (*id, "prepare-private-app-files"),
             Self::PrepareVolatileFiles { id, .. } => (*id, "prepare-volatile-files"),
             Self::PrepareCodexSqlite { id, .. } => (*id, "prepare-codex-sqlite"),
@@ -473,6 +476,10 @@ pub fn read_file(
         path,
         completion,
     })
+}
+
+pub(crate) fn load_access_policy() -> core::result::Result<FsResult<()>, BlockingRequestError> {
+    submit(|id, completion| Request::LoadAccessPolicy { id, completion })
 }
 
 pub(crate) fn prepare_volatile_files(
@@ -755,6 +762,10 @@ async fn process_request(owned: OwnedRequest) {
         crate::access_key_db::audit_path(vm, disk, path, operation, create).await;
     }
     match request {
+        Request::LoadAccessPolicy { id, completion } => {
+            let result = crate::access_key_workspace::load_admin_catalog().await.map(|_| ());
+            finish(id, "load-access-policy", completion, result, &mut progress);
+        }
         Request::PreparePrivateAppFiles { id, root, archive, account, completion } => {
             let result = crate::access_key_workspace::prepare_persistent(&archive, &root, account).await;
             finish(id, "prepare-private-app-files", completion, result, &mut progress);

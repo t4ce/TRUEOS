@@ -3,7 +3,7 @@
 //! This module edits images only. The caller serializes storage, durably saves
 //! a returned image, and only then installs grants or stamps filesystem roots.
 //! Key references are public authorization metadata, never encryption material.
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 use trueos_crypto::{AccountId, KeyHandle, KeyRef, ProviderId};
 use trueos_fs::RecordKey;
 use trueos_redb::{
@@ -172,6 +172,194 @@ pub(crate) fn ensure_workspace(
     })
 }
 
+// Administrative metadata shares the existing image, preserving other tables.
+const ALIASES: TableDefinition<&[u8], &str> = TableDefinition::new("access_key_alias_v1");
+const APP_GRANTS: TableDefinition<&str, &[u8]> = TableDefinition::new("access_key_app_grant_v1");
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Catalog {
+    pub workspaces: Vec<(String, WorkspaceRecord)>,
+    pub aliases: Vec<(RecordKey, String)>,
+    pub grants: Vec<(AccountId, String, RecordKey)>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum AdminChange {
+    Alias {
+        key: RecordKey,
+        name: String,
+    },
+    Grant {
+        account: AccountId,
+        app: String,
+        key: RecordKey,
+        enabled: bool,
+    },
+}
+
+pub(crate) fn valid_app_name(app: &str) -> bool {
+    !app.is_empty()
+        && app.len() <= 128
+        && !app.starts_with(['.', '_'])
+        && !app.ends_with(['.', '_'])
+        && app
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '-' | '.'))
+}
+
+fn key_bytes(key: RecordKey) -> [u8; 49] {
+    let mut bytes = [0; 49];
+    if let RecordKey::Key(key) = key {
+        bytes[0] = 1;
+        bytes[1..17].copy_from_slice(key.provider.as_bytes());
+        bytes[17..].copy_from_slice(key.handle.as_bytes());
+    }
+    bytes
+}
+
+fn read_key(bytes: &[u8]) -> Result<RecordKey, StoreError> {
+    if bytes.len() != 49 {
+        return Err(StoreError::Corrupt);
+    }
+    match bytes[0] {
+        0 if bytes[1..].iter().all(|b| *b == 0) => Ok(RecordKey::Ffa),
+        1 => Ok(RecordKey::Key(KeyRef::new(
+            ProviderId::new(bytes[1..17].try_into().unwrap()).ok_or(StoreError::Corrupt)?,
+            KeyHandle::new(bytes[17..].try_into().unwrap()).ok_or(StoreError::Corrupt)?,
+        ))),
+        _ => Err(StoreError::Corrupt),
+    }
+}
+
+fn valid_alias(name: &str) -> bool {
+    !name.trim().is_empty() && name.len() <= 64 && !name.chars().any(char::is_control)
+}
+
+pub(crate) fn catalog(image: &[u8]) -> Result<Catalog, StoreError> {
+    let store = ImageDatabase::open(image).map_err(|_| StoreError::Corrupt)?;
+    let read = store
+        .database()
+        .begin_read()
+        .map_err(|_| StoreError::Database)?;
+    let mut result = Catalog::default();
+    match read.open_table(WORKSPACES) {
+        Ok(table) => {
+            for row in table.iter().map_err(|_| StoreError::Database)? {
+                let (path, value) = row.map_err(|_| StoreError::Database)?;
+                let record = decode(value.value())?;
+                if !valid_workspace(path.value())
+                    || result.workspaces.iter().any(|(_, r)| r.key == record.key)
+                {
+                    return Err(StoreError::Corrupt);
+                }
+                result.workspaces.push((String::from(path.value()), record));
+            }
+        }
+        Err(TableError::TableDoesNotExist(_)) => {}
+        Err(_) => return Err(StoreError::Corrupt),
+    }
+    match read.open_table(ALIASES) {
+        Ok(table) => {
+            for row in table.iter().map_err(|_| StoreError::Database)? {
+                let (key, name) = row.map_err(|_| StoreError::Database)?;
+                if !valid_alias(name.value())
+                    || result.aliases.iter().any(|(_, n)| n == name.value())
+                {
+                    return Err(StoreError::Corrupt);
+                }
+                result
+                    .aliases
+                    .push((read_key(key.value())?, String::from(name.value())));
+            }
+        }
+        Err(TableError::TableDoesNotExist(_)) => {}
+        Err(_) => return Err(StoreError::Corrupt),
+    }
+    match read.open_table(APP_GRANTS) {
+        Ok(table) => {
+            for row in table.iter().map_err(|_| StoreError::Database)? {
+                let (subject, keys) = row.map_err(|_| StoreError::Database)?;
+                let (account, app) = subject.value().split_once('/').ok_or(StoreError::Corrupt)?;
+                let account = AccountId::new(account.parse().map_err(|_| StoreError::Corrupt)?);
+                if !valid_app_name(app) || keys.value().is_empty() || keys.value().len() % 49 != 0 {
+                    return Err(StoreError::Corrupt);
+                }
+                for bytes in keys.value().chunks_exact(49) {
+                    let grant = (account, String::from(app), read_key(bytes)?);
+                    if result.grants.contains(&grant) {
+                        return Err(StoreError::Corrupt);
+                    }
+                    result.grants.push(grant);
+                }
+            }
+        }
+        Err(TableError::TableDoesNotExist(_)) => {}
+        Err(_) => return Err(StoreError::Corrupt),
+    }
+    Ok(result)
+}
+
+pub(crate) fn edit_admin(image: &[u8], change: &AdminChange) -> Result<Vec<u8>, StoreError> {
+    let mut state = catalog(image)?;
+    let store = ImageDatabase::open(image).map_err(|_| StoreError::Corrupt)?;
+    let write = store
+        .database()
+        .begin_write()
+        .map_err(|_| StoreError::Database)?;
+    match change {
+        AdminChange::Alias { key, name } => {
+            if !valid_alias(name) || state.aliases.iter().any(|(k, n)| k != key && n == name) {
+                return Err(StoreError::InvalidKey);
+            }
+            let bytes = key_bytes(*key);
+            write
+                .open_table(ALIASES)
+                .map_err(|_| StoreError::Database)?
+                .insert(bytes.as_slice(), name.as_str())
+                .map_err(|_| StoreError::Database)?;
+        }
+        AdminChange::Grant {
+            account,
+            app,
+            key,
+            enabled,
+        } => {
+            if !valid_app_name(app) {
+                return Err(StoreError::InvalidWorkspace);
+            }
+            state
+                .grants
+                .retain(|(a, p, k)| a != account || p != app || k != key);
+            if *enabled {
+                state.grants.push((*account, app.clone(), *key));
+            }
+            let mut bytes = Vec::new();
+            for (_, _, key) in state
+                .grants
+                .iter()
+                .filter(|(a, p, _)| a == account && p == app)
+            {
+                bytes.extend_from_slice(&key_bytes(*key));
+            }
+            let subject = alloc::format!("{}/{app}", account.raw());
+            let mut table = write
+                .open_table(APP_GRANTS)
+                .map_err(|_| StoreError::Database)?;
+            if bytes.is_empty() {
+                table
+                    .remove(subject.as_str())
+                    .map_err(|_| StoreError::Database)?;
+            } else {
+                table
+                    .insert(subject.as_str(), bytes.as_slice())
+                    .map_err(|_| StoreError::Database)?;
+            }
+        }
+    }
+    write.commit().map_err(|_| StoreError::Database)?;
+    store.into_image().map_err(|_| StoreError::Database)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +387,99 @@ mod tests {
         }
         write.commit().unwrap();
         store.into_image().unwrap()
+    }
+
+    #[test]
+    fn admin_edits_preserve_unrelated_tables_and_workspace_identities() {
+        let store = ImageDatabase::open(&[]).unwrap();
+        let write = store.database().begin_write().unwrap();
+        write
+            .open_table(OTHER)
+            .unwrap()
+            .insert("theme", b"opaque\0settings".as_slice())
+            .unwrap();
+        write.commit().unwrap();
+        let first = provision(&store.into_image().unwrap(), "apps/codex", 41, 1);
+        let record = first.record;
+        let image = edit_admin(
+            &first.image.unwrap(),
+            &AdminChange::Alias {
+                key: record.key,
+                name: "codex-workspace".into(),
+            },
+        )
+        .unwrap();
+        let image = edit_admin(
+            &image,
+            &AdminChange::Grant {
+                account: account(41),
+                app: "termdir".into(),
+                key: record.key,
+                enabled: true,
+            },
+        )
+        .unwrap();
+        let state = catalog(&image).unwrap();
+        assert_eq!(
+            state.workspaces,
+            alloc::vec![(String::from("apps/codex"), record)]
+        );
+        assert_eq!(
+            state.aliases,
+            alloc::vec![(record.key, String::from("codex-workspace"))]
+        );
+        assert_eq!(
+            state.grants,
+            alloc::vec![(account(41), String::from("termdir"), record.key)]
+        );
+        let reopened = ImageDatabase::open(&image).unwrap();
+        let read = reopened.database().begin_read().unwrap();
+        assert_eq!(
+            read.open_table(OTHER)
+                .unwrap()
+                .get("theme")
+                .unwrap()
+                .unwrap()
+                .value(),
+            b"opaque\0settings"
+        );
+        assert_eq!(provision(&image, "apps/codex", 41, 2).record, record);
+        assert!(
+            edit_admin(
+                &image,
+                &AdminChange::Alias {
+                    key: key(2),
+                    name: "codex-workspace".into()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            edit_admin(
+                b"damaged database",
+                &AdminChange::Alias {
+                    key: key(2),
+                    name: "other".into()
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn malformed_admin_tables_are_errors_not_empty_catalogs() {
+        let store = ImageDatabase::open(&[]).unwrap();
+        let write = store.database().begin_write().unwrap();
+        write
+            .open_table(APP_GRANTS)
+            .unwrap()
+            .insert("41/termdir", &[1u8; 48][..])
+            .unwrap();
+        write.commit().unwrap();
+        assert_eq!(
+            catalog(&store.into_image().unwrap()).unwrap_err(),
+            StoreError::Corrupt
+        );
     }
 
     #[test]

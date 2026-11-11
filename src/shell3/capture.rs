@@ -207,6 +207,11 @@ pub(super) fn recognizes(name: &str) -> bool {
 }
 pub(super) fn start(name: &str, frontend: Frontend) -> Result<(), String> {
     let kind = Kind::parse(name).ok_or("capture: unknown helper")?;
+    // These native helpers record the whole station. Guest shells must use
+    // Spirit's explicitly admitted frame observation instead.
+    if tui::guest_frontend_account(frontend).is_some() {
+        return Err("capture: desktop recording requires a human terminal".into());
+    }
     let Some((target, spawner)) = helper::admit(name, frontend)? else {
         return Ok(());
     };

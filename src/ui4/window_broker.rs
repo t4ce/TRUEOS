@@ -462,7 +462,7 @@ pub(crate) enum WindowDockTarget {
     GenericResize,
     /// Bottom-left-of-center compact action; never a producer resize.
     Collapse,
-    /// Bottom-center permission action; never committed as a dock placement.
+    /// Spirit hardware-cursor circle permission action; never a dock placement.
     SpiritAccess,
     LeftHalf,
     RightHalf,

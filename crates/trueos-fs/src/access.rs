@@ -152,12 +152,34 @@ pub struct AccessKeyDb {
     grants: BTreeMap<AccountId, AccountGrants>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct PolicySnapshot {
+    pub keys: Vec<RecordKey>,
+    pub containers: Vec<(ContainerId, ContainerPolicy, Vec<AccountId>)>,
+    pub grants: Vec<(AccountId, GrantScope, RecordKey)>,
+}
+
 impl AccessKeyDb {
     pub const fn new() -> Self {
         Self {
             keys: Vec::new(),
             containers: BTreeMap::new(),
             grants: BTreeMap::new(),
+        }
+    }
+
+    /// Owned inspection data for trusted permission-management UIs.
+    pub fn snapshot(&self) -> PolicySnapshot {
+        PolicySnapshot {
+            keys: self.keys.clone(),
+            containers: self.containers.iter().map(|(id, c)|
+                (id.clone(), c.policy, c.members.iter().copied().collect())).collect(),
+            grants: self.grants.iter().flat_map(|(account, grants)| {
+                grants.apps.iter().flat_map(move |(app, keys)| keys.iter().map(move |key|
+                    (*account, GrantScope::App(app.clone()), *key)))
+                    .chain(grants.containers.iter().flat_map(move |(id, keys)| keys.iter().map(move |key|
+                        (*account, GrantScope::Container(id.clone()), *key))))
+            }).collect(),
         }
     }
 

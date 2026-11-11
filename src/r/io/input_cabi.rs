@@ -10,7 +10,8 @@ static INPUT_COMBO_OWNERS: spin::Mutex<input_combo_policy::Ownership> =
     spin::Mutex::new(input_combo_policy::Ownership::new());
 
 fn input_combo_guest() -> Result<Option<input_combo_policy::Guest>, i32> {
-    let Some(vm) = crate::hv::current_guest_execution_context_vm_id() else { return Ok(None) };
+    let Some(vm) = crate::hv::current_guest_execution_context_vm_id()
+        .or_else(crate::hv::current_hull_guest_context_vm_id) else { return Ok(None) };
     let run = crate::hv::vm_run_generation(vm).filter(|run| *run != 0).ok_or(-2)?;
     Ok(Some(input_combo_policy::Guest { vm, run }))
 }
@@ -26,6 +27,82 @@ fn guest_combo_device_owned(guest: input_combo_policy::Guest, kind: u8, controll
             == Some(GamepadControlPrincipal::Vm(guest.vm)),
         _ => false,
     }
+}
+
+fn raw_keyboard_device_visible(
+    caller: Result<Option<input_combo_policy::Guest>, i32>,
+    controller: u32,
+    slot: u32,
+    ep: u32,
+) -> bool {
+    match caller {
+        Ok(None) => true,
+        Ok(Some(guest)) => guest_combo_device_owned(guest, 2, controller, slot, ep),
+        Err(_) => false,
+    }
+}
+
+/// Raw diagnostics expose a guest's own virtual keyboard, never another source.
+/// Advance across every consumed ring record even when none are visible.
+fn read_keyboard_output_for_caller(
+    read_seq: u64,
+    out: &mut [crate::r::keyboard::TrueosKeyboardOutputEvent],
+) -> (u64, u32, usize) {
+    let caller = input_combo_guest();
+    if matches!(caller, Ok(None)) {
+        return crate::r::keyboard::read_output_events_since(read_seq, out);
+    }
+    // A native guest context can retain a guest allocation domain. Keep raw
+    // records in the host heap until filtering, including scratch destruction.
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        const MAX_RAW_KEYBOARD_READ_BATCH: usize = 256;
+        let mut events = alloc::vec![
+            crate::r::keyboard::TrueosKeyboardOutputEvent::default();
+            out.len().min(MAX_RAW_KEYBOARD_READ_BATCH)
+        ];
+        let (next_seq, dropped, consumed) =
+            crate::r::keyboard::read_output_events_since(read_seq, &mut events);
+        let mut wrote = 0;
+        for event in &events[..consumed] {
+            if raw_keyboard_device_visible(caller, event.controller_id, event.slot_id, event.ep_target) {
+                out[wrote] = *event;
+                wrote += 1;
+            }
+        }
+        (next_seq, dropped, wrote)
+    })
+}
+
+/// Preserve LINK's global inventory while hiding other sources' live key state.
+pub(crate) fn read_keyboard_snapshot_for_caller(
+    out: &mut [crate::usb2::hid::hut::TrueosHidHutKeyboardState],
+) -> usize {
+    let caller = input_combo_guest();
+    if matches!(caller, Ok(None)) {
+        return crate::usb2::hid::hut::read_keyboards_snapshot(out);
+    }
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let mut keyboards = alloc::vec![
+            crate::usb2::hid::hut::TrueosHidHutKeyboardState::default();
+            out.len().min(input_wire::HUT_SNAPSHOT_LIMIT as usize)
+        ];
+        let wrote = crate::usb2::hid::hut::read_keyboards_snapshot(&mut keyboards);
+        for keyboard in &mut keyboards[..wrote] {
+            if !raw_keyboard_device_visible(
+                caller,
+                keyboard.controller_id,
+                keyboard.slot_id,
+                keyboard.ep_target,
+            ) {
+                keyboard.modifiers = 0;
+                keyboard.keys = [0; 6];
+                keyboard.ascii = [0; 6];
+                keyboard.key_down_bits = [0; 8];
+            }
+        }
+        out[..wrote].copy_from_slice(&keyboards[..wrote]);
+        wrote
+    })
 }
 
 fn authorize_input_combo_mutation(guest: Option<input_combo_policy::Guest>, combo_id: u32) -> Result<(), i32> {
@@ -129,7 +206,7 @@ pub fn host_input_hut_snapshot_v1(
             let total = crate::usb2::hid::hut::keyboards_snapshot().len();
             if out_cap == 0 { return Ok((total, 0)); }
             let mut keyboards = alloc::vec![crate::usb2::hid::hut::TrueosHidHutKeyboardState::default(); cap];
-            let wrote = crate::usb2::hid::hut::read_keyboards_snapshot(&mut keyboards);
+            let wrote = read_keyboard_snapshot_for_caller(&mut keyboards);
             for (record, bytes) in keyboards[..wrote].iter().zip(payload.chunks_exact_mut(record_len)) {
                 input_wire::hut_keyboard(bytes, record);
             }
@@ -306,6 +383,9 @@ pub fn host_input_pop_keyboard_output(payload: &mut [u8]) -> (i32, usize) {
     if payload.len() < event_size {
         return (-1, 0);
     }
+    if !matches!(input_combo_guest(), Ok(None)) {
+        return (1, 0);
+    }
     let Some(event) = crate::r::keyboard::pop_output_event() else {
         return (1, 0);
     };
@@ -327,7 +407,7 @@ pub fn host_input_keyboard_output_since(
     let cap = core::cmp::min(out_cap as usize, max_events);
     let mut events = alloc::vec![crate::r::keyboard::TrueosKeyboardOutputEvent::default(); cap];
     let (next_seq, dropped, wrote) =
-        crate::r::keyboard::read_output_events_since(read_seq, events.as_mut_slice());
+        read_keyboard_output_for_caller(read_seq, events.as_mut_slice());
     payload[0..8].copy_from_slice(&next_seq.to_le_bytes());
     payload[8..12].copy_from_slice(&dropped.to_le_bytes());
     let bytes_len = wrote.saturating_mul(event_size);
@@ -606,6 +686,9 @@ unsafe fn input_pop_keyboard_output(
     if out.is_null() {
         return -1;
     }
+    if !matches!(input_combo_guest(), Ok(None)) {
+        return 1;
+    }
     let Some(event) = crate::r::keyboard::pop_output_event() else {
         return 1;
     };
@@ -630,7 +713,7 @@ unsafe fn input_read_keyboard_output_since(
     if cap == 0 || out.is_null() {
         let mut none: [crate::r::keyboard::TrueosKeyboardOutputEvent; 0] = [];
         let (next_seq, dropped, _wrote) =
-            crate::r::keyboard::read_output_events_since(read_seq, &mut none);
+            read_keyboard_output_for_caller(read_seq, &mut none);
         unsafe {
             *out_next_seq = next_seq;
             *out_dropped = dropped;
@@ -640,7 +723,7 @@ unsafe fn input_read_keyboard_output_since(
 
     let out_slice = unsafe { core::slice::from_raw_parts_mut(out, cap) };
     let (next_seq, dropped, wrote) =
-        crate::r::keyboard::read_output_events_since(read_seq, out_slice);
+        read_keyboard_output_for_caller(read_seq, out_slice);
     unsafe {
         *out_next_seq = next_seq;
         *out_dropped = dropped;
@@ -1228,6 +1311,8 @@ pub unsafe extern "C" fn trueos_cabi_input_combo_request(
     if out_combo.is_null() {
         return -1;
     }
+    let guest = match input_combo_guest() { Ok(guest) => guest, Err(error) => return error };
+    if guest.is_some() && input_combo_source_kind(source_kind) != crate::usb2::hid::hut::HidSourceKind::Ai { return -2; }
     let label = match unsafe { checked_utf8(label_ptr, label_len) } {
         Ok(label) if !label.is_empty() => label,
         _ => return -1,
@@ -1244,6 +1329,15 @@ pub unsafe extern "C" fn trueos_cabi_input_combo_request(
     else {
         return -4;
     };
+    if let Some(guest) = guest {
+        let ids = crate::usb2::hid::hut::combos_snapshot();
+        let remembered = crate::allocators::with_host_alloc_domain_strong(|| {
+            let mut owners = INPUT_COMBO_OWNERS.lock();
+            owners.retain_live(|id| ids.iter().any(|combo| combo.combo_id == id));
+            owners.remember(combo.combo_id, guest)
+        });
+        if !remembered { crate::usb2::hid::hut::remove_empty_combo(combo.combo_id); return -4; }
+    }
     unsafe {
         *out_combo = input_combo_info(&combo);
     }
@@ -1252,6 +1346,9 @@ pub unsafe extern "C" fn trueos_cabi_input_combo_request(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_input_combo_set_color(combo_id: u32, color_id: u8) -> i32 {
+    let guest = match input_combo_guest() { Ok(guest) => guest, Err(error) => return error };
+    if let Err(error) = authorize_input_combo_mutation(guest, combo_id) { return error; }
+
     if crate::usb2::hid::hut::set_combo_color(combo_id, color_id) {
         0
     } else {
@@ -1266,6 +1363,10 @@ pub extern "C" fn trueos_cabi_input_combo_bind_mouse(
     slot_id: u32,
     ep_target: u32,
 ) -> i32 {
+    let guest = match input_combo_guest() { Ok(guest) => guest, Err(error) => return error };
+    if let Err(error) = authorize_input_combo_mutation(guest, combo_id) { return error; }
+    if guest.is_some_and(|guest| !guest_combo_device_owned(guest, 1, controller_id, slot_id, ep_target)) { return -2; }
+
     if crate::usb2::hid::hut::bind_combo_mouse(combo_id, controller_id, slot_id, ep_target) {
         0
     } else {
@@ -1280,6 +1381,10 @@ pub extern "C" fn trueos_cabi_input_combo_bind_keyboard(
     slot_id: u32,
     ep_target: u32,
 ) -> i32 {
+    let guest = match input_combo_guest() { Ok(guest) => guest, Err(error) => return error };
+    if let Err(error) = authorize_input_combo_mutation(guest, combo_id) { return error; }
+    if guest.is_some_and(|guest| !guest_combo_device_owned(guest, 2, controller_id, slot_id, ep_target)) { return -2; }
+
     if crate::usb2::hid::hut::bind_combo_keyboard(combo_id, controller_id, slot_id, ep_target) {
         0
     } else {
@@ -1294,6 +1399,10 @@ pub extern "C" fn trueos_cabi_input_combo_bind_tablet(
     slot_id: u32,
     ep_target: u32,
 ) -> i32 {
+    let guest = match input_combo_guest() { Ok(guest) => guest, Err(error) => return error };
+    if let Err(error) = authorize_input_combo_mutation(guest, combo_id) { return error; }
+    if guest.is_some_and(|guest| !guest_combo_device_owned(guest, 3, controller_id, slot_id, ep_target)) { return -2; }
+
     if crate::usb2::hid::hut::bind_combo_tablet(combo_id, controller_id, slot_id, ep_target) {
         0
     } else {
@@ -1308,6 +1417,10 @@ pub extern "C" fn trueos_cabi_input_combo_bind_gamepad(
     slot_id: u32,
     ep_target: u32,
 ) -> i32 {
+    let guest = match input_combo_guest() { Ok(guest) => guest, Err(error) => return error };
+    if let Err(error) = authorize_input_combo_mutation(guest, combo_id) { return error; }
+    if guest.is_some_and(|guest| !guest_combo_device_owned(guest, 4, controller_id, slot_id, ep_target)) { return -2; }
+
     if crate::usb2::hid::hut::bind_combo_gamepad(combo_id, controller_id, slot_id, ep_target) {
         0
     } else {
@@ -1317,7 +1430,11 @@ pub extern "C" fn trueos_cabi_input_combo_bind_gamepad(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_input_combo_remove(combo_id: u32) -> i32 {
+    let guest = match input_combo_guest() { Ok(guest) => guest, Err(error) => return error };
+    if let Err(error) = authorize_input_combo_mutation(guest, combo_id) { return error; }
+
     if crate::usb2::hid::hut::remove_combo(combo_id) {
+        INPUT_COMBO_OWNERS.lock().forget(combo_id);
         0
     } else {
         -3
