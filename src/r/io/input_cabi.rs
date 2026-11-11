@@ -3,6 +3,50 @@ extern crate alloc;
 #[path = "input_wire.rs"]
 mod input_wire;
 
+#[path = "input_combo_policy.rs"]
+mod input_combo_policy;
+
+static INPUT_COMBO_OWNERS: spin::Mutex<input_combo_policy::Ownership> =
+    spin::Mutex::new(input_combo_policy::Ownership::new());
+
+fn input_combo_guest() -> Result<Option<input_combo_policy::Guest>, i32> {
+    let Some(vm) = crate::hv::current_guest_execution_context_vm_id() else { return Ok(None) };
+    let run = crate::hv::vm_run_generation(vm).filter(|run| *run != 0).ok_or(-2)?;
+    Ok(Some(input_combo_policy::Guest { vm, run }))
+}
+
+fn guest_combo_device_owned(guest: input_combo_policy::Guest, kind: u8, controller: u32, slot: u32, ep: u32) -> bool {
+    if controller != 0 || ep != 0 || slot == 0 { return false; }
+    match kind {
+        1 => crate::r::services::mouse_motion_service::cursor_principal(slot)
+            == Some(MouseControlPrincipal::Vm(guest.vm)),
+        2 => crate::r::services::keyboard_control_service::keyboard_principal(slot)
+            == Some(KeyboardControlPrincipal::Vm(guest.vm)),
+        4 => crate::r::services::gamepad_control_service::gamepad_principal(slot)
+            == Some(GamepadControlPrincipal::Vm(guest.vm)),
+        _ => false,
+    }
+}
+
+fn authorize_input_combo_mutation(guest: Option<input_combo_policy::Guest>, combo_id: u32) -> Result<(), i32> {
+    let Some(guest) = guest else { return Ok(()) };
+    if !INPUT_COMBO_OWNERS.lock().owns(combo_id, guest) { return Err(-2); }
+    let combo = crate::usb2::hid::hut::combos_snapshot().into_iter()
+        .find(|combo| combo.combo_id == combo_id).ok_or(-2)?;
+    if combo.source_kind != crate::usb2::hid::hut::HidSourceKind::Ai { return Err(-2); }
+    // A trusted LINK edit can add another user's/VM's device to this bucket.
+    // That does not authorize the original guest to alter those devices.
+    for (kind, controller, slot, ep) in [
+        (1, combo.mouse_controller_id, combo.mouse_slot_id, combo.mouse_ep_target),
+        (2, combo.keyboard_controller_id, combo.keyboard_slot_id, combo.keyboard_ep_target),
+        (3, combo.tablet_controller_id, combo.tablet_slot_id, combo.tablet_ep_target),
+        (4, combo.gamepad_controller_id, combo.gamepad_slot_id, combo.gamepad_ep_target),
+    ] {
+        if slot != 0 && !guest_combo_device_owned(guest, kind, controller, slot, ep) { return Err(-2); }
+    }
+    Ok(())
+}
+
 use crate::r::services::gamepad_control_service::{
     GamepadControlPrincipal, gamepad_is_idle, gamepad_snapshot, release_gamepad, request_gamepad,
     submit_command as submit_gamepad_command, submit_json as submit_gamepad_json,

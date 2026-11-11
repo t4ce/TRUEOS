@@ -117,6 +117,13 @@ struct KeyboardControlStation {
 }
 
 impl KeyboardControlStation {
+    fn principal_for_slot(&self, slot_id: u32) -> Option<KeyboardControlPrincipal> {
+        self.keyboards
+            .iter()
+            .find(|keyboard| keyboard.capability.slot_id == slot_id)
+            .map(|keyboard| keyboard.principal)
+    }
+
     const fn new() -> Self {
         Self {
             keyboards: Vec::new(),
@@ -376,6 +383,12 @@ pub(crate) fn request_keyboard(
     label: &str,
 ) -> Result<KeyboardControlDevice, KeyboardControlError> {
     STATION.lock().request(principal, label)
+}
+
+/// Attribute a live virtual-keyboard report using the kernel-owned station.
+/// Unknown or retired virtual slots return None; they are never human input.
+pub(crate) fn keyboard_principal(slot_id: u32) -> Option<KeyboardControlPrincipal> {
+    STATION.lock().principal_for_slot(slot_id)
 }
 
 pub(crate) fn release_keyboard(

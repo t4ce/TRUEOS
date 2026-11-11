@@ -102,6 +102,56 @@ mod r{
     #[test]fn actual_concurrent_append_jobs_preserve_all_entries(){reset();let a=opened(1,"log",1|4|16);let b=opened(2,"log",1|4);let barrier=std::sync::Arc::new(std::sync::Barrier::new(2));let gate=barrier.clone();let first=std::thread::spawn(move||{gate.wait();for n in 0..100{call(1,3,0,a,0,format!("A{n:03};").as_bytes()).unwrap();}});let second=std::thread::spawn(move||{barrier.wait();for n in 0..100{call(2,3,0,b,0,format!("B{n:03};").as_bytes()).unwrap();}});first.join().unwrap();second.join().unwrap();let bytes=disk("log").unwrap();assert_eq!(bytes.len(),1000);let text=String::from_utf8(bytes).unwrap();for n in 0..100{assert_eq!(text.matches(&format!("A{n:03};")).count(),1);assert_eq!(text.matches(&format!("B{n:03};")).count(),1);}}
     #[test]fn access_modes_negative_seek_and_mount_epoch(){reset();let write=opened(1,"file",2|16);call(1,3,0,write,0,b"123").unwrap();assert_eq!(call(1,2,0,write,1,&[]),Err(-19));let read_only=opened(2,"file",1);assert_eq!(call(2,3,0,read_only,0,b"x"),Err(-19));assert_eq!(call(2,6,0,read_only,0,&[]),Err(-19));assert_eq!(call(2,4,1,read_only,(-1_i64)as u64,&[]),Err(-4));assert_eq!(id(call(2,4,1,read_only,0,&[]).unwrap()),0);ROOTS.lock()[0].seq=2;assert_eq!(call(2,2,0,read_only,1,&[]),Err(-8));call(2,8,0,read_only,0,&[]).unwrap();}
     fn key(value:u8)->RecordKey{RecordKey::Key(trueos_crypto::KeyRef::new(trueos_crypto::ProviderId::new([1;16]).unwrap(),trueos_crypto::KeyHandle::new([value;32]).unwrap()))}
+    #[test]
+    fn common_output_uses_ffa_for_native_creation_and_checked_binary_export() {
+        reset();
+        use authorized::{self as auth, Actor};
+        const OWNER: u32 = 0x80000001;
+        let actor = Actor::Vm(1, 1);
+        let workspace_key = key(71);
+        for directory in ["apps/demo", "apps/common"] {
+            crate::run(auth::create_dir_all(Actor::Host, D, directory)).unwrap();
+        }
+        crate::run(stamp_directory_key_async(D, "apps/demo", workspace_key)).unwrap();
+        crate::access_key_db::grant(1, workspace_key);
+        let bytes: Vec<_> = (0..128 * 1024 + 17).map(|n| (n % 256) as u8).collect();
+        let source = "apps/demo/image.bin";
+        assert!(crate::run(auth::write(actor, D, source, &bytes, ContentTypeId::BLOB, true)).unwrap());
+        assert_eq!(INDEX.lock()[source].record_key, workspace_key);
+
+        // std/Tokio open + read/write: destination creation chooses its key.
+        let input = opened(OWNER, source, 1);
+        let output = opened(OWNER, "apps/common/native.bin", 1 | 2 | 16 | 32);
+        assert_eq!(INDEX.lock()["apps/common/native.bin"].record_key, RecordKey::Ffa);
+        loop {
+            let chunk = call(OWNER, 2, 0, input, 64 * 1024, &[]).unwrap();
+            if chunk.is_empty() { break; }
+            call(OWNER, 3, 0, output, 0, &chunk).unwrap();
+        }
+        assert_eq!(INDEX.lock()["apps/common/native.bin"].record_key, RecordKey::Ffa);
+        assert_eq!(crate::run(auth::read(Actor::Public, D, "apps/common/native.bin", bytes.len() as u64)).unwrap().unwrap(), bytes);
+
+        // Codex's direct file tools use the checked, atomic destination writer.
+        let destination = "apps/common/export.bin";
+        let copied = crate::run(auth::read(actor, D, source, bytes.len() as u64)).unwrap().unwrap();
+        assert!(crate::run(file_in_checked_with_type_policy_async(
+            D, destination, &copied, ContentTypeId::BLOB, true, None,
+            CheckedWriteTypePolicy::Retain, actor,
+        )).unwrap());
+        assert_eq!(INDEX.lock()[destination].record_key, RecordKey::Ffa);
+        assert_eq!(crate::run(auth::read(Actor::Public, D, destination, bytes.len() as u64)).unwrap().unwrap(), bytes);
+        assert_eq!(INDEX.lock()[source].record_key, workspace_key);
+        assert_eq!(crate::run(auth::read(Actor::Public, D, source, bytes.len() as u64)), Err(block::Error::PermissionDenied));
+        let visible = crate::run(auth::list(Actor::Public, D, "apps/common", 10)).unwrap().unwrap();
+        assert!(visible.entries.iter().any(|entry| entry.name == "native.bin"));
+        assert!(visible.entries.iter().any(|entry| entry.name == "export.bin"));
+        assert_eq!(crate::run(file_in_checked_with_type_policy_async(
+            D, destination, b"replacement", ContentTypeId::BLOB, true, None,
+            CheckedWriteTypePolicy::Retain, actor,
+        )), Err(CheckedWriteError::AlreadyExists));
+        assert_eq!(crate::run(auth::read(Actor::Public, D, destination, bytes.len() as u64)).unwrap().unwrap(), bytes);
+    }
+
     #[test]fn keyed_root_stamp_is_atomic_and_children_inherit(){reset();crate::run(create_directory_async(D,"apps")).unwrap();crate::run(create_directory_async(D,"apps/demo")).unwrap();let legacy=opened(1,"apps/demo/legacy",1|2|16);call(1,3,0,legacy,0,b"untouched").unwrap();let old_id=INDEX.lock()["apps/demo"].file_id;let old_leaf=INDEX.lock()["apps/demo/legacy"];FAIL_WRITE.store(true,core::sync::atomic::Ordering::SeqCst);assert!(crate::run(stamp_directory_key_async(D,"apps/demo",key(1))).is_err());assert_eq!(INDEX.lock()["apps/demo"].record_key,RecordKey::Ffa);assert_eq!(crate::run(stamp_directory_key_async(D,"apps/demo",key(1))),Ok(true));assert_eq!(INDEX.lock()["apps/demo"].file_id,old_id);assert_eq!(INDEX.lock()["apps/demo/legacy"],old_leaf);assert_eq!(disk("apps/demo/legacy").unwrap(),b"untouched");assert_eq!(crate::run(stamp_directory_key_async(D,"apps/demo",key(2))),Err(block::Error::NotSupported));crate::run(create_directory_new_async(D,"apps/demo/sub")).unwrap();assert_eq!(INDEX.lock()["apps/demo/sub"].record_key,key(1));let new=opened(1,"apps/demo/sub/new",1|2|16);call(1,3,0,new,0,b"new").unwrap();assert_eq!(INDEX.lock()["apps/demo/sub/new"].record_key,key(1));assert_eq!(crate::run(async{let _lease=write_gate::RootWriteLease::acquire(D.id()).await;inherited_record_key_under_lease(D,&params(),"apps/demo/sub/another").await}).unwrap(),key(1));}
     #[test]fn ancestor_key_protects_legacy_leaf_and_retained_objects(){reset();crate::run(create_directory_async(D,"apps")).unwrap();crate::run(create_directory_async(D,"apps/demo")).unwrap();let host=opened(1,"apps/demo/legacy",1|2|16);call(1,3,0,host,0,b"private").unwrap();crate::run(stamp_directory_key_async(D,"apps/demo",key(3))).unwrap();assert_eq!(crate::run(open(0x80000002,D,"apps/demo/legacy",1)),Err(-19));crate::access_key_db::grant(1,key(3));let user=opened(0x80000001,"apps/demo/legacy",1);assert_eq!(read(0x80000001,user),b"private");remove("apps/demo/legacy");crate::access_key_db::clear();seek(1,host,0);assert_eq!(read(1,host),b"private");assert_eq!(call(0x80000001,2,0,user,5,&[]),Err(-19));call(0x80000001,8,0,user,0,&[]).unwrap();}
     #[test]fn actors_enforce_metadata_reads_writes_mkdir_and_filtered_listing(){

@@ -206,6 +206,13 @@ struct MouseControlStation {
 }
 
 impl MouseControlStation {
+    fn principal_for_slot(&self, slot_id: u32) -> Option<MouseControlPrincipal> {
+        self.cursors
+            .iter()
+            .find(|cursor| cursor.capability.slot_id == slot_id)
+            .map(|cursor| cursor.principal)
+    }
+
     const fn new() -> Self {
         Self {
             cursors: Vec::new(),
@@ -695,6 +702,13 @@ pub(crate) fn cursor_visual_metadata(slot_id: u32) -> Option<MouseControlVisualM
         .map(|cursor| cursor.visual.clone())
 }
 
+/// Trusted attribution for reports emitted by a live mediated cursor. Labels
+/// and HUT presentation metadata never establish an input principal. An absent
+/// virtual slot is retired or unknown and must not be treated as human input.
+pub(crate) fn cursor_principal(slot_id: u32) -> Option<MouseControlPrincipal> {
+    STATION.lock().principal_for_slot(slot_id)
+}
+
 /// Resolve presentation metadata for one mediated vCursor without exposing
 /// its capability or command queue to UI4.
 pub(crate) fn cursor_visual_color(slot_id: u32) -> Option<crate::graphics::primitives::Rgba8> {
@@ -1110,6 +1124,19 @@ mod visual_cursor_tests {
             visible: true,
             visual_only: true,
         }
+    }
+
+    #[test]
+    fn cursor_principal_lookup_follows_live_slots_and_ignores_labels() {
+        let mut station = MouseControlStation::new();
+        let guest = station.request(MouseControlPrincipal::Vm(9), "Kernel", visual()).unwrap();
+        let kernel = station.request(MouseControlPrincipal::Kernel, "guest", visual()).unwrap();
+        assert_eq!(station.principal_for_slot(guest.slot_id), Some(MouseControlPrincipal::Vm(9)));
+        assert_eq!(station.principal_for_slot(kernel.slot_id), Some(MouseControlPrincipal::Kernel));
+        assert_eq!(station.principal_for_slot(u32::MAX), None);
+        station.release(MouseControlPrincipal::Vm(9), guest.handle).unwrap();
+        assert_eq!(station.principal_for_slot(guest.slot_id), None);
+        assert_eq!(station.principal_for_slot(kernel.slot_id), Some(MouseControlPrincipal::Kernel));
     }
 
     #[test]

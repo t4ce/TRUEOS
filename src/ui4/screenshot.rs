@@ -429,6 +429,9 @@ fn capture_scope_log_fields(selection: CaptureSelection) -> (&'static str, u32, 
 
 /// Capture and encode one exact broker window as a compact RGB PNG carrying a
 /// light normalized coordinate grid.
+/// Pixels come only from that window's leased published frame, never display
+/// writeback or a desktop crop. Transparent pixels use the fixed observation
+/// background rather than sampling other windows behind the selected frame.
 ///
 /// The first attempt preserves the native aspect ratio within a 512-pixel long
 /// edge. If the encoded PNG is larger than the hard payload budget, each retry
@@ -467,38 +470,9 @@ fn capture_window_rgba(window: WindowSnapshot) -> Result<CapturedWindowRgba, Cap
     let lease = acquire_published_frame(window.frame)?;
     let result = (|| {
         let view = published_rgba_view(lease)?;
-        let row_bytes = usize::try_from(view.width)
-            .ok()
-            .and_then(|width| width.checked_mul(4))
-            .ok_or(CaptureError::DimensionTooLarge)?;
-        let height = usize::try_from(view.height).map_err(|_| CaptureError::DimensionTooLarge)?;
-        let byte_len = row_bytes
-            .checked_mul(height)
-            .ok_or(CaptureError::DimensionTooLarge)?;
         crate::intel::dma_flush(view.virt, view.byte_len);
         let source = unsafe { core::slice::from_raw_parts(view.virt.cast_const(), view.byte_len) };
-        let mut rgba = alloc::vec![0u8; byte_len];
-        for row in 0..height {
-            let source_offset = row
-                .checked_mul(view.pitch as usize)
-                .ok_or(CaptureError::DimensionTooLarge)?;
-            let destination_offset = row
-                .checked_mul(row_bytes)
-                .ok_or(CaptureError::DimensionTooLarge)?;
-            let source_end = source_offset
-                .checked_add(row_bytes)
-                .ok_or(CaptureError::DimensionTooLarge)?;
-            let destination_end = destination_offset
-                .checked_add(row_bytes)
-                .ok_or(CaptureError::DimensionTooLarge)?;
-            let source_row = source
-                .get(source_offset..source_end)
-                .ok_or(CaptureError::InvalidFrameLayout)?;
-            let destination_row = rgba
-                .get_mut(destination_offset..destination_end)
-                .ok_or(CaptureError::InvalidFrameLayout)?;
-            destination_row.copy_from_slice(source_row);
-        }
+        let rgba = copy_window_rgba_rows(view.width, view.height, view.pitch, source)?;
         Ok::<_, CaptureError>(CapturedWindowRgba {
             width: view.width,
             height: view.height,
@@ -507,6 +481,44 @@ fn capture_window_rgba(window: WindowSnapshot) -> Result<CapturedWindowRgba, Cap
     })();
     let _ = release_published_frame(lease);
     result
+}
+
+/// Copy precisely one frame's visible rows. Pitch padding and any trailing
+/// allocation bytes are outside the image and must never enter a capture.
+fn copy_window_rgba_rows(
+    width: u32,
+    height: u32,
+    pitch: u32,
+    source: &[u8],
+) -> Result<Vec<u8>, CaptureError> {
+    if width == 0 || height == 0 {
+        return Err(CaptureError::InvalidFrameLayout);
+    }
+    let row_bytes = usize::try_from(width)
+        .ok()
+        .and_then(|width| width.checked_mul(4))
+        .ok_or(CaptureError::DimensionTooLarge)?;
+    let height = usize::try_from(height).map_err(|_| CaptureError::DimensionTooLarge)?;
+    let pitch = usize::try_from(pitch).map_err(|_| CaptureError::DimensionTooLarge)?;
+    if pitch < row_bytes {
+        return Err(CaptureError::InvalidFrameLayout);
+    }
+    let source_len = pitch
+        .checked_mul(height - 1)
+        .and_then(|offset| offset.checked_add(row_bytes))
+        .ok_or(CaptureError::DimensionTooLarge)?;
+    if source.len() < source_len {
+        return Err(CaptureError::InvalidFrameLayout);
+    }
+    let byte_len = row_bytes
+        .checked_mul(height)
+        .ok_or(CaptureError::DimensionTooLarge)?;
+    let mut rgba = alloc::vec![0u8; byte_len];
+    for (row, destination) in rgba.chunks_exact_mut(row_bytes).enumerate() {
+        let offset = row * pitch;
+        destination.copy_from_slice(&source[offset..offset + row_bytes]);
+    }
+    Ok(rgba)
 }
 
 fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, CaptureError> {

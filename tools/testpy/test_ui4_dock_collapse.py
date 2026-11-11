@@ -217,7 +217,7 @@ mod ui4 {
         fn action_only_targets_cannot_commit_dock_geometry() {
             let (_, _, mut window) = setup(true);
             let before = window;
-            for target in [WindowDockTarget::Collapse, WindowDockTarget::GenericResize] {
+            for target in [WindowDockTarget::Collapse, WindowDockTarget::GenericResize, WindowDockTarget::SpiritAccess] {
                 assert_eq!(docked_window_placement(window.interaction, window.placement, target, 1920, 1080), before.placement);
                 assert_eq!(change_window_dock_record(&mut window, Some(target), 1920, 1080, None, None), Err(WindowBrokerError::InteractionDenied));
                 assert_eq!(window.placement, before.placement);

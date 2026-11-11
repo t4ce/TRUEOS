@@ -193,12 +193,55 @@ pub(crate) struct Ui4VisualRect {
 pub(crate) struct Ui4DockPreview {
     pub(crate) target: super::WindowDockTarget,
     pub(crate) destination: Ui4VisualRect,
+    pub(crate) spirit_access_granted: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) struct Ui4DockZone {
     pub(super) target: super::WindowDockTarget,
     pub(super) rect: Ui4VisualRect,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) struct Ui4SpiritDockCircle {
+    pub(super) center_x: i32,
+    pub(super) center_y: i32,
+    pub(super) radius: u32,
+}
+
+pub(super) fn spirit_dock_circle() -> Option<Ui4SpiritDockCircle> {
+    // marker_anchor reports the applied hardware-cursor-plane geometry, rather
+    // than Spirit's queued destination. Its center is the cursor hotspot.
+    let (_, _, left, top, width, height) = crate::spirit::marker_anchor()?;
+    Some(Ui4SpiritDockCircle {
+        center_x: left.saturating_add((width / 2) as i32),
+        center_y: top.saturating_add((height / 2) as i32),
+        radius: 150,
+    })
+}
+
+pub(super) fn spirit_circle_contains(circle: Ui4SpiritDockCircle, x: u32, y: u32) -> bool {
+    let dx = i64::from(x).abs_diff(i64::from(circle.center_x));
+    let dy = i64::from(y).abs_diff(i64::from(circle.center_y));
+    u128::from(dx) * u128::from(dx) + u128::from(dy) * u128::from(dy)
+        <= u128::from(circle.radius) * u128::from(circle.radius)
+}
+
+pub(super) fn spirit_circle_row_span(
+    circle: Ui4SpiritDockCircle, row: u32, screen_width: u32,
+) -> Option<Ui4VisualRect> {
+    let dy = i64::from(row).abs_diff(i64::from(circle.center_y));
+    let radius = u64::from(circle.radius);
+    if dy > radius || screen_width == 0 { return None; }
+    let remaining = radius * radius - dy * dy;
+    let half = last_true_prefix(circle.radius.saturating_add(1), |offset| {
+        u64::from(offset) * u64::from(offset) <= remaining
+    })?;
+    let left = (i64::from(circle.center_x) - i64::from(half)).max(0);
+    let right = (i64::from(circle.center_x) + i64::from(half) + 1).min(i64::from(screen_width));
+    (right > left).then_some(Ui4VisualRect {
+        x: left as u32, y: row, width: (right - left) as u32, height: 1,
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1191,6 +1234,9 @@ impl InputBroker {
                     };
                     self.cursors[index].dock_preview = Some(Ui4DockPreview {
                         target: dock_target,
+                        spirit_access_granted: super::spirit_access::is_granted(
+                            WindowTarget::from(target).cursor_frame_key(),
+                        ),
                         destination: Ui4VisualRect {
                             x: preview.x.max(0) as u32,
                             y: preview.y.max(0) as u32,
@@ -1199,6 +1245,32 @@ impl InputBroker {
                         },
                     });
                 }
+            }
+            if secondary_drop
+                && dock_target == Some(super::WindowDockTarget::SpiritAccess)
+                && buttons_down == 0
+            {
+                // The registry independently rejects software input and captures
+                // this exact brokered frame; apps cannot grant access themselves.
+                let result = super::spirit_access::toggle_from_human(
+                    source, WindowTarget::from(target).cursor_frame_key(),
+                );
+                crate::log_info!(target: "ui4";
+                    "ui4/input: Spirit access owner={:?} window={} result={:?}\n",
+                    target.owner, target.id.raw(), result);
+                let route = &mut self.cursors[index];
+                route.capture = None;
+                route.secondary_anchor = None;
+                route.secondary_start_placement = None;
+                route.secondary_restore_origin = None;
+                route.secondary_dragged = false;
+                route.dock_fields_visible = false;
+                route.dock_preview = None;
+                route.selection_anchor = None;
+                route.x = x;
+                route.y = y;
+                route.buttons_down = 0;
+                return;
             }
             if secondary_drop
                 && dock_target == Some(super::WindowDockTarget::Collapse)
@@ -1244,7 +1316,7 @@ impl InputBroker {
             if secondary_drop
                 && let Some(dock_target) = dock_target
                 && !matches!(dock_target,
-                    super::WindowDockTarget::GenericResize | super::WindowDockTarget::Collapse)
+                    super::WindowDockTarget::GenericResize | super::WindowDockTarget::Collapse | super::WindowDockTarget::SpiritAccess)
             {
                 match super::dock_window(
                     target.owner,
@@ -2151,7 +2223,7 @@ pub(crate) async fn ui4_input_service_task(ap1_spawner: crate::workers::WorkerSp
         ),
     }
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings cursor_wake=producer-signal keyboard_watchdog_hz={} selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback start_key=reveal-menu-button cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/per-cursor-selected-frame-only dock=top-center-maximize+center-sides-halves+corners-quadrants+bottom-third-collapse+bottom-two-thirds-resize-latch-10s/dpi-mm-first outline=primary-button/selected-frame-only desktop_menu=per-cursor/color-picker+shell owner_events=selected-frame-only screenshot=parked\n",
+        "ui4/input: service online source=hid-sequence-rings cursor_wake=producer-signal keyboard_watchdog_hz={} selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback start_key=reveal-menu-button cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/per-cursor-selected-frame-only dock=top-center-maximize+center-sides-halves+corners-quadrants+bottom-third-collapse+spirit-hardware-cursor-circle-access+bottom-two-thirds-resize-latch-10s/dpi-mm-first outline=primary-button/selected-frame-only desktop_menu=per-cursor/color-picker+shell owner_events=selected-frame-only screenshot=parked\n",
         super::INTERACTION_CADENCE_HZ,
     );
     loop {
@@ -3202,6 +3274,9 @@ fn dock_target_at(
     screen_width: u32,
     screen_height: u32,
 ) -> Option<super::WindowDockTarget> {
+    if spirit_dock_circle().is_some_and(|circle| spirit_circle_contains(circle, x, y)) {
+        return Some(super::WindowDockTarget::SpiritAccess);
+    }
     dock_target_at_in_zones(x, y, &dock_zones(screen_width, screen_height))
 }
 
@@ -3253,7 +3328,7 @@ pub(super) fn dock_zone_row_span(zone: Ui4DockZone, row: u32) -> Option<Ui4Visua
             let first = first_true_suffix(zone.rect.width, contains)?;
             (first, zone.rect.width.saturating_sub(1))
         }
-        WindowDockTarget::Maximize | WindowDockTarget::Collapse | WindowDockTarget::GenericResize => {
+        WindowDockTarget::Maximize | WindowDockTarget::Collapse | WindowDockTarget::GenericResize | WindowDockTarget::SpiritAccess => {
             let left_half = zone.rect.width / 2 + zone.rect.width % 2;
             let first = first_true_suffix(left_half, contains)?;
             (first, zone.rect.width.saturating_sub(1).saturating_sub(first))
@@ -3287,7 +3362,8 @@ pub(super) fn dock_zone_column_span(zone: Ui4DockZone, column: u32) -> Option<Ui
         WindowDockTarget::BottomLeft
         | WindowDockTarget::BottomRight
         | WindowDockTarget::Collapse
-        | WindowDockTarget::GenericResize => {
+        | WindowDockTarget::GenericResize
+        | WindowDockTarget::SpiritAccess => {
             let first = first_true_suffix(zone.rect.height, contains)?;
             (first, zone.rect.height.saturating_sub(1))
         }
@@ -3387,7 +3463,7 @@ fn dock_zone_local_contains(
                 height,
             )
         }
-        WindowDockTarget::Collapse | WindowDockTarget::GenericResize => normalized_ellipse_contains(
+        WindowDockTarget::Collapse | WindowDockTarget::GenericResize | WindowDockTarget::SpiritAccess => normalized_ellipse_contains(
             x.saturating_mul(2).saturating_add(1).abs_diff(width),
             width,
             height
@@ -3432,6 +3508,7 @@ const fn dock_target_label(target: super::WindowDockTarget) -> &'static str {
     match target {
         super::WindowDockTarget::Collapse => "collapse",
         super::WindowDockTarget::GenericResize => "generic-resize",
+        super::WindowDockTarget::SpiritAccess => "spirit-access",
         super::WindowDockTarget::Maximize => "maximize",
         super::WindowDockTarget::LeftHalf => "left-half",
         super::WindowDockTarget::RightHalf => "right-half",
@@ -3440,6 +3517,10 @@ const fn dock_target_label(target: super::WindowDockTarget) -> &'static str {
         super::WindowDockTarget::BottomLeft => "bottom-left",
         super::WindowDockTarget::BottomRight => "bottom-right",
     }
+}
+
+pub(super) const fn spirit_dock_label(granted: bool) -> &'static str {
+    if granted { "REVOKE AI" } else { "ALLOW AI" }
 }
 
 fn translated_frame_placement(

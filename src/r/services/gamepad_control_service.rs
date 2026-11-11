@@ -406,6 +406,13 @@ pub(crate) fn release_principal(principal: GamepadControlPrincipal) -> usize {
     STATION.lock().release_principal(principal)
 }
 
+/// Trusted ownership of a live mediated gamepad, independent of HUT labels.
+pub(crate) fn gamepad_principal(slot_id: u32) -> Option<GamepadControlPrincipal> {
+    STATION.lock().gamepads.iter()
+        .find(|gamepad| gamepad.capability.slot_id == slot_id)
+        .map(|gamepad| gamepad.principal)
+}
+
 pub(crate) fn submit_command(
     principal: GamepadControlPrincipal,
     handle: u64,

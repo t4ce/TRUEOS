@@ -453,6 +453,48 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
             };
             push_dock_zone_mask(&mut rects, zone, color);
         }
+        if let Some(circle) = super::input_broker::spirit_dock_circle() {
+            let preview = visuals.iter().filter_map(|visual| visual.dock_preview)
+                .find(|preview| preview.target == super::WindowDockTarget::SpiritAccess);
+            let granted = preview.is_some_and(|preview| preview.spirit_access_granted);
+            let color = if granted { Rgba8::new(235, 100, 115, DOCK_FIELD_ALPHA) }
+                else { Rgba8::new(70, 205, 160, DOCK_FIELD_ALPHA) };
+            let top = i64::from(circle.center_y).saturating_sub(i64::from(circle.radius)).max(0) as u32;
+            let bottom = (i64::from(circle.center_y) + i64::from(circle.radius) + 1)
+                .clamp(0, i64::from(screen_h)) as u32;
+            for row in top..bottom {
+                if let Some(span) = super::input_broker::spirit_circle_row_span(circle, row, screen_w) {
+                    push_visual_rect(&mut rects, span, color);
+                }
+            }
+            let label = preview.map_or("AI ACCESS", |preview| {
+                super::input_broker::spirit_dock_label(preview.spirit_access_granted)
+            });
+            let text_width = (label.len() as u32).saturating_mul((microfont::FWIDTH * 2) as u32);
+            let text_x = (i64::from(circle.center_x) - i64::from(text_width / 2))
+                .clamp(0, i64::from(screen_w.saturating_sub(text_width))) as u32;
+            let text_y = (i64::from(circle.center_y) - i64::from((microfont::FHEIGHT + 8) as u32))
+                .clamp(0, i64::from(screen_h)) as u32;
+            push_microfont_menu_text(&mut rects, text_x, text_y, text_width.min(screen_w), label,
+                Rgba8::new(255, 255, 255, 255));
+        }
+    }
+
+    // This badge belongs to the brokered frame, not to app pixels or an app-wide
+    // permission. It disappears as soon as that exact grant is revoked/retired.
+    for window in slot4_windows() {
+        let frame = super::CursorFrameKey::new(window.owner, window.id);
+        if !super::spirit_access::is_granted(frame) {
+            continue;
+        }
+        let placement = window.presentation_placement;
+        let width = placement.width.min(34);
+        let height = placement.height.min((microfont::FHEIGHT * 2 + 4) as u32);
+        let x = placement.x.max(0) as u32;
+        let y = placement.y.max(0) as u32;
+        push_overlay_rect(&mut rects, x, y, width, height, Rgba8::new(30, 115, 85, 235));
+        push_microfont_menu_text(&mut rects, x.saturating_add(4), y.saturating_add(2),
+            width.saturating_sub(8), "AI", Rgba8::new(255, 255, 255, 255));
     }
 
     for (preview, x, y) in super::codex_prompt::attachment_visuals() {

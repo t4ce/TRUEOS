@@ -462,6 +462,8 @@ pub(crate) enum WindowDockTarget {
     GenericResize,
     /// Bottom-left-of-center compact action; never a producer resize.
     Collapse,
+    /// Bottom-center permission action; never committed as a dock placement.
+    SpiritAccess,
     LeftHalf,
     RightHalf,
     TopLeft,
@@ -2605,7 +2607,7 @@ pub(super) fn docked_window_placement(
     let split_x = output_width / 2;
     let split_y = output_height / 2;
     let (x, y, width, height) = match target {
-        WindowDockTarget::GenericResize | WindowDockTarget::Collapse => return previous,
+        WindowDockTarget::GenericResize | WindowDockTarget::Collapse | WindowDockTarget::SpiritAccess => return previous,
         WindowDockTarget::Maximize => (0, 0, output_width, output_height),
         WindowDockTarget::LeftHalf => (0, 0, split_x, output_height),
         WindowDockTarget::RightHalf => {
@@ -2696,7 +2698,7 @@ fn change_window_dock_record_at(
     destination: Option<WindowPlacement>,
 ) -> Result<WindowDockChange, WindowBrokerError> {
     if !window.interaction.maximizable
-        || matches!(target, Some(WindowDockTarget::GenericResize | WindowDockTarget::Collapse))
+        || matches!(target, Some(WindowDockTarget::GenericResize | WindowDockTarget::Collapse | WindowDockTarget::SpiritAccess))
     {
         return Err(WindowBrokerError::InteractionDenied);
     }
@@ -3109,6 +3111,7 @@ pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), Windo
     broker.mark_composition_changed();
     drop(broker);
     super::video_frame::decoded_video_window_closed(owner, id);
+    super::spirit_access::frame_closed(super::CursorFrameKey::new(owner, id));
     super::cursor_frame_inout::frame_closed(owner, id);
     super::context_menu::dismiss_window(owner, id);
     Ok(())

@@ -32,6 +32,7 @@ mod input_broker;
 mod layer_contract;
 mod link_service;
 mod screenshot;
+pub(crate) mod spirit_access;
 pub(crate) use screenshot::writable_capture_root_handle;
 mod slot4_service;
 mod button_outline;
