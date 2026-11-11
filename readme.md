@@ -18,6 +18,21 @@ Sign in with your Codex account; sign-in pages open in Hull. Your account's usag
 
 TRUEOS is a research and engineering tool for developers and hobbyists. Tech enthusiasts can get the most out of it: driver support is still small, but the tooling to wire that last mile, with AI or with both hands, is wide open in [tools/](tools/).
 
+> [!WARNING]
+> **This is an experimental release, not a production-ready or security-hardened platform.** Useful work is possible, but the firewall is not integrated and authentication, TPM integration, isolation, and recovery are still being developed. Do not use it for banking, sensitive accounts, or private data, and never keep the only copy of your work here.
+>
+> Use spare hardware and a controlled lab or test network, isolated from sensitive devices and services. A local LAN or DMZ alone does not make the system secure. Production readiness is a goal, with no fixed release date.
+>
+> This tool is built for constructive work. Please use it with care and for the benefit of others.
+
+### Codex sign-in and workspace protection
+
+Codex sign-in is available in the current build with a specific protection already active: TRUEOSFS access keys. When Codex's private workspace is first provisioned, TRUEOS creates a unique key and saves its ownership relation persistently. That key protects the workspace across launches, including Codex's internal session files.
+
+Other apps and the builtin file browser do not gain access to that private workspace simply by being installed or open under another login. Access is tied to the authenticated owner and the launched app container, with explicit delegation for Codex's SQLite service. Codex can still work with permitted files outside its private workspace, and you can share project files with it without exposing its internal session storage.
+
+This is an active filesystem boundary, while the broader account and permission-management interface is still unfinished. It provides a concrete safeguard for trying Codex sign-in, but it is not a guarantee that a session cannot be stolen: the kernel and trusted services remain part of the security boundary, and access keys do not encrypt the disk. Someone who can read the disk through another operating system may recover session data. Network security and the rest of the platform still need hardening; use a test account and a controlled setup accordingly.
+
 The privilege to use AI will lead to new generations of algorithms.
 While a lot of effort goes into the production of hardware, maintaining large data centers, energy, and bandwidth requires infrastructure for the power demand inherent to the raw computation of inference.
 This enormous effort enables us to enjoy that privilege of intelligence, and that revolution leads to a Codex of 10 keypoints dedicated to AI.
@@ -218,6 +233,23 @@ Apps are userspace Blueprints. Builtins ship inside the kernel bundle; the rest 
 | 8 | [OSM](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/osm) + [Frog](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/Frog) | Catalog | OpenStreetMap on a desktop you can extend. Right-click a point on the map and Frog shows its live weather. |
 | 9 | [Termdir](https://github.com/t4ce/TRUEOS-Buildins/tree/master/termdir) | Builtin | Browse TRUEOSFS as a graph, with a minimap, SHA-256, and archive actions. |
 | 10 | [PrismQ](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/prismq) | Catalog | Quantum circuits. Maxpix's quantum scenes build on them. |
+
+## SYSTEM CAPABILITIES
+
+The app catalog sits on top of services and tools already available in TRUEOS:
+
+| Capability | Current scope |
+| --- | --- |
+| Video playback | Up to a 4K soft cap; practical limits depend on the CPU, Intel iGPU, and display engine. |
+| Capture | Record video, audio, or both. Camera support is planned. |
+| Hardware discovery | Generic PCI enumeration and a USB stack provide the foundation for device support. |
+| Networking | PCI network drivers, Intel Wi-Fi (`iwl_ax201`, `iwl_ax211`, and `iwl4965`), and USB Ethernet through CDC-ECM (RTL8153). Coverage and features are still evolving toward broader, more generic support. |
+| System information | Inspect BIOS and system tables. |
+| System logs | Select and filter detailed logs while the system is running. |
+| Resource monitoring | Monitor RAM usage and CPU cores. |
+| Hypervisor | The foundations are in place for every launched Blueprint. The full lifecycle, including pause and replication, is still unfinished. |
+| Disk management | Inspect and manage disks, and format them with the custom TRUEOSFS filesystem. |
+| Authentication | Cryptographic and two-factor authentication foundations are present. Full TPM integration is unfinished. |
 
 ## BOOT IT. TRY IT.
 
