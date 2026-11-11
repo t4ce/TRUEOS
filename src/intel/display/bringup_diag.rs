@@ -232,7 +232,7 @@ fn append_pipe(out: &mut String, dev: crate::intel::Dev, pipe: PipeInfo, physica
             slot,
             slot + 1,
             if native_ui4_for_pipe(pipe) {
-                tgl_ui4_layout::logical_slot(slot)
+                tgl_ui4_layout::profile_logical_slot(slot, laptop_expanded_planes_enabled())
             } else {
                 (slot < UNIVERSAL_PLANE_SLOTS).then_some(slot)
             },

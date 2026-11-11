@@ -17,8 +17,8 @@ use super::display::{
     PLANE_CTL_ARB_SLOTS_4BPP, PLANE_CTL_ENABLE, PLANE_CTL_FORMAT_XRGB_8888, TRANS_DDI_FUNC_CTL_A,
     TRANS_HTOTAL_A, TRANS_VTOTAL_A, UNI_PLANE_AUX_DIST_OFF, UNI_PLANE_AUX_OFFSET_OFF,
     UNI_PLANE_BASE, UNI_PLANE_COLOR_CTL_OFF, UNI_PLANE_CUS_CTL_OFF, UNI_PLANE_KEYMSK_OFF,
-    UNI_PLANE_OFFSET_OFF, UNI_PLANE_POS_OFF, UNI_PLANE_SIZE_OFF, UNI_PLANE_STRIDE_OFF,
-    UNI_PLANE_SURF_OFF, UNI_PLANE_SURFLIVE_OFF,
+    UNI_PLANE_OFFSET_OFF, UNI_PLANE_POS_OFF, UNI_PLANE_SIZE_OFF, UNI_PLANE_SLOT_STRIDE,
+    UNI_PLANE_STRIDE_OFF, UNI_PLANE_SURF_OFF, UNI_PLANE_SURFLIVE_OFF,
 };
 use super::{Dev, mmio_read, mmio_write};
 
@@ -153,7 +153,7 @@ fn primary_scalers_detached(dev: Dev) -> bool {
     scalers_detached(dev, 0b11)
 }
 
-/// The seven-plane UI4 bootstrap takes every Pipe A plane at native size.
+/// The native UI4 bootstrap takes every selected Pipe A plane at native size.
 /// Retire all inherited scaler bindings before publishing that contract.
 pub(super) fn detach_ui4_scalers(dev: Dev) -> bool {
     if !is_target(dev) || !native_scanout_ready() {
@@ -161,6 +161,34 @@ pub(super) fn detach_ui4_scalers(dev: Dev) -> bool {
     }
     let armed = detach_scalers(dev, u8::MAX);
     (!armed || wait_frame(dev)) && scalers_detached(dev, u8::MAX)
+}
+
+/// Latch off carriers omitted by the five-plane comparison before their
+/// inherited DBUF ranges can conflict with the selected native allocation.
+/// Re-arm even a staged disabled CTL: it does not prove the live plane is off.
+pub(super) fn disable_unused_ui4_planes(dev: Dev) -> bool {
+    if !is_target(dev) || !native_scanout_ready() {
+        return false;
+    }
+    if super::display::laptop_expanded_planes_enabled() {
+        return true;
+    }
+    for physical_slot in 5..7 {
+        let base = UNI_PLANE_BASE + physical_slot * UNI_PLANE_SLOT_STRIDE;
+        let ctl = mmio_read(dev, base);
+        let surf = mmio_read(dev, base + UNI_PLANE_SURF_OFF);
+        mmio_write(dev, base, ctl & !PLANE_CTL_ENABLE);
+        mmio_write(dev, base + UNI_PLANE_SURF_OFF, surf);
+        let _ = mmio_read(dev, base + UNI_PLANE_SURF_OFF);
+    }
+    if !wait_frame(dev) || !wait_frame(dev) {
+        return false;
+    }
+    (5..7).all(|physical_slot| {
+        mmio_read(dev, UNI_PLANE_BASE + physical_slot * UNI_PLANE_SLOT_STRIDE)
+            & PLANE_CTL_ENABLE
+            == 0
+    })
 }
 
 fn prepare_frame(dev: Dev) -> Option<Frame> {
@@ -315,23 +343,25 @@ pub(crate) fn init_once(dev: Dev) -> bool {
         SPIRIT_RESEALED as u8,
     );
     if readback_ok {
-        // Retain the proven allocation for compact font-free diagnostics on
-        // hardware plane 6. UI4 interaction owns hardware plane 7 above it.
-        let (diagnostic_width, diagnostic_height) = super::display::laptop_diagnostic_extent();
-        let diagnostic_pitch = diagnostic_width * 4;
-        let _ = unsafe {
-            crate::r::services::microfont_log_service::install(
-                crate::r::services::microfont_log_service::Surface {
-                    phys: frame.phys,
-                    gpu: SURFACE_GPU,
-                    virt: frame.virt,
-                    byte_len: (diagnostic_pitch * diagnostic_height) as usize,
-                    width: diagnostic_width,
-                    height: diagnostic_height,
-                    pitch_bytes: diagnostic_pitch,
-                },
-            )
-        };
+        if super::display::laptop_expanded_planes_enabled() {
+            // Only the expanded layout retains a dedicated diagnostic plane.
+            // Never move this service onto the five-plane interaction carrier.
+            let (diagnostic_width, diagnostic_height) = super::display::laptop_diagnostic_extent();
+            let diagnostic_pitch = diagnostic_width * 4;
+            let _ = unsafe {
+                crate::r::services::microfont_log_service::install(
+                    crate::r::services::microfont_log_service::Surface {
+                        phys: frame.phys,
+                        gpu: SURFACE_GPU,
+                        virt: frame.virt,
+                        byte_len: (diagnostic_pitch * diagnostic_height) as usize,
+                        width: diagnostic_width,
+                        height: diagnostic_height,
+                        pitch_bytes: diagnostic_pitch,
+                    },
+                )
+            };
+        }
         // PIPE_SRC now describes the actual native panel. Re-enter the same
         // allocation, alpha/DBUF, plane-latch and capability-publication path
         // as desktop UI4, with distinct 4K-safe scanout/compositor reservations.

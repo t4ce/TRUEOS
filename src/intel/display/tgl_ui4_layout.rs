@@ -5,6 +5,39 @@
 //! GGTT and compositor PPGTT are separate; neither remaps the retained native
 //! panel probe at E0000000.
 
+// Keep the extra-plane experiment parked while comparing scanout against
+// five carriers. Native 4K addresses, capacities and width-aware DBUF/WM
+// remain selected independently; this is not a return to desktop geometry.
+pub(super) const EXPANDED_PLANES_ENABLED: bool = false;
+
+pub(super) const fn plane_count(expanded: bool) -> usize {
+    if expanded { 7 } else { 5 }
+}
+
+pub(super) const fn application_mask(expanded: bool) -> u8 {
+    if expanded { 0x2F } else { 0x0F }
+}
+
+pub(super) const fn profile_physical_slot(logical: usize, expanded: bool) -> Option<usize> {
+    if expanded {
+        physical_slot(logical)
+    } else if logical < 5 {
+        Some(logical)
+    } else {
+        None
+    }
+}
+
+pub(super) const fn profile_logical_slot(physical: usize, expanded: bool) -> Option<usize> {
+    if expanded {
+        logical_slot(physical)
+    } else if physical < 5 {
+        Some(physical)
+    } else {
+        None
+    }
+}
+
 pub(super) const PRIMARY_SLOT_BYTES: u64 = 0x0400_0000;
 pub(super) const OVERLAY_SLOT_BYTES: u64 = 0x0200_0000;
 pub(super) const GGTT_BASE: u64 = 0xD000_0000;

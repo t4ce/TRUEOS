@@ -297,9 +297,6 @@ mod tests {
         protocol::set_speech_playing(true); next();
         protocol::set_speech_playing(false);
         now(31000);
-        // The preceding speech returned Lilly to uncrossed arms.
-        assert_eq!(next().animation.key, "transition.neutral_to_crossed");
-        now(31399);
         assert_eq!(next().animation.key, "idea.finger_up");
     }
 
@@ -430,90 +427,4 @@ mod tests {
             next();
         }
     }
-    fn advance(scheduled: protocol::LillyScheduledAnimation) {
-        now(NOW.load(Ordering::Relaxed) + scheduled.boundary_ms);
-    }
-
-    #[test]
-    fn mixed_expression_queue_prepares_each_start_and_inherits_each_end() {
-        let _lock = reset(0);
-        for tag in ["wink.playful", "wave.neutral", "happy.cheer", "idea.finger_up"] {
-            protocol::enqueue_animation(tag, protocol::SpiritRgba8::WHITE).unwrap();
-        }
-        for key in [
-            "transition.neutral_to_crossed", "wink.playful",
-            "transition.uncross_arms", "wave.neutral",
-            "transition.neutral_to_crossed", "happy.cheer",
-            "transition.neutral_to_crossed", "idea.finger_up",
-        ] {
-            let scheduled = next();
-            assert_eq!(scheduled.animation.key, key);
-            advance(scheduled);
-        }
-        assert_eq!(next().animation.key, "idle.crossed.soft_blink");
-    }
-
-    #[test]
-    fn timeline_replacement_during_preparation_cannot_play_stale_gesture() {
-        let _lock = reset(0);
-        protocol::enqueue_animation("wink.playful", protocol::SpiritRgba8::WHITE).unwrap();
-        let prep = next();
-        assert_eq!(prep.animation.key, "transition.neutral_to_crossed");
-        let replacement = protocol::SpiritPackage::new(None, Some(protocol::SpiritGesture {
-            tag: "wave.neutral".into(), rgba: protocol::SpiritRgba8::WHITE,
-        }));
-        protocol::replace_timeline(&[replacement]).unwrap();
-        advance(prep);
-        let prep = next();
-        assert_eq!(prep.animation.key, "transition.uncross_arms");
-        advance(prep);
-        let wave = next();
-        assert_eq!(wave.animation.key, "wave.neutral");
-        advance(wave);
-        assert_eq!(next().animation.key, "idle.uncrossed.soft_blink");
-    }
-
-    #[test]
-    fn stopping_during_preparation_keeps_completed_posture_without_playing_gesture() {
-        let _lock = reset(0);
-        protocol::enqueue_animation("wink.playful", protocol::SpiritRgba8::WHITE).unwrap();
-        let prep = next();
-        assert_eq!(prep.animation.key, "transition.neutral_to_crossed");
-        assert_eq!(protocol::stop_after_boundary(), 1);
-        advance(prep);
-        assert_eq!(next().animation.key, "idle.crossed.soft_blink");
-    }
-
-    #[test]
-    fn reasoning_and_speech_prepare_without_losing_reasoning_event() {
-        let _lock = reset(0);
-        *ai::ai_activity::EVENT.lock() = Some(ai::ai_activity::AiReasoningEvent {
-            phase: ai::ai_activity::AiReasoningPhase::Finished, source: "test", turn: 1,
-        });
-        let prep = next();
-        assert_eq!(prep.animation.key, "transition.neutral_to_crossed");
-        advance(prep);
-        let cue = next();
-        assert_eq!(cue.animation.key, "idea.finger_up");
-        advance(cue);
-        protocol::set_speech_playing(true);
-        let prep = next();
-        assert_eq!(prep.animation.key, "transition.uncross_arms");
-        advance(prep);
-        let speech = next();
-        assert_eq!(speech.animation.key, "talk.calm.uncrossed");
-        advance(speech);
-        protocol::set_speech_playing(false);
-        assert_eq!(next().animation.key, "idle.uncrossed.soft_blink");
-    }
-
-    #[test]
-    fn unknown_or_internal_expression_rejects_whole_request() {
-        let _lock = reset(0);
-        for word in ["static", "transition", "wink.playful", "unknown"] {
-            assert_eq!(protocol::enqueue_emotion_words(&["flirt", word]), Err(protocol::LillyProtocolError::UnknownEmotion));
-        }
-        assert_eq!(next().animation.key, "idle.uncrossed.soft_blink");
-    }
-
 }

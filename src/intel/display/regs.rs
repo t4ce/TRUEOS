@@ -237,7 +237,11 @@ pub(in crate::intel) struct PlaneId {
 impl PlaneId {
     pub(in crate::intel) fn physical_slot(self) -> usize {
         if super::native_ui4_for_pipe(self.pipe) {
-            super::tgl_ui4_layout::physical_slot(self.slot).expect("native display plane slot")
+            super::tgl_ui4_layout::profile_physical_slot(
+                self.slot,
+                super::laptop_expanded_planes_enabled(),
+            )
+            .expect("native display plane slot")
         } else {
             self.slot
         }

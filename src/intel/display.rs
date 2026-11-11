@@ -34,6 +34,10 @@ fn native_ui4_for_pipe(pipe: PipeInfo) -> bool {
     pipe.slot == 0 && crate::intel::tgl_native_panel::ui4_handoff_active()
 }
 
+pub(super) fn laptop_expanded_planes_enabled() -> bool {
+    tgl_ui4_layout::EXPANDED_PLANES_ENABLED
+}
+
 pub(super) fn laptop_diagnostic_extent() -> (u32, u32) {
     (
         tgl_ui4_layout::DIAGNOSTIC_WIDTH,
@@ -43,7 +47,7 @@ pub(super) fn laptop_diagnostic_extent() -> (u32, u32) {
 
 fn plane_slot_count(pipe: PipeInfo) -> usize {
     if native_ui4_for_pipe(pipe) {
-        MAX_UNIVERSAL_PLANE_SLOTS
+        tgl_ui4_layout::plane_count(laptop_expanded_planes_enabled())
     } else {
         UNIVERSAL_PLANE_SLOTS
     }
@@ -51,7 +55,7 @@ fn plane_slot_count(pipe: PipeInfo) -> usize {
 
 fn application_plane_mask(pipe: PipeInfo) -> u8 {
     if native_ui4_for_pipe(pipe) {
-        0x2f
+        tgl_ui4_layout::application_mask(laptop_expanded_planes_enabled())
     } else {
         0x0f
     }
@@ -3566,14 +3570,14 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     bringup_diag::checkpoint("transparent-front-allocation", usize::MAX);
     let count = plane_slot_count(pipe);
     if native_ui4_for_pipe(pipe) {
-        // The seven-plane allocation borrows both TGL DBUF slices. Another
+        // The native 4K allocation borrows both TGL DBUF slices. Another
         // active pipe changes the allowed slice routing and needs reallocation.
         if PIPES.iter().skip(1).any(|other| {
             crate::intel::mmio_read(dev, PIPECONF_A + other.slot * PIPE_MMIO_STRIDE)
                 & PIPECONF_STATE
                 != 0
         }) {
-            return fail("native-seven-planes-require-single-active-pipe");
+            return fail("native-4k-stack-requires-single-active-pipe");
         }
         let ctl = crate::intel::mmio_read(dev, tgl_ui4_layout::DBUF_CTL_S2);
         crate::intel::mmio_write(
@@ -3622,6 +3626,9 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
 
     if native_ui4_for_pipe(pipe) && !super::tgl_native_panel::detach_ui4_scalers(dev) {
         return fail("native-inherited-scaler-detach");
+    }
+    if native_ui4_for_pipe(pipe) && !super::tgl_native_panel::disable_unused_ui4_planes(dev) {
+        return fail("native-unused-planes-disable");
     }
 
     // PLANE_SURF is the double-buffered commit trigger. Stage every disabled
@@ -3709,13 +3716,19 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     }
     bringup_diag::checkpoint("ready", usize::MAX);
     bringup_diag::log_ready(dev);
-    if native_ui4_for_pipe(pipe) {
+    if native_ui4_for_pipe(pipe) && laptop_expanded_planes_enabled() {
         crate::log!(
             "intel/display: native-plane-layout pipe={} universal_planes=7 application_logical_slots=0,1,2,3,5 application_mask=0x{:02X} interaction_logical=4 interaction_physical=7 diagnostics_logical=6 diagnostics_physical=6 diagnostics=centered-{}x{} dbuf=s1+s2 wm0_full=249 desktop_policy=unchanged\n",
             pipe.name,
             application_plane_mask,
             tgl_ui4_layout::DIAGNOSTIC_WIDTH,
             tgl_ui4_layout::DIAGNOSTIC_HEIGHT,
+        );
+    } else if native_ui4_for_pipe(pipe) {
+        crate::log!(
+            "intel/display: native-plane-layout pipe={} profile=five-plane-comparison universal_planes=5 application_logical_slots=0,1,2,3 application_mask=0x{:02X} interaction_logical=4 interaction_physical=5 unused_physical=6,7 disabled_and_latched=1 diagnostics=off dbuf=s1+s2 wm0_full=249 native_4k_reservations=preserved desktop_policy=unchanged\n",
+            pipe.name,
+            application_plane_mask,
         );
     }
     crate::log!(
@@ -4178,7 +4191,9 @@ fn overlay_surface_pool(
         2 => Some(&OVERLAY_SURFACES_SLOT_2[pipe.slot]),
         3 => Some(&OVERLAY_SURFACES_SLOT_3[pipe.slot]),
         4 => Some(&OVERLAY_SURFACES_SLOT_4[pipe.slot]),
-        5 if native_ui4_for_pipe(pipe) => Some(&OVERLAY_SURFACES_SLOT_5[pipe.slot]),
+        5 if native_ui4_for_pipe(pipe) && laptop_expanded_planes_enabled() => {
+            Some(&OVERLAY_SURFACES_SLOT_5[pipe.slot])
+        }
         _ => None,
     }
 }
@@ -4192,7 +4207,9 @@ fn ui4_direct_scanout_pool(
         1 => Some(&UI4_DIRECT_SCANOUT_SLOT_1[pipe.slot]),
         2 => Some(&UI4_DIRECT_SCANOUT_SLOT_2[pipe.slot]),
         3 => Some(&UI4_DIRECT_SCANOUT_SLOT_3[pipe.slot]),
-        5 if native_ui4_for_pipe(pipe) => Some(&UI4_DIRECT_SCANOUT_SLOT_5[pipe.slot]),
+        5 if native_ui4_for_pipe(pipe) && laptop_expanded_planes_enabled() => {
+            Some(&UI4_DIRECT_SCANOUT_SLOT_5[pipe.slot])
+        }
         _ => None,
     }
 }
@@ -4202,7 +4219,7 @@ fn ui4_direct_scanout_gpu_for_alias(
     plane_slot: usize,
     alias_index: usize,
 ) -> Option<u64> {
-    if native_ui4_for_pipe(pipe) && plane_slot == 5 {
+    if native_ui4_for_pipe(pipe) && laptop_expanded_planes_enabled() && plane_slot == 5 {
         return tgl_ui4_layout::extra_direct_scanout_gpu(alias_index);
     }
     let plane_index = plane_slot;

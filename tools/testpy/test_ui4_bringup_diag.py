@@ -8,6 +8,18 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def rust_function(source: str, name: str) -> str:
+    match = re.search(rf"^fn {name}\([^\n]+", source, re.MULTILINE)
+    assert match, name
+    opening = source.index("{", match.start())
+    depth = 1
+    for index in range(opening + 1, len(source)):
+        depth += (source[index] == "{") - (source[index] == "}")
+        if depth == 0:
+            return source[match.start():index + 1]
+    raise AssertionError(name)
+
+
 def main() -> None:
     channel = re.search(r'^channel\s*=\s*"([^"]+)"',
                         (ROOT / "rust-toolchain.toml").read_text(), re.MULTILINE)
@@ -87,12 +99,13 @@ const PIPE_MMIO_STRIDE: usize = 0x1000;
 static UI4_RGBA8_PLANE_STACK_STATE: AtomicU32 = AtomicU32::new(3);
 static PRIMARY_BOOT_SURFACE_INIT: AtomicBool = AtomicBool::new(true);
 #[derive(Clone, Copy)] struct PipeInfo { name: &'static str, slot: usize, pipe_src_off: usize }
-fn native_ui4_for_pipe(pipe: PipeInfo) -> bool {
-    pipe.slot == 0 && intel::tgl_native_panel::ui4_handoff_active()
+// The selection is a fixture so one run can exercise both profiles; actual
+// native adoption and logical-count routing execute from display.rs below.
+static EXPANDED_PROFILE: AtomicBool = AtomicBool::new(tgl_ui4_layout::EXPANDED_PLANES_ENABLED);
+fn laptop_expanded_planes_enabled() -> bool {
+    EXPANDED_PROFILE.load(Ordering::Acquire)
 }
-fn plane_slot_count(pipe: PipeInfo) -> usize {
-    if native_ui4_for_pipe(pipe) { MAX_UNIVERSAL_PLANE_SLOTS } else { UNIVERSAL_PLANE_SLOTS }
-}
+@DISPLAY_SELECTION@
 #[path = "@LAYOUT@"] mod tgl_ui4_layout;
 const PIPES: [PipeInfo; 4] = [PipeInfo { name: "pipe-a", slot: 0, pipe_src_off: 0x6001C }, PipeInfo { name: "pipe-b", slot: 1, pipe_src_off: 0x6101C }, PipeInfo { name: "pipe-c", slot: 2, pipe_src_off: 0x6201C }, PipeInfo { name: "pipe-d", slot: 3, pipe_src_off: 0x6301C }];
 fn active_pipe(_: intel::Dev) -> Option<PipeInfo> { None }
@@ -140,20 +153,52 @@ fn failed_bootstrap_retains_attempted_pipe_and_failure_time_registers() {
     // continue reading physical banks in order, including every extra plane.
     intel::tgl_native_panel::ADOPTED.store(true, Ordering::Release);
     bringup_diag::select_pipe(PIPES[0]);
-    bringup_diag::checkpoint("plane-arm", 6);
-    bringup_diag::latch([0x1000, 0x2000, 0x3000, 0x4000, 0x5000, 0x6000, 0x7000], 0x7f, 1);
-    let mut adopted = String::new();
-    bringup_diag::append(&mut adopted, dev);
-    assert!(adopted.contains("last_live_mask=0x7F last_polls=1 wanted=[00001000, 00002000, 00003000, 00004000, 00005000, 00006000, 00007000]"));
-    assert!(adopted.contains("logical_ui4_slots=7 physical_universal_planes_per_pipe=7"));
-    assert_eq!(adopted.lines().filter(|line| line.starts_with("physical_plane pipe=")).count(), 28);
-    for (physical, logical) in [(4, 5), (5, 6), (6, 4)] {
-        let base = UNI_PLANE_BASE + physical * UNI_PLANE_SLOT_STRIDE;
-        assert!(adopted.contains(&format!(
-            "physical_plane pipe=pipe-a slot={} hardware_plane={} logical_ui4_slot=Some({}) enabled=false base=0x{:X} ctl=0x{:08X}",
-            physical, physical + 1, logical, base, base + 0x10)));
+    let mut profile_reads = None;
+    for expanded in [false,true] {
+        EXPANDED_PROFILE.store(expanded,Ordering::Release);
+        bringup_diag::checkpoint("plane-arm", if expanded { 6 } else { 4 });
+        let wanted = if expanded {
+            [0x1000,0x2000,0x3000,0x4000,0x5000,0x6000,0x7000]
+        } else {
+            [0x1000,0x2000,0x3000,0x4000,0x5000,0,0]
+        };
+        bringup_diag::latch(wanted, if expanded { 0x7f } else { 0x1f },1);
+        intel::READS.lock().unwrap().clear();
+        let mut adopted = String::new();
+        let dbuf_reads_before = intel::DBUF_READS.load(Ordering::Relaxed);
+        bringup_diag::append(&mut adopted, dev);
+        assert_eq!(intel::DBUF_READS.load(Ordering::Relaxed) - dbuf_reads_before,2);
+        let reads = intel::READS.lock().unwrap().clone();
+        if let Some(previous_reads) = &profile_reads {
+            assert_eq!(previous_reads,&reads,
+                "changing the logical profile must not change physical register reads");
+        } else {
+            profile_reads = Some(reads);
+        }
+        assert!(adopted.contains(if expanded {
+            "last_live_mask=0x7F last_polls=1 wanted=[00001000, 00002000, 00003000, 00004000, 00005000, 00006000, 00007000]"
+        } else {
+            "last_live_mask=0x1F last_polls=1 wanted=[00001000, 00002000, 00003000, 00004000, 00005000, 00000000, 00000000]"
+        }));
+        assert!(adopted.contains(if expanded {
+            "logical_ui4_slots=7 physical_universal_planes_per_pipe=7"
+        } else {
+            "logical_ui4_slots=5 physical_universal_planes_per_pipe=7"
+        }));
+        assert_eq!(adopted.lines().filter(|line| line.starts_with("physical_plane pipe=")).count(),28);
+        let logical_slots = if expanded {
+            [Some(0),Some(1),Some(2),Some(3),Some(5),Some(6),Some(4)]
+        } else {
+            [Some(0),Some(1),Some(2),Some(3),Some(4),None,None]
+        };
+        for (physical,logical) in logical_slots.into_iter().enumerate() {
+            let base = UNI_PLANE_BASE + physical * UNI_PLANE_SLOT_STRIDE;
+            assert!(adopted.contains(&format!(
+                "physical_plane pipe=pipe-a slot={} hardware_plane={} logical_ui4_slot={:?} enabled=false base=0x{:X} ctl=0x{:08X}",
+                physical,physical + 1,logical,base,base + 0x10)));
+        }
+        assert!(adopted.contains("physical_plane pipe=pipe-b slot=6 hardware_plane=7 logical_ui4_slot=None"));
     }
-    assert!(adopted.contains("physical_plane pipe=pipe-b slot=6 hardware_plane=7 logical_ui4_slot=None"));
 
     // The supplemental snapshot has independent literal register expectations.
     // Every requested word is read exactly once; none overlaps the old capture.
@@ -243,6 +288,9 @@ fn failed_bootstrap_retains_attempted_pipe_and_failure_time_registers() {
 }
 '''.replace("@SOURCE@", str(ROOT / "src/intel/display/bringup_diag.rs")).replace(
         "@LAYOUT@", str(ROOT / "src/intel/display/tgl_ui4_layout.rs"))
+    display = (ROOT / "src/intel/display.rs").read_text()
+    harness = harness.replace("@DISPLAY_SELECTION@", "\n".join(
+        rust_function(display, name) for name in ("native_ui4_for_pipe", "plane_slot_count")))
     registers = (ROOT / "src/intel/display/regs.rs").read_text()
     names = "PIPECONF_A TRANS_DDI_FUNC_CTL_A TRANS_HTOTAL_A TRANS_HSYNC_A TRANS_VTOTAL_A TRANS_VSYNC_A TRANS_PSR_CTL_A TRANS_PSR_STATUS_A TRANS_PSR2_CTL_A TRANS_PSR2_STATUS_A PLANE_CTL_ENABLE UNI_PLANE_WM_TRANS_OFF UNI_PLANE_WM_SAGV_OFF UNI_PLANE_WM_SAGV_TRANS_OFF PIPE_SCALER_0_A_CTRL PIPE_SCALER_ENABLE PIPE_SCALER_BINDING_MASK PIPE_SCALER_WIN_POS_FROM_CTRL PIPE_SCALER_WIN_SIZE_FROM_CTRL PIPE_SCALER_VPHASE_FROM_CTRL PIPE_SCALER_HPHASE_FROM_CTRL".split()
     names += "UNI_PLANE_BASE UNI_PLANE_PIPE_STRIDE UNI_PLANE_SLOT_STRIDE UNI_PLANE_CTL_OFF UNI_PLANE_BUF_CFG_OFF UNI_PLANE_SURF_OFF UNI_PLANE_SURFLIVE_OFF UNI_PLANE_STRIDE_OFF UNI_PLANE_POS_OFF UNI_PLANE_SIZE_OFF UNI_PLANE_OFFSET_OFF UNI_PLANE_COLOR_CTL_OFF UNI_PLANE_WM_0_OFF".split()
