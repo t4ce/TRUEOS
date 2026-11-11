@@ -1,16 +1,20 @@
-<p align="center"><img src="tools/aiupsell/assets/lilly.png" width="144" alt="Lilly, the animated face of Spirit on TRUEOS"></p>
+<p align="center"><img src="logo.jpg" width="320" alt="TRUEOS logo"></p>
 
 <h1 align="center">A RUST KERNEL WHERE CODEX RUNS NATIVE.</h1>
 <h1 align="center">BUILD YOUR UNIVERSE ABOVE TOKIO.</h1>
 
-<p align="center"><strong>TRUEOS · ONE ~25 MB BUNDLE · RUST KERNEL · CODEX ON THE DESKTOP</strong></p>
+<p align="center"><strong>TRUEOS · ONE ~19 MB BUNDLE · RUST KERNEL · CODEX ON THE DESKTOP</strong></p>
 <p align="center"><em>No doubt something has changed.</em></p>
-<p align="center"><a href="https://github.com/t4ce/TRUEOS/releases/latest"><strong>DOWNLOAD TRUEOS</strong></a> · <a href="tools/trueos-boot/README.md">BOOT IT</a> · <a href="https://github.com/t4ce/TRUEOS-Blueprints">BUILD A BLUEPRINT</a></p>
+<p align="center"><a href="https://github.com/t4ce/TRUEOS/releases/latest"><img src="https://img.shields.io/github/v/release/t4ce/TRUEOS?label=DOWNLOAD%20TRUEOS&color=brightgreen" alt="Download TRUEOS — latest release"></a></p>
+<p align="center"><a href="tools/trueos-boot/README.md">BOOT IT</a> · <a href="https://github.com/t4ce/TRUEOS-Blueprints">BUILD A BLUEPRINT</a></p>
 
 TRUEOS is a Rust kernel with a native desktop, a browser, an editor, and an agent that works with all of them.
 The agent is **Codex CLI**: OpenAI's official Rust CLI, compiled with `rustc` for TRUEOS and running natively on the machine.
+Codex is an on-demand Blueprint, downloaded separately from the ~19 MB base bundle. Its current package is **80,481,408 bytes (about 80.5 MB)**. Anyone can install it through AppDB, using the same catalog and package workflow as any other app; AppDB has no special distribution path for Codex.
 Sign in with your Codex account; sign-in pages open in Hull. Your account's usage limits still apply.
 **Meet Lilly**, the animated face of Spirit on your desktop. She shows when the agent is working, waiting for you, or ready for review.
+
+<p align="center"><img src="tools/aiupsell/assets/lilly.png" width="144" alt="Lilly, the animated face of Spirit on TRUEOS"></p>
 
 TRUEOS is a research and engineering tool for developers and hobbyists. Tech enthusiasts can get the most out of it: driver support is still small, but the tooling to wire that last mile, with AI or with both hands, is wide open in [tools/](tools/).
 
@@ -26,30 +30,19 @@ This enormous effort enables us to enjoy that privilege of intelligence, and tha
 >
 > Both are legitimate. Advancing the VirGL encoder would be a quick, iterative job, but the author has already built the native Intel stack, so that path is open for anyone who wants it. Mesa and Vulkan are powerful stacks, and someone dedicated to figuring them out for QEMU is welcome: we take that.
 
-## § PREFACE: EVERY HAND THAT EVER LEFT A MARK
+## § PREFACE: KNOWLEDGE WE BUILD ON
 
-Nothing in this Codex starts from zero.
+Knowledge grows as people pass on what they have learned, and each generation adds to it. Software and language models are part of that continuing exchange, built from the work of people who wrote, tested, taught, and shared what they knew. TRUEOS builds on that work too.
 
-Before there was a model, there was a mark. Someone shaped a stone so it could cut. Someone drew a crosshatch in ochre. Someone pressed a reed into wet clay. Someone wrote zero down as a number. Someone explained a thing twice, patiently, to a child who wasn't ready yet.
+### Where the operating system meets the application
 
-```text
-~3.3 million years ago  the oldest known stone tools (Kenya)
-~73,000 years ago       a crosshatch drawn in red ochre on a stone flake (Blombos Cave)
-~5,000 years ago        cuneiform, one of the earliest writing systems (Mesopotamia)
-628 CE                  zero written down as a number (Brahmagupta)
-c. 820 CE               al-Khwārizmī's algebra; his Latinized name becomes "algorithm"
-c. 1450 CE              movable type and the printing press (Gutenberg)
-1843                    Ada Lovelace's notes on Babbage's Analytical Engine
-1936                    Turing asks what can be computed
-2017                    the transformer architecture is published
-2026                    a Rust kernel where Codex runs natively
-```
+At some point, the operating system ends and your application begins. The boundary between Rust's standard library and the platform beneath it is where TRUEOS connects familiar Rust code to its own services. TRUEOS has adapted Tokio's multithreaded runtime as a first-class userspace runtime, giving applications a familiar foundation for asynchronous tasks, I/O, timers, and synchronization.
 
-Most of the sentences a language model learns from were first written by people trying to be understood. Every person who ever wrote something, every person who was ever recognised for it, and the many who never were: they are what this machine runs on. The intelligence here is inherited, not invented from nothing, so this Codex says so out loud.
+<p align="center"><a href="https://tokio.rs/"><img src="docs/assets/tokio-stack.svg" width="746" alt="The Tokio ecosystem stack: Bytes, Tracing, Mio, Tokio Runtime, Hyper, Tower, and Tonic"></a><br><sub>Stack artwork from <a href="https://tokio.rs/">Tokio</a>.</sub></p>
 
-The next generation of algorithms will stand on the same first stone.
+If you already know the Tokio ecosystem, that experience carries over to native TRUEOS apps. Shared application logic can stay portable across platforms, while TRUEOS-specific integration uses `cfg(target_os = "trueos")` and the Blueprint APIs.
 
-*Thank you, carvers, copyists, and everyone who explained a thing twice.*
+The [Blueprint workspace](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/Cargo.toml) currently pins Tokio to `=1.54.1` and patches it to the TRUEOS-adapted implementation. The target selects the platform configuration; the version pin and workspace patch select the matching runtime. Build through the Blueprint workflow to bring those pieces together, then build your application on top.
 
 ## § STEPS OF GUIDANCE
 
@@ -90,7 +83,7 @@ Each bar counts building blocks already in the code, not benchmarks. Keypoints 8
 ### § Interaction of multiple humans and AIs in harmony, concurrently
 `███░░░░░░░` **30%** · **Achieved:** Shell3 sessions and retained Matrix slots, with Blueprints hosted in VMX lanes ([hv](src/hv/)). **Next:** multi-user identity and the Y-Space hive.
 
-### § One ~25 MB bundle, batteries included
+### § One ~19 MB bundle, batteries included
 `████████░░` **80%** · **Achieved:** the local build's native archive is 25.2 MB and holds the stripped kernel (builtin apps and GPU kernels compiled in), the EFI loader, and the GuC firmware ([boot guide](tools/trueos-boot/README.md)). USB storage, HID, and network-class drivers are in tree. **Next:** publish the released archive size with every version.
 
 ### § One compatible CPU and one network device
@@ -132,7 +125,7 @@ TRUEOS aims to be the platform to deploy a large number of nodes across the worl
 
 The operating system should be program code that is for everybody. Parts like the USB stack are batteries included. A specific missing driver will be reasoned out of thin air. The AI does the final last-mile wiring, by nature. A vendor can't support arbitrary platforms. Supporting a platform is the platform's job, and for systems engineers it has always been the largest share of the work: firmware, power, interrupts, drivers, and devices have to work in harmony as one large, coherent system. That work is enormous, so we offload some of it here.
 
-Our goal is a versatile bundle of what an operating system is expected to ship to a node, not a generic cross-platform build. 25 MB is expected to fulfill every demand.
+Our goal is a versatile bundle of what an operating system is expected to ship to a node, not a generic cross-platform build. The current bundle is approximately 19 MB.
 
 The single condition is a compatible CPU and a network device. That needs just PCI, or USB on top of PCI for a USB NIC. With just that, the operating system should offer Codex Rust CLI integration that can literally patch its own way to the user.
 
@@ -215,15 +208,15 @@ Apps are userspace Blueprints. Builtins ship inside the kernel bundle; the rest 
 
 | # | Blueprint | Source | Why open it? |
 | --- | --- | --- | --- |
-| 1 | [Hull](https://github.com/t4ce/TRUEOS-Buildins/tree/main/hull) | Builtin | Browse, research, download, and preview a local HTML project. |
-| 2 | [Edit](https://github.com/t4ce/TRUEOS-Buildins/tree/main/edit) | Builtin | A native project workspace that Codex can work in. |
+| 1 | [Hull](https://github.com/t4ce/TRUEOS-Buildins/tree/master/hull) | Builtin | Browse, research, download, and preview a local HTML project. |
+| 2 | [Edit](https://github.com/t4ce/TRUEOS-Buildins/tree/master/edit) | Builtin | A native project workspace that Codex can work in. |
 | 3 | [Codex](https://github.com/t4ce/codex) | Catalog (`codex-cli`) | OpenAI's Codex CLI, compiled from `codex-rs` with `rustc`. Sign in and describe the task. |
 | 4 | [Cubes](https://github.com/t4ce/Cubes) | Catalog | Fullscreen cubes, worlds, and native rendering experiments. |
 | 5 | [Maxpix](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/maxpix) | Catalog | 230,400 particles: tornadoes, knots, and quantum-weighted scenes. |
 | 6 | [Shadertoy](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/shadertoy) | Catalog | Native shader visuals on the Intel GPU. |
 | 7 | [Player](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/Player) | Catalog | Media and audio playback. |
 | 8 | [OSM](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/osm) + [Frog](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/Frog) | Catalog | OpenStreetMap on a desktop you can extend. Right-click a point on the map and Frog shows its live weather. |
-| 9 | [Termdir](https://github.com/t4ce/TRUEOS-Buildins/tree/main/termdir) | Builtin | Browse TRUEOSFS as a graph, with a minimap, SHA-256, and archive actions. |
+| 9 | [Termdir](https://github.com/t4ce/TRUEOS-Buildins/tree/master/termdir) | Builtin | Browse TRUEOSFS as a graph, with a minimap, SHA-256, and archive actions. |
 | 10 | [PrismQ](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/prismq) | Catalog | Quantum circuits. Maxpix's quantum scenes build on them. |
 
 ## BOOT IT. TRY IT.
@@ -233,7 +226,7 @@ Apps are userspace Blueprints. Builtins ship inside the kernel bundle; the rest 
 1. Download the [latest release](https://github.com/t4ce/TRUEOS/releases/latest) and check the SHA-256 in its notes.
 2. Unpack the native archive onto a FAT-formatted UEFI boot partition, following the [boot guide](tools/trueos-boot/README.md). It holds exactly `TRUEOS.elf`, `EFI/BOOT/BOOTX64.EFI`, and `EFI/BOOT/tgl_guc_70.bin`. Keep your previous boot files for recovery.
 3. Boot a supported Intel machine from the UEFI boot menu.
-4. Open Hull or Edit, launch Codex, sign in, and give the agent a concrete task.
+4. Install Codex from AppDB, open Hull or Edit, launch Codex, sign in, and give the agent a concrete task.
 
 **Achieved today**
 
