@@ -127,10 +127,11 @@ pub(super) fn append(out: &mut String, dev: crate::intel::Dev) {
     ] {
         let raw = crate::intel::mmio_read(dev, register);
         let _ = writeln!(out,
-            "display_dbuf slice={} register=0x{:X} raw=0x{:08X} power_request={} power_state={} capture=read-only-no-poll",
+            "display_dbuf slice={} register=0x{:X} raw=0x{:08X} power_request={} power_state={} capture=read-only-no-poll tracker_state_service={}",
             slice, register, raw,
             raw & tgl_ui4_layout::DBUF_POWER_REQUEST != 0,
-            raw & tgl_ui4_layout::DBUF_POWER_STATE != 0);
+            raw & tgl_ui4_layout::DBUF_POWER_STATE != 0,
+            (raw >> 19) & 0x1F);
     }
     // A failed bootstrap may have disabled the very primary plane needed by
     // active_pipe(). Retain the attempted pipe so failures still expose it.
@@ -151,11 +152,45 @@ pub(super) fn append(out: &mut String, dev: crate::intel::Dev) {
         physical_count
     );
     if physical_count == 7 {
+        append_tgl_registers(out, dev);
         for observed_pipe in PIPES {
             append_pipe(out, dev, observed_pipe, physical_count);
         }
     } else {
         append_pipe(out, dev, pipe, physical_count);
+    }
+}
+
+fn append_tgl_registers(out: &mut String, dev: crate::intel::Dev) {
+    // Tiger Lake Pipe A and shared display state. These ordinary register
+    // reads neither acknowledge W1C interrupts nor change power or PSR state.
+    // Linux v6.14: i915_reg.h, intel_psr_regs.h, intel_fbc_regs.h and
+    // skl_watermark_regs.h. PSR2 CTL/status and DBUF are already captured above.
+    // https://github.com/torvalds/linux/tree/v6.14/drivers/gpu/drm/i915
+    const REGISTERS: [(&str, usize); 17] = [
+        ("pipe_a_isr", 0x44400),
+        ("pipe_a_imr", 0x44404),
+        ("pipe_a_iir", 0x44408),
+        ("pipe_a_ier", 0x4440C),
+        ("psr_a_event", 0x60848),
+        ("psr2_a_manual_tracking", 0x60910),
+        ("fbc_a_ctl", 0x43208),
+        ("fbc_a_status", 0x43210),
+        ("fbc_a_status2", 0x43214),
+        ("fbc_a_stride", 0x43228),
+        ("cdclk_ctl", 0x46000),
+        ("cdclk_pll_enable", 0x46070),
+        ("dssm", 0x51004),
+        ("mbus_abox0_ctl", 0x45038),
+        ("mbus_abox1_ctl", 0x45048),
+        ("mbus_abox2_ctl", 0x4504C),
+        ("pipe_a_mbus_dbox_ctl", 0x7003C),
+    ];
+    for (name, register) in REGISTERS {
+        let raw = crate::intel::mmio_read(dev, register);
+        let _ = writeln!(out,
+            "display_tgl_register name={} register=0x{:X} raw=0x{:08X} capture=read-only-no-ack",
+            name, register, raw);
     }
 }
 
@@ -192,7 +227,7 @@ fn append_pipe(out: &mut String, dev: crate::intel::Dev, pipe: PipeInfo, physica
         dbufs[slot] = dbuf;
         let _ = writeln!(
             out,
-            "physical_plane pipe={} slot={} hardware_plane={} logical_ui4_slot={:?} enabled={} base=0x{:X} ctl=0x{:08X} surf=0x{:08X} live=0x{:08X} stride=0x{:08X} pos=0x{:08X} size=0x{:08X} offset=0x{:08X} color=0x{:08X} dbuf=0x{:08X} dbuf_start={} dbuf_end_inclusive={}",
+            "physical_plane pipe={} slot={} hardware_plane={} logical_ui4_slot={:?} enabled={} base=0x{:X} ctl=0x{:08X} surf=0x{:08X} live=0x{:08X} stride=0x{:08X} pos=0x{:08X} size=0x{:08X} offset=0x{:08X} color=0x{:08X} dbuf=0x{:08X} dbuf_start={} dbuf_end_inclusive={} fetch_format=0x{:02X} render_decompression={} media_decompression={} mirror_x={} rotation={}",
             pipe.name,
             slot,
             slot + 1,
@@ -213,8 +248,29 @@ fn append_pipe(out: &mut String, dev: crate::intel::Dev, pipe: PipeInfo, physica
             crate::intel::mmio_read(dev, base + UNI_PLANE_COLOR_CTL_OFF),
             dbuf,
             dbuf & 0x1FFF,
-            (dbuf >> 16) & 0x1FFF
+            (dbuf >> 16) & 0x1FFF,
+            (ctl >> 23) & 0x1F,
+            ctl & (1 << 15) != 0,
+            ctl & (1 << 4) != 0,
+            ctl & (1 << 8) != 0,
+            ctl & 3
         );
+        if physical_count == 7 {
+            // TGL selective-fetch banks are not normal plane-stride banks:
+            // hardware plane 5 starts a second range. Linux v6.14
+            // display/skl_universal_plane_regs.h, _MMIO_SEL_FETCH().
+            const SELECTIVE_FETCH_CTL_A: [usize; 7] = [
+                0x70890, 0x708B0, 0x708D0, 0x708F0, 0x70920, 0x70940, 0x70960,
+            ];
+            let selective = SELECTIVE_FETCH_CTL_A[slot] + pipe_delta;
+            let ctl = crate::intel::mmio_read(dev, selective);
+            let pos = crate::intel::mmio_read(dev, selective + 4);
+            let size = crate::intel::mmio_read(dev, selective + 8);
+            let offset = crate::intel::mmio_read(dev, selective + 0xC);
+            let _ = writeln!(out,
+                "physical_plane_selective_fetch pipe={} slot={} register=0x{:X} ctl=0x{:08X} enabled={} pos=0x{:08X} size=0x{:08X} offset=0x{:08X} capture=read-only-no-commit",
+                pipe.name, slot, selective, ctl, ctl & (1 << 31) != 0, pos, size, offset);
+        }
         let wm = core::array::from_fn::<u32, 8, _>(|level| {
             crate::intel::mmio_read(dev, base + UNI_PLANE_WM_0_OFF + level * 4)
         });

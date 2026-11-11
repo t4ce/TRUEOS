@@ -1,7 +1,7 @@
 <p align="center"><img src="tools/aiupsell/assets/lilly.png" width="144" alt="Lilly, the animated face of Spirit on TRUEOS"></p>
 
 <h1 align="center">A RUST KERNEL WHERE CODEX RUNS NATIVE.</h1>
-<h1 align="center">VIBECODE YOUR DESKTOP.</h1>
+<h1 align="center">BUILD YOUR UNIVERSE ABOVE TOKIO.</h1>
 
 <p align="center"><strong>TRUEOS · ONE ~25 MB BUNDLE · RUST KERNEL · CODEX ON THE DESKTOP</strong></p>
 <p align="center"><em>No doubt something has changed.</em></p>

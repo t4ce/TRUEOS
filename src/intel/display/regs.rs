@@ -80,6 +80,11 @@ pub(in crate::intel) const PLANE_CTL_ENABLE: u32 = 1 << 31;
 pub(in crate::intel) const PLANE_CTL_ARB_SLOTS_MASK: u32 = 0x07 << 28;
 pub(in crate::intel) const PLANE_CTL_ARB_SLOTS_4BPP: u32 = 1 << 28;
 pub(in crate::intel) const PLANE_CTL_FORMAT_MASK_SKL: u32 = 0x0F << 24;
+// ICL and newer (including TGL/ADL/RPL) extend the format field through bit 23.
+pub(in crate::intel) const PLANE_CTL_FORMAT_MASK_GEN12: u32 = 0x1F << 23;
+pub(in crate::intel) const PLANE_CTL_RENDER_DECOMPRESSION_ENABLE: u32 = 1 << 15;
+pub(in crate::intel) const PLANE_CTL_MEDIA_DECOMPRESSION_ENABLE: u32 = 1 << 4;
+pub(in crate::intel) const PLANE_CTL_FLIP_HORIZONTAL: u32 = 1 << 8;
 pub(in crate::intel) const PLANE_CTL_ORDER_RGBX: u32 = 1 << 20;
 pub(in crate::intel) const PLANE_CTL_YUV420_Y_PLANE: u32 = 1 << 19;
 pub(in crate::intel) const PLANE_CTL_KEY_ENABLE_MASK: u32 = 0x03 << 21;

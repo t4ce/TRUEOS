@@ -2557,12 +2557,6 @@ fn primary_plane_contract_regs_match(dev: crate::intel::Dev, surface: PrimarySur
     };
     let ctl = crate::intel::mmio_read(dev, surface.pipe.primary_plane().ctl());
     let ctl_expected = primary_plane_ctl_enabled(ctl);
-    let ctl_match_mask = PLANE_CTL_ENABLE
-        | PLANE_CTL_ARB_SLOTS_MASK
-        | PLANE_CTL_FORMAT_MASK_SKL
-        | PLANE_CTL_KEY_ENABLE_MASK
-        | PLANE_CTL_TILED_MASK
-        | PLANE_CTL_ORDER_RGBX;
     crate::intel::mmio_read(dev, surface.pipe.primary_plane().stride()) == stride_reg
         && crate::intel::mmio_read(dev, surface.pipe.primary_plane().base() + UNI_PLANE_POS_OFF)
             == plane_pos_reg_value(0, 0)
@@ -2574,7 +2568,9 @@ fn primary_plane_contract_regs_match(dev: crate::intel::Dev, surface: PrimarySur
             dev,
             surface.pipe.primary_plane().base() + UNI_PLANE_OFFSET_OFF,
         ) == plane_pos_reg_value(0, 0)
-        && (ctl & ctl_match_mask) == (ctl_expected & ctl_match_mask)
+        // The builder preserves unowned bits. Full equality checks every
+        // normalized fetch field without letting this guard's mask drift.
+        && ctl == ctl_expected
 }
 
 #[inline]
@@ -3111,10 +3107,20 @@ fn primary_plane_ctl_enabled_for_format(ctl_before: u32, format: PrimaryPlaneSou
             PLANE_CTL_ORDER_RGBX
         }
     };
+    // These surfaces are uncompressed linear RGB in their authored orientation,
+    // with no auxiliary surface. Disabled firmware planes can retain a different
+    // format/CCS/transform contract, so remove those bits before taking ownership.
+    // All supported Gen12 targets use the ICL+ format field, including bit 23.
+    // Linux v6.14 skl_universal_plane_regs.h and skl_universal_plane.c describe
+    // these fields; NV12 has its own format/tiling construction below.
     (ctl_before
         & !(PLANE_CTL_ENABLE
             | PLANE_CTL_ARB_SLOTS_MASK
-            | PLANE_CTL_FORMAT_MASK_SKL
+            | PLANE_CTL_FORMAT_MASK_GEN12
+            | PLANE_CTL_RENDER_DECOMPRESSION_ENABLE
+            | PLANE_CTL_MEDIA_DECOMPRESSION_ENABLE
+            | PLANE_CTL_FLIP_HORIZONTAL
+            | PLANE_CTL_ROTATE_MASK
             | PLANE_CTL_KEY_ENABLE_MASK
             | PLANE_CTL_TILED_MASK
             | PLANE_CTL_ORDER_RGBX
@@ -5937,8 +5943,7 @@ fn overlay_plane_needs_rearm(
     let want_color_ctl = plane_color_ctl_alpha(color_ctl, alpha);
 
     let want_ctl = overlay_plane_ctl_enabled(ctl, alpha);
-    (ctl & PLANE_CTL_ENABLE) == 0
-        || (ctl & PLANE_CTL_ORDER_RGBX) != (want_ctl & PLANE_CTL_ORDER_RGBX)
+    ctl != want_ctl
         || stride != want_stride
         || pos != want_pos
         || size != want_size

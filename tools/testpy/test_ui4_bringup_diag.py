@@ -43,7 +43,14 @@ mod intel {
     pub static DBUF_S1: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0xC0000000);
     pub static DBUF_S2: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0x80000000);
     pub static DBUF_READS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    pub static READS: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+    pub static SAMPLE_CTL_ENABLED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    pub static SAMPLE_CTL: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
     pub fn mmio_read(_: Dev, offset: usize) -> u32 {
+        READS.lock().unwrap().push(offset);
+        if offset == 0x70180 && SAMPLE_CTL_ENABLED.load(core::sync::atomic::Ordering::Acquire) {
+            return SAMPLE_CTL.load(core::sync::atomic::Ordering::Acquire);
+        }
         // Independent literal Pipe C PS_WIN_POS/SZ addresses. Reading the
         // HSCALE/reserved addresses above PS_CTRL must not pass these checks.
         match offset {
@@ -148,17 +155,91 @@ fn failed_bootstrap_retains_attempted_pipe_and_failure_time_registers() {
     }
     assert!(adopted.contains("physical_plane pipe=pipe-b slot=6 hardware_plane=7 logical_ui4_slot=None"));
 
+    // The supplemental snapshot has independent literal register expectations.
+    // Every requested word is read exactly once; none overlaps the old capture.
+    const EXTRA_REGISTERS: [usize; 17] = [
+        0x44400, 0x44404, 0x44408, 0x4440C, 0x60848, 0x60910,
+        0x43208, 0x43210, 0x43214, 0x43228, 0x46000, 0x46070, 0x51004,
+        0x45038, 0x45048, 0x4504C, 0x7003C,
+    ];
+    // Hardware plane 5 deliberately jumps over the cursor bank at 0x70900.
+    const SELECTIVE_FETCH_WORDS: [[usize; 4]; 7] = [
+        [0x70890, 0x70894, 0x70898, 0x7089C],
+        [0x708B0, 0x708B4, 0x708B8, 0x708BC],
+        [0x708D0, 0x708D4, 0x708D8, 0x708DC],
+        [0x708F0, 0x708F4, 0x708F8, 0x708FC],
+        [0x70920, 0x70924, 0x70928, 0x7092C],
+        [0x70940, 0x70944, 0x70948, 0x7094C],
+        [0x70960, 0x70964, 0x70968, 0x7096C],
+    ];
+    intel::READS.lock().unwrap().clear();
+    intel::SAMPLE_CTL_ENABLED.store(true, Ordering::Release);
+    // Odd ICL format value exercises expanded format bit 23 independently of
+    // the old four-bit field; all inherited transform/compression bits are set.
+    intel::SAMPLE_CTL.store(0x8E808113, Ordering::Release);
+    intel::DBUF_S1.store(0xC0400000, Ordering::Release);
+    let mut sampled = String::new();
+    bringup_diag::append(&mut sampled, dev);
+    let reads = intel::READS.lock().unwrap();
+    let extras: Vec<_> = sampled.lines().filter(|line| line.starts_with("display_tgl_register ")).collect();
+    assert_eq!(extras.len(), 17);
+    for register in EXTRA_REGISTERS {
+        assert_eq!(reads.iter().filter(|&&offset| offset == register).count(), 1,
+            "extra register 0x{register:X} must be read once without polling");
+        assert_eq!(extras.iter().filter(|line| line.contains(&format!(
+            "register=0x{:X} raw=0x{:08X} capture=read-only-no-ack", register, register + 0x10))).count(), 1);
+    }
+    let selective: Vec<_> = sampled.lines().filter(|line| line.starts_with("physical_plane_selective_fetch ")).collect();
+    assert_eq!(selective.len(), 28);
+    for pipe_delta in [0, 0x1000, 0x2000, 0x3000] {
+        for quartet in SELECTIVE_FETCH_WORDS {
+            for register in quartet {
+                assert_eq!(reads.iter().filter(|&&offset| offset == register + pipe_delta).count(), 1,
+                    "selective-fetch register 0x{:X} must be read once", register + pipe_delta);
+            }
+            assert!(selective.iter().any(|line| line.contains(&format!(
+                "register=0x{:X} ctl=0x{:08X} enabled=false pos=0x{:08X} size=0x{:08X} offset=0x{:08X}",
+                quartet[0] + pipe_delta, quartet[0] + pipe_delta + 0x10,
+                quartet[1] + pipe_delta + 0x10, quartet[2] + pipe_delta + 0x10,
+                quartet[3] + pipe_delta + 0x10))));
+        }
+    }
+    assert!(!reads.contains(&0x70910), "plane 5 must not use the cursor-adjacent gap");
+    drop(reads);
+    assert!(sampled.lines().any(|line| line.starts_with("physical_plane pipe=pipe-a slot=0 ")
+        && line.contains("fetch_format=0x1D render_decompression=true media_decompression=true mirror_x=true rotation=3")));
+    assert!(sampled.contains("raw=0xC0400000 power_request=true power_state=true capture=read-only-no-poll tracker_state_service=8"));
+
     // The desktop inventory retains its five-bank policy and selected-pipe
     // scope; neither the larger evidence array nor laptop mapping widens it.
+    // CTL decoding uses the already-read word on desktops as well.
     pci::DEVICE.store(0x4680_8086, Ordering::Release);
     intel::tgl_native_panel::ADOPTED.store(false, Ordering::Release);
-    bringup_diag::select_pipe(PIPES[2]);
+    bringup_diag::select_pipe(PIPES[0]);
+    intel::READS.lock().unwrap().clear();
+    intel::SAMPLE_CTL.store(0x94000000, Ordering::Release);
     let mut desktop = String::new();
     bringup_diag::append(&mut desktop, dev);
     assert!(desktop.contains("logical_ui4_slots=5 physical_universal_planes_per_pipe=5"));
     assert_eq!(desktop.lines().filter(|line| line.starts_with("physical_plane pipe=")).count(), 5);
-    assert!(!desktop.contains("physical_plane pipe=pipe-a"));
+    assert!(!desktop.contains("physical_plane pipe=pipe-c"));
     assert!(!desktop.contains("hardware_plane=6"));
+    assert!(!desktop.contains("display_tgl_register "));
+    assert!(!desktop.contains("physical_plane_selective_fetch "));
+    assert!(desktop.lines().any(|line| line.starts_with("physical_plane pipe=pipe-a slot=0 ")
+        && line.contains("fetch_format=0x08 render_decompression=false media_decompression=false mirror_x=false rotation=0")));
+    let desktop_reads = intel::READS.lock().unwrap();
+    for register in EXTRA_REGISTERS {
+        assert!(!desktop_reads.contains(&register), "desktop must not read extra TGL register 0x{register:X}");
+    }
+    for pipe_delta in [0, 0x1000, 0x2000, 0x3000] {
+        for quartet in SELECTIVE_FETCH_WORDS {
+            for register in quartet {
+                assert!(!desktop_reads.contains(&(register + pipe_delta)),
+                    "desktop must not read selective-fetch register 0x{:X}", register + pipe_delta);
+            }
+        }
+    }
 }
 '''.replace("@SOURCE@", str(ROOT / "src/intel/display/bringup_diag.rs")).replace(
         "@LAYOUT@", str(ROOT / "src/intel/display/tgl_ui4_layout.rs"))
