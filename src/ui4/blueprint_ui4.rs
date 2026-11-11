@@ -134,6 +134,8 @@ const _: () = {
         UI4_SCENE_SPRITE_GPU + UI4_SCENE_SPRITE_MAX_BYTES as u64
             <= crate::intel::gpgpu::DIRECT_RCS_PPGTT_LIMIT_BYTES
     );
+    assert!(UI4_SCENE_SPRITE_GPU + UI4_SCENE_SPRITE_MAX_BYTES as u64
+        <= crate::r::ui_surface::UI_SURFACE_GPU_SPILL_BASE);
 };
 
 #[repr(C)]

@@ -261,15 +261,25 @@ fn spirit_vfx_ppgtt_evidence(
         return None;
     }
     let pd_index = usize::try_from(gpu >> 21).ok()?;
+    let pdpt_index = usize::try_from(gpu >> 30).ok()?;
     let leaf_offset = exact_ppgtt_pte_offset(gpu & !0xFFF, 0)?;
-    let offsets = [0, 4096, 8192usize.checked_add(pd_index.checked_mul(8)?)?, leaf_offset];
+    let offsets = [
+        DIRECT_RCS_PPGTT_PML4_OFFSET,
+        DIRECT_RCS_PPGTT_PDPT_OFFSET.checked_add(pdpt_index.checked_mul(8)?)?,
+        DIRECT_RCS_PPGTT_PD_OFFSET.checked_add(pd_index.checked_mul(8)?)?,
+        leaf_offset,
+    ];
     if offsets.iter().any(|&offset| {
         offset.checked_add(core::mem::size_of::<u64>())
             .is_none_or(|end| end > DIRECT_RCS_PPGTT_BYTES)
     }) {
         return None;
     }
-    let child_offsets = [4096, 8192, 12288usize.checked_add(pd_index.checked_mul(4096)?)?];
+    let child_offsets = [
+        DIRECT_RCS_PPGTT_PDPT_OFFSET,
+        DIRECT_RCS_PPGTT_PD_OFFSET.checked_add(pdpt_index.checked_mul(4096)?)?,
+        DIRECT_RCS_PPGTT_PT_OFFSET.checked_add(pd_index.checked_mul(4096)?)?,
+    ];
     let mut evidence = SpiritVfxPpgttEvidence {
         entries: [0; 4], read_levels: 0, topology_match: false, leaf_match: false,
     };

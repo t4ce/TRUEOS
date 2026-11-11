@@ -20,6 +20,7 @@ def harness_source() -> str:
     declarations = [
         constant(driver, name)
         for name in (
+            "DIRECT_BLT_PPGTT_PD_COUNT",
             "DIRECT_BLT_PPGTT_PT_COUNT",
             "DIRECT_BLT_PPGTT_LIMIT_BYTES",
             "BCS0_GGTT_BASE",
@@ -44,7 +45,9 @@ def harness_source() -> str:
         )
     )
     return (
-        "#![allow(dead_code)]\nextern crate alloc;\nmod intel {\n"
+        "#![allow(dead_code)]\nextern crate alloc;\nmod r {pub mod ui_surface {\n"
+        + constant("src/r/ui_surface.rs", "UI_SURFACE_GPU_SPILL_LIMIT")
+        + "\n}}\nmod intel {\n"
         + constant("src/intel/mod.rs", "WARM_ALIGN")
         + "\nmod blt {\n"
         + "\n".join(declarations)

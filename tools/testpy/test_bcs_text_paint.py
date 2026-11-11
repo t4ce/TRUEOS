@@ -6,6 +6,7 @@ CPU pixel access and timers are replaced, making ordering and cancellation
 observable without constructing a second text-paint implementation.
 """
 from pathlib import Path
+import json
 import subprocess
 import tempfile
 from test_clip_position3_uv_texture import ROOT, constant, item
@@ -291,7 +292,12 @@ fn pinned_destination_is_never_prepared_or_submitted_again() {
 }
 
 '''
-    return source
+    return source.replace("mod intel {\n",
+        "mod r {pub mod ui_surface {\n"
+        + constant("src/r/ui_surface.rs", "UI_SURFACE_GPU_SPILL_LIMIT")
+        + "\n}}\nmod intel {\n#[path = "
+        + json.dumps(str(ROOT / "src/intel/copy/bcs_mappings.rs"))
+        + "] mod bcs_mappings;\n", 1)
 
 
 def main() -> None:

@@ -147,7 +147,21 @@ mod integration_tests {
             }
         }
         fn leaf(&self, gpu: u64) -> u64 {
-            self.table[1 + 3 * 4096 / 8 + (gpu / 4096) as usize]
+            self.table[1 + super::super::bcs_mappings::LEAF_OFFSET_BYTES / 8 + (gpu / 4096) as usize]
+        }
+        fn walk(&self, gpu: u64) -> Option<(u64, u64)> {
+            let root = 0x10000000u64;
+            let mut parent = root;
+            for shift in [39, 30, 21, 12] {
+                let index = usize::try_from((parent.checked_sub(root)? / 8)
+                    .checked_add((gpu >> shift) & 511)?).ok()?;
+                let raw = *self.table.get(1 + index)?;
+                if raw & 1 == 0 { return None; }
+                if shift == 12 { return Some(((raw & !4095) | (gpu & 4095), raw & 4095)); }
+                assert_eq!(raw & 0x80, 0);
+                parent = raw & !4095;
+            }
+            None
         }
         fn table_publication(&self) -> Vec<(usize, usize)> {
             let base = self.table.as_ptr() as usize + 8;
@@ -180,6 +194,67 @@ mod integration_tests {
     }
     fn operation(source: GucBcs0RgbaSurface, backend: CopyBackend) -> BcsOp {
         BcsOp::Copy { copy: copy(source), backend, source_cache: SourceCache::WriteBack }
+    }
+
+    #[test]
+    fn legacy_initializer_and_mapper_walk_upper_pd_without_wrapping_old_aliases() {
+        let mut f = Fixture::new();
+        let state = f.state();
+        assert!(direct_blt_init_ppgtt(state));
+        assert_eq!(f.table_publication(), vec![(0, DIRECT_BLT_PPGTT_BYTES)]);
+        assert_eq!(DIRECT_BLT_PPGTT_LIMIT_BYTES, 0x80000000);
+        for control in guc_blt_control_mappings(state) {
+            assert_eq!(f.walk(control.gpu), Some((control.phys, 3)));
+        }
+        assert!(direct_blt_map_ppgtt_region(state, 0x3ffff000, 0x120000000, 3 * 4096, 3));
+        assert_eq!(f.walk(0x3fffffff), Some((0x120000fff, 3)));
+        assert_eq!(f.walk(0x40000000), Some((0x120001000, 3)));
+        assert_eq!(f.walk(0x40001fff), Some((0x120002fff, 3)));
+        assert_eq!(f.walk(0), None, "upper PD must not wrap onto the original directory");
+        assert!(direct_blt_map_ppgtt_region(state, 0x7ffff000, 0x220000000, 4096, 0x1b));
+        assert_eq!(f.walk(0x7fffffff), Some((0x220000fff, 0x1b)));
+        assert_eq!(f.walk(0x80000000), None);
+        let before = f.table.clone();
+        for (gpu, phys, bytes, flags) in [
+            (0x80000000, 0x200000, 4096, 3),
+            (0x7ffff000, 0x200000, 4097, 3),
+            (0x40000001, 0x200000, 4096, 3),
+            (0x40000000, 0x200001, 4096, 3),
+            (0x40000000, u64::MAX & !4095, 4096, 3),
+            (0x40000000, 0x200000, usize::MAX, 3),
+            (0x40000000, 0x200000, 0, 3),
+            (0x40000000, 0x200000, 4096, 2),
+        ] {
+            assert!(!direct_blt_map_ppgtt_region(state, gpu, phys, bytes, flags));
+            assert_eq!(f.table, before, "reject the whole invalid range before writing leaves");
+        }
+        f.assert_guards();
+    }
+
+    #[test]
+    fn actual_sparse_driver_maps_spill_surfaces_and_unmaps_a_cross_directory_source() {
+        let mut f = Fixture::new();
+        let state = f.state();
+        let destination = surface(0x50000000);
+        let source = surface(0x3ffff000);
+        assert!(guc_blt_map_ui4_surfaces(state, destination, &[copy(source)], false, None));
+        assert_eq!(f.walk(source.gpu), Some((source.phys, 3)));
+        assert_eq!(f.walk(0x40000000), Some((source.phys + 4096, 3)));
+        assert_eq!(f.walk(destination.gpu), Some((destination.phys, 0x1b)));
+        super::super::clear_publication();
+        let next = surface(0x5ffff000 - 3 * 4096);
+        assert!(guc_blt_map_ui4_surfaces(state, destination, &[copy(next)], false, None));
+        assert_eq!(f.walk(source.gpu), None);
+        assert_eq!(f.walk(0x40000000), None);
+        assert_eq!(f.walk(next.gpu), Some((next.phys, 3)));
+        assert_eq!(f.walk(destination.gpu), Some((destination.phys, 0x1b)));
+        let published = f.table_publication();
+        assert!(published.iter().all(|&(offset, bytes)| offset % 64 == 0 && bytes % 64 == 0
+            && offset >= super::super::bcs_mappings::LEAF_OFFSET_BYTES
+            && offset + bytes <= DIRECT_BLT_PPGTT_BYTES));
+        assert!(published.iter().map(|&(_,bytes)| bytes).sum::<usize>() <= 256);
+        super::super::FENCES.with(|fences| assert_eq!(fences.get(), 1));
+        f.assert_guards();
     }
 
     #[test]

@@ -7,11 +7,17 @@
 use alloc::vec::Vec;
 
 const PAGE_BYTES: usize = 4096;
-const TABLE_PAGES: usize = 3 + 512;
-const TABLE_BYTES: usize = TABLE_PAGES * PAGE_BYTES;
+pub(super) const PD_COUNT: usize = 2;
+pub(super) const PT_COUNT: usize = PD_COUNT * 512;
+pub(super) const PML4_OFFSET_BYTES: usize = 0;
+pub(super) const PDP_OFFSET_BYTES: usize = PAGE_BYTES;
+pub(super) const PD_OFFSET_BYTES: usize = 2 * PAGE_BYTES;
+pub(super) const LEAF_OFFSET_BYTES: usize = (2 + PD_COUNT) * PAGE_BYTES;
+const TABLE_PAGES: usize = 2 + PD_COUNT + PT_COUNT;
+pub(super) const TABLE_BYTES: usize = TABLE_PAGES * PAGE_BYTES;
 const TABLE_ENTRIES: usize = TABLE_BYTES / core::mem::size_of::<u64>();
-const LEAF_OFFSET_BYTES: usize = 3 * PAGE_BYTES;
-const VA_LIMIT: u64 = 512 * 512 * PAGE_BYTES as u64;
+pub(super) const VA_LIMIT: u64 = PT_COUNT as u64 * 512 * PAGE_BYTES as u64;
+const _: () = assert!(crate::r::ui_surface::UI_SURFACE_GPU_SPILL_LIMIT <= VA_LIMIT);
 const DIRECTORY_FLAGS: u64 = 0x1b;
 const CACHE_LINE_BYTES: usize = 64;
 
@@ -31,7 +37,7 @@ impl BcsMapping {
             .map(|end| end & !(PAGE_BYTES as u64 - 1))
     }
 
-    fn valid(self) -> bool {
+    pub(super) fn valid(self) -> bool {
         let Some(bytes) = self.rounded_bytes() else {
             return false;
         };
@@ -115,16 +121,17 @@ impl BcsMappings {
         if initialize {
             let next_controls = controls.to_vec();
             table[..TABLE_ENTRIES].fill(0);
-            write_entry(table, 0, (root_phys + PAGE_BYTES as u64) | DIRECTORY_FLAGS);
-            write_entry(
-                table,
-                PAGE_BYTES / 8,
-                (root_phys + 2 * PAGE_BYTES as u64) | DIRECTORY_FLAGS,
-            );
-            for index in 0..512 {
+            write_entry(table, PML4_OFFSET_BYTES / 8,
+                (root_phys + PDP_OFFSET_BYTES as u64) | DIRECTORY_FLAGS);
+            for index in 0..PD_COUNT {
+                write_entry(table, PDP_OFFSET_BYTES / 8 + index,
+                    (root_phys + PD_OFFSET_BYTES as u64 + (index * PAGE_BYTES) as u64)
+                        | DIRECTORY_FLAGS);
+            }
+            for index in 0..PT_COUNT {
                 write_entry(
                     table,
-                    2 * PAGE_BYTES / 8 + index,
+                    PD_OFFSET_BYTES / 8 + index,
                     (root_phys + LEAF_OFFSET_BYTES as u64 + (index * PAGE_BYTES) as u64)
                         | DIRECTORY_FLAGS,
                 );
@@ -268,6 +275,68 @@ mod tests {
 
     fn leaf(table: &[u64], gpu: u64) -> u64 {
         table[LEAF_OFFSET_BYTES / 8 + (gpu / PAGE_BYTES as u64) as usize]
+    }
+
+    // Follow the emitted directory addresses, independently of the dense-leaf
+    // offset arithmetic used by the mapper itself.
+    fn walk(table: &[u64], gpu: u64) -> Option<(u64, u64)> {
+        let mut parent = ROOT;
+        for shift in [39, 30, 21, 12] {
+            let index = usize::try_from((parent.checked_sub(ROOT)? / 8)
+                .checked_add((gpu >> shift) & 511)?).ok()?;
+            let raw = *table.get(index)?;
+            if raw & 1 == 0 { return None; }
+            if shift == 12 { return Some(((raw & !4095) | (gpu & 4095), raw & 4095)); }
+            assert_eq!(raw & 0x80, 0, "dense topology must not create large pages");
+            parent = raw & !4095;
+        }
+        None
+    }
+
+    #[test]
+    fn emitted_tree_walks_both_pd_pages_and_the_final_byte_below_two_gib() {
+        let mut state = BcsMappings::new();
+        let mut table = vec![u64::MAX; TABLE_ENTRIES];
+        let old = mapping(0x200000, 0x100200000, PAGE_BYTES);
+        let crossing = BcsMapping { flags: 0x1b,
+            ..mapping(0x3ffff000, 0x120000000, 3 * PAGE_BYTES) };
+        let top = mapping(0x7ffff000, 0x220000000, PAGE_BYTES);
+        assert_eq!(VA_LIMIT, 0x80000000);
+        assert_eq!(state.prepare(&mut table, ROOT, &[], &[old, crossing, top]),
+            Some(vec![(0, TABLE_BYTES)]));
+        assert_eq!(walk(&table, old.gpu), Some((old.phys, 3)));
+        for offset in [0, 4095, 4096, 8192, 12287] {
+            assert_eq!(walk(&table, crossing.gpu + offset), Some((crossing.phys + offset, 0x1b)));
+        }
+        assert_eq!(walk(&table, VA_LIMIT - 1), Some((top.phys + 4095, 3)));
+        assert_eq!(walk(&table, VA_LIMIT), None);
+        assert_eq!(table[PDP_OFFSET_BYTES / 8 + 1], (ROOT + 3 * 4096) | DIRECTORY_FLAGS);
+        assert_eq!(table[PDP_OFFSET_BYTES / 8 + 2], 0);
+        assert_eq!(table[PD_OFFSET_BYTES / 8 + PT_COUNT - 1],
+            (ROOT + LEAF_OFFSET_BYTES as u64 + (PT_COUNT as u64 - 1) * 4096) | DIRECTORY_FLAGS);
+    }
+
+    #[test]
+    fn remapping_across_one_gib_clears_old_leaves_and_publishes_only_changed_cache_lines() {
+        let mut state = BcsMappings::new();
+        let mut table = vec![0; TABLE_ENTRIES];
+        let controls = [mapping(0x10000, 0x100000, PAGE_BYTES)];
+        let crossing = mapping(0x3ffff000, 0x120000000, 3 * PAGE_BYTES);
+        state.prepare(&mut table, ROOT, &controls, &[crossing]).unwrap();
+        let topology = table[..LEAF_OFFSET_BYTES / 8].to_vec();
+        let top = BcsMapping { flags: 0x1b,
+            ..mapping(VA_LIMIT - PAGE_BYTES as u64, 0x220000000, PAGE_BYTES) };
+        let dirty = state.prepare(&mut table, ROOT, &controls, &[top]).unwrap();
+        assert_eq!(dirty, vec![(crossing.leaf_range().0 & !63, 128), (top.leaf_range().0 & !63, 64)]);
+        assert!(dirty.iter().all(|&(offset, bytes)|
+            offset >= LEAF_OFFSET_BYTES && offset % 64 == 0 && bytes % 64 == 0
+                && offset + bytes <= TABLE_BYTES));
+        assert_eq!(&table[..LEAF_OFFSET_BYTES / 8], &topology);
+        for offset in [0, 4096, 8192] { assert_eq!(walk(&table, crossing.gpu + offset), None); }
+        assert_eq!(walk(&table, controls[0].gpu), Some((controls[0].phys, 3)));
+        assert_eq!(walk(&table, VA_LIMIT - 1), Some((top.phys + 4095, 0x1b)));
+        state.prepare(&mut table, ROOT, &controls, &[]).unwrap();
+        assert_eq!(walk(&table, top.gpu), None);
     }
 
     #[test]

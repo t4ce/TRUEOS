@@ -71,9 +71,10 @@ const DIRECT_BLT_COPY_BYTES: usize = 4096;
 // Match the direct-RCS address envelope so BCS can consume the same stable,
 // allocation-owned producer and compositor aliases. Each copy batch invalidates
 // BCS translations before accessing surfaces, including recycled producer VAs.
-const DIRECT_BLT_PPGTT_PT_COUNT: usize = 512;
-const DIRECT_BLT_PPGTT_BYTES: usize = (3 + DIRECT_BLT_PPGTT_PT_COUNT) * 4096;
-const DIRECT_BLT_PPGTT_LIMIT_BYTES: u64 = DIRECT_BLT_PPGTT_PT_COUNT as u64 * 512 * 4096;
+const DIRECT_BLT_PPGTT_PD_COUNT: usize = super::bcs_mappings::PD_COUNT;
+const DIRECT_BLT_PPGTT_PT_COUNT: usize = super::bcs_mappings::PT_COUNT;
+const DIRECT_BLT_PPGTT_BYTES: usize = super::bcs_mappings::TABLE_BYTES;
+const DIRECT_BLT_PPGTT_LIMIT_BYTES: u64 = super::bcs_mappings::VA_LIMIT;
 const DIRECT_BLT_LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
 // The old 0x00B0_0000 window was inside Render0's 0x0088_0000..0x0169_0000
 // streamout GGTT mapping. Its later boot map silently replaced our controls.
@@ -1591,10 +1592,10 @@ fn direct_blt_init_ppgtt(state: DirectBltState) -> bool {
     // Boot/probe paths rebuild the image outside the incremental mapper.
     // A later plan must reconstruct its metadata before trusting any PTEs.
     GUC_BLT_MAPPINGS.lock().invalidate();
-    let pml4_off = 0usize;
-    let pdp_off = 4096usize;
-    let pd_off = 8192usize;
-    let pt_off = 12288usize;
+    let pml4_off = super::bcs_mappings::PML4_OFFSET_BYTES;
+    let pdp_off = super::bcs_mappings::PDP_OFFSET_BYTES;
+    let pd_off = super::bcs_mappings::PD_OFFSET_BYTES;
+    let pt_off = super::bcs_mappings::LEAF_OFFSET_BYTES;
     let pte_present_rw = super::GEN8_PAGE_PRESENT | (1 << 1);
     let pde_present_rw_uc = pte_present_rw | (1 << 3) | (1 << 4);
 
@@ -1607,7 +1608,10 @@ fn direct_blt_init_ppgtt(state: DirectBltState) -> bool {
             pml4,
             (state.ppgtt_phys + pdp_off as u64) | pde_present_rw_uc,
         );
-        core::ptr::write_volatile(pdp, (state.ppgtt_phys + pd_off as u64) | pde_present_rw_uc);
+        for index in 0..DIRECT_BLT_PPGTT_PD_COUNT {
+            let pd_phys = state.ppgtt_phys + pd_off as u64 + index as u64 * 4096;
+            core::ptr::write_volatile(pdp.add(index), pd_phys | pde_present_rw_uc);
+        }
         for index in 0..DIRECT_BLT_PPGTT_PT_COUNT {
             let pt_phys = state.ppgtt_phys + pt_off as u64 + (index as u64) * 4096;
             core::ptr::write_volatile(pd.add(index), pt_phys | pde_present_rw_uc);
@@ -1663,10 +1667,13 @@ fn direct_blt_map_ppgtt_region(
     len: usize,
     entry_flags: u64,
 ) -> bool {
-    let pt_off = 12288usize;
+    if !(BcsMapping { gpu, phys, bytes: len, flags: entry_flags }).valid() {
+        return false;
+    }
+    let pt_off = super::bcs_mappings::LEAF_OFFSET_BYTES;
     for page in 0..len.div_ceil(4096) {
         let va_page = (gpu >> 12) + page as u64;
-        let pd_index = ((va_page >> 9) & 0x1FF) as usize;
+        let pd_index = (va_page >> 9) as usize;
         let pt_index = (va_page & 0x1FF) as usize;
         if pd_index >= DIRECT_BLT_PPGTT_PT_COUNT {
             return false;

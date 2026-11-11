@@ -49,7 +49,9 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool,AtomicU64,Ordering};
 '''
 source += "\n".join(constant(CONSTANTS, name) for name in (
-    "GEN8_PAGE_RW", "GEN8_PAGE_PWT", "GEN8_PAGE_PCD", "DIRECT_RCS_PPGTT_PT_COUNT",
+    "GEN8_PAGE_RW", "GEN8_PAGE_PWT", "GEN8_PAGE_PCD", "DIRECT_RCS_PPGTT_PD_COUNT",
+    "DIRECT_RCS_PPGTT_PT_COUNT", "DIRECT_RCS_PPGTT_PML4_OFFSET",
+    "DIRECT_RCS_PPGTT_PDPT_OFFSET", "DIRECT_RCS_PPGTT_PD_OFFSET", "DIRECT_RCS_PPGTT_PT_OFFSET",
     "DIRECT_RCS_PPGTT_BYTES", "DIRECT_RCS_PPGTT_LIMIT_BYTES", "RCS_RING_BASE", "RCS_RING_START",
     "SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU", "SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES",
     "SPIRIT_VFX_SPRITE_IDD_OFFSET_BYTES", "SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES",
@@ -105,10 +107,14 @@ fn table()->(Vec<u64>,DirectRcsState) {
     let state=DirectRcsState {ppgtt_virt:bytes.as_mut_ptr().cast(),ppgtt_phys:0x100000000,
         batch_phys:0x1f00000,batch_virt:core::ptr::null_mut(),context_phys:0x80002000,
         gpu_va:DirectRcsGpuVa{ring:0x8000000,batch:0x8100000,context:0x8002000}};
-    bytes[0]=(state.ppgtt_phys+4096)|0x1b;
-    bytes[4096/8]=(state.ppgtt_phys+8192)|0x1b;
+    bytes[DIRECT_RCS_PPGTT_PML4_OFFSET/8]=(state.ppgtt_phys+DIRECT_RCS_PPGTT_PDPT_OFFSET as u64)|0x1b;
+    for index in 0..DIRECT_RCS_PPGTT_PD_COUNT {
+        bytes[DIRECT_RCS_PPGTT_PDPT_OFFSET/8+index]=
+            (state.ppgtt_phys+DIRECT_RCS_PPGTT_PD_OFFSET as u64+index as u64*4096)|0x1b;
+    }
     for index in 0..DIRECT_RCS_PPGTT_PT_COUNT {
-        bytes[8192/8+index]=(state.ppgtt_phys+12288+index as u64*4096)|0x1b;
+        bytes[DIRECT_RCS_PPGTT_PD_OFFSET/8+index]=
+            (state.ppgtt_phys+DIRECT_RCS_PPGTT_PT_OFFSET as u64+index as u64*4096)|0x1b;
     }
     (bytes,state)
 }
@@ -121,7 +127,8 @@ fn map(bytes:&mut [u64],gpu:u64,phys:u64,flags:u64) {
     let gpu=DIRECT_RCS_PPGTT_LIMIT_BYTES-1;
     let phys=0x201234fff;
     map(&mut bytes,gpu,phys,0x1b|0x60);
-    bytes[0]|=0x20;bytes[4096/8]|=0x20;bytes[8192/8+511]|=0x20;
+    bytes[0]|=0x20;bytes[DIRECT_RCS_PPGTT_PDPT_OFFSET/8+(gpu>>30)as usize]|=0x20;
+    bytes[DIRECT_RCS_PPGTT_PD_OFFSET/8+(gpu>>21)as usize]|=0x20;
     let result=spirit_vfx_ppgtt_evidence(state,gpu,phys,0x1b).unwrap();
     assert_eq!(result.read_levels,4);
     assert!(result.topology_match&&result.leaf_match);
@@ -129,8 +136,9 @@ fn map(bytes:&mut [u64],gpu:u64,phys:u64,flags:u64) {
 }
 
 #[test] fn corrupt_parent_stops_before_any_unowned_or_lower_level_read() {
-    let (mut bytes,state)=table();let gpu=0x90a0000;
-    let offsets=[0,4096/8,8192/8+(gpu>>21)as usize];
+    let (mut bytes,state)=table();let gpu=0x490a0000;
+    let offsets=[0,DIRECT_RCS_PPGTT_PDPT_OFFSET/8+(gpu>>30)as usize,
+        DIRECT_RCS_PPGTT_PD_OFFSET/8+(gpu>>21)as usize];
     for (level,offset) in offsets.into_iter().enumerate() {
         let original=bytes[offset];
         for corrupt in [original&!1,original|0x80,0xdeadbeef000|0x1b] {

@@ -10,11 +10,13 @@ use spin::Mutex;
 // limits below; this table is only opaque handle bookkeeping.
 const MAX_UI_SURFACES: usize = 128;
 pub(crate) const UI_SURFACE_GPU_BASE: u64 = 0x1200_0000;
-// Producer surfaces are mapped into the direct-RCS PPGTT on demand. Keep this
-// arena below render's persistent-font range at 0x2000_0000 and well inside
-// the direct-RCS 1 GiB PPGTT. Packing actual aligned allocation sizes avoids
-// the former 32 MiB-per-handle VA waste and makes room for normal UI4 growth.
+// Producer addresses are imported by both DirectRCS and BCS on demand. Keep
+// legacy allocations below the compositor/font reservations at 0x2000_0000.
+// The spill bank starts after all UI4 source/compositor aliases and fits both
+// engines' 2 GiB PPGTTs. Both banks pack actual aligned allocation sizes.
 pub(crate) const UI_SURFACE_GPU_LIMIT: u64 = 0x2000_0000;
+pub(crate) const UI_SURFACE_GPU_SPILL_BASE: u64 = 0x4000_0000;
+pub(crate) const UI_SURFACE_GPU_SPILL_LIMIT: u64 = 0x6000_0000;
 const UI_SURFACE_MAX_BYTES: u64 = 0x0200_0000;
 const UI_SURFACE_MAX_PHYS_EXCLUSIVE: u64 = 1u64 << 39;
 const UI_SURFACE_BYTES_PER_PIXEL: u32 = 4;
@@ -26,6 +28,12 @@ const _: () = {
     assert!(UI_SURFACE_GPU_BASE < UI_SURFACE_GPU_LIMIT);
     assert!(UI_SURFACE_MAX_BYTES <= UI_SURFACE_GPU_LIMIT - UI_SURFACE_GPU_BASE);
     assert!(UI_SURFACE_GPU_LIMIT <= crate::intel::gpgpu::DIRECT_RCS_PPGTT_LIMIT_BYTES);
+    assert!(UI_SURFACE_GPU_LIMIT <= UI_SURFACE_GPU_SPILL_BASE);
+    assert!(UI_SURFACE_GPU_SPILL_BASE % 4096 == 0);
+    assert!(UI_SURFACE_GPU_SPILL_LIMIT % 4096 == 0);
+    assert!(UI_SURFACE_GPU_SPILL_BASE < UI_SURFACE_GPU_SPILL_LIMIT);
+    assert!(UI_SURFACE_GPU_SPILL_LIMIT <= crate::intel::gpgpu::DIRECT_RCS_PPGTT_LIMIT_BYTES);
+    assert!(UI_SURFACE_GPU_SPILL_LIMIT <= 1u64 << 31);
     assert!(UI_SURFACE_MAX_PHYS_EXCLUSIVE <= 1u64 << 46);
 };
 
@@ -230,10 +238,22 @@ fn allocate_surface_gpu_va(surfaces: &[Option<TrustedUiSurface>], byte_len: usiz
         return None;
     }
 
-    let mut candidate = UI_SURFACE_GPU_BASE;
+    allocate_surface_gpu_va_in_range(surfaces, byte_len, UI_SURFACE_GPU_BASE, UI_SURFACE_GPU_LIMIT)
+        .or_else(|| allocate_surface_gpu_va_in_range(
+            surfaces, byte_len, UI_SURFACE_GPU_SPILL_BASE, UI_SURFACE_GPU_SPILL_LIMIT,
+        ))
+}
+
+fn allocate_surface_gpu_va_in_range(
+    surfaces: &[Option<TrustedUiSurface>],
+    byte_len: u64,
+    base: u64,
+    limit: u64,
+) -> Option<u64> {
+    let mut candidate = base;
     loop {
         let candidate_end = candidate.checked_add(byte_len)?;
-        if candidate_end > UI_SURFACE_GPU_LIMIT {
+        if candidate_end > limit {
             return None;
         }
 
@@ -270,7 +290,7 @@ fn log_allocation_rejected(
     if occurrences <= 8 {
         crate::log_warn!(
             target: "ui4";
-            "ui4 trusted-surface allocation rejected reason={} occurrences={} active={} requested={} handle_max={} request={}x{} pitch=0x{:X} bytes=0x{:X} max_surface_bytes=0x{:X} producer_va=0x{:X}..0x{:X} action=reject-create\n",
+            "ui4 trusted-surface allocation rejected reason={} occurrences={} active={} requested={} handle_max={} request={}x{} pitch=0x{:X} bytes=0x{:X} max_surface_bytes=0x{:X} producer_va=0x{:X}..0x{:X} producer_spill_va=0x{:X}..0x{:X} action=reject-create\n",
             reason,
             occurrences,
             active,
@@ -283,6 +303,8 @@ fn log_allocation_rejected(
             UI_SURFACE_MAX_BYTES,
             UI_SURFACE_GPU_BASE,
             UI_SURFACE_GPU_LIMIT,
+            UI_SURFACE_GPU_SPILL_BASE,
+            UI_SURFACE_GPU_SPILL_LIMIT,
         );
     } else if occurrences >= 64 && occurrences.is_power_of_two() {
         crate::log_trace!(
@@ -512,6 +534,7 @@ fn flush_surface_rect(surface: TrustedUiSurface, rect: UiRect) {
 mod tests {
     use super::{
         MAX_UI_SURFACES, TrustedUiSurface, UI_SURFACE_GPU_BASE, UI_SURFACE_GPU_LIMIT,
+        UI_SURFACE_GPU_SPILL_BASE, UI_SURFACE_GPU_SPILL_LIMIT,
         allocate_surface_gpu_va,
     };
     use crate::graphics::primitives::{UiSurface, UiSurfaceFormat};
@@ -557,11 +580,16 @@ mod tests {
     fn producer_va_rejects_exhausted_arena() {
         let mut surfaces = [None; MAX_UI_SURFACES];
         let max_surface_bytes = 0x0200_0000usize;
-        for (slot, surface) in surfaces.iter_mut().take(7).enumerate() {
-            *surface = Some(test_surface(
-                UI_SURFACE_GPU_BASE + (slot * max_surface_bytes) as u64,
-                max_surface_bytes,
-            ));
+        let mut slot = 0;
+        for (base, limit) in [(UI_SURFACE_GPU_BASE, UI_SURFACE_GPU_LIMIT),
+            (UI_SURFACE_GPU_SPILL_BASE, UI_SURFACE_GPU_SPILL_LIMIT)]
+        {
+            let mut gpu = base;
+            while gpu + max_surface_bytes as u64 <= limit {
+                surfaces[slot] = Some(test_surface(gpu, max_surface_bytes));
+                slot += 1;
+                gpu += max_surface_bytes as u64;
+            }
         }
 
         assert_eq!(allocate_surface_gpu_va(&surfaces, TEST_BYTES), None);

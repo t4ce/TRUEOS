@@ -542,10 +542,22 @@ const _: () = assert!(
 );
 const DIRECT_RCS_TIMESTAMP_BITS: u32 = 36;
 const DIRECT_RCS_TIMESTAMP_MASK: u64 = (1u64 << DIRECT_RCS_TIMESTAMP_BITS) - 1;
-const DIRECT_RCS_PPGTT_PT_COUNT: usize = 512;
-const DIRECT_RCS_PPGTT_BYTES: usize = (3 + DIRECT_RCS_PPGTT_PT_COUNT) * 4096;
+// One PML4, one PDPT, two contiguous PD pages and their 1024 PT pages.
+// The second PDPT entry extends the existing dense mapping to 2 GiB without
+// changing any client VA, root address, or leaf cache policy.
+const DIRECT_RCS_PPGTT_PD_COUNT: usize = 2;
+const DIRECT_RCS_PPGTT_PT_COUNT: usize = DIRECT_RCS_PPGTT_PD_COUNT * 512;
+const DIRECT_RCS_PPGTT_PML4_OFFSET: usize = 0;
+const DIRECT_RCS_PPGTT_PDPT_OFFSET: usize = 4096;
+const DIRECT_RCS_PPGTT_PD_OFFSET: usize = 2 * 4096;
+const DIRECT_RCS_PPGTT_PT_OFFSET: usize = (2 + DIRECT_RCS_PPGTT_PD_COUNT) * 4096;
+const DIRECT_RCS_PPGTT_BYTES: usize = DIRECT_RCS_PPGTT_PT_OFFSET + DIRECT_RCS_PPGTT_PT_COUNT * 4096;
 pub(crate) const DIRECT_RCS_PPGTT_LIMIT_BYTES: u64 =
     (DIRECT_RCS_PPGTT_PT_COUNT as u64) * 512 * 4096;
+const _: () = {
+    assert!(DIRECT_RCS_PPGTT_PD_COUNT <= 512);
+    assert!(DIRECT_RCS_PPGTT_LIMIT_BYTES == 2 * 1024 * 1024 * 1024);
+};
 const DIRECT_RCS_LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
 const DIRECT_RCS_BATCH_START_DWORDS: usize = 4;
 // GuC registrations require stable HWLRCAs. Keep the GPGPU context window

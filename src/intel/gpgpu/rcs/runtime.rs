@@ -565,10 +565,10 @@ fn font_rcs_init_ppgtt_once(state: DirectRcsState) -> bool {
 }
 
 fn direct_rcs_rebuild_ppgtt(state: DirectRcsState) -> bool {
-    let pml4_off = 0usize;
-    let pdp_off = 4096usize;
-    let pd_off = 8192usize;
-    let pt_off = 12288usize;
+    let pml4_off = DIRECT_RCS_PPGTT_PML4_OFFSET;
+    let pdp_off = DIRECT_RCS_PPGTT_PDPT_OFFSET;
+    let pd_off = DIRECT_RCS_PPGTT_PD_OFFSET;
+    let pt_off = DIRECT_RCS_PPGTT_PT_OFFSET;
     let pte_present_rw = super::GEN8_PAGE_PRESENT | GEN8_PAGE_RW;
     let pde_present_rw_uc = pte_present_rw | GEN8_PAGE_PWT | GEN8_PAGE_PCD;
     let batch_alloc_bytes = DIRECT_RCS_BATCH_BYTES.saturating_mul(state.gpu_va.job_slots);
@@ -580,7 +580,10 @@ fn direct_rcs_rebuild_ppgtt(state: DirectRcsState) -> bool {
         let pdp = state.ppgtt_virt.add(pdp_off) as *mut u64;
         let pd = state.ppgtt_virt.add(pd_off) as *mut u64;
         core::ptr::write_volatile(pml4, (state.ppgtt_phys + pdp_off as u64) | pde_present_rw_uc);
-        core::ptr::write_volatile(pdp, (state.ppgtt_phys + pd_off as u64) | pde_present_rw_uc);
+        for index in 0..DIRECT_RCS_PPGTT_PD_COUNT {
+            let pd_phys = state.ppgtt_phys + pd_off as u64 + index as u64 * 4096;
+            core::ptr::write_volatile(pdp.add(index), pd_phys | pde_present_rw_uc);
+        }
         for index in 0..DIRECT_RCS_PPGTT_PT_COUNT {
             let pt_phys = state.ppgtt_phys + pt_off as u64 + (index as u64) * 4096;
             core::ptr::write_volatile(pd.add(index), pt_phys | pde_present_rw_uc);
@@ -671,7 +674,7 @@ fn direct_rcs_flush_ppgtt_pte_range(state: DirectRcsState, gpu: u64, len: usize)
     if pd_index >= DIRECT_RCS_PPGTT_PT_COUNT {
         return false;
     }
-    let pt_off = 12288usize;
+    let pt_off = DIRECT_RCS_PPGTT_PT_OFFSET;
     let Some(start) = pt_off
         .checked_add(pd_index.saturating_mul(4096))
         .and_then(|offset| {
@@ -765,10 +768,10 @@ fn validate_exact_ppgtt_page_map(gpu: u64, page_count: usize) -> Option<ExactPpg
     {
         return None;
     }
-    let first_pte_offset = 12288usize
+    let first_pte_offset = DIRECT_RCS_PPGTT_PT_OFFSET
         .checked_add(first_pd_index.checked_mul(4096)?)?
         .checked_add((first_va_page as usize & 0x1FF).checked_mul(core::mem::size_of::<u64>())?)?;
-    let last_pte_offset = 12288usize
+    let last_pte_offset = DIRECT_RCS_PPGTT_PT_OFFSET
         .checked_add(last_pd_index.checked_mul(4096)?)?
         .checked_add((last_va_page as usize & 0x1FF).checked_mul(core::mem::size_of::<u64>())?)?;
     let last_byte = last_pte_offset.checked_add(core::mem::size_of::<u64>())?;
@@ -787,7 +790,7 @@ fn exact_ppgtt_pte_offset(gpu: u64, page: usize) -> Option<usize> {
     if pd_index >= DIRECT_RCS_PPGTT_PT_COUNT {
         return None;
     }
-    12288usize
+    DIRECT_RCS_PPGTT_PT_OFFSET
         .checked_add(pd_index.checked_mul(4096)?)?
         .checked_add(((va_page & 0x1FF) as usize).checked_mul(core::mem::size_of::<u64>())?)
 }
@@ -945,7 +948,7 @@ fn direct_rcs_update_ppgtt_region(
         return DirectRcsPpgttMapResult::Rejected;
     }
 
-    let pt_off = 12288usize;
+    let pt_off = DIRECT_RCS_PPGTT_PT_OFFSET;
     let pages = len.div_ceil(4096);
     let cache_policy_mask = GEN8_PAGE_PWT | GEN8_PAGE_PCD;
     let mut changed = false;
@@ -1117,7 +1120,7 @@ fn direct_rcs_unmap_ppgtt_region_exact(
         return false;
     }
 
-    let pt_off = 12288usize;
+    let pt_off = DIRECT_RCS_PPGTT_PT_OFFSET;
     let pages = len.div_ceil(4096);
     for page in 0..pages {
         let va_page = (gpu >> 12) + page as u64;
@@ -1168,7 +1171,7 @@ fn direct_rcs_forcewake(dev: super::Dev) -> bool {
 mod tests {
     use super::{
         exact_ppgtt_phys_pages_are_valid, exact_ppgtt_pte_offset, validate_exact_ppgtt_page_map,
-        DIRECT_RCS_PPGTT_LIMIT_BYTES,
+        DIRECT_RCS_PPGTT_LIMIT_BYTES, DIRECT_RCS_PPGTT_PT_OFFSET,
     };
 
     #[test]
@@ -1188,9 +1191,9 @@ mod tests {
 
     #[test]
     fn exact_page_map_index_math_tracks_pt_boundaries() {
-        assert_eq!(exact_ppgtt_pte_offset(0x1000, 0), Some(0x3008));
-        assert_eq!(exact_ppgtt_pte_offset(0x1F_F000, 0), Some(0x3FF8));
-        assert_eq!(exact_ppgtt_pte_offset(0x20_0000, 0), Some(0x4000));
+        assert_eq!(exact_ppgtt_pte_offset(0x1000, 0), Some(DIRECT_RCS_PPGTT_PT_OFFSET + 8));
+        assert_eq!(exact_ppgtt_pte_offset(0x1F_F000, 0), Some(DIRECT_RCS_PPGTT_PT_OFFSET + 0xFF8));
+        assert_eq!(exact_ppgtt_pte_offset(0x20_0000, 0), Some(DIRECT_RCS_PPGTT_PT_OFFSET + 0x1000));
         assert_eq!(exact_ppgtt_pte_offset(DIRECT_RCS_PPGTT_LIMIT_BYTES, 0), None);
     }
 }
