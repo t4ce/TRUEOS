@@ -36,33 +36,61 @@ def impl(name: str, path: str = BROKER) -> str:
 
 def main() -> None:
     source = "#![allow(dead_code)]\nextern crate alloc;\n"
+    source += "mod intel {pub fn active_scanout_dimensions()->Option<(u32,u32)> {Some((3840,2160))}}\n"
     source += "mod ui4 {\nuse alloc::vec::Vec;\n"
     for name in ("OUTPUT_COUNT", "MAX_APPLICATION_PLANE_SLOTS", "ADDITIONAL_APPLICATION_PLANE_SLOT",
                  "DEFAULT_APPLICATION_PLANE_MASK", "SUPPORTED_APPLICATION_PLANE_MASK",
                  "PRIMARY_PLANE_SLOT", "INTERACTION_OVERLAY_PLANE_SLOT"):
         source += constant(MOD, name) + "\n"
-    for name in ("is_application_plane_slot", "application_plane_slots", "application_plane_mask", "background_plane_slot", "publish_output_capabilities_into"):
+    for name in ("is_application_plane_slot", "application_plane_slots", "application_plane_mask", "application_plane_scaling_enabled", "background_plane_slot", "publish_output_capabilities_into"):
         source += item(MOD, name)
     source += item(MOD, "Ui4OutputCapabilities") + impl("Ui4OutputCapabilities", MOD)
     source += r'''
 #[derive(Clone,Copy,Debug,PartialEq,Eq)] pub struct OutputId(usize);
 impl OutputId { pub fn slot(self)->usize { self.0 } }
-thread_local! { static MASKS: std::cell::Cell<[u8;4]> = const {std::cell::Cell::new([0x0f;4])}; }
-fn ui4_output_capabilities(output:OutputId)->Option<Ui4OutputCapabilities> {
-    Some(Ui4OutputCapabilities {output,width:3840,height:2160,application_plane_mask:MASKS.with(|m|m.get()[output.slot()])})
+thread_local! {
+    static MASKS: std::cell::Cell<[u8;4]> = const {std::cell::Cell::new([0x0f;4])};
+    static SCALING: std::cell::Cell<[u8;4]> = const {std::cell::Cell::new([0x0e;4])};
 }
+fn ui4_output_capabilities(output:OutputId)->Option<Ui4OutputCapabilities> {
+    Some(Ui4OutputCapabilities {output,width:3840,height:2160,application_plane_mask:MASKS.with(|m|m.get()[output.slot()]),application_plane_scaling_mask:SCALING.with(|m|m.get()[output.slot()])})
+}
+fn set_scaling(output:OutputId, mask:u8) { SCALING.with(|m| {let mut masks=m.get(); masks[output.slot()]=mask;m.set(masks);}); }
 fn set_mask(output:OutputId, mask:u8) { MASKS.with(|m| {let mut masks=m.get(); masks[output.slot()]=mask;m.set(masks);}); }
 #[test] fn capability_publication_admits_only_supported_application_carriers() {
     for mask in [0x0f,0x2f,0x29] {
-        let caps=Ui4OutputCapabilities {output:OutputId(0),width:3840,height:2160,application_plane_mask:mask};
+        let caps=Ui4OutputCapabilities {output:OutputId(0),width:3840,height:2160,application_plane_mask:mask,application_plane_scaling_mask:mask&0x0e};
         let mut outputs=[None;4];
         assert_eq!(publish_output_capabilities_into(&mut outputs,caps),Ok(()));
         assert_eq!(caps.application_plane_count(),mask.count_ones() as usize);
     }
     for mask in [0,0x10,0x40,0x3f,0x6f,0x2e] {
-        let caps=Ui4OutputCapabilities {output:OutputId(0),width:3840,height:2160,application_plane_mask:mask};
+        let caps=Ui4OutputCapabilities {output:OutputId(0),width:3840,height:2160,application_plane_mask:mask,application_plane_scaling_mask:mask&0x0e};
         assert!(publish_output_capabilities_into(&mut [None;4],caps).is_err());
     }
+}
+#[test] fn scaling_capability_is_an_admitted_subset_and_part_of_the_immutable_contract() {
+    let output=OutputId(0);
+    let base=Ui4OutputCapabilities {output,width:3840,height:2160,application_plane_mask:0x2f,
+        application_plane_scaling_mask:0};
+    for mask in [0,2,4,8,0x0a,0x0e] {
+        let caps=Ui4OutputCapabilities {application_plane_scaling_mask:mask,..base};
+        assert_eq!(publish_output_capabilities_into(&mut [None;4],caps),Ok(()));
+        for slot in 0..8 {assert_eq!(caps.supports_application_plane_scaling(slot),mask&(1<<slot)!=0);}
+        assert!(!caps.supports_application_plane_scaling(usize::MAX));
+    }
+    for mask in [1,0x10,0x20,0x40,0xff] {
+        assert_eq!(publish_output_capabilities_into(&mut [None;4],
+            Ui4OutputCapabilities {application_plane_scaling_mask:mask,..base}),
+            Err("ui4-output-capabilities-invalid-application-plane-scaling-mask"));
+    }
+    assert!(publish_output_capabilities_into(&mut [None;4],
+        Ui4OutputCapabilities {application_plane_mask:0x0b,application_plane_scaling_mask:4,..base}).is_err());
+    let mut outputs=[None;4];
+    assert_eq!(publish_output_capabilities_into(&mut outputs,base),Ok(()));
+    assert_eq!(publish_output_capabilities_into(&mut outputs,
+        Ui4OutputCapabilities {application_plane_scaling_mask:0x0e,..base}),
+        Err("ui4-output-capabilities-conflict"));
 }
 '''
     source += '#[path="' + str(ROOT / "src/ui4/layer_contract.rs") + '"] mod layer_contract;\n'
@@ -74,7 +102,7 @@ impl WindowId {fn raw(self)->u32 {self.0} fn from_raw(v:u32)->Option<Self> {(v!=
 #[derive(Clone,Copy,Debug,PartialEq,Eq)] pub enum WindowState {Ready,Closing,Closed}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)] pub struct WindowPlacement {pub x:i32,pub y:i32,pub width:u32,pub height:u32,pub z:i32,pub opacity:u8}
 #[derive(Clone,Copy)] pub struct Interaction {pub resize_on_maximize:bool}
-#[derive(Clone,Copy)] pub struct WindowSnapshot {pub plane:WindowPlane,pub placement:WindowPlacement,pub presentation_placement:WindowPlacement,pub state:WindowState,pub interaction:Interaction}
+#[derive(Clone,Copy)] pub struct WindowSnapshot {pub output:OutputId,pub plane:WindowPlane,pub placement:WindowPlacement,pub presentation_placement:WindowPlacement,pub state:WindowState,pub interaction:Interaction}
 #[derive(Clone,Copy)] struct DamageRegion;
 impl DamageRegion {const FULL:Self=Self;}
 #[derive(Clone,Copy)] struct PlaneLease {window:WindowId,last_hot_ms:u64}
@@ -93,13 +121,64 @@ impl WindowBroker {
                  "rebalance_application_planes", "rebalance_application_planes_with_mask", "apply_group_plan",
                  "focus_window", "focus_window_with_mask"):
         source += method(name)
+    source += "}\n"
+    for name in ("CLOSE_TRANSITION_DURATION_MS", "CLOSE_TRANSITION_PUFF_PER_MILLE",
+                 "OPEN_TRANSITION_SHRINK_PER_MILLE", "DIRECT_PLANE_CLOSE_WAVE_DURATION_MS",
+                 "DIRECT_PLANE_CLOSE_PUFF_PER_MILLE", "DIRECT_PLANE_OPEN_SHRINK_PER_MILLE"):
+        source += constant(BROKER, name) + "\n"
+    for name in ("WindowOpenTransition", "open_transition", "open_transition_placement",
+                 "scaled_fade_transition_placement", "centered_scale_coordinate", "close_transition_timing"):
+        source += item(BROKER, name)
     source += r'''
-}
 fn broker(output:OutputId,count:usize)->WindowBroker {
     WindowBroker {windows:(0..count).map(|z|WindowRecord {generation:1,state:WindowState::Ready,output,plane:WindowPlane::Primary,background:None,
         placement:WindowPlacement {x:0,y:0,width:640,height:480,z:z as i32,opacity:255},damage:None,revision:0,open_transition:None}).collect(),leases:[[None;4];4]}
 }
 fn slots(broker:&WindowBroker)->Vec<usize> {broker.windows.iter().map(|w|w.plane.slot()).collect()}
+#[test] fn an_output_without_scaling_keeps_native_pixels_through_the_full_open_fade() {
+    let output=OutputId(0);set_scaling(output,0);
+    let initial=WindowPlacement {x:100,y:200,width:800,height:600,z:3,opacity:255};
+    for slot in 1..=3 {
+        let open=open_transition(initial,WindowPlane::Universal(slot),output,1000).unwrap();
+        assert_eq!(open.shrink_per_mille,0);
+        let mut previous=0;
+        for elapsed in 0..=open.duration_ms {
+            let current=open_transition_placement(initial,elapsed,open.duration_ms,open.shrink_per_mille);
+            assert_eq!((current.x,current.y,current.width,current.height),(100,200,800,600));
+            assert!(current.opacity>=previous);previous=current.opacity;
+        }
+        assert_eq!(previous,255);
+    }
+}
+#[test] fn admitted_outputs_keep_the_existing_open_scale_and_direct_close_waves() {
+    let output=OutputId(0);set_scaling(output,0x0e);
+    let initial=WindowPlacement {x:100,y:200,width:800,height:600,z:3,opacity:255};
+    let open=open_transition(initial,WindowPlane::Universal(1),output,1000).unwrap();
+    assert_eq!((open.current.width,open.current.height),(280,210));
+    assert_eq!(open.shrink_per_mille,650);
+    assert_eq!(close_transition_timing(WindowPlane::Universal(1),true,true,true,true),(0,200,50));
+    assert_eq!(close_transition_timing(WindowPlane::Universal(3),true,true,true,true),(200,200,50));
+    assert_eq!(close_transition_timing(WindowPlane::Universal(3),false,true,true,true),(0,300,50));
+    assert!(open_transition(initial,WindowPlane::Primary,output,1000).is_none());
+    assert!(open_transition(initial,WindowPlane::Universal(5),output,1000).is_none());
+}
+#[test] fn unavailable_scaling_closes_with_a_fade_and_keeps_the_retirement_boundary() {
+    let initial=WindowPlacement {x:100,y:200,width:800,height:600,z:3,opacity:255};
+    for slot in [1,2,3,5] {
+        for direct in [false,true] {for puff in [false,true] {
+            let (delay,duration,puff)=close_transition_timing(WindowPlane::Universal(slot),direct,puff,false,true);
+            assert_eq!((delay,duration,puff),(0,200,0));
+            let mut previous=255;
+            for elapsed in 0..=duration {
+                let current=scaled_fade_transition_placement(initial,elapsed,duration,1000+puff);
+                assert_eq!((current.x,current.y,current.width,current.height),(100,200,800,600));
+                assert!(current.opacity<=previous);previous=current.opacity;
+            }
+            assert_eq!(previous,0);
+        }}
+    }
+    assert_eq!(close_transition_timing(WindowPlane::Primary,true,true,false,true),(0,0,0));
+}
 #[test] fn desktop_still_has_three_leases_and_overflows_to_stack() {
     let output=OutputId(0); let mut b=broker(output,6);
     b.rebalance_application_planes(output,100);
@@ -148,11 +227,13 @@ fn slots(broker:&WindowBroker)->Vec<usize> {broker.windows.iter().map(|w|w.plane
     assert!(WindowPlane::Interaction.stack_rank()>WindowPlane::Universal(5).stack_rank());
 }
 }
-use window_broker::{WindowPlacement,WindowSnapshot,WindowPlane};
+use window_broker::{WindowPlacement,WindowSnapshot,WindowPlane,WindowState};
+#[derive(Clone,Copy)] struct FrameRgbaView {width:u32,height:u32}
 mod compositor {
 use super::*;
 '''
-    for name in ("CompositionTarget", "composition_targets", "presentation_placement"):
+    for name in ("CompositionTarget", "composition_targets", "native_pixel_placement", "presentation_placement",
+                 "bounded_direct_plane_scale", "direct_overlay_geometry_eligible"):
         source += item(COMPOSITOR, name)
     source += r'''
 #[test] fn plans_follow_capabilities_without_interaction_or_diagnostics() {
@@ -163,13 +244,51 @@ use super::*;
 }
 #[test] fn extra_carrier_keeps_native_source_geometry_without_a_scaler() {
     let placement=WindowPlacement {x:10,y:20,width:320,height:240,z:0,opacity:64};
-    let window=WindowSnapshot {plane:WindowPlane::Universal(5),placement,presentation_placement:placement,state:window_broker::WindowState::Closing,
+    let window=WindowSnapshot {output:OutputId(0),plane:WindowPlane::Universal(5),placement,presentation_placement:placement,state:window_broker::WindowState::Closing,
         interaction:window_broker::Interaction {resize_on_maximize:true}};
     let native=presentation_placement(window,640,480);
     assert_eq!((native.width,native.height),(640,480));
     assert_eq!((native.x,native.y,native.opacity),(10,20,64));
     let existing=presentation_placement(WindowSnapshot {plane:WindowPlane::Universal(3),..window},640,480);
     assert_eq!((existing.width,existing.height),(320,240),"existing scaler carrier remains unchanged");
+}
+#[test] fn unsupported_scaling_centers_the_native_resize_front_and_preserves_its_alpha() {
+    let output=OutputId(0);set_scaling(output,0);
+    let placement=WindowPlacement {x:100,y:200,width:800,height:600,z:3,opacity:64};
+    let window=WindowSnapshot {output,plane:WindowPlane::Universal(1),placement,
+        presentation_placement:placement,state:window_broker::WindowState::Ready,
+        interaction:window_broker::Interaction {resize_on_maximize:true}};
+    let native=presentation_placement(window,640,480);
+    assert_eq!((native.x,native.y,native.width,native.height),(180,260,640,480));
+    assert_eq!((native.opacity,native.z),(64,3));
+    set_scaling(output,0x0e);
+    assert_eq!(presentation_placement(window,640,480),placement,"admitted desktop sizing is unchanged");
+}
+#[test] fn unsupported_outputs_never_admit_a_scaled_direct_plane() {
+    let output=OutputId(0);
+    let placement=WindowPlacement {x:100,y:200,width:400,height:300,z:3,opacity:64};
+    let mut window=WindowSnapshot {output,plane:WindowPlane::Universal(1),placement,
+        presentation_placement:placement,state:window_broker::WindowState::Closing,
+        interaction:window_broker::Interaction {resize_on_maximize:true}};
+    let view=FrameRgbaView {width:800,height:600};
+    set_scaling(output,0);
+    assert!(!direct_overlay_geometry_eligible(window,view));
+    window.placement=presentation_placement(window,view.width,view.height);
+    assert_eq!((window.placement.x,window.placement.y),(0,50),"native source stays within the output");
+    assert!(direct_overlay_geometry_eligible(window,view));
+    window.placement=placement;set_scaling(output,0x0e);
+    assert!(direct_overlay_geometry_eligible(window,view));
+}
+#[test] fn native_resize_front_clamps_at_every_output_edge_without_losing_pixels() {
+    let output=OutputId(0);set_scaling(output,0);
+    for (x,y,expected_x,expected_y) in [(0,0,0,0),(3800,2100,3040,1560)] {
+        let placement=WindowPlacement {x,y,width:100,height:100,z:0,opacity:255};
+        let window=WindowSnapshot {output,plane:WindowPlane::Universal(2),placement,
+            presentation_placement:placement,state:window_broker::WindowState::Ready,
+            interaction:window_broker::Interaction {resize_on_maximize:true}};
+        let native=presentation_placement(window,800,600);
+        assert_eq!((native.x,native.y,native.width,native.height),(expected_x,expected_y,800,600));
+    }
 }
 }
 }

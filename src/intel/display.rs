@@ -22,6 +22,7 @@ mod native_ui4;
 mod ui4_bcs;
 mod ui4_bcs_queue;
 
+mod atomic_flip;
 mod bringup_diag;
 mod display_metrics;
 mod tgl_ui4_layout;
@@ -310,6 +311,7 @@ struct PlaneSurfaceFlipBatch {
     entries: [Option<PlaneSurfaceFlip>; UI4_PLANE_SURFACE_FLIP_BATCH_CAPACITY],
     submitted_ns: u64,
     polls: u32,
+    native_frame_after_release: Option<u32>,
 }
 
 impl PlaneSurfaceFlipBatch {
@@ -321,6 +323,7 @@ impl PlaneSurfaceFlipBatch {
             entries: [None; UI4_PLANE_SURFACE_FLIP_BATCH_CAPACITY],
             submitted_ns: 0,
             polls: 0,
+            native_frame_after_release: None,
         }
     }
 }
@@ -2792,7 +2795,12 @@ fn pipe_scaler_bound_to_plane(
 }
 
 fn disable_pipe_scaler(dev: crate::intel::Dev, regs: PipeScalerRegisters) {
-    crate::intel::mmio_write(dev, regs.control, 0);
+    let control = if native_ui4_for_pipe(PIPES[0]) {
+        PIPE_SCALER_ALLOW_DOUBLE_BUFFER_DISABLE
+    } else {
+        0
+    };
+    crate::intel::mmio_write(dev, regs.control, control);
     crate::intel::mmio_write(dev, regs.window_pos, 0);
     crate::intel::mmio_write(dev, regs.window_size, 0);
 }
@@ -2814,7 +2822,12 @@ fn prepare_plane_scaler_flips(
     // Validate the whole transaction before disabling or rebinding anything.
     // Programming one scaler twice leaves an impossible readback contract for
     // the first plane and stalls every plane in the shared UI4 flip batch.
-    if !plane_scaler_flips_have_unique_bindings(entries) {
+    if !plane_scaler_flips_have_unique_bindings(entries)
+        || entries.iter().flatten().filter_map(|entry| entry.scaler).any(|scaler| {
+            matches!(scaler.mode, PlaneScalerMode::Scaled { scaler_id, .. }
+                if pipe_scaler_registers(scaler.pipe_slot, scaler_id).is_none())
+        })
+    {
         crate::log_error!(target: "intel/display";
             "intel/display: rejected conflicting UI4 scaler bindings action=preserve-live-planes\n");
         return false;
@@ -2888,6 +2901,11 @@ fn program_plane_scaler_flip(dev: crate::intel::Dev, scaler: PlaneScalerFlip) ->
         dev,
         regs.control,
         PIPE_SCALER_ENABLE
+            | if native_ui4_for_pipe(PIPES[scaler.pipe_slot]) {
+                PIPE_SCALER_ALLOW_DOUBLE_BUFFER_DISABLE
+            } else {
+                0
+            }
             | pipe_scaler_binding(
                 PIPES[scaler.pipe_slot]
                     .plane(scaler.plane_slot)
@@ -2946,16 +2964,27 @@ pub(crate) fn submit_ui4_plane_surface_flip_batch() -> bool {
     batch.accepting = false;
     batch.submitted_ns = crate::chronos::monotonic_nanos();
     batch.polls = 0;
+    if native_ui4_for_pipe(PIPES[0]) && batch.entries[..batch.len].iter().flatten().any(|entry| {
+        let ctl = crate::intel::mmio_read(dev, entry.plane_base + UNI_PLANE_CTL_OFF);
+        ctl & (PLANE_CTL_ALLOW_DOUBLE_BUFFER_DISABLE | PLANE_CTL_ASYNC_FLIP)
+            != PLANE_CTL_ALLOW_DOUBLE_BUFFER_DISABLE
+    }) {
+        return false;
+    }
+    let atomic_update = match atomic_flip::begin(dev) {
+        Ok(guard) => guard,
+        Err(reason) => {
+            crate::log_error!(target: "intel/display";
+                "intel/display: UI4 atomic flip rejected reason={}\n", reason);
+            return false;
+        }
+    };
     if !prepare_plane_scaler_flips(dev, &batch.entries[..batch.len]) {
         return false;
     }
+    // Stage every source before arming any scaler or surface. The native
+    // global hold keeps both trigger groups together even across vblank.
     for entry in batch.entries[..batch.len].iter().flatten() {
-        if entry
-            .scaler
-            .is_some_and(|scaler| !program_plane_scaler_flip(dev, scaler))
-        {
-            return false;
-        }
         if let Some(geometry) = entry.geometry {
             crate::intel::mmio_write(
                 dev,
@@ -2977,12 +3006,20 @@ pub(crate) fn submit_ui4_plane_surface_flip_batch() -> bool {
         if let Some(alpha) = entry.constant_alpha {
             program_overlay_plane_constant_alpha(dev, entry.plane_base, alpha);
         }
+    }
+    for scaler in batch.entries[..batch.len].iter().flatten().filter_map(|entry| entry.scaler) {
+        if !program_plane_scaler_flip(dev, scaler) {
+            return false;
+        }
+    }
+    for entry in batch.entries[..batch.len].iter().flatten() {
         crate::intel::mmio_write(
             dev,
             entry.plane_base + UNI_PLANE_SURF_OFF,
             entry.surface_reg,
         );
     }
+    batch.native_frame_after_release = atomic_update.map(|guard| guard.release());
     true
 }
 
@@ -3026,7 +3063,14 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
         (1u32 << batch.len) - 1
     };
     let elapsed_ns = crate::chronos::monotonic_nanos().saturating_sub(batch.submitted_ns);
-    let committed = live_mask == want_mask && alpha_mask == want_mask && scaler_mask == want_mask;
+    let frame_advanced = batch.native_frame_after_release.is_none_or(|_| {
+        atomic_flip::frame_advanced(
+            batch.native_frame_after_release,
+            crate::intel::mmio_read(dev, PIPE_FRMCOUNT_A),
+        )
+    });
+    let committed = frame_advanced
+        && live_mask == want_mask && alpha_mask == want_mask && scaler_mask == want_mask;
     let timed_out = !committed && elapsed_ns >= UI4_PLANE_SURFACE_FLIP_TIMEOUT_NS;
     if !committed && !timed_out {
         return Ui4PlaneSurfaceFlipPoll::Pending;
@@ -3035,7 +3079,7 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
     let seq = UI4_PLANE_SURFACE_FLIP_BATCH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
     if timed_out || seq <= 8 || seq.is_multiple_of(60) {
         crate::log!(
-            "intel/display: ui4-plane-surface-flip-batch seq={} ok={} planes={} live_mask=0x{:X} alpha_mask=0x{:X} scaler_mask=0x{:X} want_mask=0x{:X} polls={} wait_ns={} commit=surface+plane-alpha+scaler-together wait=async\n",
+            "intel/display: ui4-plane-surface-flip-batch seq={} ok={} planes={} live_mask=0x{:X} alpha_mask=0x{:X} scaler_mask=0x{:X} want_mask=0x{:X} polls={} wait_ns={} commit=surface+plane-alpha+scaler-together wait=async frame_after_release={:?} frame_advanced={}\n",
             seq,
             committed as u8,
             batch.len,
@@ -3045,6 +3089,8 @@ pub(crate) fn poll_ui4_plane_surface_flip_batch() -> Ui4PlaneSurfaceFlipPoll {
             want_mask,
             batch.polls,
             elapsed_ns,
+            batch.native_frame_after_release,
+            frame_advanced as u8,
         );
     }
     if timed_out {
@@ -3649,7 +3695,15 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
         else {
             return fail("static-contract");
         };
-        controls[slot] = ctl;
+        controls[slot] = if native_ui4_for_pipe(pipe) {
+            (ctl & !PLANE_CTL_ASYNC_FLIP) | PLANE_CTL_ALLOW_DOUBLE_BUFFER_DISABLE
+        } else {
+            ctl
+        };
+        if native_ui4_for_pipe(pipe) {
+            // Establish permission before taking the global hold below.
+            crate::intel::mmio_write(dev, pipe.plane(slot).ctl(), controls[slot] & !PLANE_CTL_ENABLE);
+        }
         let plane_base = pipe.plane(slot).base();
         program_plane_watermark_boot_safe(dev, plane_base, true);
         let Some(wm0) = plane_watermark(pipe, slot) else {
@@ -3679,11 +3733,16 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     bringup_diag::checkpoint("plane-arm", usize::MAX);
     // Publish every final CTL/SURF pair back-to-back and consume one common
     // latch. Each configured plane receives one bootstrap SURF write.
+    let atomic_update = match atomic_flip::begin(dev) {
+        Ok(guard) => guard,
+        Err(reason) => return fail(reason),
+    };
     for slot in 0..count {
         let plane = pipe.plane(slot);
         crate::intel::mmio_write(dev, plane.ctl(), controls[slot]);
         crate::intel::mmio_write(dev, plane.surf(), surface_regs[slot]);
     }
+    drop(atomic_update);
     let (arm_frame_before, arm_frame_after, arm_frame_wait) = wait_for_pipe_next_frame(dev, pipe);
     let (live_mask, live_iters) = wait_for_plane_stack_live(dev, pipe, surface_regs, 5_000_000);
     bringup_diag::latch(surface_regs, live_mask, live_iters);
@@ -3710,6 +3769,10 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
             width: primary.width,
             height: primary.height,
             application_plane_mask,
+            // The inherited TGL clock is adequate at 1:1. The current driver
+            // does not yet admit scaler bandwidth or raise CDCLK for shrink
+            // animations; exposing a scaler is not that admission proof.
+            application_plane_scaling_mask: if native_ui4_for_pipe(pipe) { 0 } else { 0x0E },
         })
     {
         return fail(reason);
@@ -6122,6 +6185,9 @@ fn direct_overlay_geometry_and_scaler(
         ));
     }
     let scaler_id = direct_plane_scaler_id(surface.plane_slot)?;
+    if native_ui4_for_pipe(surface.pipe) {
+        return None;
+    }
     pipe_scaler_registers(surface.pipe.slot, scaler_id)?;
     let hfactor = direct_plane_scaler_factor(surface.width, surface.dest_width)?;
     let vfactor = direct_plane_scaler_factor(surface.height, surface.dest_height)?;

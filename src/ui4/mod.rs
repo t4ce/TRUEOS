@@ -286,6 +286,9 @@ pub(crate) struct Ui4OutputCapabilities {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) application_plane_mask: u8,
+    /// Plane scaling admitted by the display driver for this output's current
+    /// clock and buffer contract. Hardware scaler presence alone is not proof.
+    pub(crate) application_plane_scaling_mask: u8,
 }
 
 impl Ui4OutputCapabilities {
@@ -295,6 +298,11 @@ impl Ui4OutputCapabilities {
 
     pub(crate) const fn supports_application_plane(self, slot: usize) -> bool {
         slot < u8::BITS as usize && self.application_plane_mask & (1u8 << slot) != 0
+    }
+
+    pub(crate) const fn supports_application_plane_scaling(self, slot: usize) -> bool {
+        self.supports_application_plane(slot)
+            && self.application_plane_scaling_mask & (1u8 << slot) != 0
     }
 }
 
@@ -312,6 +320,11 @@ pub(super) fn application_plane_slots(mask: u8) -> impl DoubleEndedIterator<Item
 pub(super) fn application_plane_mask(output: OutputId) -> u8 {
     ui4_output_capabilities(output)
         .map_or(DEFAULT_APPLICATION_PLANE_MASK, |caps| caps.application_plane_mask)
+}
+
+pub(super) fn application_plane_scaling_enabled(output: OutputId, slot: usize) -> bool {
+    ui4_output_capabilities(output)
+        .is_some_and(|caps| caps.supports_application_plane_scaling(slot))
 }
 
 pub(super) fn background_plane_slot(mask: u8, foreground: usize) -> Option<usize> {
@@ -346,6 +359,11 @@ fn publish_output_capabilities_into(
         || capabilities.application_plane_mask & !SUPPORTED_APPLICATION_PLANE_MASK != 0
     {
         return Err("ui4-output-capabilities-invalid-application-plane-mask");
+    }
+    if capabilities.application_plane_scaling_mask & !(capabilities.application_plane_mask & 0x0e)
+        != 0
+    {
+        return Err("ui4-output-capabilities-invalid-application-plane-scaling-mask");
     }
     let slot = capabilities.output.slot();
     match outputs[slot] {
@@ -799,6 +817,7 @@ mod live_resource_and_output_capability_tests {
             width: 2_560,
             height: 1_440,
             application_plane_mask: 0b1011,
+            application_plane_scaling_mask: 0b1010,
         };
         assert_eq!(capabilities.application_plane_count(), 3);
         assert!(capabilities.supports_application_plane(0));
@@ -819,6 +838,7 @@ mod live_resource_and_output_capability_tests {
         let capabilities = Ui4OutputCapabilities {
             output: OutputId::from_slot(0).unwrap(), width: 3_840, height: 2_160,
             application_plane_mask: SUPPORTED_APPLICATION_PLANE_MASK,
+            application_plane_scaling_mask: 0x0e,
         };
         let mut outputs = [None; OUTPUT_COUNT];
         assert_eq!(publish_output_capabilities_into(&mut outputs, capabilities), Ok(()));
@@ -833,6 +853,7 @@ mod live_resource_and_output_capability_tests {
             width: 2_560,
             height: 1_440,
             application_plane_mask: DEFAULT_APPLICATION_PLANE_MASK,
+            application_plane_scaling_mask: 0x0e,
         };
         let mut outputs = [None; OUTPUT_COUNT];
 

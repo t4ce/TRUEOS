@@ -481,7 +481,12 @@ impl View {
         let available = cols - self.split;
         let columns = (available / 28).max(1);
         let card_width = available / columns;
-        let per_page = columns * (height / CARD_HEIGHT).max(1);
+        let largest_pointer_group = data.buckets.iter().map(|bucket| data.devices.iter().filter(|device| {
+            device.combo_id == bucket.combo_id && matches!(device.id.kind, HidDeviceKind::Mouse | HidDeviceKind::Tablet)
+        }).count()).max().unwrap_or(0);
+        let pointer_rows = largest_pointer_group.max(1).min(height.saturating_sub(6).max(1));
+        let card_height = CARD_HEIGHT.max(pointer_rows + 6);
+        let per_page = columns * (height / card_height).max(1);
         self.buckets_page = self
             .buckets_page
             .min(data.buckets.len().saturating_sub(1) / per_page);
@@ -489,9 +494,9 @@ impl View {
         for (index, bucket) in data.buckets.iter().skip(offset).take(per_page).enumerate() {
             let rect = Rect {
                 x: self.split + index % columns * card_width,
-                y: HEADER + index / columns * CARD_HEIGHT,
+                y: HEADER + index / columns * card_height,
                 w: card_width - 1,
-                h: CARD_HEIGHT,
+                h: card_height,
             };
             let hovered = self
                 .press
@@ -506,28 +511,31 @@ impl View {
                 hovered,
             );
             canvas.hit(rect, Hit::Bucket(bucket.combo_id));
-            let pointer = data.devices.iter().find(|device| {
+            let pointers: Vec<_> = data.devices.iter().filter(|device| {
                 device.combo_id == bucket.combo_id
                     && matches!(device.id.kind, HidDeviceKind::Mouse | HidDeviceKind::Tablet)
-            });
+            }).collect();
             let keyboard = data.devices.iter().find(|device| {
                 device.combo_id == bucket.combo_id && device.id.kind == HidDeviceKind::Keyboard
             });
             let gamepad = data.devices.iter().find(|device| {
                 device.combo_id == bucket.combo_id && device.id.kind == HidDeviceKind::Gamepad
             });
+            let member_rows = pointers.len().max(1).min(pointer_rows);
+            if pointers.is_empty() {
+                canvas.text(rect.x + 2, rect.y + 1, rect.w - 4, "░ No cursor");
+            }
+            for (index, device) in pointers.iter().take(member_rows).enumerate() {
+                canvas.text(rect.x + 2, rect.y + 1 + index, rect.w - 4, &format!("█ {}", device_label(device)));
+                canvas.hit(Rect { x: rect.x + 1, y: rect.y + 1 + index, w: rect.w - 2, h: 1 }, Hit::Device(device.id));
+            }
+            let keyboard_row = rect.y + member_rows + 1;
+            let gamepad_row = keyboard_row + 1;
+            let tag_row = keyboard_row + 2;
+            let footer_row = keyboard_row + 3;
             canvas.text(
                 rect.x + 2,
-                rect.y + 1,
-                rect.w - 4,
-                &pointer.map_or_else(
-                    || String::from("░ No cursor"),
-                    |device| format!("█ {}", device_label(device)),
-                ),
-            );
-            canvas.text(
-                rect.x + 2,
-                rect.y + 2,
+                keyboard_row,
                 rect.w - 4,
                 &keyboard.map_or_else(
                     || String::from("░ No keyboard"),
@@ -536,7 +544,7 @@ impl View {
             );
             canvas.text(
                 rect.x + 2,
-                rect.y + 3,
+                gamepad_row,
                 rect.w - 4,
                 &gamepad.map_or_else(
                     || String::from("░ No gamepad"),
@@ -544,9 +552,8 @@ impl View {
                 ),
             );
             for (row, device) in [
-                (rect.y + 1, pointer),
-                (rect.y + 2, keyboard),
-                (rect.y + 3, gamepad),
+                (keyboard_row, keyboard),
+                (gamepad_row, gamepad),
             ] {
                 if let Some(device) = device {
                     canvas.hit(
@@ -567,7 +574,7 @@ impl View {
             };
             canvas.text(
                 rect.x + 2,
-                rect.y + 4,
+                tag_row,
                 rect.w - 4,
                 &format!("#{:08x} {}", bucket.combo_id, tag),
             );
@@ -576,13 +583,14 @@ impl View {
             let empty = bucket.mouse_slot_id == 0
                 && bucket.tablet_slot_id == 0
                 && bucket.keyboard_slot_id == 0
-                && bucket.gamepad_slot_id == 0;
+                && bucket.gamepad_slot_id == 0
+                && !data.devices.iter().any(|device| device.combo_id == bucket.combo_id);
             if empty {
-                canvas.text(rect.x + 2, rect.y + 5, rect.w - 4, "[Remove empty]");
+                canvas.text(rect.x + 2, footer_row, rect.w - 4, "[Remove empty]");
                 canvas.hit(
                     Rect {
                         x: rect.x + 2,
-                        y: rect.y + 5,
+                        y: footer_row,
                         w: 14.min(rect.w - 4),
                         h: 1,
                     },
@@ -591,13 +599,13 @@ impl View {
             } else {
                 canvas.text(
                     rect.x + 2,
-                    rect.y + 5,
+                    footer_row,
                     rect.w - 4,
-                    &format!(
+                    &if pointers.len() > 1 { format!("Pointers {} → 1 cursor", pointers.len()) } else { format!(
                         "Cursor {}/1 · Pad {}/1",
-                        usize::from(pointer.is_some()),
+                        usize::from(!pointers.is_empty()),
                         usize::from(gamepad.is_some())
-                    ),
+                    ) },
                 );
             }
         }
@@ -914,6 +922,47 @@ mod tests {
             view.event(Event::Up(target.0, target.1), &frame),
             Some(Command::MoveDevice(mouse, 20))
         );
+    }
+
+    #[test]
+    fn grouped_physical_pointer_members_are_visible_and_individually_splittable() {
+        let mut data = sample();
+        data.devices.push(device(2, HidDeviceKind::Gamepad));
+        let mut trackpad = device(8, HidDeviceKind::Mouse);
+        let mut finger = device(9, HidDeviceKind::Tablet);
+        trackpad.combo_id = 10;
+        finger.combo_id = 10;
+        data.devices[0].combo_id = 10;
+        data.devices[1].combo_id = 10;
+        data.devices[2].combo_id = 10;
+        let canonical = data.devices[0].id;
+        data.buckets[0].mouse_controller_id = canonical.controller_id;
+        data.buckets[0].mouse_slot_id = canonical.slot_id;
+        data.buckets[0].mouse_ep_target = canonical.ep_target;
+        let alias = trackpad.id;
+        data.devices.push(trackpad);
+        data.devices.push(finger);
+        let mut view = View::default();
+        let frame = view.frame(&data, 100, 24);
+        let (bucket, _) = frame.hits.iter().find(|(_, hit)| *hit == Hit::Bucket(10)).unwrap();
+        assert!(frame.lines[bucket.y + 7].contains("Pointers 3 → 1 cursor"));
+        for member in &data.devices {
+            assert!(frame.hits.iter().any(|(rect, hit)| rect.x >= view.split && *hit == Hit::Device(member.id)));
+        }
+        let (rect, _) = frame.hits.iter().find(|(rect, hit)| rect.x >= view.split && *hit == Hit::Device(alias)).unwrap();
+        let source = (rect.x, rect.y);
+        let target = coordinate(&frame, Hit::Bucket(20));
+        view.event(Event::Down(source.0, source.1), &frame);
+        view.event(Event::Move(target.0, target.1), &frame);
+        let frame = view.frame(&data, 100, 24);
+        assert_eq!(view.event(Event::Up(target.0, target.1), &frame), Some(Command::MoveDevice(alias, 20)));
+        // Per-device membership, not only the canonical wire slots, protects a
+        // card from offering deletion while aliased pointers are still live.
+        data.buckets[0].mouse_controller_id = 0;
+        data.buckets[0].mouse_slot_id = 0;
+        data.buckets[0].mouse_ep_target = 0;
+        let frame = view.frame(&data, 100, 24);
+        assert!(!frame.hits.iter().any(|(_, hit)| *hit == Hit::Remove(10)));
     }
 
     #[test]

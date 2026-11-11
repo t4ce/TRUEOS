@@ -1,5 +1,15 @@
 extern crate alloc;
 
+pub(crate) mod ps2;
+mod ps2_controller;
+mod ps2_keyboard;
+mod designware_i2c;
+mod hid_touchpad;
+mod i2c_hid;
+pub(crate) mod i2c_touchpad;
+mod intel_gpio;
+mod intel_i2c;
+
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;

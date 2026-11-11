@@ -69,7 +69,7 @@ fn opened_hid_streams_are_pairable_before_any_input_report() {
         .find(|device| device.controller_id == 74).unwrap();
     assert_eq!((tablet.x, tablet.y, tablet.x_raw, tablet.y_raw), (0.5, 0.5, 0, 0));
     assert_eq!((tablet.buttons_down, tablet.report_id), (0, 0));
-    assert_ne!(mouse.combo_id, tablet.combo_id);
+    assert_eq!(mouse.combo_id, tablet.combo_id);
     let before = hut::devices_snapshot();
     register_hut_stream_device(HidBootKind::EyeTracker, 74, 103, 3);
     assert_eq!(hut::devices_snapshot(), before);

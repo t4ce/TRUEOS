@@ -14,6 +14,8 @@ pub mod bgrt;
 pub mod dbg;
 pub mod facp;
 pub mod hpet;
+pub(crate) mod i2c_hid;
+pub(crate) mod i2c_hid_firmware;
 pub mod madt;
 pub mod sleep;
 pub(crate) mod tlb;

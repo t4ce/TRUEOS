@@ -1278,10 +1278,12 @@ fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView)
     };
     let exact_size = placement.width == view.width && placement.height == view.height;
     let scaler_safe_resize = window.interaction.resize_on_maximize
+        && super::application_plane_scaling_enabled(window.output, window.plane.slot())
         && matches!(window.plane.slot(), 1..=3)
         && bounded_direct_plane_scale(view.width, placement.width)
         && bounded_direct_plane_scale(view.height, placement.height);
     let scaler_safe_close = window.state == super::WindowState::Closing
+        && super::application_plane_scaling_enabled(window.output, window.plane.slot())
         && matches!(window.plane.slot(), 1..=3)
         && placement.width >= 8
         && placement.height >= 8
@@ -1314,8 +1316,37 @@ pub(super) fn presentation_placement(
         // Retain native pixels while an older resize front is displayed.
         placement.width = backing_width;
         placement.height = backing_height;
+    } else {
+        let capabilities = super::ui4_output_capabilities(window.output);
+        if !capabilities.is_some_and(|caps| caps.supports_application_plane_scaling(window.plane.slot())) {
+            placement = native_pixel_placement(
+                placement,
+                backing_width,
+                backing_height,
+                capabilities.map(|caps| (caps.width, caps.height)),
+            );
+        }
     }
     placement
+}
+
+fn native_pixel_placement(
+    placement: WindowPlacement,
+    backing_width: u32,
+    backing_height: u32,
+    output_extent: Option<(u32, u32)>,
+) -> WindowPlacement {
+    let centered = |origin: i32, previous: u32, native: u32, extent: Option<u32>| {
+        (i64::from(origin) + (i64::from(previous) - i64::from(native)) / 2)
+            .clamp(0, extent.map_or(i64::from(i32::MAX), |size| i64::from(size.saturating_sub(native)))) as i32
+    };
+    WindowPlacement {
+        x: centered(placement.x, placement.width, backing_width, output_extent.map(|size| size.0)),
+        y: centered(placement.y, placement.height, backing_height, output_extent.map(|size| size.1)),
+        width: backing_width,
+        height: backing_height,
+        ..placement
+    }
 }
 
 /// Slots 1 and 3 share scaler 0. Session-local animation waves cannot

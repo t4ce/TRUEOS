@@ -1,7 +1,8 @@
 //! HID mouse reports.
 
 use super::{
-    HidRuntime, TrueosHidCursorEvent, clamp01, push_cursor_event, sync_runtime_cursor_snapshot,
+    HidRuntime, TrueosHidCursorEvent, clamp01, push_mouse_cursor_event,
+    sync_runtime_cursor_snapshot,
 };
 const HID_MOUSE_RING_CAP: usize = crate::allcaps::input::HID_MOUSE_RING_CAP;
 
@@ -112,6 +113,8 @@ pub(crate) fn handle_decoded_report(
     let legacy_dy = saturating_i8(dy);
     let legacy_wheel = saturating_i8(wheel);
     let prev_buttons = runtime.mouse_buttons_down;
+    let previous_x = runtime.mouse_x;
+    let previous_y = runtime.mouse_y;
     runtime.mouse_buttons_down = u32::from(buttons);
 
     if dx != 0 || dy != 0 {
@@ -196,7 +199,7 @@ pub(crate) fn handle_decoded_report(
     );
     // Publish to UI4 last: the absolute snapshot and HUT identity above are
     // already coherent if the input consumer runs concurrently on its core.
-    push_cursor_event(cursor_event);
+    push_mouse_cursor_event(cursor_event, dx, dy, previous_x, previous_y);
 }
 
 #[inline]

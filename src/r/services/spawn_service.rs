@@ -92,6 +92,8 @@ define_started_flags!(
     THERMAL_SERVICE_STARTED,
     HTML_SHACK_SERVICE_STARTED,
     USB_CONTROLLER_TASKS_STARTED,
+    PS2_KEYBOARD_STARTED,
+    I2C_TRACKPAD_STARTED,
     USER_INPUT_RECORD_WRITER_STARTED,
     BP_AUTOSTART_STARTED,
     FACTORY_RAM_PROBE_STARTED,
@@ -914,6 +916,15 @@ fn spawn_usb_controller_tasks(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::usb2::usb_controller_service_task())
 }
 
+fn spawn_ps2_keyboard(spawner: Spawner) -> SpawnAttempt {
+    // Port ownership and bounded command waits stay on the cooperative BSP.
+    spawn_local(spawner, |_spawner| crate::r::io::ps2::keyboard_task())
+}
+
+fn spawn_i2c_trackpad(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::io::i2c_touchpad::trackpad_task())
+}
+
 fn spawn_user_input_record_writer(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::user_input_record::writer_task())
 }
@@ -928,7 +939,7 @@ const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
 // Own the AtomicBool fields in a static array; an interior-mutable temporary
 // cannot be promoted behind a shared slice reference.
-const TASK_COUNT: usize = 62
+const TASK_COUNT: usize = 64
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + 2 * cfg!(feature = "trueos_ttstt") as usize
     + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize;
@@ -1108,6 +1119,18 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         0,
         &USB_CONTROLLER_TASKS_STARTED,
         spawn_usb_controller_tasks,
+    ),
+    TaskSpec::enabled(
+        "i8042-keyboard",
+        0,
+        &PS2_KEYBOARD_STARTED,
+        spawn_ps2_keyboard,
+    ),
+    TaskSpec::enabled(
+        "i2c-hid-trackpad",
+        0,
+        &I2C_TRACKPAD_STARTED,
+        spawn_i2c_trackpad,
     ),
     TaskSpec::enabled(
         "lan-discovery",

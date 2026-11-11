@@ -15,7 +15,7 @@ use super::display::{
     PIPE_SCALER_BINDING_MASK, PIPE_SCALER_ENABLE, PIPE_SCALER_WIN_POS_FROM_CTRL,
     PIPE_SCALER_WIN_SIZE_FROM_CTRL, PIPECONF_A, PIPECONF_STATE, PLANE_COLOR_PLANE_GAMMA_DISABLE,
     PLANE_CTL_ARB_SLOTS_4BPP, PLANE_CTL_ENABLE, PLANE_CTL_FORMAT_XRGB_8888, TRANS_DDI_FUNC_CTL_A,
-    TRANS_HTOTAL_A, TRANS_VTOTAL_A, UNI_PLANE_AUX_DIST_OFF, UNI_PLANE_AUX_OFFSET_OFF,
+    TRANS_HTOTAL_A, TRANS_VTOTAL_A, SKL_BOTTOM_COLOR_A, UNI_PLANE_AUX_DIST_OFF, UNI_PLANE_AUX_OFFSET_OFF,
     UNI_PLANE_BASE, UNI_PLANE_COLOR_CTL_OFF, UNI_PLANE_CUS_CTL_OFF, UNI_PLANE_KEYMSK_OFF,
     UNI_PLANE_OFFSET_OFF, UNI_PLANE_POS_OFF, UNI_PLANE_SIZE_OFF, UNI_PLANE_SLOT_STRIDE,
     UNI_PLANE_STRIDE_OFF, UNI_PLANE_SURF_OFF, UNI_PLANE_SURFLIVE_OFF,
@@ -34,7 +34,7 @@ const PITCH_BYTES: u32 = WIDTH * 4;
 const FRAME_BYTES: usize = PITCH_BYTES as usize * HEIGHT as usize;
 // The desktop boot surface has only a 16 MiB slot. Do not enlarge its mapping
 // into a neighboring owner's range. This CPU-authored, never-GPU-written
-// probe uses a separate 64 MiB GGTT reservation and needs no EU edge guard.
+// handoff uses a separate 64 MiB GGTT reservation and needs no EU edge guard.
 pub(super) const SURFACE_GPU: u64 = 0xE000_0000;
 pub(super) const SURFACE_GPU_CAPACITY: u64 = 0x0400_0000;
 const GGTT_MMIO_END: usize = 0x0100_0000;
@@ -194,28 +194,10 @@ pub(super) fn disable_unused_ui4_planes(dev: Dev) -> bool {
 fn prepare_frame(dev: Dev) -> Option<Frame> {
     let (phys, virt) = super::alloc_ggtt_backing(FRAME_BYTES, super::WARM_ALIGN)?;
     let pixels = unsafe { core::slice::from_raw_parts_mut(virt.cast::<u32>(), FRAME_BYTES / 4) };
-    for y in 0..HEIGHT as usize {
-        for x in 0..WIDTH as usize {
-            // XRGB8888 little-endian, matching PRIMARY_CTL (not RGBA byte order).
-            // Outer border proves all four native edges; the inner cyan box
-            // marks the old 2560x1440 extent. No font/GPU/USB/NIC is required.
-            let border = x < 16 || y < 16 || x >= WIDTH as usize - 16 || y >= HEIGHT as usize - 16;
-            let old_extent =
-                (x < 2560 && (1436..1440).contains(&y)) || (y < 1440 && (2556..2560).contains(&x));
-            pixels[y * WIDTH as usize + x] = if border {
-                0x00FF_FFFF
-            } else if old_extent {
-                0x0000_FFFF
-            } else {
-                match (x >= WIDTH as usize / 2, y >= HEIGHT as usize / 2) {
-                    (false, false) => 0x0030_1020,
-                    (true, false) => 0x0010_3020,
-                    (false, true) => 0x0010_2030,
-                    (true, true) => 0x0030_3020,
-                }
-            };
-        }
-    }
+    // Initialize every scanned pixel before publishing the XRGB handoff.
+    // Native geometry and SURFLIVE readback establish readiness without
+    // presenting a diagnostic image between firmware and the UI4 bootstrap.
+    pixels.fill(0);
     super::dma_flush(virt, FRAME_BYTES);
     if !super::map_display_scanout_ggtt(dev, phys, FRAME_BYTES, SURFACE_GPU) {
         let _ = super::unmap_display_scanout_ggtt(dev, FRAME_BYTES, SURFACE_GPU);
@@ -274,11 +256,18 @@ pub(crate) fn init_once(dev: Dev) -> bool {
     RETAINED_FRAME.call_once(|| frame);
     let ctl_before = mmio_read(dev, UNI_PLANE_BASE);
     let surf_before = mmio_read(dev, UNI_PLANE_BASE + UNI_PLANE_SURF_OFF);
+    // Match the initialized black handoff while the primary is disabled.
+    // UI4 establishes its white bottom color after adopting the native pipe.
+    mmio_write(dev, SKL_BOTTOM_COLOR_A, 0);
+    let _ = mmio_read(dev, SKL_BOTTOM_COLOR_A);
     if ctl_before & PLANE_CTL_ENABLE != 0 {
         mmio_write(dev, UNI_PLANE_BASE, ctl_before & !PLANE_CTL_ENABLE);
         mmio_write(dev, UNI_PLANE_BASE + UNI_PLANE_SURF_OFF, surf_before);
         let _ = mmio_read(dev, UNI_PLANE_BASE + UNI_PLANE_SURF_OFF);
-        if !wait_frame(dev) || !wait_frame(dev) {
+        // The SURF-armed disable latches at the next start of vblank. Observe
+        // that boundary before changing source/scalers; a second wait adds
+        // no further disable requirement (TGL Display PRM, Double Buffering).
+        if !wait_frame(dev) {
             // Native source/scaler changes have not been written. Re-arm the
             // untouched old plane, retain the new allocation, and stop.
             mmio_write(dev, UNI_PLANE_BASE, ctl_before);
@@ -327,7 +316,7 @@ pub(crate) fn init_once(dev: Dev) -> bool {
         && scalers_detached;
     SCANOUT_LATCHED.store(readback_ok, Ordering::Release);
     crate::log!(
-        "intel/tgl-native-panel: source={}x{} source_before=0x{:08X} source_after=0x{:08X} pitch={} bytes={} gpu=0x{:X} phys=0x{:X} virt=0x{:X} surflive=0x{:08X} latched={} scaler_detached={} link_timing=preserved dbuf=preserved watermarks=preserved ui4_stack_ready=0 spirit_resealed={} proof=cpu-native-border-and-quadrants backing=retained\n",
+        "intel/tgl-native-panel: source={}x{} source_before=0x{:08X} source_after=0x{:08X} pitch={} bytes={} gpu=0x{:X} phys=0x{:X} virt=0x{:X} surflive=0x{:08X} latched={} scaler_detached={} link_timing=preserved dbuf=preserved watermarks=preserved ui4_stack_ready=0 spirit_resealed={} handoff=cpu-initialized-black disable_wait_frames=1 blank_background=black backing=retained\n",
         WIDTH,
         HEIGHT,
         source_before,

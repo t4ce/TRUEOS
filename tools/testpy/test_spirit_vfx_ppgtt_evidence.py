@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the production timeout-only PPGTT walk and MMIO attribution."""
+"""Exercise owned encoding snapshots, PPGTT walks and MMIO attribution."""
 
 from pathlib import Path
 import subprocess
@@ -18,6 +18,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 thread_local! {
     static READS: RefCell<VecDeque<(usize,u32)>> = const {RefCell::new(VecDeque::new())};
+    static FLUSHES: RefCell<Vec<(usize,usize)>> = const {RefCell::new(Vec::new())};
     static LOGS: RefCell<Vec<String>> = const {RefCell::new(Vec::new())};
 }
 #[macro_export] macro_rules! log_error {
@@ -25,6 +26,16 @@ thread_local! {
         crate::LOGS.with(|logs| logs.borrow_mut().push(format!($($args)*)))
     };
 }
+#[macro_export] macro_rules! log_info {
+    (target:$target:expr; $($args:tt)*) => { crate::log_error!(target:$target; $($args)*) };
+}
+fn dma_flush(virt:*mut u8,bytes:usize) {
+    FLUSHES.with(|flushes|flushes.borrow_mut().push((virt as usize,bytes)));
+}
+mod intel {pub mod render {
+    std::thread_local! {pub static TGL:std::cell::Cell<bool>=const {std::cell::Cell::new(true)};}
+    pub fn tgl_spirit_compute_contract()->bool {TGL.with(std::cell::Cell::get)}
+}}
 #[derive(Clone,Copy)] struct Dev;
 const GEN8_PAGE_PRESENT:u64=1;
 fn mmio_read(_:Dev,offset:usize)->u32 {
@@ -35,6 +46,7 @@ fn mmio_read(_:Dev,offset:usize)->u32 {
 }
 mod diagnostic {
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool,AtomicU64,Ordering};
 '''
 source += "\n".join(constant(CONSTANTS, name) for name in (
     "GEN8_PAGE_RW", "GEN8_PAGE_PWT", "GEN8_PAGE_PCD", "DIRECT_RCS_PPGTT_PT_COUNT",
@@ -42,24 +54,57 @@ source += "\n".join(constant(CONSTANTS, name) for name in (
     "SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU", "SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES",
     "SPIRIT_VFX_SPRITE_IDD_OFFSET_BYTES", "SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES",
     "SPIRIT_VFX_SPRITE_PAYLOAD_OFFSET_BYTES",
+    "DIRECT_RCS_BATCH_BYTES", "SPIRIT_VFX_CONTROL_DWORDS",
+    "SPIRIT_VFX_BACKGROUND_CROSS_THREAD_BYTES", "SPIRIT_VFX_SPRITE_CROSS_THREAD_BYTES",
+))
+source += "\n".join(constant(SPIRIT, name) for name in (
+    "SPIRIT_VFX_INITIAL_TRACE_FRAMES", "SPIRIT_VFX_PERIODIC_TRACE_FRAMES",
 ))
 source += "\n" + item(RUNTIME, "exact_ppgtt_pte_offset")
 source += "\n".join(item(SPIRIT, name) for name in (
-    "SpiritVfxBuffer", "SpiritVfxSubmitted", "SpiritVfxPpgttEvidence",
+    "SpiritVfxBuffer", "SpiritVfxSubmitted", "SpiritVfxSubmission", "SpiritVfxPending",
+    "SpiritVfxPpgttEvidence", "SpiritVfxEncodingEvidence", "spirit_vfx_owned_dwords",
+    "spirit_vfx_capture_encoding_evidence", "spirit_vfx_log_encoding_evidence",
     "spirit_vfx_ppgtt_evidence", "spirit_vfx_log_mapping_evidence",
+    "submit_spirit_vfx_frame", "spirit_vfx_trace_frame",
 ))
+source += "\n".join(line for line in (Path(__file__).resolve().parents[2] / SPIRIT).read_text().splitlines() if line.startswith((
+    "static SPIRIT_VFX_PENDING:", "static SPIRIT_VFX_NEXT_TAG:",
+    "static SPIRIT_VFX_FIRST_ENCODING_LOGGED:",
+)))
 source += r'''
-#[derive(Clone,Copy,Debug)] struct DirectRcsGpuVa {ring:u64,batch:u64}
+#[derive(Clone,Copy,Debug)] struct DirectRcsGpuVa {ring:u64,batch:u64,context:u64}
 #[derive(Clone,Copy,Debug)] struct DirectRcsState {
-    ppgtt_virt:*mut u8,ppgtt_phys:u64,batch_phys:u64,gpu_va:DirectRcsGpuVa,
+    ppgtt_virt:*mut u8,ppgtt_phys:u64,batch_phys:u64,batch_virt:*mut u8,
+    context_phys:u64,gpu_va:DirectRcsGpuVa,
 }
+unsafe impl Send for DirectRcsState {}
+unsafe impl Send for SpiritVfxBuffer {}
 #[derive(Clone,Copy)] struct UploadedKernelArtifact {gpu:u64,phys:u64}
-#[derive(Clone,Copy)] struct GpgpuRgba8Surface {gpu:u64,phys:u64}
+#[derive(Clone,Copy)] pub(crate) struct GpgpuRgba8Surface {gpu:u64,phys:u64,width:u32,height:u32}
+#[derive(Clone,Copy)] pub(crate) struct SpiritVfxControl;
+struct Mutex<T>(std::sync::Mutex<T>);
+impl<T> Mutex<T> {
+    const fn new(value:T)->Self {Self(std::sync::Mutex::new(value))}
+    fn lock(&self)->std::sync::MutexGuard<'_,T> {self.0.lock().unwrap()}
+    fn try_lock(&self)->Option<std::sync::MutexGuard<'_,T>> {self.0.try_lock().ok()}
+}
+static EXECUTION_RCS_SUBMIT_LOCK:Mutex<()>=Mutex::new(());
+static EXECUTION_RCS_DETACHED_TAG:AtomicU64=AtomicU64::new(0);
+std::thread_local! {
+    static ADMISSION:std::cell::Cell<Option<(SpiritVfxSubmitted,Option<SpiritVfxEncodingEvidence>)>>=
+        const {std::cell::Cell::new(None)};
+}
+fn submit_spirit_vfx_batch(_:GpgpuRgba8Surface,_:GpgpuRgba8Surface,_:SpiritVfxControl,_:u32)
+    ->Option<(SpiritVfxSubmitted,Option<SpiritVfxEncodingEvidence>)> {
+    ADMISSION.with(|admission|admission.take())
+}
 
 fn table()->(Vec<u64>,DirectRcsState) {
     let mut bytes=vec![0u64;DIRECT_RCS_PPGTT_BYTES/8];
     let state=DirectRcsState {ppgtt_virt:bytes.as_mut_ptr().cast(),ppgtt_phys:0x100000000,
-        batch_phys:0x1f00000,gpu_va:DirectRcsGpuVa{ring:0x8000000,batch:0x8100000}};
+        batch_phys:0x1f00000,batch_virt:core::ptr::null_mut(),context_phys:0x80002000,
+        gpu_va:DirectRcsGpuVa{ring:0x8000000,batch:0x8100000,context:0x8002000}};
     bytes[0]=(state.ppgtt_phys+4096)|0x1b;
     bytes[4096/8]=(state.ppgtt_phys+8192)|0x1b;
     for index in 0..DIRECT_RCS_PPGTT_PT_COUNT {
@@ -132,13 +177,14 @@ fn map(bytes:&mut [u64],gpu:u64,phys:u64,flags:u64) {
     let (mut bytes,state)=table();
     let kernel=UploadedKernelArtifact{gpu:0xd430000,phys:0x18557000};
     let control=SpiritVfxBuffer{gpu:0x90a0000,phys:0x18613000,virt:core::ptr::null_mut(),bytes:4096};
-    let dst=GpgpuRgba8Surface{gpu:0x6000000,phys:0x184d7000};
+    let dst=GpgpuRgba8Surface{gpu:0x6000000,phys:0x184d7000,width:256,height:256};
     for (gpu,phys,flags) in [(kernel.gpu,kernel.phys,3),(control.gpu,control.phys,3),
         (dst.gpu,dst.phys,0x1b),(state.gpu_va.batch+0x6000,state.batch_phys+0x6000,3)] {
         map(&mut bytes,gpu,phys,flags);
     }
     let submitted=SpiritVfxSubmitted{state,first_kernel:kernel,control,source:dst,dst,
-        submit_ambiguous:false,frame:0,revision:0,background_mode:11,shader_mode:1,started_tick:0};
+        submit_ambiguous:false,frame:0,revision:0,background_mode:11,shader_mode:1,started_tick:0,
+        first_encoding_evidence:false};
     for (before,after,hi_before,hi_after,expected) in [
         (0x8000000,0x8000000,1,1,"Some(true)"),
         (0x8000000,0x800000,1,1,"None"),
@@ -159,6 +205,113 @@ fn map(bytes:&mut [u64],gpu:u64,phys:u64,flags:u64) {
             for line in &logs[1..] {assert!(line.contains("leaf_match: true"),"{line}");}
         });
     }
+}
+
+fn encoding_mmio() {
+    crate::READS.with(|reads|*reads.borrow_mut()=VecDeque::from([
+        (0x2038,0x8000000),(0x2274,1),(0x2270,0),(0x2274,1),
+        (0x20e4,4),(0x20e0,0x4000),(0xb134,0xb0000040),(0x2038,0x8000000)]));
+}
+
+#[test] fn owned_word_reader_checks_whole_range_alignment_and_address_overflow() {
+    crate::FLUSHES.with(|flushes|flushes.borrow_mut().clear());
+    let mut words=[0x11111111u32,0x22222222,0x33333333,0x44444444];
+    let base=words.as_mut_ptr().cast();
+    assert_eq!(spirit_vfx_owned_dwords::<2>(base,16,8),Some([0x33333333,0x44444444]));
+    for (virt,bytes,offset) in [(base,15,8),(base,16,12),(base,16,1),
+        (base,16,usize::MAX),(core::ptr::null_mut(),16,0),
+        ((usize::MAX&!3)as *mut u8,8,0),(base,usize::MAX,0)] {
+        assert!(spirit_vfx_owned_dwords::<2>(virt,bytes,offset).is_none());
+    }
+    crate::FLUSHES.with(|flushes|assert_eq!(*flushes.borrow(),vec![(base as usize+8,8)],
+        "invalid ranges must never be flushed or read"));
+    assert_eq!(words,[0x11111111,0x22222222,0x33333333,0x44444444]);
+}
+
+#[test] fn snapshots_copy_only_fixed_owned_regions_and_observe_later_mutation() {
+    let (_table,mut state)=table();
+    let mut batch:Vec<u32>=(0..DIRECT_RCS_BATCH_BYTES/4).map(|word|word as u32).collect();
+    state.batch_virt=batch.as_mut_ptr().cast();
+    let mut control_words:[u32;SPIRIT_VFX_CONTROL_DWORDS]=core::array::from_fn(|i|0x1000+i as u32);
+    let control=SpiritVfxBuffer{phys:0x18613000,gpu:0x90a0000,
+        virt:control_words.as_mut_ptr().cast(),bytes:control_words.len()*4};
+    // These are actual payload words, not permission to follow a pointer.
+    batch[SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES/4+12]=u32::MAX;
+    batch[SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES/4+13]=u32::MAX;
+    encoding_mmio();
+    let before=spirit_vfx_capture_encoding_evidence(crate::Dev,state,control,true).unwrap();
+    crate::READS.with(|reads|assert!(reads.borrow().is_empty()));
+    assert_eq!(before.background_idd.unwrap(),core::array::from_fn(|i|(SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES/4+i)as u32));
+    assert_eq!(before.background_cross_thread.unwrap()[12..14],[u32::MAX;2]);
+    assert_eq!(before.background_local_ids.unwrap()[0],((SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES+64)/4)as u32);
+    assert_eq!(before.sprite_idd.unwrap()[7],(SPIRIT_VFX_SPRITE_IDD_OFFSET_BYTES/4+7)as u32);
+    assert_eq!(before.sprite_cross_thread.unwrap()[23],(SPIRIT_VFX_SPRITE_PAYLOAD_OFFSET_BYTES/4+23)as u32);
+    assert_eq!(before.sprite_local_ids.unwrap()[23],((SPIRIT_VFX_SPRITE_PAYLOAD_OFFSET_BYTES+96)/4+23)as u32);
+    assert_eq!(before.control.unwrap()[32],0x1020,"include the final clock field");
+    batch[SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES/4]=0xdeadbeef;
+    unsafe {core::ptr::write_volatile(control_words.as_mut_ptr().add(32),0xabcdef01);}
+    encoding_mmio();
+    let after=spirit_vfx_capture_encoding_evidence(crate::Dev,state,control,true).unwrap();
+    assert_ne!(before.background_idd,after.background_idd);
+    assert_ne!(before.control,after.control);
+    assert_eq!(before.control.unwrap()[32],0x1020,"earlier capture must be retained by value");
+    assert_eq!(after.control.unwrap()[32],0xabcdef01);
+    encoding_mmio();
+    let sprite_only=spirit_vfx_capture_encoding_evidence(crate::Dev,state,control,false).unwrap();
+    assert!(sprite_only.background_idd.is_none()&&sprite_only.background_cross_thread.is_none()
+        &&sprite_only.background_local_ids.is_none());
+    assert!(sprite_only.sprite_idd.is_some()&&sprite_only.control.is_some());
+    assert_eq!(batch[SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES/4],0xdeadbeef);
+}
+
+#[test] fn desktop_skips_extra_encoding_mmio_and_owned_memory_reads() {
+    let (_table,state)=table();
+    let invalid=SpiritVfxBuffer{phys:0,gpu:0,virt:1usize as *mut u8,bytes:4096};
+    crate::intel::render::TGL.with(|tgl|tgl.set(false));
+    crate::READS.with(|reads|reads.borrow_mut().clear());
+    crate::FLUSHES.with(|flushes|flushes.borrow_mut().clear());
+    assert!(spirit_vfx_capture_encoding_evidence(crate::Dev,state,invalid,true).is_none());
+    crate::READS.with(|reads|assert!(reads.borrow().is_empty()));
+    crate::FLUSHES.with(|flushes|assert!(flushes.borrow().is_empty()));
+    crate::intel::render::TGL.with(|tgl|tgl.set(true));
+}
+
+#[test] fn rejected_admission_keeps_first_capture_available_then_logs_actual_accepted_tag_once() {
+    SPIRIT_VFX_FIRST_ENCODING_LOGGED.store(false,Ordering::Release);
+    EXECUTION_RCS_DETACHED_TAG.store(0,Ordering::Release);
+    *SPIRIT_VFX_PENDING.lock()=None;
+    let (_table,state)=table();
+    let surface=GpgpuRgba8Surface{gpu:0x6000000,phys:0x184d7000,width:256,height:256};
+    assert!(submit_spirit_vfx_frame(surface,surface,SpiritVfxControl,60).is_none());
+    assert!(!SPIRIT_VFX_FIRST_ENCODING_LOGGED.load(Ordering::Acquire));
+    let control=SpiritVfxBuffer{phys:0x18613000,gpu:0x90a0000,virt:core::ptr::null_mut(),bytes:4096};
+    encoding_mmio();
+    let capture=spirit_vfx_capture_encoding_evidence(crate::Dev,state,control,true).unwrap();
+    let submitted=SpiritVfxSubmitted{state,first_kernel:UploadedKernelArtifact{gpu:0xd430000,phys:0x18557000},
+        control,source:surface,dst:surface,submit_ambiguous:true,frame:7,revision:19,
+        background_mode:11,shader_mode:1,started_tick:0,first_encoding_evidence:false};
+    ADMISSION.with(|admission|admission.set(Some((submitted,Some(capture)))));
+    crate::LOGS.with(|logs|logs.borrow_mut().clear());
+    let handle=submit_spirit_vfx_frame(surface,surface,SpiritVfxControl,60).unwrap();
+    assert!(SPIRIT_VFX_FIRST_ENCODING_LOGGED.load(Ordering::Acquire));
+    assert!(SPIRIT_VFX_PENDING.lock().unwrap().submitted.first_encoding_evidence);
+    crate::LOGS.with(|logs| {
+        let logs=logs.borrow();assert_eq!(logs.len(),10,"nine evidence lines and accepted record");
+        assert!(logs[0].contains(&format!("tag={} frame=7 phase=before-commit background_present=true",handle.tag)));
+        assert!(logs[0].contains("root=0x100000000 context_phys=0x80002000 context_gpu=0x8002000"));
+        assert!(logs[1].contains("root_matches=Some(true)"));
+        assert!(logs[1].contains("capture=observational"));
+        assert!(logs[8].contains("resource=control offset=0x0 dwords=None"));
+    });
+    EXECUTION_RCS_DETACHED_TAG.store(0,Ordering::Release);
+    *SPIRIT_VFX_PENDING.lock()=None;
+    ADMISSION.with(|admission|admission.set(Some((submitted,Some(capture)))));
+    crate::LOGS.with(|logs|logs.borrow_mut().clear());
+    submit_spirit_vfx_frame(surface,surface,SpiritVfxControl,60).unwrap();
+    assert!(!SPIRIT_VFX_PENDING.lock().unwrap().submitted.first_encoding_evidence);
+    crate::LOGS.with(|logs|assert_eq!(logs.borrow().len(),1,"later jobs have no encoding dump"));
+    EXECUTION_RCS_DETACHED_TAG.store(0,Ordering::Release);
+    *SPIRIT_VFX_PENDING.lock()=None;
 }
 }
 '''

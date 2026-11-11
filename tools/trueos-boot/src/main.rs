@@ -12,13 +12,13 @@ mod graphics;
 mod handoff;
 mod network;
 mod paging;
+mod screen;
 mod smp;
 mod time;
 
 use alloc::vec::Vec;
 use core::{alloc::{GlobalAlloc, Layout}, ffi::c_void, fmt::{self, Write}, mem, ptr};
 use core::sync::atomic::{AtomicPtr, Ordering};
-use font8x8::{UnicodeFonts, BASIC_FONTS};
 use r_efi::{base::{Guid, Handle, Status}, protocols::{file, loaded_image, simple_file_system}, system::{self, BootServices, SystemTable}};
 use handoff::{Blob, BootFacts, Framebuffer, Handoff, MemoryRegion};
 
@@ -29,8 +29,6 @@ const MAX_MAP_ENTRIES: usize = MAP_BYTES / 40;
 static BOOT_SERVICES: AtomicPtr<BootServices> = AtomicPtr::new(ptr::null_mut());
 static mut SYSTEM_TABLE: *mut SystemTable = ptr::null_mut();
 static mut DISPLAY: Option<Framebuffer> = None;
-static mut SCREEN_ROW: usize = 0;
-static mut SCREEN_COLUMN: usize = 0;
 static mut LOADER_LOG: bootlog::BootLog = bootlog::BootLog::new();
 
 struct FirmwareAllocator;
@@ -72,42 +70,30 @@ impl Write for Console {
                 }
                 core::arch::asm!("out dx, al", in("dx") 0x3f8u16, in("al") byte, options(nomem, nostack));
             }
-            if let Some(fb) = DISPLAY {
-                let color = (0x90u32 << fb.red_mask_shift) | (0xffu32 << fb.green_mask_shift) | (0xb0u32 << fb.blue_mask_shift);
-                for ch in value.chars() {
-                    if ch == '\n' { SCREEN_ROW += 1; SCREEN_COLUMN = 0; continue; }
-                    if 16 + (SCREEN_COLUMN + 1) * 8 > fb.width as usize {
-                        SCREEN_ROW += 1;
-                        SCREEN_COLUMN = 0;
-                    }
-                    if let Some(glyph) = BASIC_FONTS.get(ch) {
-                        for (y, bits) in glyph.iter().enumerate() {
-                            for x in 0..8 {
-                                let px = 16 + SCREEN_COLUMN * 8 + x;
-                                let py = 16 + SCREEN_ROW * 10 + y;
-                                if px < fb.width as usize && py < fb.height as usize {
-                                    let address = fb.phys as usize + py * fb.pitch as usize + px * 4;
-                                    (address as *mut u32).write_volatile(if bits & (1 << x) != 0 { color } else { 0 });
-                                }
-                            }
-                        }
-                    }
-                    SCREEN_COLUMN += 1;
-                }
-            } else if !BOOT_SERVICES.load(Ordering::Acquire).is_null() && !SYSTEM_TABLE.is_null() {
-                let out = (*SYSTEM_TABLE).con_out;
-                if !out.is_null() {
-                    for byte in value.bytes() {
-                        let text = [u16::from(byte), 0];
-                        ((*out).output_string)(out, text.as_ptr() as *mut u16);
-                    }
-                }
-            }
         }
         Ok(())
     }
 }
 macro_rules! log { ($($arg:tt)*) => {{ let _ = writeln!(Console, $($arg)*); }}; }
+
+fn stage(message: &str) {
+    unsafe {
+        if let Some(fb) = DISPLAY {
+            screen::stage(fb, message);
+        } else if !BOOT_SERVICES.load(Ordering::Acquire).is_null() && !SYSTEM_TABLE.is_null() {
+            let out = (*SYSTEM_TABLE).con_out;
+            if !out.is_null() {
+                ((*out).clear_screen)(out);
+                for line in [screen::TITLE, "\r\n\r\n", message] {
+                    for word in line.encode_utf16() {
+                        let text = [word, 0];
+                        ((*out).output_string)(out, text.as_ptr() as *mut u16);
+                    }
+                }
+            }
+        }
+    }
+}
 
 unsafe fn initialize_serial() {
     for (port, byte) in [(0x3f9u16,0u8),(0x3fb,0x80),(0x3f8,1),(0x3f9,0),(0x3fb,3),(0x3fa,0xc7),(0x3fc,0x0b)] {
@@ -117,6 +103,7 @@ unsafe fn initialize_serial() {
 
 fn stop(reason: &str) -> ! {
     log!("TRUEOS BOOT STOP: {reason}");
+    stage(reason);
     loop { core::hint::spin_loop(); }
 }
 fn require<T>(result: Result<T, &'static str>) -> T {
@@ -349,6 +336,8 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
     ((*bs).set_watchdog_timer)(0, 0, 0, ptr::null_mut());
     let boot_display = graphics::initialize(st);
     DISPLAY = boot_display.as_ref().ok().and_then(|display| display.framebuffer);
+    if let Some(fb) = DISPLAY { screen::initialize(fb); }
+    stage("Loading TRUEOS.elf");
     log!("TRUEOS native UEFI loader v0.1");
     match &boot_display {
         Ok(display) => {
@@ -395,6 +384,7 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
         ptr::copy_nonoverlapping(kernel.as_ptr().add(segment.file_offset),
             (kernel_phys + segment.virtual_address - elf.base) as *mut u8, segment.file_size);
     }
+    stage("Loading firmware modules");
     let mut modules = Vec::new();
     match files.read("EFI/BOOT/tgl_guc_70.bin") {
         Ok(bytes) => modules.push(Blob { phys: bytes.as_ptr() as u64, len: bytes.len(),
@@ -407,6 +397,7 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
         Err(error) => log!("Installer EFI module unavailable: {error}"),
     }
     files.close();
+    stage("Preparing boot responses");
     let mut rsdp = configuration(st, system::ACPI_20_TABLE_GUID);
     if rsdp == 0 { rsdp = configuration(st, system::ACPI_10_TABLE_GUID); }
     if rsdp == 0 { stop("firmware did not provide ACPI RSDP"); }
@@ -489,11 +480,13 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
     activate_tables(tables.root());
     log!("Firmware exited; initial page tables active");
     if let Some(mut mp) = mp {
+        stage("Starting secondary CPU threads");
         log!("Starting secondary CPU threads");
         let summary = mp.start_aps(|id, ready| log!("CPU APIC {}: {}", id, if ready {"ready"} else {"failed"}));
         log!("CPU threads ready: {}; failed: {}", summary.started + 1, summary.failed);
     }
     log!("Entering TrueOS kernel");
+    stage("Entering TrueOS kernel");
     core::arch::asm!("cli", "cld", "mov rsp, rdx", "xor rbp, rbp", "jmp rax",
         in("rdx") stack + STACK_BYTES as u64 - 16, in("rax") elf.entry, options(noreturn));
 }
@@ -501,6 +494,7 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
     log!("UEFI loader panic: {info}");
+    stage("UEFI loader panic");
     loop { core::hint::spin_loop(); }
 }
 

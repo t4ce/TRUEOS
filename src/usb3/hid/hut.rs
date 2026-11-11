@@ -362,7 +362,8 @@ fn endpoint_matches(left: ComboEndpoint, right: ComboEndpoint) -> bool {
         && left.ep_target == right.ep_target
 }
 
-/// Mouse and tablet each produce a cursor, so they share one bucket slot.
+/// The wire record names the canonical pointer; other physical pointers use
+/// their existing per-device `combo_id` as membership in that same cursor.
 fn other_cursor_endpoint(combo: &InputCombo, kind: ComboDeviceKind) -> ComboEndpoint {
     match kind {
         ComboDeviceKind::Mouse => combo_endpoint(combo, ComboDeviceKind::Tablet),
@@ -446,6 +447,83 @@ fn empty_combo(
     }
 }
 
+fn pointer_kind(kind: ComboDeviceKind) -> bool {
+    matches!(kind, ComboDeviceKind::Mouse | ComboDeviceKind::Tablet)
+}
+
+fn canonical_pointer(combo: &InputCombo) -> Option<HidDeviceId> {
+    for (kind, public_kind) in [
+        (ComboDeviceKind::Mouse, HidDeviceKind::Mouse),
+        (ComboDeviceKind::Tablet, HidDeviceKind::Tablet),
+    ] {
+        let endpoint = combo_endpoint(combo, kind);
+        if !endpoint_is_empty(endpoint) {
+            return Some(HidDeviceId {
+                kind: public_kind,
+                controller_id: endpoint.controller_id,
+                slot_id: endpoint.slot_id,
+                ep_target: endpoint.ep_target,
+            });
+        }
+    }
+    None
+}
+
+fn physical_pointer(state: &HidHutState, kind: ComboDeviceKind, endpoint: ComboEndpoint) -> bool {
+    match kind {
+        ComboDeviceKind::Mouse => state.mice.iter().find(|entry| {
+            endpoint_matches(endpoint, ComboEndpoint::new(entry.controller_id, entry.slot_id, entry.ep_target))
+        }).is_none_or(|entry| !entry.virtual_device),
+        ComboDeviceKind::Tablet => state.tablets.iter().find(|entry| {
+            endpoint_matches(endpoint, ComboEndpoint::new(entry.controller_id, entry.slot_id, entry.ep_target))
+        }).is_none_or(|entry| !entry.virtual_device),
+        _ => false,
+    }
+}
+
+fn shared_pointer_target(state: &HidHutState, combo: &InputCombo, kind: ComboDeviceKind, endpoint: ComboEndpoint) -> bool {
+    if combo.source_kind != HidSourceKind::Human || !physical_pointer(state, kind, endpoint) {
+        return false;
+    }
+    canonical_pointer(combo).is_none_or(|canonical| {
+        let kind = if canonical.kind == HidDeviceKind::Tablet { ComboDeviceKind::Tablet } else { ComboDeviceKind::Mouse };
+        physical_pointer(state, kind, ComboEndpoint::new(canonical.controller_id, canonical.slot_id, canonical.ep_target))
+    })
+}
+
+fn existing_combo_id(state: &HidHutState, kind: ComboDeviceKind, endpoint: ComboEndpoint) -> Option<u32> {
+    state.combos.iter().find(|combo| endpoint_matches(combo_endpoint(combo, kind), endpoint))
+        .map(|combo| combo.combo_id)
+        .or_else(|| match kind {
+            ComboDeviceKind::Mouse => state.mice.iter().find(|entry| {
+                endpoint_matches(endpoint, ComboEndpoint::new(entry.controller_id, entry.slot_id, entry.ep_target))
+            }).map(|entry| entry.combo_id).filter(|id| *id != 0),
+            ComboDeviceKind::Tablet => state.tablets.iter().find(|entry| {
+                endpoint_matches(endpoint, ComboEndpoint::new(entry.controller_id, entry.slot_id, entry.ep_target))
+            }).map(|entry| entry.combo_id).filter(|id| *id != 0),
+            _ => None,
+        })
+}
+
+fn resolved_combo(state: &HidHutState, combo_id: u32) -> Option<ResolvedBinding> {
+    let combo = state.combos.iter().find(|combo| combo.combo_id == combo_id)?;
+    Some(ResolvedBinding { combo_id, source_kind: combo.source_kind, source_tag: combo.source_tag.clone() })
+}
+
+fn promote_pointer(state: &mut HidHutState, combo_id: u32) {
+    let Some(index) = state.combos.iter().position(|combo| combo.combo_id == combo_id) else { return; };
+    if canonical_pointer(&state.combos[index]).is_some() {
+        return;
+    }
+    let member = state.mice.iter().find(|entry| entry.combo_id == combo_id)
+        .map(|entry| (ComboDeviceKind::Mouse, ComboEndpoint::new(entry.controller_id, entry.slot_id, entry.ep_target)))
+        .or_else(|| state.tablets.iter().find(|entry| entry.combo_id == combo_id)
+            .map(|entry| (ComboDeviceKind::Tablet, ComboEndpoint::new(entry.controller_id, entry.slot_id, entry.ep_target))));
+    if let Some((kind, endpoint)) = member {
+        set_combo_endpoint(&mut state.combos[index], kind, endpoint);
+    }
+}
+
 fn bind_device_in_state(
     state: &mut HidHutState,
     combo_id: u32,
@@ -459,10 +537,11 @@ fn bind_device_in_state(
     else {
         return false;
     };
-    if !endpoint_is_empty(other_cursor_endpoint(&state.combos[target_index], kind)) {
+    let share_pointer = shared_pointer_target(state, &state.combos[target_index], kind, endpoint);
+    if !share_pointer && !endpoint_is_empty(other_cursor_endpoint(&state.combos[target_index], kind)) {
         return false;
     }
-    let displaced_endpoint = combo_endpoint(&state.combos[target_index], kind);
+    let displaced_endpoint = if share_pointer { ComboEndpoint::new(0, 0, 0) } else { combo_endpoint(&state.combos[target_index], kind) };
 
     // A device belongs to at most one collection. This makes manual re-pairing
     // deterministic and prevents one keyboard from routing to two cursors.
@@ -471,7 +550,9 @@ fn bind_device_in_state(
             set_combo_endpoint(combo, kind, ComboEndpoint::new(0, 0, 0));
         }
     }
-    set_combo_endpoint(&mut state.combos[target_index], kind, endpoint);
+    if !share_pointer || canonical_pointer(&state.combos[target_index]).is_none() {
+        set_combo_endpoint(&mut state.combos[target_index], kind, endpoint);
+    }
     let source_kind = state.combos[target_index].source_kind;
     let source_tag = state.combos[target_index].source_tag.clone();
     match kind {
@@ -564,6 +645,12 @@ fn bind_device_in_state(
             }
         }
     }
+    // Moving the canonical pointer must leave the remaining members and their
+    // keyboard attached to one live cursor, rather than an empty wire slot.
+    for index in 0..state.combos.len() {
+        let combo_id = state.combos[index].combo_id;
+        promote_pointer(state, combo_id);
+    }
     true
 }
 
@@ -572,27 +659,32 @@ fn ensure_auto_combo_binding(
     kind: ComboDeviceKind,
     endpoint: ComboEndpoint,
 ) {
-    if state
-        .combos
-        .iter()
-        .any(|combo| endpoint_matches(combo_endpoint(combo, kind), endpoint))
-    {
-        return;
+    let _ = ensure_auto_binding(state, kind, endpoint);
+}
+
+fn ensure_auto_binding(state: &mut HidHutState, kind: ComboDeviceKind, endpoint: ComboEndpoint) -> Option<ResolvedBinding> {
+    if let Some(binding) = existing_combo_id(state, kind, endpoint).and_then(|id| resolved_combo(state, id)) {
+        return Some(binding);
     }
 
-    // Composite devices sharing one USB slot are the strongest available
-    // evidence. For independent devices, discovery order is intentionally only
-    // a best-effort boot pairing until a user-facing Combo app stores policy.
-    let same_slot = state.combos.iter().position(|combo| {
-        combo.flags & INPUT_COMBO_FLAG_AUTO_ASSIGNED != 0
+    // Physical pointers share the default Human cursor. Keyboard/gamepad slots
+    // remain singular; for those, a shared USB slot is preferred before the
+    // first available automatic Human bucket. Explicit Link choices stay put.
+    let same_slot = (!pointer_kind(kind)).then(|| state.combos.iter().position(|combo| {
+        combo.source_kind == HidSourceKind::Human
+            && combo.flags & INPUT_COMBO_FLAG_AUTO_ASSIGNED != 0
             && endpoint_is_empty(combo_endpoint(combo, kind))
             && endpoint_is_empty(other_cursor_endpoint(combo, kind))
             && combo_contains_usb_slot(combo, endpoint.controller_id, endpoint.slot_id)
-    });
+    })).flatten();
     let best_effort = state.combos.iter().position(|combo| {
-        combo.flags & INPUT_COMBO_FLAG_AUTO_ASSIGNED != 0
-            && endpoint_is_empty(combo_endpoint(combo, kind))
-            && endpoint_is_empty(other_cursor_endpoint(combo, kind))
+        combo.source_kind == HidSourceKind::Human
+            && combo.flags & INPUT_COMBO_FLAG_AUTO_ASSIGNED != 0
+            && if pointer_kind(kind) {
+                shared_pointer_target(state, combo, kind, endpoint)
+            } else {
+                endpoint_is_empty(combo_endpoint(combo, kind)) && endpoint_is_empty(other_cursor_endpoint(combo, kind))
+            }
     });
     let target_index = same_slot.or(best_effort).or_else(|| {
         let combo_id = next_combo_id(state)?;
@@ -612,8 +704,11 @@ fn ensure_auto_combo_binding(
 
     if let Some(index) = target_index {
         let combo_id = state.combos[index].combo_id;
-        let _ = bind_device_in_state(state, combo_id, kind, endpoint);
+        if bind_device_in_state(state, combo_id, kind, endpoint) {
+            return resolved_combo(state, combo_id);
+        }
     }
+    None
 }
 
 fn resolve_mouse_binding(
@@ -624,16 +719,9 @@ fn resolve_mouse_binding(
     fallback_kind: HidSourceKind,
     fallback_tag: &str,
 ) -> ResolvedBinding {
-    if let Some(combo) = state.combos.iter().find(|combo| {
-        combo.mouse_controller_id == controller_id
-            && combo.mouse_slot_id == slot_id
-            && combo.mouse_ep_target == ep_target
-    }) {
-        return ResolvedBinding {
-            combo_id: combo.combo_id,
-            source_kind: combo.source_kind,
-            source_tag: combo.source_tag.clone(),
-        };
+    if let Some(binding) = existing_combo_id(state, ComboDeviceKind::Mouse, ComboEndpoint::new(controller_id, slot_id, ep_target))
+        .and_then(|id| resolved_combo(state, id)) {
+        return binding;
     }
     ResolvedBinding {
         combo_id: 0,
@@ -650,16 +738,9 @@ fn resolve_tablet_binding(
     fallback_kind: HidSourceKind,
     fallback_tag: &str,
 ) -> ResolvedBinding {
-    if let Some(combo) = state.combos.iter().find(|combo| {
-        combo.tablet_controller_id == controller_id
-            && combo.tablet_slot_id == slot_id
-            && combo.tablet_ep_target == ep_target
-    }) {
-        return ResolvedBinding {
-            combo_id: combo.combo_id,
-            source_kind: combo.source_kind,
-            source_tag: combo.source_tag.clone(),
-        };
+    if let Some(binding) = existing_combo_id(state, ComboDeviceKind::Tablet, ComboEndpoint::new(controller_id, slot_id, ep_target))
+        .and_then(|id| resolved_combo(state, id)) {
+        return binding;
     }
     ResolvedBinding {
         combo_id: 0,
@@ -706,15 +787,15 @@ pub fn upsert_mouse_state(
     virtual_device: bool,
 ) {
     let mut guard = HID_HUT.lock();
-    if !virtual_device && source_kind == HidSourceKind::Human {
-        ensure_auto_combo_binding(
+    let automatic = if !virtual_device && source_kind == HidSourceKind::Human {
+        ensure_auto_binding(
             &mut guard,
             ComboDeviceKind::Mouse,
             ComboEndpoint::new(controller_id, slot_id, ep_target),
-        );
-    }
-    let binding =
-        resolve_mouse_binding(&guard, controller_id, slot_id, ep_target, source_kind, source_tag);
+        )
+    } else { None };
+    let binding = automatic.unwrap_or_else(||
+        resolve_mouse_binding(&guard, controller_id, slot_id, ep_target, source_kind, source_tag));
     if let Some(existing) = guard.mice.iter_mut().find(|mouse| {
         mouse.controller_id == controller_id
             && mouse.slot_id == slot_id
@@ -766,15 +847,15 @@ pub fn upsert_tablet_state(
     virtual_device: bool,
 ) {
     let mut guard = HID_HUT.lock();
-    if !virtual_device && source_kind == HidSourceKind::Human {
-        ensure_auto_combo_binding(
+    let automatic = if !virtual_device && source_kind == HidSourceKind::Human {
+        ensure_auto_binding(
             &mut guard,
             ComboDeviceKind::Tablet,
             ComboEndpoint::new(controller_id, slot_id, ep_target),
-        );
-    }
-    let binding =
-        resolve_tablet_binding(&guard, controller_id, slot_id, ep_target, source_kind, source_tag);
+        )
+    } else { None };
+    let binding = automatic.unwrap_or_else(||
+        resolve_tablet_binding(&guard, controller_id, slot_id, ep_target, source_kind, source_tag));
     if let Some(existing) = guard.tablets.iter_mut().find(|tablet| {
         tablet.controller_id == controller_id
             && tablet.slot_id == slot_id
@@ -1104,11 +1185,12 @@ fn move_device_in_state(
         .iter()
         .find(|combo| combo.combo_id == combo_id)
         .ok_or(ComboMoveError::ComboMissing)?;
-    if !endpoint_is_empty(other_cursor_endpoint(target, kind)) {
+    let share_pointer = shared_pointer_target(state, target, kind, endpoint);
+    if !share_pointer && !endpoint_is_empty(other_cursor_endpoint(target, kind)) {
         return Err(ComboMoveError::CursorOccupied);
     }
     let occupied = combo_endpoint(target, kind);
-    if !endpoint_is_empty(occupied) && !endpoint_matches(occupied, endpoint) {
+    if !share_pointer && !endpoint_is_empty(occupied) && !endpoint_matches(occupied, endpoint) {
         return Err(match kind {
             ComboDeviceKind::Mouse | ComboDeviceKind::Tablet => ComboMoveError::CursorOccupied,
             _ => ComboMoveError::DeviceKindOccupied,
@@ -1129,8 +1211,8 @@ fn move_device_in_state(
 }
 
 /// Move one live device atomically, preserving the old pairing on rejection.
-/// A bucket accepts one cursor (mouse or tablet), one keyboard, and one gamepad.
-/// Replacing an occupied slot requires first moving its device to another bucket.
+/// Physical pointers in a Human bucket share its cursor. A bucket still accepts
+/// one keyboard and one gamepad; virtual pointer pairings stay explicit.
 pub fn move_device_to_combo(device: HidDeviceId, combo_id: u32) -> Result<(), ComboMoveError> {
     move_device_in_state(&mut HID_HUT.lock(), device, combo_id)
 }
@@ -1197,22 +1279,56 @@ pub fn combo_color_for_cursor(
         ComboDeviceKind::Mouse
     };
     let endpoint = ComboEndpoint::new(controller_id, slot_id, ep_target);
-    HID_HUT
-        .lock()
-        .combos
-        .iter()
-        .find(|combo| endpoint_matches(combo_endpoint(combo, kind), endpoint))
-        .map(|combo| combo.color_id)
+    let guard = HID_HUT.lock();
+    let combo_id = existing_combo_id(&guard, kind, endpoint)?;
+    guard.combos.iter().find(|combo| combo.combo_id == combo_id).map(|combo| combo.color_id)
+}
+
+/// Resolve a physical pointer member to the bucket's one canonical cursor.
+/// Identity/state snapshots remain per-device; producers can coalesce their
+/// cursor position and buttons without making virtual input physical.
+pub(crate) fn pointer_combo_binding(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    tablet: bool,
+) -> Option<(u32, HidDeviceId)> {
+    let guard = HID_HUT.lock();
+    pointer_combo_binding_in_state(&guard, controller_id, slot_id, ep_target, tablet)
+}
+
+fn pointer_combo_binding_in_state(state: &HidHutState, controller_id: u32, slot_id: u32, ep_target: u32, tablet: bool) -> Option<(u32, HidDeviceId)> {
+    let endpoint = ComboEndpoint::new(controller_id, slot_id, ep_target);
+    let combo_id = if tablet {
+        let entry = state.tablets.iter().find(|entry| endpoint_matches(endpoint, ComboEndpoint::new(entry.controller_id, entry.slot_id, entry.ep_target)))?;
+        if entry.virtual_device || entry.source_kind != HidSourceKind::Human { return None; }
+        entry.combo_id
+    } else {
+        let entry = state.mice.iter().find(|entry| endpoint_matches(endpoint, ComboEndpoint::new(entry.controller_id, entry.slot_id, entry.ep_target)))?;
+        if entry.virtual_device || entry.source_kind != HidSourceKind::Human { return None; }
+        entry.combo_id
+    };
+    let combo = state.combos.iter().find(|combo| combo.combo_id == combo_id && combo.source_kind == HidSourceKind::Human)?;
+    let canonical = canonical_pointer(combo)?;
+    let canonical_physical = match canonical.kind {
+        HidDeviceKind::Mouse => state.mice.iter().any(|entry| entry.controller_id == canonical.controller_id && entry.slot_id == canonical.slot_id && entry.ep_target == canonical.ep_target && !entry.virtual_device && entry.source_kind == HidSourceKind::Human),
+        HidDeviceKind::Tablet => state.tablets.iter().any(|entry| entry.controller_id == canonical.controller_id && entry.slot_id == canonical.slot_id && entry.ep_target == canonical.ep_target && !entry.virtual_device && entry.source_kind == HidSourceKind::Human),
+        _ => false,
+    };
+    canonical_physical.then_some((combo_id, canonical))
 }
 
 pub fn remove_slot(controller_id: u32, slot_id: u32) -> bool {
-    let mut guard = HID_HUT.lock();
+    remove_slot_in_state(&mut HID_HUT.lock(), controller_id, slot_id)
+}
+
+fn remove_slot_in_state(state: &mut HidHutState, controller_id: u32, slot_id: u32) -> bool {
     let mut removed = false;
 
     let mut idx = 0usize;
-    while idx < guard.mice.len() {
-        if guard.mice[idx].controller_id == controller_id && guard.mice[idx].slot_id == slot_id {
-            let _ = guard.mice.remove(idx);
+    while idx < state.mice.len() {
+        if state.mice[idx].controller_id == controller_id && state.mice[idx].slot_id == slot_id {
+            let _ = state.mice.remove(idx);
             removed = true;
         } else {
             idx += 1;
@@ -1220,11 +1336,11 @@ pub fn remove_slot(controller_id: u32, slot_id: u32) -> bool {
     }
 
     let mut idx = 0usize;
-    while idx < guard.keyboards.len() {
-        if guard.keyboards[idx].controller_id == controller_id
-            && guard.keyboards[idx].slot_id == slot_id
+    while idx < state.keyboards.len() {
+        if state.keyboards[idx].controller_id == controller_id
+            && state.keyboards[idx].slot_id == slot_id
         {
-            let _ = guard.keyboards.remove(idx);
+            let _ = state.keyboards.remove(idx);
             removed = true;
         } else {
             idx += 1;
@@ -1232,11 +1348,11 @@ pub fn remove_slot(controller_id: u32, slot_id: u32) -> bool {
     }
 
     let mut idx = 0usize;
-    while idx < guard.tablets.len() {
-        if guard.tablets[idx].controller_id == controller_id
-            && guard.tablets[idx].slot_id == slot_id
+    while idx < state.tablets.len() {
+        if state.tablets[idx].controller_id == controller_id
+            && state.tablets[idx].slot_id == slot_id
         {
-            let _ = guard.tablets.remove(idx);
+            let _ = state.tablets.remove(idx);
             removed = true;
         } else {
             idx += 1;
@@ -1244,18 +1360,18 @@ pub fn remove_slot(controller_id: u32, slot_id: u32) -> bool {
     }
 
     let mut idx = 0usize;
-    while idx < guard.gamepads.len() {
-        if guard.gamepads[idx].id.controller_id == controller_id
-            && guard.gamepads[idx].id.slot_id == slot_id
+    while idx < state.gamepads.len() {
+        if state.gamepads[idx].id.controller_id == controller_id
+            && state.gamepads[idx].id.slot_id == slot_id
         {
-            let _ = guard.gamepads.remove(idx);
+            let _ = state.gamepads.remove(idx);
             removed = true;
         } else {
             idx += 1;
         }
     }
 
-    for combo in guard.combos.iter_mut() {
+    for combo in state.combos.iter_mut() {
         if combo.mouse_controller_id == controller_id && combo.mouse_slot_id == slot_id {
             combo.mouse_controller_id = 0;
             combo.mouse_slot_id = 0;
@@ -1280,6 +1396,11 @@ pub fn remove_slot(controller_id: u32, slot_id: u32) -> bool {
             combo.gamepad_ep_target = 0;
             removed = true;
         }
+    }
+
+    for index in 0..state.combos.len() {
+        let combo_id = state.combos[index].combo_id;
+        promote_pointer(state, combo_id);
     }
 
     removed
@@ -1500,120 +1621,299 @@ mod link_tests {
             .unwrap();
     }
 
+    fn laptop_pairing_state() -> (HidHutState, ComboEndpoint, ComboEndpoint) {
+        let mut state = HidHutState::new();
+        let ps2 = ComboEndpoint::new(0x4938_3034, 0x4938_0001, 0);
+        let usb_mouse = ComboEndpoint::new(4, 1, 3);
+        let ai_mouse = ComboEndpoint::new(0, 0x5600_0001, 0);
+        let ai_keyboard = ComboEndpoint::new(0, 0x5700_0001, 0);
+        let mut ai = empty_combo(0x4C49_4C59, HidSourceKind::Ai, "Spirit/Lilly", 1, 0);
+        set_combo_endpoint(&mut ai, ComboDeviceKind::Mouse, ai_mouse);
+        set_combo_endpoint(&mut ai, ComboDeviceKind::Keyboard, ai_keyboard);
+        state.combos.push(ai).unwrap();
+
+        let mut virtual_mouse = mouse(ai_mouse.slot_id);
+        virtual_mouse.controller_id = ai_mouse.controller_id;
+        virtual_mouse.ep_target = ai_mouse.ep_target;
+        virtual_mouse.combo_id = state.combos[0].combo_id;
+        virtual_mouse.source_kind = HidSourceKind::Ai;
+        virtual_mouse.source_tag = normalized_tag("Spirit/Lilly");
+        virtual_mouse.virtual_device = true;
+        state.mice.push(virtual_mouse).unwrap();
+
+        let mut virtual_keyboard = keyboard(ai_keyboard.slot_id);
+        virtual_keyboard.controller_id = ai_keyboard.controller_id;
+        virtual_keyboard.ep_target = ai_keyboard.ep_target;
+        virtual_keyboard.combo_id = state.combos[0].combo_id;
+        virtual_keyboard.source_kind = HidSourceKind::Ai;
+        virtual_keyboard.source_tag = normalized_tag("Spirit/Lilly");
+        virtual_keyboard.virtual_device = true;
+        state.keyboards.push(virtual_keyboard).unwrap();
+
+        let mut physical_mouse = mouse(usb_mouse.slot_id);
+        physical_mouse.controller_id = usb_mouse.controller_id;
+        physical_mouse.ep_target = usb_mouse.ep_target;
+        state.mice.push(physical_mouse).unwrap();
+        let mut physical_keyboard = keyboard(ps2.slot_id);
+        physical_keyboard.controller_id = ps2.controller_id;
+        physical_keyboard.ep_target = ps2.ep_target;
+        state.keyboards.push(physical_keyboard).unwrap();
+        (state, ps2, usb_mouse)
+    }
+
+    fn assert_laptop_pairing(keyboard_first: bool) {
+        let (mut state, ps2, usb_mouse) = laptop_pairing_state();
+        let ai_combo = state.combos[0].clone();
+        let ai_mouse = state.mice[0].clone();
+        let ai_keyboard = state.keyboards[0].clone();
+        let order = if keyboard_first {
+            [(ComboDeviceKind::Keyboard, ps2), (ComboDeviceKind::Mouse, usb_mouse)]
+        } else {
+            [(ComboDeviceKind::Mouse, usb_mouse), (ComboDeviceKind::Keyboard, ps2)]
+        };
+        for (kind, endpoint) in order {
+            ensure_auto_combo_binding(&mut state, kind, endpoint);
+        }
+
+        assert_eq!(state.combos.len(), 2);
+        let human = &state.combos[1];
+        assert_eq!(human.source_kind, HidSourceKind::Human);
+        assert_ne!(human.flags & INPUT_COMBO_FLAG_AUTO_ASSIGNED, 0);
+        assert_eq!(combo_endpoint(human, ComboDeviceKind::Mouse), usb_mouse);
+        assert_eq!(combo_endpoint(human, ComboDeviceKind::Keyboard), ps2);
+        assert_eq!(state.mice[1].combo_id, human.combo_id);
+        assert_eq!(state.keyboards[1].combo_id, human.combo_id);
+        assert_eq!(state.mice[1].source_kind, HidSourceKind::Human);
+        assert_eq!(state.keyboards[1].source_kind, HidSourceKind::Human);
+        assert!(!state.mice[1].virtual_device);
+        assert!(!state.keyboards[1].virtual_device);
+
+        // Every physical report repeats this check. Idle registration and later
+        // mouse/key activity must retain the same collection and AI endpoints.
+        let paired = state.combos.clone();
+        for (kind, endpoint) in order.into_iter().rev() {
+            ensure_auto_combo_binding(&mut state, kind, endpoint);
+        }
+        assert_eq!(state.combos, paired);
+        assert_eq!(state.combos[0], ai_combo);
+        assert_eq!(state.mice[0], ai_mouse);
+        assert_eq!(state.keyboards[0], ai_keyboard);
+    }
+
     #[test]
-    fn auto_pairing_separates_mouse_and_tablet_in_the_same_usb_slot() {
+    fn ps2_keyboard_joins_existing_usb_mouse_human_bucket_without_touching_ai() {
+        assert_laptop_pairing(false);
+    }
+
+    #[test]
+    fn usb_mouse_joins_existing_ps2_keyboard_human_bucket_without_touching_ai() {
+        assert_laptop_pairing(true);
+    }
+
+    #[test]
+    fn ai_auto_bucket_is_not_a_human_pairing_candidate_even_with_same_slot() {
+        let ps2 = ComboEndpoint::new(0x4938_3034, 0x4938_0001, 0);
+        let usb_mouse = ComboEndpoint::new(4, 1, 3);
+        for same_slot in [false, true] {
+            let mut state = HidHutState::new();
+            let mut ai = empty_combo(
+                0x4C49_4C59, HidSourceKind::Ai, "AI auto", 1,
+                INPUT_COMBO_FLAG_AUTO_ASSIGNED,
+            );
+            let ai_mouse = if same_slot {
+                ComboEndpoint::new(ps2.controller_id, ps2.slot_id, 3)
+            } else {
+                ComboEndpoint::new(0, 0x5600_0001, 0)
+            };
+            set_combo_endpoint(&mut ai, ComboDeviceKind::Mouse, ai_mouse);
+            state.combos.push(ai.clone()).unwrap();
+            let mut human = empty_combo(
+                0x4943_0001, HidSourceKind::Human, "human auto", 2,
+                INPUT_COMBO_FLAG_AUTO_ASSIGNED,
+            );
+            set_combo_endpoint(&mut human, ComboDeviceKind::Mouse, usb_mouse);
+            state.combos.push(human).unwrap();
+
+            ensure_auto_combo_binding(&mut state, ComboDeviceKind::Keyboard, ps2);
+            assert_eq!(state.combos.len(), 2);
+            assert_eq!(state.combos[0], ai);
+            assert_eq!(
+                combo_endpoint(&state.combos[1], ComboDeviceKind::Keyboard), ps2,
+            );
+            let binding = resolve_keyboard_binding(
+                &state, ps2.controller_id, ps2.slot_id, ps2.ep_target,
+                HidSourceKind::Human, "human",
+            );
+            assert_eq!(binding.combo_id, 0x4943_0001);
+            assert_eq!(binding.source_kind, HidSourceKind::Human);
+        }
+    }
+
+    #[test]
+    fn ps2_and_usb_reports_preserve_manual_pairing_instead_of_refilling_auto_bucket() {
+        let (mut state, ps2, usb_mouse) = laptop_pairing_state();
+        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, usb_mouse);
+        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Keyboard, ps2);
+        let manual_id = 0x484D_0001;
+        state.combos.push(empty_combo(
+            manual_id, HidSourceKind::Human, "manual laptop", 2, 0,
+        )).unwrap();
+        assert!(bind_device_in_state(&mut state, manual_id, ComboDeviceKind::Mouse, usb_mouse));
+        assert!(bind_device_in_state(&mut state, manual_id, ComboDeviceKind::Keyboard, ps2));
+        assert!(combo_is_empty(&state.combos[1]));
+        let before = state.combos.clone();
+        let ai_mouse = state.mice[0].clone();
+        let ai_keyboard = state.keyboards[0].clone();
+
+        // These are the same ensure/resolve operations performed on every
+        // upsert; the now-empty auto bucket must not reclaim either device.
+        for _ in 0..3 {
+            ensure_auto_combo_binding(&mut state, ComboDeviceKind::Keyboard, ps2);
+            ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, usb_mouse);
+            let keyboard = resolve_keyboard_binding(
+                &state, ps2.controller_id, ps2.slot_id, ps2.ep_target,
+                HidSourceKind::Human, "human",
+            );
+            let mouse = resolve_mouse_binding(
+                &state, usb_mouse.controller_id, usb_mouse.slot_id, usb_mouse.ep_target,
+                HidSourceKind::Human, "human",
+            );
+            for binding in [keyboard, mouse] {
+                assert_eq!(binding.combo_id, manual_id);
+                assert_eq!(binding.source_kind, HidSourceKind::Human);
+                assert_eq!(binding.source_tag.as_str(), "manual laptop");
+            }
+        }
+        assert_eq!(state.combos, before);
+        assert_eq!(state.mice[1].combo_id, manual_id);
+        assert_eq!(state.keyboards[1].combo_id, manual_id);
+        assert_eq!(state.mice[0], ai_mouse);
+        assert_eq!(state.keyboards[0], ai_keyboard);
+    }
+
+    #[test]
+    fn auto_pairing_groups_mouse_tablet_and_keyboard_under_one_canonical_cursor() {
         let mut state = HidHutState::new();
         let endpoint = ComboEndpoint::new(1, 2, 1);
         ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, endpoint);
         ensure_auto_combo_binding(&mut state, ComboDeviceKind::Tablet, endpoint);
         ensure_auto_combo_binding(&mut state, ComboDeviceKind::Keyboard, endpoint);
-        assert_eq!(state.combos.len(), 2);
-        assert_eq!(
-            combo_endpoint(&state.combos[0], ComboDeviceKind::Mouse),
-            endpoint
-        );
-        assert_eq!(
-            combo_endpoint(&state.combos[0], ComboDeviceKind::Keyboard),
-            endpoint
-        );
-        assert!(endpoint_is_empty(combo_endpoint(
-            &state.combos[0],
-            ComboDeviceKind::Tablet
-        )));
-        assert_eq!(
-            combo_endpoint(&state.combos[1], ComboDeviceKind::Tablet),
-            endpoint
-        );
-        assert!(endpoint_is_empty(combo_endpoint(
-            &state.combos[1],
-            ComboDeviceKind::Mouse
-        )));
+        assert_eq!(state.combos.len(), 1);
+        assert_eq!(combo_endpoint(&state.combos[0], ComboDeviceKind::Mouse), endpoint);
+        assert_eq!(combo_endpoint(&state.combos[0], ComboDeviceKind::Keyboard), endpoint);
+        assert!(endpoint_is_empty(combo_endpoint(&state.combos[0], ComboDeviceKind::Tablet)));
     }
 
     #[test]
-    fn binding_a_second_cursor_preserves_both_previous_pairings() {
+    fn binding_a_second_physical_pointer_joins_without_replacing_the_canonical() {
         let mut state = HidHutState::new();
         add_combo(&mut state, 1);
         add_combo(&mut state, 2);
-        let mouse = ComboEndpoint::new(1, 2, 1);
-        let tablet = ComboEndpoint::new(1, 3, 1);
-        assert!(bind_device_in_state(
-            &mut state,
-            1,
-            ComboDeviceKind::Mouse,
-            mouse
-        ));
-        assert!(bind_device_in_state(
-            &mut state,
-            2,
-            ComboDeviceKind::Tablet,
-            tablet
-        ));
-        let before = state.combos.clone();
-        assert!(!bind_device_in_state(
-            &mut state,
-            2,
-            ComboDeviceKind::Mouse,
-            mouse
-        ));
-        assert!(!bind_device_in_state(
-            &mut state,
-            1,
-            ComboDeviceKind::Tablet,
-            tablet
-        ));
-        assert_eq!(state.combos, before);
+        let first = ComboEndpoint::new(1, 2, 1);
+        let second = ComboEndpoint::new(1, 3, 1);
+        state.mice.push(mouse(2)).unwrap();
+        state.mice.push(mouse(3)).unwrap();
+        assert!(bind_device_in_state(&mut state, 1, ComboDeviceKind::Mouse, first));
+        assert!(bind_device_in_state(&mut state, 2, ComboDeviceKind::Mouse, second));
+        assert!(bind_device_in_state(&mut state, 2, ComboDeviceKind::Mouse, first));
+        assert_eq!(combo_endpoint(&state.combos[1], ComboDeviceKind::Mouse), second);
+        assert_eq!(state.mice[0].combo_id, 2);
+        assert_eq!(state.mice[1].combo_id, 2);
+        assert!(combo_is_empty(&state.combos[0]));
+        assert_eq!(pointer_combo_binding_in_state(&state, 1, 2, 1, false), Some((2, device(HidDeviceKind::Mouse, 3))));
     }
 
     #[test]
-    fn rejected_drops_are_atomic_and_successful_moves_keep_the_active_pointer() {
-        let mut state = HidHutState::new();
-        for id in 1..=3 {
-            add_combo(&mut state, id);
+    fn default_keyboard_mouse_and_trackpad_share_one_human_cursor_until_split() {
+        for trackpad_first in [false, true] {
+            let (mut state, ps2, usb) = laptop_pairing_state();
+            let trackpad = ComboEndpoint::new(0x4932_4348, 0x4932_0001, 0);
+            let mut pad = mouse(trackpad.slot_id);
+            pad.controller_id = trackpad.controller_id;
+            pad.ep_target = trackpad.ep_target;
+            state.mice.push(pad).unwrap();
+            let ai = state.combos[0].clone();
+            ensure_auto_combo_binding(&mut state, ComboDeviceKind::Keyboard, ps2);
+            for pointer in if trackpad_first { [trackpad, usb] } else { [usb, trackpad] } {
+                ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, pointer);
+            }
+            assert_eq!(state.combos.len(), 2);
+            assert_eq!(state.combos[0], ai);
+            let human_id = state.combos[1].combo_id;
+            assert_eq!(state.keyboards[1].combo_id, human_id);
+            assert_eq!(state.mice[1].combo_id, human_id);
+            assert_eq!(state.mice[2].combo_id, human_id);
+            let canonical = pointer_combo_binding_in_state(&state, usb.controller_id, usb.slot_id, usb.ep_target, false).unwrap().1;
+            assert_eq!(pointer_combo_binding_in_state(&state, trackpad.controller_id, trackpad.slot_id, trackpad.ep_target, false), Some((human_id, canonical)));
+            assert_eq!(pointer_combo_binding_in_state(&state, 0, 0x5600_0001, 0, false), None);
+
+            let split = 0x534c_4954;
+            state.combos.push(empty_combo(split, HidSourceKind::Human, "manual split", 3, 0)).unwrap();
+            let pad_id = HidDeviceId { kind: HidDeviceKind::Mouse, controller_id: trackpad.controller_id, slot_id: trackpad.slot_id, ep_target: trackpad.ep_target };
+            assert_eq!(move_device_in_state(&mut state, pad_id, split), Ok(()));
+            ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, trackpad);
+            assert_eq!(state.mice[2].combo_id, split);
+            assert_eq!(state.mice[1].combo_id, human_id);
+            assert_eq!(state.keyboards[1].combo_id, human_id);
+            assert_eq!(pointer_combo_binding_in_state(&state, trackpad.controller_id, trackpad.slot_id, trackpad.ep_target, false), Some((split, pad_id)));
+            assert_eq!(state.combos[0], ai);
         }
+    }
+
+    #[test]
+    fn removing_the_canonical_pointer_promotes_its_remaining_physical_member() {
+        let (mut state, ps2, usb) = laptop_pairing_state();
+        let trackpad = ComboEndpoint::new(0x4932_4348, 0x4932_0001, 0);
+        let mut pad = mouse(trackpad.slot_id); pad.controller_id = trackpad.controller_id; pad.ep_target = trackpad.ep_target;
+        state.mice.push(pad).unwrap();
+        for pointer in [usb, trackpad] { ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, pointer); }
+        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Keyboard, ps2);
+        let human = state.combos[1].combo_id;
+        assert!(remove_slot_in_state(&mut state, usb.controller_id, usb.slot_id));
+        let expected = HidDeviceId { kind: HidDeviceKind::Mouse, controller_id: trackpad.controller_id, slot_id: trackpad.slot_id, ep_target: trackpad.ep_target };
+        assert_eq!(pointer_combo_binding_in_state(&state, trackpad.controller_id, trackpad.slot_id, trackpad.ep_target, false), Some((human, expected)));
+        assert_eq!(state.keyboards[1].combo_id, human);
+        assert!(!combo_is_empty(&state.combos[1]));
+        assert!(remove_slot_in_state(&mut state, trackpad.controller_id, trackpad.slot_id));
+        assert!(canonical_pointer(&state.combos[1]).is_none());
+        assert!(!combo_is_empty(&state.combos[1])); // Keyboard still owns the bucket.
+    }
+
+    #[test]
+    fn physical_members_do_not_resolve_to_a_virtual_canonical_identity() {
+        let (mut state, _, usb) = laptop_pairing_state();
+        let mut human = empty_combo(123, HidSourceKind::Human, "explicit mixed", 2, 0);
+        set_combo_endpoint(&mut human, ComboDeviceKind::Mouse, ComboEndpoint::new(0, 0x5600_0001, 0));
+        state.combos.push(human).unwrap();
+        state.mice[1].combo_id = 123;
+        assert_eq!(pointer_combo_binding_in_state(&state, usb.controller_id, usb.slot_id, usb.ep_target, false), None);
+        assert!(!shared_pointer_target(&state, &state.combos[1], ComboDeviceKind::Mouse, usb));
+    }
+
+    #[test]
+    fn invalid_drops_are_atomic_and_physical_members_can_join_or_split() {
+        let mut state = HidHutState::new();
+        for id in 1..=3 { add_combo(&mut state, id); }
         state.mice.push(mouse(2)).unwrap();
         state.mice.push(mouse(3)).unwrap();
-        assert!(bind_device_in_state(
-            &mut state,
-            1,
-            ComboDeviceKind::Mouse,
-            ComboEndpoint::new(1, 2, 1)
-        ));
-        assert!(bind_device_in_state(
-            &mut state,
-            2,
-            ComboDeviceKind::Mouse,
-            ComboEndpoint::new(1, 3, 1)
-        ));
+        assert!(bind_device_in_state(&mut state, 1, ComboDeviceKind::Mouse, ComboEndpoint::new(1, 2, 1)));
+        assert!(bind_device_in_state(&mut state, 2, ComboDeviceKind::Mouse, ComboEndpoint::new(1, 3, 1)));
         let before = state.combos.clone();
-        assert_eq!(
-            move_device_in_state(&mut state, device(HidDeviceKind::Mouse, 2), 2),
-            Err(ComboMoveError::CursorOccupied)
-        );
-        assert_eq!(
-            move_device_in_state(&mut state, device(HidDeviceKind::Mouse, 99), 3),
-            Err(ComboMoveError::DeviceMissing)
-        );
-        assert_eq!(
-            move_device_in_state(&mut state, device(HidDeviceKind::Mouse, 2), 99),
-            Err(ComboMoveError::ComboMissing)
-        );
+        assert_eq!(move_device_in_state(&mut state, device(HidDeviceKind::Mouse, 99), 3), Err(ComboMoveError::DeviceMissing));
+        assert_eq!(move_device_in_state(&mut state, device(HidDeviceKind::Mouse, 2), 99), Err(ComboMoveError::ComboMissing));
         assert_eq!(state.combos, before);
+        assert_eq!(move_device_in_state(&mut state, device(HidDeviceKind::Mouse, 2), 2), Ok(()));
+        assert_eq!(combo_endpoint(&state.combos[1], ComboDeviceKind::Mouse), ComboEndpoint::new(1, 3, 1));
+        assert_eq!(state.mice[0].combo_id, 2);
+        assert_eq!(state.mice[1].combo_id, 2);
         let before_pointer = state.mice[0].clone();
-        assert_eq!(
-            move_device_in_state(&mut state, device(HidDeviceKind::Mouse, 2), 3),
-            Ok(())
-        );
-        assert!(combo_is_empty(&state.combos[0]));
+        assert_eq!(move_device_in_state(&mut state, device(HidDeviceKind::Mouse, 2), 3), Ok(()));
         assert_eq!(state.combos[2].flags & INPUT_COMBO_FLAG_AUTO_ASSIGNED, 0);
-        let mut expected_pointer = before_pointer;
-        expected_pointer.combo_id = 3;
-        assert_eq!(state.mice[0], expected_pointer);
-        // Dropping back into the same bucket is harmless.
-        assert_eq!(
-            move_device_in_state(&mut state, device(HidDeviceKind::Mouse, 2), 3),
-            Ok(())
-        );
+        let mut expected = before_pointer; expected.combo_id = 3;
+        assert_eq!(state.mice[0], expected);
+        assert_eq!(state.mice[1].combo_id, 2);
+        for _ in 0..2 { ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, ComboEndpoint::new(1, 2, 1)); }
+        assert_eq!(state.mice[0].combo_id, 3);
     }
 
     #[test]
@@ -1746,54 +2046,36 @@ mod tests {
     }
 
     #[test]
-    fn auto_pairing_uses_discovery_order_for_independent_devices() {
+    fn physical_pointers_share_the_default_bucket_while_keyboards_keep_one_slot() {
         let mut state = HidHutState::new();
-        let mouse_a = endpoint(1, 10, 2);
-        let mouse_b = endpoint(1, 11, 2);
-        let keyboard_a = endpoint(1, 20, 3);
-        let keyboard_b = endpoint(1, 21, 3);
-
-        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, mouse_a);
-        ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, mouse_b);
+        let mouse_a = endpoint(1, 10, 2); let mouse_b = endpoint(1, 11, 2);
+        let keyboard_a = endpoint(1, 20, 3); let keyboard_b = endpoint(1, 21, 3);
+        for pointer in [mouse_a, mouse_b] {
+            state.mice.push(HidMouseState { controller_id: pointer.controller_id, slot_id: pointer.slot_id, ep_target: pointer.ep_target, x: 0.5, y: 0.5, buttons_down: 0, combo_id: 0, source_kind: HidSourceKind::Human, source_tag: normalized_tag("physical"), virtual_device: false }).unwrap();
+            ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, pointer);
+        }
         ensure_auto_combo_binding(&mut state, ComboDeviceKind::Keyboard, keyboard_a);
         ensure_auto_combo_binding(&mut state, ComboDeviceKind::Keyboard, keyboard_b);
-
         assert_eq!(state.combos.len(), 2);
-        assert!(endpoint_matches(
-            combo_endpoint(&state.combos[0], ComboDeviceKind::Mouse),
-            mouse_a,
-        ));
-        assert!(endpoint_matches(
-            combo_endpoint(&state.combos[0], ComboDeviceKind::Keyboard),
-            keyboard_a,
-        ));
-        assert!(endpoint_matches(
-            combo_endpoint(&state.combos[1], ComboDeviceKind::Mouse),
-            mouse_b,
-        ));
-        assert!(endpoint_matches(
-            combo_endpoint(&state.combos[1], ComboDeviceKind::Keyboard),
-            keyboard_b,
-        ));
-        assert_ne!(state.combos[0].color_id, state.combos[1].color_id);
+        assert_eq!(combo_endpoint(&state.combos[0], ComboDeviceKind::Mouse), mouse_a);
+        assert_eq!(combo_endpoint(&state.combos[0], ComboDeviceKind::Keyboard), keyboard_a);
+        assert!(endpoint_is_empty(combo_endpoint(&state.combos[1], ComboDeviceKind::Mouse)));
+        assert_eq!(combo_endpoint(&state.combos[1], ComboDeviceKind::Keyboard), keyboard_b);
+        assert_eq!(state.mice[0].combo_id, state.combos[0].combo_id);
+        assert_eq!(state.mice[1].combo_id, state.combos[0].combo_id);
     }
 
     #[test]
-    fn auto_pairing_prefers_members_from_the_same_usb_slot() {
+    fn keyboard_and_additional_pointer_use_the_default_human_bucket() {
         let mut state = HidHutState::new();
-        let mouse_a = endpoint(1, 10, 2);
-        let mouse_b = endpoint(1, 11, 2);
+        let mouse_a = endpoint(1, 10, 2); let mouse_b = endpoint(1, 11, 2);
         let keyboard_b = endpoint(1, 11, 3);
-
         ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, mouse_a);
         ensure_auto_combo_binding(&mut state, ComboDeviceKind::Mouse, mouse_b);
         ensure_auto_combo_binding(&mut state, ComboDeviceKind::Keyboard, keyboard_b);
-
-        assert!(endpoint_is_empty(combo_endpoint(&state.combos[0], ComboDeviceKind::Keyboard,)));
-        assert!(endpoint_matches(
-            combo_endpoint(&state.combos[1], ComboDeviceKind::Keyboard),
-            keyboard_b,
-        ));
+        assert_eq!(state.combos.len(), 1);
+        assert_eq!(combo_endpoint(&state.combos[0], ComboDeviceKind::Mouse), mouse_a);
+        assert_eq!(combo_endpoint(&state.combos[0], ComboDeviceKind::Keyboard), keyboard_b);
     }
 
     #[test]
@@ -1827,7 +2109,7 @@ mod tests {
         assert!(bind_device_in_state(&mut state, second_id, ComboDeviceKind::Mouse, mouse_b,));
         assert!(endpoint_matches(
             combo_endpoint(&state.combos[1], ComboDeviceKind::Mouse),
-            mouse_b,
+            mouse_a,
         ));
     }
 }

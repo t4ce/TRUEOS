@@ -332,6 +332,10 @@ impl From<crate::r::keyboard::TrueosKeyboardOutputEvent> for KeyboardSource {
 #[derive(Copy, Clone)]
 struct CursorRoute {
     source: Ui4CursorSource,
+    /// Retained through canonical-device removal so a Human pointer group can
+    /// keep its selected frame when another physical member takes over.
+    combo_id: u32,
+    human_pointer_group: bool,
     x: u32,
     y: u32,
     buttons_down: u32,
@@ -373,6 +377,8 @@ impl CursorRoute {
     fn new(source: Ui4CursorSource, x: u32, y: u32, buttons_down: u32) -> Self {
         Self {
             source,
+            combo_id: 0,
+            human_pointer_group: false,
             x,
             y,
             buttons_down,
@@ -541,11 +547,36 @@ impl InputBroker {
     }
 
     fn cursor_index(&mut self, source: Ui4CursorSource, x: u32, y: u32) -> usize {
+        let (combo_id, virtual_cursor) = cursor_hut_metadata(source);
+        let human_pointer_group = combo_id != 0 && !virtual_cursor
+            && super::spirit_access::cursor_is_human(source);
         if let Some(index) = self.cursors.iter().position(|route| route.source == source) {
+            self.cursors[index].combo_id = combo_id;
+            self.cursors[index].human_pointer_group = human_pointer_group;
             return index;
         }
+        if human_pointer_group {
+            if let Some(index) = self.cursors.iter().position(|route| {
+                !route.visual_only && route.human_pointer_group && route.combo_id == combo_id
+            }) {
+                let previous = self.cursors[index].source;
+                super::context_menu::dismiss_for_source(previous);
+                super::cursor_frame_inout::retarget_source(previous, source);
+                if self.quad_resize.is_some_and(|gesture| gesture.source == previous) {
+                    self.quad_resize = None;
+                }
+                let keyboard_source = self.cursors[index].keyboard_source;
+                self.cursors[index].clear_window_interaction();
+                self.cursors[index].keyboard_source = keyboard_source;
+                self.cursors[index].source = source;
+                return index;
+            }
+        }
         if self.cursors.push(CursorRoute::new(source, x, y, 0)).is_ok() {
-            return self.cursors.len() - 1;
+            let index = self.cursors.len() - 1;
+            self.cursors[index].combo_id = combo_id;
+            self.cursors[index].human_pointer_group = human_pointer_group;
+            return index;
         }
         let index = self
             .cursors
@@ -560,6 +591,8 @@ impl InputBroker {
             self.quad_resize = None;
         }
         self.cursors[index] = CursorRoute::new(source, x, y, 0);
+        self.cursors[index].combo_id = combo_id;
+        self.cursors[index].human_pointer_group = human_pointer_group;
         index
     }
 
@@ -631,6 +664,19 @@ impl InputBroker {
         released
     }
 
+    /// A Link move may retire a shared pointer without removing the device's
+    /// keyboard interface. Group changes must not retire that keyboard.
+    fn retire_pointer_group(&mut self, source: Ui4CursorSource) {
+        if let Some(index) = self.cursors.iter().position(|route| route.source == source) {
+            self.cursors.remove(index);
+        }
+        if self.quad_resize.is_some_and(|gesture| gesture.source == source) {
+            self.quad_resize = None;
+        }
+        super::context_menu::dismiss_for_source(source);
+        super::cursor_frame_inout::cursor_retired(source);
+    }
+
     fn retire_hid_slot(&mut self, controller_id: u32, slot_id: u32) -> (usize, usize) {
         let mut retired_routes = 0usize;
         let mut index = 0usize;
@@ -663,6 +709,10 @@ impl InputBroker {
     }
 
     fn process_cursor(&mut self, event: crate::usb2::hid::TrueosHidCursorEvent, ring_sequence: u64) {
+        if event.flags & crate::usb2::hid::HID_CURSOR_EVENT_FLAG_POINTER_GROUP_RETIRED != 0 {
+            self.retire_pointer_group(Ui4CursorSource::from_event(event));
+            return;
+        }
         if event.flags & crate::usb2::hid::HID_CURSOR_EVENT_FLAG_DEVICE_LOST != 0 {
             let (routes, keyboards) = self.retire_hid_slot(event.controller_id, event.slot_id);
             crate::log_info!(target: "ui4";

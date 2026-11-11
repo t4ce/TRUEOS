@@ -1214,6 +1214,7 @@ impl WindowBroker {
                 window.state == WindowState::Ready
                     && window.session == id
                     && matches!(window.plane.slot(), 1 | 2)
+                    && super::application_plane_scaling_enabled(window.output, window.plane.slot())
             });
         for (window_slot, window) in self.windows.iter_mut().enumerate() {
             if window.state != WindowState::Closed && window.session == id {
@@ -1223,36 +1224,13 @@ impl WindowBroker {
                 {
                     final_frames.push(snapshot);
                 }
-                let (delay_ms, duration_ms, puff_per_mille) = if window.plane == WindowPlane::Primary {
-                    // Slot0 resolves pixel ownership with native-size BCS
-                    // copies; whole-window fades and scaling need blending.
-                    (0, 0, 0)
-                } else if window.plane.slot() == super::ADDITIONAL_APPLICATION_PLANE_SLOT {
-                    // The additional carrier has no assigned hardware scaler.
-                    // Keep source geometry while fading to the same retirement boundary.
-                    (0, DIRECT_PLANE_CLOSE_WAVE_DURATION_MS, 0)
-                } else if direct_plane_scaling {
-                    let delay_ms = if window.plane.slot() == 3 && direct_first_wave_present {
-                        DIRECT_PLANE_CLOSE_WAVE_DURATION_MS
-                    } else {
-                        0
-                    };
-                    (
-                        delay_ms,
-                        DIRECT_PLANE_CLOSE_WAVE_DURATION_MS,
-                        DIRECT_PLANE_CLOSE_PUFF_PER_MILLE,
-                    )
-                } else {
-                    (
-                        0,
-                        CLOSE_TRANSITION_DURATION_MS,
-                        if puff {
-                            CLOSE_TRANSITION_PUFF_PER_MILLE
-                        } else {
-                            0
-                        },
-                    )
-                };
+                let (delay_ms, duration_ms, puff_per_mille) = close_transition_timing(
+                    window.plane,
+                    direct_plane_scaling,
+                    puff,
+                    super::application_plane_scaling_enabled(window.output, window.plane.slot()),
+                    direct_first_wave_present,
+                );
                 let native = window.replacement_presentation.unwrap_or(window.placement);
                 let presentation = if window.plane == WindowPlane::Primary {
                     WindowPlacement { opacity: 0, ..native }
@@ -2173,7 +2151,7 @@ pub(crate) fn commit_window_frame_refresh(
         && !window.first_presentation_emitted
         && window.replacement_presentation.is_none()
     {
-        window.open_transition = open_transition(window.placement, window.plane, started_ms);
+        window.open_transition = open_transition(window.placement, window.plane, window.output, started_ms);
     }
     window.state = WindowState::Ready;
     window.publish_serial = next_serial(window.publish_serial);
@@ -3069,7 +3047,7 @@ pub(crate) fn publish_window_frame(
                 && window.replacement_presentation.is_none()
             {
                 window.open_transition =
-                    open_transition(window.placement, window.plane, started_ms);
+                    open_transition(window.placement, window.plane, window.output, started_ms);
             }
             window.replacement_presentation = None;
         }
@@ -3553,19 +3531,48 @@ fn scaled_fade_transition_placement(
     }
 }
 
+fn close_transition_timing(
+    plane: WindowPlane,
+    direct_plane_scaling: bool,
+    puff: bool,
+    scaling_admitted: bool,
+    direct_first_wave_present: bool,
+) -> (u64, u64, u64) {
+    if plane == WindowPlane::Primary {
+        // Slot0 uses native-size BCS copies and cannot fade a whole window.
+        (0, 0, 0)
+    } else if !scaling_admitted {
+        // Preserve native pixels while fading to the usual retirement boundary.
+        (0, DIRECT_PLANE_CLOSE_WAVE_DURATION_MS, 0)
+    } else if direct_plane_scaling {
+        let delay_ms = if plane.slot() == 3 && direct_first_wave_present {
+            DIRECT_PLANE_CLOSE_WAVE_DURATION_MS
+        } else {
+            0
+        };
+        (delay_ms, DIRECT_PLANE_CLOSE_WAVE_DURATION_MS, DIRECT_PLANE_CLOSE_PUFF_PER_MILLE)
+    } else {
+        (0, CLOSE_TRANSITION_DURATION_MS, if puff { CLOSE_TRANSITION_PUFF_PER_MILLE } else { 0 })
+    }
+}
+
 fn open_transition(
     initial: WindowPlacement,
     plane: WindowPlane,
+    output: OutputId,
     started_ms: u64,
 ) -> Option<WindowOpenTransition> {
     if plane == WindowPlane::Primary || plane.slot() == super::ADDITIONAL_APPLICATION_PLANE_SLOT {
         return None;
     }
-    let (duration_ms, shrink_per_mille) = if matches!(plane.slot(), 1..=3) {
+    let (duration_ms, mut shrink_per_mille) = if matches!(plane.slot(), 1..=3) {
         (DIRECT_PLANE_CLOSE_WAVE_DURATION_MS, DIRECT_PLANE_OPEN_SHRINK_PER_MILLE)
     } else {
         (CLOSE_TRANSITION_DURATION_MS, OPEN_TRANSITION_SHRINK_PER_MILLE)
     };
+    if !super::application_plane_scaling_enabled(output, plane.slot()) {
+        shrink_per_mille = 0;
+    }
     Some(WindowOpenTransition {
         initial,
         current: open_transition_placement(initial, 0, duration_ms, shrink_per_mille),
@@ -4272,7 +4279,7 @@ mod tests {
             .unwrap();
         let (slot, _) = unpack_handle(window.raw()).unwrap();
         let native = broker.windows[slot].placement;
-        broker.windows[slot].open_transition = open_transition(native, WindowPlane::Universal(1), 0);
+        broker.windows[slot].open_transition = open_transition(native, WindowPlane::Universal(1), broker.windows[slot].output, 0);
         assert_ne!(broker.windows[slot].presentation_placement(), native);
 
         // Adding the fourth application window moves the oldest one onto
@@ -4285,7 +4292,7 @@ mod tests {
         assert_eq!(broker.windows[slot].plane, WindowPlane::Primary);
         assert!(broker.windows[slot].open_transition.is_none());
         assert_eq!(broker.windows[slot].presentation_placement(), native);
-        assert!(open_transition(native, WindowPlane::Primary, 0).is_none());
+        assert!(open_transition(native, WindowPlane::Primary, broker.windows[slot].output, 0).is_none());
     }
 
     #[test]

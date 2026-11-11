@@ -4,7 +4,7 @@ set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 action=${1:-status}
-export TRUEOS_BAREMETAL_LOG_HOST=${TRUEOS_LAPTOP_HOST:-192.168.178.60}
+export TRUEOS_BAREMETAL_LOG_HOST=${TRUEOS_LAPTOP_HOST:-192.168.178.66}
 export TRUEOS_BAREMETAL_LOG_PORT=1
 export TRUEOS_BAREMETAL_LOG_DELAY=0
 export TRUEOS_BAREMETAL_LOG_DIR="$root/bld/laptop-bringup/logs"

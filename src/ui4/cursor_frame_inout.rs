@@ -634,6 +634,34 @@ impl CursorFrameRig {
             .map(|entry| Arc::clone(&entry.image))
     }
 
+    fn retarget_source(&mut self, previous: Ui4CursorSource, next: Ui4CursorSource) -> bool {
+        if previous == next || self.selecting_cursors.iter().any(|cursor| cursor.source == next) {
+            return false;
+        }
+        let mut changed = false;
+        for cursor in self.selecting_cursors.iter_mut() {
+            if cursor.source == previous {
+                cursor.source = next;
+                changed = true;
+            }
+        }
+        for frame in self.frames.iter_mut() {
+            if frame.overrides.iter().any(|cursor| cursor.source == next) {
+                let previous_len = frame.overrides.len();
+                frame.overrides.retain(|cursor| cursor.source != previous);
+                changed |= frame.overrides.len() != previous_len;
+            } else {
+                for cursor in frame.overrides.iter_mut() {
+                    if cursor.source == previous {
+                        cursor.source = next;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        changed
+    }
+
     fn cursor_retired(&mut self, source: Ui4CursorSource) -> bool {
         let previous_len = self.selecting_cursors.len();
         self.selecting_cursors
@@ -731,6 +759,15 @@ pub(crate) fn center_snapped_frame_for_source(source: Ui4CursorSource) -> Option
     CURSOR_FRAME_RIG
         .lock()
         .center_snapped_frame_for_source(source)
+}
+
+/// A Human combo survives unplugging its canonical mouse while another
+/// physical pointer remains. Preserve frame selection under the new source.
+pub(super) fn retarget_source(previous: Ui4CursorSource, next: Ui4CursorSource) {
+    super::drag_drop::cursor_retired(previous);
+    if CURSOR_FRAME_RIG.lock().retarget_source(previous, next) {
+        signal_visual_change();
+    }
 }
 
 pub(super) fn cursor_retired(source: Ui4CursorSource) {
@@ -1409,6 +1446,21 @@ mod tests {
         assert_eq!(rig.selected_frame_for_source(source(3)), Some(second));
         assert!(!rig.source_selected(source(1)));
         assert!(rig.source_selected(source(3)));
+    }
+
+    #[test]
+    fn human_pointer_promotion_preserves_selection_and_cursor_presentation() {
+        let mut rig = CursorFrameRig::new();
+        let frame = CursorFrameKey::new(WindowOwner::KernelApp(1), WindowId::from_raw(1).unwrap());
+        rig.frame_opened(frame, WindowSessionId::from_raw(1).unwrap()).unwrap();
+        rig.select(Some(frame), mouse_source(1), Rgba8::new(1, 2, 3, 255));
+        rig.set_cursor(frame, Some(mouse_source(1)), Ui4CursorIcon::Loading).unwrap();
+        assert!(rig.retarget_source(mouse_source(1), mouse_source(2)));
+        assert_eq!(rig.selected_frame_for_source(mouse_source(1)), None);
+        assert_eq!(rig.selected_frame_for_source(mouse_source(2)), Some(frame));
+        assert!(rig.source_selected(mouse_source(2)));
+        assert_eq!(rig.cursor_icon(frame, mouse_source(2)), Ui4CursorIcon::Loading);
+        assert!(!rig.retarget_source(mouse_source(1), mouse_source(2)));
     }
 
     #[test]

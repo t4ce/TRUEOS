@@ -15,12 +15,24 @@ pub(crate) mod hex;
 const PAGE_COLUMNS: u32 = 8;
 const PAGE_ROWS: u32 = 8;
 pub(crate) const DEFAULT_UI4_FONT_SCALE: u32 = 2;
+const ATLAS_EM_HALF_MM: u32 = 15;
+const LAPTOP_SHELL_EM_HALF_MM: u32 = 8;
 
-/// Scale 2 uses a 7.5mm em when physical display size is known, otherwise the
-/// font's 11-row em at twice its native pixel size. Other scales retain zoom.
-/// This is shared by the font source, frame, paint, scrolling and hit testing.
+/// Scale 2 uses a 4-mm em on the physical Tiger Lake laptop and a 7.5-mm em
+/// elsewhere. Unknown physical size retains the font's 11-row pixel fallback.
+/// Frame, paint, scrolling and hit testing share this presentation size; the
+/// one native atlas retains its canonical 7.5-mm production size.
 pub(crate) fn cell_extent(scale: u32) -> Option<(u32, u32)> {
-    let numerator = 15u32.checked_mul(scale)?;
+    let em_half_mm = if crate::pci::experimental_tgl_9a49_active() {
+        LAPTOP_SHELL_EM_HALF_MM
+    } else {
+        ATLAS_EM_HALF_MM
+    };
+    cell_extent_for_em(scale, em_half_mm)
+}
+
+fn cell_extent_for_em(scale: u32, em_half_mm: u32) -> Option<(u32, u32)> {
+    let numerator = em_half_mm.checked_mul(scale)?;
     let height = if let Some((_, height)) = crate::ui4::physical_extent_pixels_fraction(
         numerator, numerator, 2 * DEFAULT_UI4_FONT_SCALE) {
         height
@@ -164,7 +176,7 @@ pub(crate) async fn prepare() -> Result<(), &'static str> {
 
 fn prepare_once() -> Result<(), &'static str> {
     if FONT.get().is_some() { return Ok(()); }
-    let (_, height) = cell_extent(DEFAULT_UI4_FONT_SCALE)
+    let (_, height) = cell_extent_for_em(DEFAULT_UI4_FONT_SCALE, ATLAS_EM_HALF_MM)
         .ok_or("shell3-font-physical-size-unavailable")?;
     native_boot_preflight()?;
     let alpha = build_shell3_alpha_atlas(height)?;
@@ -174,6 +186,13 @@ fn prepare_once() -> Result<(), &'static str> {
     crate::log_important!(target: "microfont-mask";
         "shell3-font: ready source=native-line-quad producer=native-gpu format=r8 em_mm=7.5 em_height_px={} glyphs={} successful_productions=1 retained=service-lifetime layout=physical-cells missing_glyph=red-question-mark\n",
         height, glyphs);
+    if crate::pci::experimental_tgl_9a49_active() {
+        if let Some((width, presentation_height)) = cell_extent(DEFAULT_UI4_FONT_SCALE) {
+            crate::log_important!(target: "microfont-mask";
+                "shell3-font: presentation em_mm=4 cell={}x{} scale=2 atlas_em_height_px={} sampling=shared-native-atlas\n",
+                width, presentation_height, height);
+        }
+    }
     Ok(())
 }
 

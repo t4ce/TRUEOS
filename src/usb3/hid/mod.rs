@@ -13,6 +13,7 @@ pub mod mediacontrol;
 pub mod midi;
 pub mod mouse;
 mod mouse_report;
+mod pointer_group;
 pub mod tablet;
 pub(crate) use crate::log_os::flags::HID_DEBUG_REPORT_LOGS;
 pub use v::vinput::TrueosHidCursorEvent;
@@ -26,6 +27,8 @@ const CURSOR_EVENT_RING_CAP: usize = crate::allcaps::input::HID_CURSOR_EVENT_RIN
 pub const HID_CURSOR_EVENT_FLAG_DEVICE_LOST: u32 = 1 << 31;
 /// A station-owned software-cursor visual, without input-device enrollment.
 pub(crate) const HID_CURSOR_EVENT_FLAG_VISUAL_ONLY: u32 = 1 << 19;
+/// Retire only a persona's cursor presentation; its physical device is alive.
+pub(crate) const HID_CURSOR_EVENT_FLAG_POINTER_GROUP_RETIRED: u32 = 1 << 18;
 
 const ZERO_CURSOR_EVENT: TrueosHidCursorEvent = TrueosHidCursorEvent {
     t_ms: 0,
@@ -99,6 +102,8 @@ impl HidRuntime {
 }
 
 static HID_RUNTIMES: Mutex<Vec<HidRuntime>> = Mutex::new(Vec::new());
+static POINTER_GROUPS: Mutex<pointer_group::GroupState> =
+    Mutex::new(pointer_group::GroupState::new());
 static CURSOR_EVENT_RING: Mutex<CursorEventRing> = Mutex::new(CursorEventRing::new());
 static CURSOR_EVENT_POP_SEQ: Mutex<u64> = Mutex::new(0);
 static CURSOR_EVENT_READY: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
@@ -192,6 +197,158 @@ fn push_cursor_event(event: TrueosHidCursorEvent) {
     ring.write_seq = ring.write_seq.wrapping_add(1);
     let idx = ((ring.write_seq - 1) as usize) % CURSOR_EVENT_RING_CAP;
     ring.buf[idx] = event;
+}
+
+fn physical_pointer_bindings(
+    source_seed: Option<(pointer_group::Identity, f64, f64)>,
+) -> heapless::Vec<pointer_group::Binding, 64> {
+    let mut bindings = heapless::Vec::new();
+    for mouse in hut::mice_snapshot() {
+        // UDP reports pass through the boot-mouse decoder before their HUT
+        // record is reclassified as virtual. Exclude that namespace here too.
+        if mouse.controller_id == HID_UDP_CONTROLLER_ID
+            || mouse.source_kind != hut::HidSourceKind::Human
+            || mouse.virtual_device
+        {
+            continue;
+        }
+        let Some((combo_id, canonical)) =
+            hut::pointer_combo_binding(mouse.controller_id, mouse.slot_id, mouse.ep_target, false)
+        else {
+            continue;
+        };
+        // Absolute tablet coordinates keep their existing path. This group
+        // integrates only physical relative mice and decoded trackpads.
+        if canonical.kind != hut::HidDeviceKind::Mouse {
+            continue;
+        }
+        let source = pointer_group::Identity {
+            controller_id: mouse.controller_id,
+            slot_id: mouse.slot_id,
+            ep_target: mouse.ep_target,
+            hid_kind: HID_KIND_MOUSE,
+        };
+        let (seed_x, seed_y) = source_seed
+            .filter(|(identity, _, _)| *identity == source)
+            .map(|(_, x, y)| (x, y))
+            .unwrap_or((mouse.x, mouse.y));
+        // HUT admits at most 32 mice, below this fixed inventory capacity.
+        let _ = bindings.push(pointer_group::Binding {
+            source,
+            combo_id,
+            canonical: pointer_group::Identity {
+                controller_id: canonical.controller_id,
+                slot_id: canonical.slot_id,
+                ep_target: canonical.ep_target,
+                hid_kind: HID_KIND_MOUSE,
+            },
+            buttons: mouse.buttons_down,
+            seed_x,
+            seed_y,
+        });
+    }
+    bindings
+}
+
+fn sync_pointer_group_snapshot(snapshot: pointer_group::Snapshot) {
+    let source = snapshot.canonical;
+    crate::r::cursor::upsert_snapshot(
+        source.controller_id,
+        source.slot_id,
+        source.ep_target,
+        source.hid_kind,
+        snapshot.x,
+        snapshot.y,
+        snapshot.buttons,
+    );
+}
+
+fn publish_pointer_changes(
+    changes: pointer_group::Changes,
+    active_event: Option<TrueosHidCursorEvent>,
+    t_ms: u32,
+) -> usize {
+    let mut published = 0;
+    // Retire before a split/reassignment can reuse the former canonical ID.
+    // This never signals physical keyboard loss on a composite USB device.
+    for source in changes.retired.into_iter().flatten() {
+        push_cursor_event(TrueosHidCursorEvent {
+            t_ms,
+            controller_id: source.controller_id,
+            slot_id: source.slot_id,
+            ep_target: source.ep_target,
+            hid_kind: source.hid_kind,
+            flags: HID_CURSOR_EVENT_FLAG_POINTER_GROUP_RETIRED,
+            ..ZERO_CURSOR_EVENT
+        });
+        published += 1;
+    }
+    for update in changes.updates.into_iter().flatten() {
+        let snapshot = update.snapshot;
+        let source = snapshot.canonical;
+        let mut event = if changes.active_combo == Some(snapshot.combo_id) {
+            active_event.unwrap_or(ZERO_CURSOR_EVENT)
+        } else {
+            ZERO_CURSOR_EVENT
+        };
+        event.t_ms = t_ms;
+        event.seq = snapshot.seq;
+        event.controller_id = source.controller_id;
+        event.slot_id = source.slot_id;
+        event.ep_target = source.ep_target;
+        event.hid_kind = source.hid_kind;
+        event.x = snapshot.x;
+        event.y = snapshot.y;
+        event.buttons_down = snapshot.buttons;
+        event.flags &= !(1 << 2);
+        if update.moved {
+            event.flags |= 1 << 0;
+        }
+        if update.buttons_changed {
+            event.flags |= 1 << 2;
+        }
+        sync_pointer_group_snapshot(snapshot);
+        push_cursor_event(event);
+        published += 1;
+    }
+    published
+}
+
+fn push_mouse_cursor_event(
+    event: TrueosHidCursorEvent,
+    dx: i32,
+    dy: i32,
+    previous_x: f64,
+    previous_y: f64,
+) {
+    if event.controller_id == HID_UDP_CONTROLLER_ID {
+        push_cursor_event(event);
+        return;
+    }
+    let source = pointer_group::Identity {
+        controller_id: event.controller_id,
+        slot_id: event.slot_id,
+        ep_target: event.ep_target,
+        hid_kind: event.hid_kind,
+    };
+    let bindings = physical_pointer_bindings(Some((source, previous_x, previous_y)));
+    let changes = POINTER_GROUPS.lock().apply(
+        bindings.as_slice(),
+        Some(pointer_group::Motion {
+            source,
+            dx: f64::from(dx) * HID_MOUSE_NORM_PER_DELTA,
+            dy: f64::from(dy) * HID_MOUSE_NORM_PER_DELTA,
+        }),
+    );
+    if let Some(changes) = changes {
+        let grouped = changes.active_combo.is_some();
+        publish_pointer_changes(changes, Some(event), event.t_ms);
+        if grouped {
+            return;
+        }
+    }
+    // AI/virtual and unbound inputs retain their own cursor identity.
+    push_cursor_event(event);
 }
 
 /// Wake UI4 after a cursor report and its HUT/snapshot state are coherent.
@@ -595,19 +752,28 @@ pub(crate) fn remove_hid_slot(controller_id: u32, slot_id: u32) {
         .iter()
         .filter(|runtime| runtime.controller_id == controller_id && runtime.slot_id == slot_id)
         .count();
-    let cursor_runtime_count = runtimes
-        .iter()
-        .filter(|runtime| {
-            runtime.controller_id == controller_id
-                && runtime.slot_id == slot_id
-                && runtime.hid_kind != HID_KIND_KEYBOARD
-        })
-        .count();
+    let ungrouped_cursor_count = {
+        let groups = POINTER_GROUPS.lock();
+        runtimes
+            .iter()
+            .filter(|runtime| {
+                runtime.controller_id == controller_id
+                    && runtime.slot_id == slot_id
+                    && runtime.hid_kind != HID_KIND_KEYBOARD
+                    && !groups.contains(pointer_group::Identity {
+                        controller_id,
+                        slot_id,
+                        ep_target: runtime.ep_target,
+                        hid_kind: runtime.hid_kind,
+                    })
+            })
+            .count()
+    };
     runtimes
         .retain(|runtime| !(runtime.controller_id == controller_id && runtime.slot_id == slot_id));
     drop(runtimes);
 
-    let cursor_lost_event = (cursor_runtime_count != 0).then_some(TrueosHidCursorEvent {
+    let cursor_lost_event = (ungrouped_cursor_count != 0).then_some(TrueosHidCursorEvent {
         t_ms: now_ms_u32(),
         seq: 0,
         controller_id,
@@ -628,8 +794,17 @@ pub(crate) fn remove_hid_slot(controller_id: u32, slot_id: u32) {
     let hut_removed = self::hut::remove_slot(controller_id, slot_id);
     let cursors_removed = crate::r::cursor::remove_snapshots(controller_id, slot_id);
     let keyboard_loss_signals = crate::r::keyboard::signal_device_lost(controller_id, slot_id);
+    // HUT has promoted any surviving member already. Keep that persona's
+    // position and union of buttons while retiring only vanished groups.
+    let bindings = physical_pointer_bindings(None);
+    let changes = POINTER_GROUPS.lock().apply(bindings.as_slice(), None);
+    let group_signals = changes
+        .map(|changes| publish_pointer_changes(changes, None, now_ms_u32()))
+        .unwrap_or(0);
     if let Some(event) = cursor_lost_event {
         push_cursor_event(event);
+    }
+    if cursor_lost_event.is_some() || group_signals != 0 {
         notify_cursor_event_ready();
     }
     crate::log_info!(target: "usb";
@@ -637,7 +812,7 @@ pub(crate) fn remove_hid_slot(controller_id: u32, slot_id: u32) {
         controller_id,
         slot_id,
         runtime_count,
-        usize::from(cursor_runtime_count != 0),
+        usize::from(cursor_lost_event.is_some()) + group_signals,
         keyboard_loss_signals,
         legacy_events,
         cursors_removed,
@@ -861,7 +1036,7 @@ pub unsafe extern "C" fn trueos_cabi_hid_hut_read_keyboards(
     crate::r::io::input_cabi::read_keyboard_snapshot_for_caller(out_slice) as u32
 }
 
-/// Rebase relative motion for exactly one HID cursor without a button event.
+/// Rebase a relative cursor and its shared persona without a button event.
 pub(crate) fn center_cursor(controller_id: u32, slot_id: u32, ep_target: u32) {
     let mut runtimes = HID_RUNTIMES.lock();
     if let Some(runtime) = runtimes.iter_mut().find(|runtime| {
@@ -872,5 +1047,14 @@ pub(crate) fn center_cursor(controller_id: u32, slot_id: u32, ep_target: u32) {
         runtime.mouse_x = 0.5;
         runtime.mouse_y = 0.5;
         sync_runtime_cursor_snapshot(runtime);
+        let snapshot = POINTER_GROUPS.lock().center(pointer_group::Identity {
+            controller_id,
+            slot_id,
+            ep_target,
+            hid_kind: runtime.hid_kind,
+        });
+        if let Some(snapshot) = snapshot {
+            sync_pointer_group_snapshot(snapshot);
+        }
     }
 }

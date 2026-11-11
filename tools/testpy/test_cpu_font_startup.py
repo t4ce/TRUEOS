@@ -49,9 +49,13 @@ mod ui4 {
  thread_local! {
   pub static OUTPUT:std::cell::Cell<Option<(u32,u32)>>=const {std::cell::Cell::new(Some((1920,1080)))};
   pub static PHYSICAL:std::cell::Cell<Option<(u32,u32)>>=const {std::cell::Cell::new(None)};
+  pub static PHYSICAL_REQUESTS:std::cell::RefCell<Vec<(u32,u32,u32)>>=const {std::cell::RefCell::new(Vec::new())};
  }
  pub fn output_dimensions()->Option<(u32,u32)> {OUTPUT.with(std::cell::Cell::get)}
- pub fn physical_extent_pixels_fraction(_:u32,_:u32,_:u32)->Option<(u32,u32)> {PHYSICAL.with(std::cell::Cell::get)}
+ pub fn physical_extent_pixels_fraction(width:u32,height:u32,denominator:u32)->Option<(u32,u32)> {
+  PHYSICAL_REQUESTS.with(|requests|requests.borrow_mut().push((width,height,denominator)));
+  PHYSICAL.with(std::cell::Cell::get)
+ }
 }
 static GPU_AVAILABLE:AtomicBool=AtomicBool::new(false);
 static WARM_AVAILABLE:AtomicBool=AtomicBool::new(true);
@@ -138,7 +142,9 @@ mod microfont {pub const FWIDTH:usize=6;pub const FHEIGHT:usize=11;}
 '''
     font_source = (ROOT / FONT).read_text()
     source += constant(FONT, "DEFAULT_UI4_FONT_SCALE") + "\n"
-    for name in ("cell_extent", "Font", "cpu_bitmap_fallback_enabled", "effective_face",
+    source += constant(FONT, "ATLAS_EM_HALF_MM") + "\n"
+    source += constant(FONT, "LAPTOP_SHELL_EM_HALF_MM") + "\n"
+    for name in ("cell_extent", "cell_extent_for_em", "Font", "cpu_bitmap_fallback_enabled", "effective_face",
                  "native_font_first_bringup_enabled", "native_boot_preflight", "prepare_once"):
         source += item(FONT, name) + "\n"
     source += "static FONT:spin::Once<Font>=spin::Once::new();\n"
@@ -203,10 +209,14 @@ mod microfont {pub const FWIDTH:usize=6;pub const FHEIGHT:usize=11;}
  }
  #[test] fn tgl_successful_preflight_runs_once_before_atlas_and_publication() {
   enable_tgl();native_boot_preflight().unwrap();native_boot_preflight().unwrap();
+  crate::ui4::PHYSICAL.with(|p|p.set(Some((999,94))));
   assert_eq!(crate::PROBE_CALLS.load(Ordering::Relaxed),1);
   assert!(!font_published());assert_eq!(atlas_calls(),0);
   prepare_once().unwrap();prepare_once().unwrap();
   assert!(font_published());assert_eq!(atlas_calls(),1);
+  assert_eq!(NATIVE_HEIGHT.load(Ordering::Relaxed),94);
+  assert_eq!(crate::ui4::PHYSICAL_REQUESTS.with(|requests|requests.borrow().clone()),
+      [(30,30,4),(16,16,4)],"one 7.5-mm atlas; separate 4-mm presentation cells");
   assert_eq!(crate::PROBE_CALLS.load(Ordering::Relaxed),1);
   assert_eq!(*crate::STARTUP_EVENTS.lock().unwrap(),["preflight","atlas"]);
  }

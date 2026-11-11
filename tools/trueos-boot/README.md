@@ -258,11 +258,14 @@ the general millimetre APIs still require measured monitor dimensions.
 
 ## Hardware diagnostics
 
-The loader prints milestones to the GOP framebuffer and COM1, including the
-boot source, file downloads, kernel image size, discovered logical CPU count,
-firmware exit, successfully started CPUs, and entry into the kernel. P cores,
-E cores and SMT threads are enumerated through ACPI MADT and identified by
-their APIC IDs.
+The GOP framebuffer shows a large centered `Boot-Loading TrueOS §` title and
+one smaller centered stage beneath it: loading the kernel, loading firmware
+modules, preparing boot responses, starting secondary CPU threads (when
+available), and entering the kernel. A boot stop displays its reason there.
+Detailed diagnostics go to COM1, including the boot source, file downloads,
+kernel image size, discovered logical CPU count, firmware exit, and individual
+CPU startup results. P cores, E cores and SMT threads are enumerated through
+ACPI MADT and identified by their APIC IDs.
 
 The loader also retains a bounded transcript as a boot module. The kernel
 replays it through LogOs between `native-loader-log: begin` and `end`, including
