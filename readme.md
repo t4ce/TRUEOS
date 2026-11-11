@@ -12,7 +12,7 @@ TRUEOS is a Rust kernel with a native desktop, a browser, an editor, and an agen
 The agent is **Codex CLI**: OpenAI's official Rust CLI, compiled with `rustc` for TRUEOS and running natively on the machine.
 Codex is an on-demand Blueprint, downloaded separately from the ~19 MB base bundle. Its current package is **about 80.5 MB**. Anyone can install it through AppDB, using the same catalog and package workflow as any other app; AppDB has no special distribution path for Codex.
 Sign in with your Codex account; sign-in pages open in Hull. Your account's usage limits still apply.
-**Meet Lilly**, the animated face of Spirit on your desktop. She shows when the agent is working, waiting for you, or ready for review.
+**Meet Lilly**, the animated face of Spirit on your desktop. She shows when the agent is working or waiting for your next decision or prompt. Subagent indicators automatically use each agent's suggested name, so you can visually keep track of their states.
 
 <p align="center"><img src="tools/aiupsell/assets/lilly.png" width="144" alt="Lilly, the animated face of Spirit on TRUEOS"></p>
 
