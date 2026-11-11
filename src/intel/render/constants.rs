@@ -103,6 +103,10 @@ pub(crate) const FONT_STAMP_DEFAULT_NATIVE_SCALE: u32 = 5;
 const FONT_STAMP_BASE_SIZE: usize = 64;
 pub(crate) const RESIDENT_SCENE_TARGET_WIDTH: usize = 2560;
 pub(crate) const RESIDENT_SCENE_TARGET_HEIGHT: usize = 1440;
+// Direct UI4 targets have independent aliases and depth storage. Keep the
+// historical scratch/readback and MSAA reservations at their existing extent.
+pub(crate) const RESIDENT_SCENE_DIRECT_TARGET_WIDTH: usize = 3840;
+pub(crate) const RESIDENT_SCENE_DIRECT_TARGET_HEIGHT: usize = 2160;
 const WARM_STREAMOUT_BYTES: usize =
     RESIDENT_SCENE_TARGET_WIDTH * RESIDENT_SCENE_TARGET_HEIGHT * core::mem::size_of::<u32>();
 // The resident-scene hidden-surface path uses one D32_FLOAT surface. Gen12 depth
@@ -186,12 +190,26 @@ const GPU_VA_RESIDENT_UI4_FRAME_STRIDE: u64 = 0x0100_0000;
 pub(crate) const RESIDENT_UI4_DIRECT_MAPPING_COUNT: usize = 30;
 const GPU_VA_RESIDENT_UI4_FRAME_LIMIT: u64 = GPU_VA_RESIDENT_UI4_FRAME_BASE
     + RESIDENT_UI4_DIRECT_MAPPING_COUNT as u64 * GPU_VA_RESIDENT_UI4_FRAME_STRIDE;
+// Larger native frames use the same thirty lifetime slots in a separate bank;
+// a small frame keeps its historical address even when large frames coexist.
+const GPU_VA_RESIDENT_UI4_LARGE_FRAME_BASE: u64 = 0x9000_0000;
+const GPU_VA_RESIDENT_UI4_LARGE_FRAME_STRIDE: u64 = 0x0200_0000;
+const GPU_VA_RESIDENT_UI4_LARGE_FRAME_LIMIT: u64 = GPU_VA_RESIDENT_UI4_LARGE_FRAME_BASE
+    + RESIDENT_UI4_DIRECT_MAPPING_COUNT as u64 * GPU_VA_RESIDENT_UI4_LARGE_FRAME_STRIDE;
+// D32's 128-byte pitch and 32-row alignment require 0x1FE0000 bytes at 4K.
+// This lazy cache has no HiZ tail and never displaces legacy depth mappings.
+const GPU_VA_RESIDENT_SCENE_LARGE_DEPTH_BASE: u64 = 0xCC00_0000;
+const RESIDENT_SCENE_LARGE_DEPTH_BYTES: usize = 32 * 1024 * 1024;
 const _: () = {
     assert!(GPU_VA_RESIDENT_UI4_FRAME_BASE == 0x6000_0000);
     assert!(GPU_VA_RESIDENT_UI4_FRAME_LIMIT == 0x7E00_0000);
     assert!(GPU_VA_RESIDENT_UI4_FRAME_LIMIT <= 0x8000_0000);
     assert!(GPU_VA_RESIDENT_UI4_FRAME_BASE % GPU_VA_RESIDENT_UI4_FRAME_STRIDE == 0);
     assert!(WARM_STREAMOUT_BYTES as u64 <= GPU_VA_RESIDENT_UI4_FRAME_STRIDE);
+    assert!(GPU_VA_RESIDENT_UI4_LARGE_FRAME_LIMIT == GPU_VA_RESIDENT_SCENE_LARGE_DEPTH_BASE);
+    assert!(GPU_VA_RESIDENT_SCENE_LARGE_DEPTH_BASE + RESIDENT_SCENE_LARGE_DEPTH_BYTES as u64 <= 1u64 << 32);
+    assert!(RESIDENT_SCENE_DIRECT_TARGET_WIDTH * RESIDENT_SCENE_DIRECT_TARGET_HEIGHT * 4
+        <= GPU_VA_RESIDENT_UI4_LARGE_FRAME_STRIDE as usize);
     assert!(
         GPU_VA_RESIDENT_SCENE_STATE_BASE + RESIDENT_SCENE_STATE_BYTES as u64
             <= GPU_VA_RESIDENT_UI4_FRAME_BASE
@@ -215,6 +233,7 @@ const _: () = {
     assert!(GPU_VA_VERTEX_BASE + WARM_VERTEX_BYTES as u64 <= GPU_VA_RESIDENT_SCENE_STATE_BASE);
     assert!(GPU_VA_RESIDENT_UI4_FRAME_LIMIT <= GPU_VA_PERSISTENT_SPILL_BASE);
     assert!(GPU_VA_PERSISTENT_SPILL_BASE < GPU_VA_PERSISTENT_SPILL_LIMIT);
+    assert!(GPU_VA_PERSISTENT_SPILL_LIMIT <= GPU_VA_RESIDENT_UI4_LARGE_FRAME_BASE);
     assert!(GPU_VA_PERSISTENT_SPILL_LIMIT <= u32::MAX as u64);
 };
 static PERSISTENT_RESOURCE_GPU_VA_CURSOR: AtomicU64 =

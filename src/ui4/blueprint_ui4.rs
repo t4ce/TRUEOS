@@ -74,8 +74,33 @@ use guest_transport::{
 };
 
 const MAX_SURFACES: usize = 32;
-const MAX_FRAME_WIDTH: u32 = 2_560;
-const MAX_FRAME_HEIGHT: u32 = 1_440;
+// Historical backing limit, retained when no output has been published. Active
+// admission below also considers the output and renderer's supported storage.
+const MAX_FRAME_WIDTH: u32 = crate::intel::render::RESIDENT_SCENE_TARGET_WIDTH as u32;
+const MAX_FRAME_HEIGHT: u32 = crate::intel::render::RESIDENT_SCENE_TARGET_HEIGHT as u32;
+
+fn blueprint_frame_limits_for_output(
+    output: Option<(u32, u32)>,
+    renderer: (u32, u32),
+) -> (u32, u32) {
+    let (width, height) = output.filter(|&(w, h)| w != 0 && h != 0)
+        .unwrap_or((MAX_FRAME_WIDTH, MAX_FRAME_HEIGHT));
+    (width.min(renderer.0), height.min(renderer.1))
+}
+
+fn blueprint_frame_max_extent() -> (u32, u32) {
+    let output = OutputId::from_slot(0)
+        .and_then(super::ui4_output_capabilities)
+        .map(|caps| (caps.width, caps.height))
+        .or_else(super::output_dimensions);
+    blueprint_frame_limits_for_output(output, crate::intel::render::ui4_frame_extent_limit())
+}
+
+fn blueprint_frame_extent_admitted(width: u32, height: u32) -> bool {
+    if width == 0 || height == 0 { return false; }
+    let packed = trueos_cabi_ui4_scene_frame_max_extent_v1();
+    width <= (packed >> 32) as u32 && height <= packed as u32
+}
 const MAX_PENDING_POINTER_EVENTS: usize = 256;
 const MAX_PENDING_PAN_EVENTS: usize = 256;
 const MAX_PENDING_KEYBOARD_EVENTS: usize = 256;
@@ -760,7 +785,7 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_open(
     width: u32,
     height: u32,
 ) -> u32 {
-    if width == 0 || height == 0 || width > MAX_FRAME_WIDTH || height > MAX_FRAME_HEIGHT {
+    if !blueprint_frame_extent_admitted(width, height) {
         return 0;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
@@ -789,7 +814,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_open_immutable(
     width: u32,
     height: u32,
 ) -> u32 {
-    if width == 0 || height == 0 || width > MAX_FRAME_WIDTH || height > MAX_FRAME_HEIGHT {
+    if !blueprint_frame_extent_admitted(width, height) {
         return 0;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
@@ -814,7 +839,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_open_streaming(
     width: u32,
     height: u32,
 ) -> u32 {
-    if width == 0 || height == 0 || width > MAX_FRAME_WIDTH || height > MAX_FRAME_HEIGHT {
+    if !blueprint_frame_extent_admitted(width, height) {
         return 0;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
@@ -841,10 +866,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_open_layered_v1(
     height: u32,
     background_hz: u32,
 ) -> u32 {
-    if width == 0
-        || height == 0
-        || width > MAX_FRAME_WIDTH
-        || height > MAX_FRAME_HEIGHT
+    if !blueprint_frame_extent_admitted(width, height)
         || background_hz == 0
         || background_hz > UI4_VISUAL_SOFT_CAP_HZ
     {
@@ -913,10 +935,7 @@ pub extern "C" fn trueos_cabi_ui4_winit_frame_open_scaled_v1(
     scene_divisor: u32,
 ) -> u32 {
     if !matches!(scene_divisor, 1 | 2 | 4)
-        || width == 0
-        || height == 0
-        || width > MAX_FRAME_WIDTH
-        || height > MAX_FRAME_HEIGHT
+        || !blueprint_frame_extent_admitted(width, height)
         || background_hz == 0
         || background_hz > UI4_VISUAL_SOFT_CAP_HZ
     {
@@ -1042,10 +1061,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_open_visual(
     height: u32,
     target_hz: u32,
 ) -> u32 {
-    if width == 0
-        || height == 0
-        || width > MAX_FRAME_WIDTH
-        || height > MAX_FRAME_HEIGHT
+    if !blueprint_frame_extent_admitted(width, height)
         || target_hz == 0
         || target_hz > UI4_VISUAL_SOFT_CAP_HZ
     {
@@ -2524,6 +2540,20 @@ pub extern "C" fn trueos_cabi_ui4_scene_output_dimensions() -> u64 {
     pack_u32_pair(width, height)
 }
 
+/// Maximum admitted Blueprint frame extent, packed as `width << 32 | height`.
+/// This describes backing storage, which can be smaller than the output.
+pub extern "C" fn trueos_cabi_ui4_scene_frame_max_extent_v1() -> u64 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, extent) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_MAX_EXTENT_V1,
+            0, 0, &[], &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK { extent } else { 0 };
+    }
+    let (width, height) = blueprint_frame_max_extent();
+    pack_u32_pair(width, height)
+}
+
 /// Convert millimetres using active output metrics; zero means unavailable.
 pub extern "C" fn trueos_cabi_ui4_scene_physical_extent_v1(width_mm: u32, height_mm: u32) -> u64 {
     if width_mm == 0 || height_mm == 0 { return 0; }
@@ -3559,7 +3589,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
     width: u32,
     height: u32,
 ) -> i32 {
-    if width == 0 || height == 0 || width > MAX_FRAME_WIDTH || height > MAX_FRAME_HEIGHT {
+    if !blueprint_frame_extent_admitted(width, height) {
         return ERROR_INVALID;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {

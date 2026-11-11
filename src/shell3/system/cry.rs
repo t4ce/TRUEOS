@@ -5,6 +5,9 @@ use core::fmt::Write;
 use qrcodegen::{QrCode, QrCodeEcc, Version};
 use spin::Mutex;
 use zeroize::Zeroizing;
+#[path = "cry_finger.rs"]
+pub(super) mod finger;
+
 const QR_QUIET_ZONE: i32 = 4;
 const QR_MAX_VERSION: Version = Version::new(10);
 const QR_BUFFER_BYTES: usize = QR_MAX_VERSION.buffer_len();

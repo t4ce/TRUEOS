@@ -159,6 +159,8 @@ enum Page {
     RamSizes,
     Field(Field),
     Details(Vec<String>),
+    Finger(Vec<String>),
+    FingerResult(Vec<String>),
     SshKeys(Vec<[u8; 32]>),
     Enrollment(Zeroizing<Vec<String>>),
     Recovery(Zeroizing<String>),
@@ -479,6 +481,7 @@ impl View {
                 "Show recovery key",
                 "Manage SSH keys",
                 "Sign out",
+                "Finger",
                 "Return",
             ],
             Page::Home => &["List disks", "Format a disk", "Create a RAM disk", "Return"],
@@ -491,8 +494,17 @@ impl View {
                 "Back",
                 "Return",
             ],
-            Page::Details(_) | Page::Recovery(_) | Page::SavedRecovery { .. } => {
-                &["Back", "Return"]
+            Page::Details(_)
+            | Page::FingerResult(_)
+            | Page::Recovery(_)
+            | Page::SavedRecovery { .. } => &["Back", "Return"],
+            Page::Finger(_) => {
+                let mut labels: Vec<String> = cry::finger::SCENARIOS
+                    .iter()
+                    .map(|scenario| String::from(scenario.label()))
+                    .collect();
+                labels.extend(["Back".into(), "Return".into()]);
+                return labels;
             }
             Page::SshKeys(_) => &["Add an SSH key", "Back", "Return"],
             Page::Field(_) | Page::Enrollment(_) => &[],
@@ -585,7 +597,7 @@ impl View {
                 ]
             }
             Page::RamSizes => alloc::vec!["Choose a size. Creates and mounts TRUEOSFS.".into()],
-            Page::Details(lines) => lines.clone(),
+            Page::Details(lines) | Page::Finger(lines) | Page::FingerResult(lines) => lines.clone(),
             Page::SshKeys(keys) => alloc::vec![
                 format!("{} authorized SSH key(s)", keys.len()),
                 "Adding or removing a key requires a fresh authenticator code.".into()
@@ -631,7 +643,12 @@ impl View {
             return;
         }
         if label == "Back" {
-            self.set_page(Page::Home);
+            let page = if matches!(&self.page, Page::FingerResult(_)) {
+                Page::Finger(cry::finger::summary())
+            } else {
+                Page::Home
+            };
+            self.set_page(page);
             return;
         }
         let scope = Self::scope(target);
@@ -674,13 +691,22 @@ impl View {
                     }
                     self.result = "Signed out.".into();
                 }
-                8 if self.draft.is_some() => {
+                8 => {
+                    self.result.clear();
+                    self.set_page(Page::Finger(cry::finger::summary()));
+                }
+                9 if self.draft.is_some() => {
                     self.draft = None;
                     self.result = "Enrollment closed.".into();
                     self.selected = 0;
                 }
                 _ => {}
             },
+            Page::Finger(_) => {
+                if let Some(scenario) = cry::finger::SCENARIOS.get(self.selected) {
+                    self.set_page(Page::FingerResult(scenario.run()));
+                }
+            }
             Page::Home => match self.selected {
                 0 | 1 => self.set_page(Page::Disks {
                     format: self.selected == 1,
@@ -914,7 +940,9 @@ impl View {
             | Page::SavedRecovery { .. }
             | Page::SshKeys(_) => 2,
             Page::Disk(_) | Page::Field(Field::FormatSure(_)) => 3,
-            Page::Details(lines) => lines.len().min(4),
+            Page::Details(lines) | Page::Finger(lines) | Page::FingerResult(lines) => {
+                lines.len().min(4)
+            }
             _ => 1,
         };
         (2 + count).min(rows.saturating_sub(3)).max(2)
@@ -940,7 +968,11 @@ impl View {
             self.problem("The 2FA session ended.");
         }
         let mut lines = Zeroizing::new(alloc::vec![String::new();rows]);
-        lines[0] = self.kind.title().into();
+        lines[0] = if matches!(&self.page, Page::Finger(_) | Page::FingerResult(_)) {
+            "CRY  Finger tests".into()
+        } else {
+            self.kind.title().into()
+        };
         let body = Zeroizing::new(self.body(target));
         for (index, line) in body.iter().take(4).enumerate() {
             if index + 2 < rows - 3 {

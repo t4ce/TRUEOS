@@ -8,11 +8,11 @@ pub(crate) struct DrawableDepth {
 }
 
 pub(crate) fn drawable_depth_bytes(width: u32, height: u32) -> Option<usize> {
-    if width == 0 || height == 0 || width as usize > RESIDENT_SCENE_TARGET_WIDTH
-        || height as usize > RESIDENT_SCENE_TARGET_HEIGHT { return None; }
-    let pitch = crate::intel::align_up((width as usize).checked_mul(4)?, 128)?;
-    let rows = crate::intel::align_up(height as usize, 32)?;
-    crate::intel::align_up(pitch.checked_mul(rows)?, 4096)
+    if !resident_scene_target_extent_supported(width as usize, height as usize, true) {
+        return None;
+    }
+    let (_, _, bytes) = resident_scene_depth_layout(width as usize, height as usize)?;
+    crate::intel::align_up(bytes, 4096)
 }
 
 pub(crate) fn create_drawable_depth(width: u32, height: u32) -> Result<DrawableDepth, &'static str> {

@@ -350,6 +350,7 @@ static SPIRIT_VFX_PENDING: Mutex<Option<SpiritVfxPending>> = Mutex::new(None);
 static SPIRIT_VFX_NEXT_TAG: AtomicU64 = AtomicU64::new(1);
 static SPIRIT_VFX_NEXT_FRAME: AtomicU32 = AtomicU32::new(0);
 static SPIRIT_VFX_FIRST_ENCODING_LOGGED: AtomicBool = AtomicBool::new(false);
+static SPIRIT_VFX_SAVED_CONTEXT_LOGS: AtomicU32 = AtomicU32::new(0);
 
 fn spirit_vfx_runtime_once() -> Option<SpiritVfxRuntime> {
     if let Some(runtime) = *SPIRIT_VFX_RUNTIME.lock() {
@@ -664,6 +665,25 @@ pub(crate) fn poll_spirit_vfx_submission(handle: SpiritVfxSubmission) -> SpiritV
         // a late GuC request may still write it. Keep ownership pinned and
         // permit only a later marker+saved-HEAD proof to retire this handle.
         return SpiritVfxCompletion::Pending;
+    }
+    if crate::intel::render::tgl_spirit_compute_contract() {
+        if let Ok(retired_index) = SPIRIT_VFX_SAVED_CONTEXT_LOGS.fetch_update(
+            Ordering::Relaxed, Ordering::Relaxed, |count| (count < 2).then_some(count + 1),
+        ) {
+            let saved_control = spirit_vfx_owned_dwords::<1>(
+                pending.submitted.state.context_virt,
+                DIRECT_RCS_CONTEXT_BYTES,
+                (DIRECT_RCS_LRC_STATE_OFFSET_DWORDS + 3) * core::mem::size_of::<u32>(),
+            ).map(|words| words[0]);
+            crate::log_important!(target: "gpgpu";
+                "intel/gpgpu: spirit-vfx saved-context tag={} frame={} retired_index={} control={:08X?} engine_restore_inhibit={:?} next_restore={} capture=owned-hwlrca-after-marker-and-saved-head writes=none\n",
+                handle.tag, pending.submitted.frame, retired_index, saved_control,
+                saved_control.map(|control| control & 1 != 0),
+                match saved_control {
+                    Some(control) if control & 1 == 0 => "enabled-observed",
+                    _ => "unproven",
+                });
+        }
     }
     *pending_slot = None;
     drop(pending_slot);

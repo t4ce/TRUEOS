@@ -2,9 +2,9 @@
 //! once and copied by either the CPU or legacy BLT. Shell3 owns layout,
 //! clipping and sink choice; every output shares the native line/quad atlas.
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use embassy_sync::signal::Signal;
-use trueos_time::{Duration, Timer};
+use trueos_time::{Duration, Instant, Timer};
 
 use super::microfont_mask_service::{OwnedAlphaAtlas, build_shell3_alpha_atlas};
 use crate::intel::{GucBcs0RgbaCopy, GucBcs0RgbaSurface, gpgpu::GpgpuOwnedRgba8Surface};
@@ -77,15 +77,106 @@ fn effective_face(_face: FontFace) -> FontFace {
     FontFace::Raster
 }
 
-/// Temporary ordering for the physical laptop bring-up: prove the native font
-/// producer before Spirit can submit its first competing RCS workload. This
-/// does not gate input, UI4 scanout, or Spirit's independent cursor task.
-pub(crate) fn native_font_first_bringup_enabled() -> bool {
+/// Temporary physical-laptop comparison: save one normal Spirit GPGPU context,
+/// build the native atlas, then exercise restoration for subsequent frames.
+pub(crate) fn laptop_context_bootstrap_enabled() -> bool {
     crate::pci::experimental_tgl_9a49_active()
 }
 
+const SPIRIT_BOOT_WAITING: u8 = 0;
+const SPIRIT_BOOT_CLAIMED: u8 = 1;
+const SPIRIT_BOOT_RETIRED: u8 = 2;
+const SPIRIT_BOOT_SKIPPED: u8 = 3;
+const SPIRIT_BOOT_FAILED: u8 = 4;
+const SPIRIT_BOOT_WAIT_MS: u64 = 2_000;
+static SPIRIT_BOOT: AtomicU8 = AtomicU8::new(SPIRIT_BOOT_WAITING);
+
+/// Claim before the real synchronous GPU admission. The font timeout may skip
+/// an unclaimed job only; accepted or ambiguous work retains this claim.
+pub(crate) fn claim_first_spirit_producer() -> Option<bool> {
+    if !laptop_context_bootstrap_enabled() { return Some(false); }
+    match SPIRIT_BOOT.compare_exchange(
+        SPIRIT_BOOT_WAITING, SPIRIT_BOOT_CLAIMED, Ordering::AcqRel, Ordering::Acquire,
+    ) {
+        Ok(_) => Some(true),
+        Err(SPIRIT_BOOT_RETIRED | SPIRIT_BOOT_SKIPPED | SPIRIT_BOOT_FAILED)
+            if FONT.get().is_some() => Some(false),
+        Err(_) => None,
+    }
+}
+
+/// Call only when GPU admission proved no submission was published.
+pub(crate) fn cancel_first_spirit_claim(claimed: bool) {
+    if claimed {
+        let _ = SPIRIT_BOOT.compare_exchange(
+            SPIRIT_BOOT_CLAIMED, SPIRIT_BOOT_WAITING, Ordering::AcqRel, Ordering::Acquire,
+        );
+    }
+}
+
+/// Called only after the normal producer fence and mailbox release validate.
+pub(crate) fn first_spirit_producer_retired() -> bool {
+    if !laptop_context_bootstrap_enabled() { return false; }
+    SPIRIT_BOOT.compare_exchange(
+        SPIRIT_BOOT_CLAIMED, SPIRIT_BOOT_RETIRED, Ordering::AcqRel, Ordering::Acquire,
+    ).is_ok()
+}
+
+pub(crate) fn spirit_font_first_required() -> bool {
+    laptop_context_bootstrap_enabled()
+        && matches!(SPIRIT_BOOT.load(Ordering::Acquire), SPIRIT_BOOT_SKIPPED | SPIRIT_BOOT_FAILED)
+}
+
+fn skip_unclaimed_spirit_bootstrap() -> bool {
+    SPIRIT_BOOT.compare_exchange(
+        SPIRIT_BOOT_WAITING, SPIRIT_BOOT_SKIPPED, Ordering::AcqRel, Ordering::Acquire,
+    ).is_ok()
+}
+
+async fn await_spirit_bootstrap_before_font() {
+    if !laptop_context_bootstrap_enabled() { return; }
+    let mut ready_since = None;
+    loop {
+        match SPIRIT_BOOT.load(Ordering::Acquire) {
+            SPIRIT_BOOT_RETIRED | SPIRIT_BOOT_SKIPPED | SPIRIT_BOOT_FAILED => return,
+            SPIRIT_BOOT_CLAIMED => {
+                // Quarantine is failure evidence, never retirement. The job
+                // and producer lease remain owned by their existing lane.
+                if crate::intel::gpgpu::execution_rcs_context_is_quarantined()
+                    && SPIRIT_BOOT.compare_exchange(
+                        SPIRIT_BOOT_CLAIMED, SPIRIT_BOOT_FAILED,
+                        Ordering::AcqRel, Ordering::Acquire,
+                    ).is_ok()
+                {
+                    crate::log_important!(target: "gfx";
+                        "trueos-spirit: context-bootstrap result=failed proof=execution-lane-quarantined first_retired=0 next=native-font-attempt ownership=existing-pending-job-retained\n");
+                    return;
+                }
+            }
+            _ => {
+                // Early font demand must not spend the comparison window
+                // before the normal GPU and Render0 prerequisites exist.
+                if crate::intel::guc_submission_ready() && crate::intel::render::warm_state().is_some() {
+                    let since = *ready_since.get_or_insert_with(Instant::now);
+                    if Instant::now().saturating_duration_since(since).as_millis() >= SPIRIT_BOOT_WAIT_MS
+                        && skip_unclaimed_spirit_bootstrap()
+                    {
+                        crate::log_important!(target: "gfx";
+                            "trueos-spirit: context-bootstrap result=skipped reason=no-first-producer-within-ready-window wait_ms={} first_retired=0 next=native-font-before-spirit\n",
+                            SPIRIT_BOOT_WAIT_MS);
+                        return;
+                    }
+                } else {
+                    ready_since = None;
+                }
+            }
+        }
+        Timer::after(Duration::from_millis(10)).await;
+    }
+}
+
 fn native_boot_preflight() -> Result<(), &'static str> {
-    if !native_font_first_bringup_enabled() { return Ok(()); }
+    if !laptop_context_bootstrap_enabled() { return Ok(()); }
     // The warm task already waits for these conditions. Paper can also demand
     // a glyph, so do not turn early demand into a cached failed GPU attempt.
     if !crate::intel::guc_submission_ready() || crate::intel::render::warm_state().is_none() {
@@ -93,7 +184,7 @@ fn native_boot_preflight() -> Result<(), &'static str> {
     }
     *NATIVE_BOOT_PREFLIGHT.call_once(|| {
         crate::log_important!(target: "microfont-mask";
-            "microfont: native-r8-preflight begin target=16x16 pixels=256 scope=font-first-laptop-bringup spirit_gpu=held fallback=none\n");
+            "microfont: native-r8-preflight begin target=16x16 pixels=256 scope=laptop-context-bootstrap spirit_gpu=held fallback=none\n");
         match crate::intel::render::probe_native_microfont_r8() {
             Ok(proof) => {
                 let passed = proof.passed();
@@ -146,6 +237,7 @@ struct CellCache {
 /// Call before acquiring a writable frame/cache lease. Concurrent shells share
 /// the same initialization; font production runs on a blocking service lane.
 pub(crate) async fn prepare() -> Result<(), &'static str> {
+    await_spirit_bootstrap_before_font().await;
     loop {
         if FONT.get().is_some() { return Ok(()); }
         if PREPARING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {

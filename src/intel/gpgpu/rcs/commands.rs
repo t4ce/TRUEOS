@@ -450,7 +450,7 @@ pub(crate) fn edit_life_rcs_context_is_quarantined() -> bool {
     EDIT_LIFE_RCS_CONTEXT_QUARANTINED.load(Ordering::Acquire)
 }
 
-fn execution_rcs_context_is_quarantined() -> bool {
+pub(crate) fn execution_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&EXECUTION_RCS_CONTEXT_QUARANTINED)
 }
 

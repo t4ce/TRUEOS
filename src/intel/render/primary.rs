@@ -699,17 +699,55 @@ struct ResidentSceneDirectUi4Mapping {
     gpu: u64,
 }
 
-fn resident_scene_direct_ui4_gpu_for_slot(slot: usize) -> Option<u64> {
-    if slot >= RESIDENT_UI4_DIRECT_MAPPING_COUNT {
+/// The larger backing contract is selected only for the adopted native panel.
+/// UI4 further limits this storage ceiling to its active output dimensions.
+pub(crate) fn ui4_frame_extent_limit() -> (u32, u32) {
+    if crate::intel::tgl_native_panel::native_scanout_ready() {
+        (RESIDENT_SCENE_DIRECT_TARGET_WIDTH as u32, RESIDENT_SCENE_DIRECT_TARGET_HEIGHT as u32)
+    } else {
+        (RESIDENT_SCENE_TARGET_WIDTH as u32, RESIDENT_SCENE_TARGET_HEIGHT as u32)
+    }
+}
+
+fn resident_scene_target_extent_supported(width: usize, height: usize, direct: bool) -> bool {
+    let (max_width, max_height) = if direct {
+        ui4_frame_extent_limit()
+    } else {
+        (RESIDENT_SCENE_TARGET_WIDTH as u32, RESIDENT_SCENE_TARGET_HEIGHT as u32)
+    };
+    width != 0 && height != 0 && width <= max_width as usize && height <= max_height as usize
+}
+
+fn resident_scene_legacy_extent(width: usize, height: usize) -> bool {
+    width <= RESIDENT_SCENE_TARGET_WIDTH && height <= RESIDENT_SCENE_TARGET_HEIGHT
+}
+
+fn resident_scene_depth_layout(width: usize, height: usize) -> Option<(usize, usize, usize)> {
+    if width == 0 || height == 0 || width > RESIDENT_SCENE_DIRECT_TARGET_WIDTH
+        || height > RESIDENT_SCENE_DIRECT_TARGET_HEIGHT
+    {
         return None;
     }
-    let gpu = GPU_VA_RESIDENT_UI4_FRAME_BASE.checked_add(
-        u64::try_from(slot)
-            .ok()?
-            .checked_mul(GPU_VA_RESIDENT_UI4_FRAME_STRIDE)?,
-    )?;
-    let end = gpu.checked_add(GPU_VA_RESIDENT_UI4_FRAME_STRIDE)?;
-    (end <= GPU_VA_RESIDENT_UI4_FRAME_LIMIT).then_some(gpu)
+    let pitch = crate::intel::align_up(width.checked_mul(core::mem::size_of::<f32>())?,
+        RESIDENT_SCENE_DEPTH_TILE_WIDTH_BYTES)?;
+    let rows = crate::intel::align_up(height, RESIDENT_SCENE_DEPTH_TILE_HEIGHT_ROWS)?;
+    let bytes = pitch.checked_mul(rows)?;
+    (bytes <= RESIDENT_SCENE_LARGE_DEPTH_BYTES).then_some((pitch, rows, bytes))
+}
+
+fn resident_scene_direct_ui4_gpu_for_slot(slot: usize, bytes: usize) -> Option<u64> {
+    if slot >= RESIDENT_UI4_DIRECT_MAPPING_COUNT || bytes == 0 {
+        return None;
+    }
+    let (base, stride, limit) = if bytes as u64 <= GPU_VA_RESIDENT_UI4_FRAME_STRIDE {
+        (GPU_VA_RESIDENT_UI4_FRAME_BASE, GPU_VA_RESIDENT_UI4_FRAME_STRIDE, GPU_VA_RESIDENT_UI4_FRAME_LIMIT)
+    } else if bytes as u64 <= GPU_VA_RESIDENT_UI4_LARGE_FRAME_STRIDE {
+        (GPU_VA_RESIDENT_UI4_LARGE_FRAME_BASE, GPU_VA_RESIDENT_UI4_LARGE_FRAME_STRIDE, GPU_VA_RESIDENT_UI4_LARGE_FRAME_LIMIT)
+    } else {
+        return None;
+    };
+    let gpu = base.checked_add(u64::try_from(slot).ok()?.checked_mul(stride)?)?;
+    (gpu.checked_add(stride)? <= limit).then_some(gpu)
 }
 
 fn resident_scene_direct_ui4_mapping_slot(
@@ -728,6 +766,7 @@ fn resident_scene_direct_ui4_vacant_slot(
 }
 
 static RESIDENT_SCENE_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
+static RESIDENT_SCENE_LARGE_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_MSAA_COLOR: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_MSAA_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_DIRECT_UI4_TARGETS: Mutex<
@@ -745,7 +784,9 @@ struct ResidentSceneMsaaColorTarget {
 fn prepare_resident_scene_direct_ui4_target(
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> Result<u64, &'static str> {
-    if !destination.is_valid() || destination.bytes as u64 > GPU_VA_RESIDENT_UI4_FRAME_STRIDE {
+    if !destination.is_valid()
+        || resident_scene_direct_ui4_gpu_for_slot(0, destination.bytes).is_none()
+    {
         return Err("resident-scene-direct-ui4-shape");
     }
     let mut mappings = RESIDENT_SCENE_DIRECT_UI4_TARGETS.lock();
@@ -761,7 +802,7 @@ fn prepare_resident_scene_direct_ui4_target(
         return Err("resident-scene-direct-ui4-buffer-limit");
     };
     let gpu =
-        resident_scene_direct_ui4_gpu_for_slot(slot).ok_or("resident-scene-direct-ui4-address")?;
+        resident_scene_direct_ui4_gpu_for_slot(slot, destination.bytes).ok_or("resident-scene-direct-ui4-address")?;
     if !map_render_ppgtt_scanout_range(gpu, destination.phys, destination.bytes) {
         return Err("resident-scene-direct-ui4-map");
     }
@@ -785,11 +826,17 @@ fn prepare_resident_scene_direct_ui4_target(
     Ok(gpu)
 }
 
-/// Release one Render0-only alias after UI4 has proved that the owning frame
+/// Release every renderer alias after UI4 has proved that the owning frame
 /// has no producer or presentation readers. The physical surface remains live
 /// until this succeeds, so a failed PPGTT unmap cannot leave an alias pointing
 /// at subsequently recycled DMA storage.
 pub(crate) fn release_resident_scene_direct_ui4_target(phys: u64, bytes: usize) -> bool {
+    // Render0's table lock must be dropped before touching carrier GPUVMs.
+    release_render0_resident_scene_direct_ui4_target(phys, bytes)
+        && release_picasso_ui4_target_aliases(phys, bytes)
+}
+
+fn release_render0_resident_scene_direct_ui4_target(phys: u64, bytes: usize) -> bool {
     let mut mappings = RESIDENT_SCENE_DIRECT_UI4_TARGETS.lock();
     let Some(slot) = resident_scene_direct_ui4_mapping_slot(&mappings, phys) else {
         return true;
@@ -845,7 +892,7 @@ mod resident_scene_direct_ui4_mapping_tests {
     fn render0_alias_arena_has_thirty_unique_full_slots() {
         assert_eq!(RESIDENT_UI4_DIRECT_MAPPING_COUNT, 30);
         for slot in 0..RESIDENT_UI4_DIRECT_MAPPING_COUNT {
-            let gpu = resident_scene_direct_ui4_gpu_for_slot(slot).unwrap();
+            let gpu = resident_scene_direct_ui4_gpu_for_slot(slot, 0x00E1_0000).unwrap();
             assert_eq!(
                 gpu,
                 GPU_VA_RESIDENT_UI4_FRAME_BASE + slot as u64 * GPU_VA_RESIDENT_UI4_FRAME_STRIDE
@@ -853,13 +900,13 @@ mod resident_scene_direct_ui4_mapping_tests {
             assert!(gpu + GPU_VA_RESIDENT_UI4_FRAME_STRIDE <= GPU_VA_RESIDENT_UI4_FRAME_LIMIT);
             if slot != 0 {
                 assert_eq!(
-                    gpu - resident_scene_direct_ui4_gpu_for_slot(slot - 1).unwrap(),
+                    gpu - resident_scene_direct_ui4_gpu_for_slot(slot - 1, 0x00E1_0000).unwrap(),
                     GPU_VA_RESIDENT_UI4_FRAME_STRIDE
                 );
             }
         }
         assert!(
-            resident_scene_direct_ui4_gpu_for_slot(RESIDENT_UI4_DIRECT_MAPPING_COUNT).is_none()
+            resident_scene_direct_ui4_gpu_for_slot(RESIDENT_UI4_DIRECT_MAPPING_COUNT, 0x00E1_0000).is_none()
         );
     }
 
@@ -870,7 +917,7 @@ mod resident_scene_direct_ui4_mapping_tests {
             *entry = Some(ResidentSceneDirectUi4Mapping {
                 phys: 0x1000_0000 + slot as u64 * 0x0100_0000,
                 bytes: 0x00E1_0000,
-                gpu: resident_scene_direct_ui4_gpu_for_slot(slot).unwrap(),
+                gpu: resident_scene_direct_ui4_gpu_for_slot(slot, 0x00E1_0000).unwrap(),
             });
         }
         assert!(resident_scene_direct_ui4_vacant_slot(&mappings).is_none());
@@ -889,7 +936,7 @@ mod resident_scene_direct_ui4_mapping_tests {
         mappings[retired_slot] = Some(ResidentSceneDirectUi4Mapping {
             phys: replacement_phys,
             bytes: retired.bytes,
-            gpu: resident_scene_direct_ui4_gpu_for_slot(retired_slot).unwrap(),
+            gpu: resident_scene_direct_ui4_gpu_for_slot(retired_slot, retired.bytes).unwrap(),
         });
         assert_eq!(
             resident_scene_direct_ui4_mapping_slot(&mappings, replacement_phys),
@@ -1079,58 +1126,48 @@ fn prepare_resident_scene_depth(
     if !device_is_gfx12(device_id) {
         return Err("resident-scene-depth-device");
     }
-    let row_bytes = target_width
-        .checked_mul(core::mem::size_of::<f32>())
-        .ok_or("resident-scene-depth-shape")?;
-    let pitch_bytes = crate::intel::align_up(row_bytes, RESIDENT_SCENE_DEPTH_TILE_WIDTH_BYTES)
-        .ok_or("resident-scene-depth-shape")?;
-    let aligned_height =
-        crate::intel::align_up(target_height, RESIDENT_SCENE_DEPTH_TILE_HEIGHT_ROWS)
-            .ok_or("resident-scene-depth-shape")?;
-    let clear_bytes = pitch_bytes
-        .checked_mul(aligned_height)
-        .ok_or("resident-scene-depth-shape")?;
-    if target_width == 0
-        || target_height == 0
-        || clear_bytes > RESIDENT_SCENE_DEPTH_MAIN_BYTES
-        || !clear_bytes.is_multiple_of(core::mem::size_of::<u32>())
-    {
-        return Err("resident-scene-depth-shape");
-    }
+    let (pitch_bytes, aligned_height, clear_bytes) =
+        resident_scene_depth_layout(target_width, target_height).ok_or("resident-scene-depth-shape")?;
+    let large = !resident_scene_legacy_extent(target_width, target_height);
+    let (cache, gpu_addr, storage_bytes) = if large {
+        (&RESIDENT_SCENE_LARGE_DEPTH, GPU_VA_RESIDENT_SCENE_LARGE_DEPTH_BASE, RESIDENT_SCENE_LARGE_DEPTH_BYTES)
+    } else {
+        (&RESIDENT_SCENE_DEPTH, GPU_VA_RESIDENT_SCENE_DEPTH_BASE, RESIDENT_SCENE_DEPTH_BYTES)
+    };
 
     let allocation = {
-        let mut resident = RESIDENT_SCENE_DEPTH.lock();
+        let mut resident = cache.lock();
         if let Some(allocation) = *resident {
             allocation
         } else {
             let Some((storage_phys, storage_virt)) =
-                crate::dma::alloc_ppgtt(RESIDENT_SCENE_DEPTH_BYTES, crate::intel::WARM_ALIGN)
+                crate::dma::alloc_ppgtt(storage_bytes, crate::intel::WARM_ALIGN)
             else {
                 return Err("resident-scene-depth-alloc");
             };
             if !map_render_ppgtt_range(
-                GPU_VA_RESIDENT_SCENE_DEPTH_BASE,
+                gpu_addr,
                 storage_phys,
-                RESIDENT_SCENE_DEPTH_BYTES,
+                storage_bytes,
             ) {
-                crate::dma::dealloc(storage_virt, RESIDENT_SCENE_DEPTH_BYTES);
+                crate::dma::dealloc(storage_virt, storage_bytes);
                 return Err("resident-scene-depth-map");
             }
             let allocation = ResidentSceneDepthAllocation {
                 storage_phys,
                 storage_virt,
-                storage_bytes: RESIDENT_SCENE_DEPTH_BYTES,
+                storage_bytes,
             };
             *resident = Some(allocation);
             crate::log_info!(
                 target: "render";
                 "resident-scene-depth: resident surface allocated phys=0x{:X} gpu=0x{:X} bytes=0x{:X} format=d32-float tiling={} max={}x{}\n",
                 allocation.storage_phys,
-                GPU_VA_RESIDENT_SCENE_DEPTH_BASE,
+                gpu_addr,
                 allocation.storage_bytes,
                 if device_is_gfx125(device_id) { "tile4" } else { "y0" },
-                RESIDENT_SCENE_TARGET_WIDTH,
-                RESIDENT_SCENE_TARGET_HEIGHT,
+                if large { RESIDENT_SCENE_DIRECT_TARGET_WIDTH } else { RESIDENT_SCENE_TARGET_WIDTH },
+                if large { RESIDENT_SCENE_DIRECT_TARGET_HEIGHT } else { RESIDENT_SCENE_TARGET_HEIGHT },
             );
             allocation
         }
@@ -1146,8 +1183,8 @@ fn prepare_resident_scene_depth(
     }
 
     Ok(TriangleDepthConfig {
-        gpu_addr: GPU_VA_RESIDENT_SCENE_DEPTH_BASE,
-        hiz: hiz::layout(device_id, target_width, target_height),
+        gpu_addr,
+        hiz: if large { None } else { hiz::layout(device_id, target_width, target_height) },
         hiz_clear: false,
         pitch_bytes: u32::try_from(pitch_bytes).map_err(|_| "resident-scene-depth-shape")?,
         width: u32::try_from(target_width).map_err(|_| "resident-scene-depth-shape")?,
@@ -1168,33 +1205,25 @@ fn prepare_picasso_resident_scene_depth(
     if !device_is_gfx12(device_id) {
         return Err("picasso-scene-depth-device");
     }
-    let row_bytes = target_width
-        .checked_mul(core::mem::size_of::<f32>())
-        .ok_or("picasso-scene-depth-shape")?;
-    let pitch_bytes = crate::intel::align_up(row_bytes, RESIDENT_SCENE_DEPTH_TILE_WIDTH_BYTES)
-        .ok_or("picasso-scene-depth-shape")?;
-    let aligned_height =
-        crate::intel::align_up(target_height, RESIDENT_SCENE_DEPTH_TILE_HEIGHT_ROWS)
-            .ok_or("picasso-scene-depth-shape")?;
-    let clear_bytes = pitch_bytes
-        .checked_mul(aligned_height)
-        .ok_or("picasso-scene-depth-shape")?;
-    if target_width == 0
-        || target_height == 0
-        || clear_bytes > RESIDENT_SCENE_DEPTH_MAIN_BYTES
-        || !clear_bytes.is_multiple_of(core::mem::size_of::<u32>())
-    {
-        return Err("picasso-scene-depth-shape");
-    }
+    let (pitch_bytes, aligned_height, clear_bytes) =
+        resident_scene_depth_layout(target_width, target_height).ok_or("picasso-scene-depth-shape")?;
+    let large = !resident_scene_legacy_extent(target_width, target_height);
     let physical = crate::gpu::physical::physical_device().ok_or("picasso-physical-gpu")?;
-    let storage =
-        prepare_picasso_render1_scene_storage(lease, physical).ok_or("picasso-scene-storage")?;
-    if storage.depth_virt.is_null() || storage.depth_bytes < RESIDENT_SCENE_DEPTH_BYTES {
+    let (gpu_addr, depth_virt, depth_bytes) = if large {
+        let depth = prepare_picasso_render1_large_depth_storage(lease, physical)
+            .ok_or("picasso-large-depth-storage")?;
+        (depth.gpu, depth.virt, depth.bytes)
+    } else {
+        let storage = prepare_picasso_render1_scene_storage(lease, physical)
+            .ok_or("picasso-scene-storage")?;
+        (GPU_VA_RESIDENT_SCENE_DEPTH_BASE, storage.depth_virt, storage.depth_bytes)
+    };
+    if depth_virt.is_null() || depth_bytes < clear_bytes {
         return Err("picasso-scene-depth-allocation");
     }
     Ok(TriangleDepthConfig {
-        gpu_addr: GPU_VA_RESIDENT_SCENE_DEPTH_BASE,
-        hiz: hiz::layout(device_id, target_width, target_height),
+        gpu_addr,
+        hiz: if large { None } else { hiz::layout(device_id, target_width, target_height) },
         hiz_clear: false,
         pitch_bytes: u32::try_from(pitch_bytes).map_err(|_| "picasso-scene-depth-shape")?,
         width: u32::try_from(target_width).map_err(|_| "picasso-scene-depth-shape")?,
@@ -3828,11 +3857,10 @@ fn submit_resident_scene_capture_inner_for_carrier(
     let geometry_draw_count = native_churn
         .map_or(draws.len(), |resident| resident.draw_group_count() + draws.len())
         + cube_companion.map_or(0, |resident| resident.draw_group_count());
-    if target_width == 0
-        || target_height == 0
-        || target_width > RESIDENT_SCENE_TARGET_WIDTH
-        || target_height > RESIDENT_SCENE_TARGET_HEIGHT
-    {
+    let direct = matches!(frame_output,
+        ResidentSceneFrameOutput::DirectGpuSurface(_)
+            | ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(_));
+    if !resident_scene_target_extent_supported(target_width, target_height, direct) {
         return Err("resident-scene-capture-shape");
     }
     if let ResidentSceneFrameOutput::GpuSurface(destination)
@@ -3866,6 +3894,12 @@ fn submit_resident_scene_capture_inner_for_carrier(
     if let Some(lease) = carrier {
         let physical = crate::gpu::physical::physical_device().ok_or("picasso-physical-gpu")?;
         prepare_picasso_render1_scene_storage(lease, physical).ok_or("picasso-scene-storage")?;
+        if opaque_depth_enabled && drawable_depth.is_none()
+            && !resident_scene_legacy_extent(target_width, target_height)
+        {
+            prepare_picasso_render1_large_depth_storage(lease, physical)
+                .ok_or("picasso-large-depth-storage")?;
+        }
         if let ResidentSceneFrameOutput::DirectGpuSurface(destination)
         | ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(destination) = frame_output
         {
@@ -3916,7 +3950,11 @@ fn submit_resident_scene_capture_inner_for_carrier(
         if carrier.is_none() && !ensure_smoke_buffers_mapped(dev, warm) {
             return Err("render-map");
         }
-        let raster_quality = if carrier.is_some()
+        let raster_quality = if !resident_scene_legacy_extent(target_width, target_height) {
+            // The fixed 64 MiB MSAA windows retain their proven legacy bound.
+            // Native direct frames use their larger single-sample aliases.
+            ResidentSceneRasterQuality::SingleSample
+        } else if carrier.is_some()
             && raster_quality == ResidentSceneRasterQuality::Multisample4x
         {
             // Phase 1 owns a separate depth/state/target cache; its MSAA
@@ -3997,7 +4035,11 @@ fn submit_resident_scene_capture_inner_for_carrier(
             crate::log_info!(target: "render";
                 "resident-scene: phase=depth-prepare enabled={} device=0x{:04X} target={}x{} depth_reservation_bytes={}\n",
                 opaque_depth_enabled, warm.device_id, target_width, target_height,
-                RESIDENT_SCENE_DEPTH_BYTES,
+                if resident_scene_legacy_extent(target_width, target_height) {
+                    RESIDENT_SCENE_DEPTH_BYTES
+                } else {
+                    RESIDENT_SCENE_LARGE_DEPTH_BYTES
+                },
             );
         }
         let depth_config = if let Some(depth) = drawable_depth {

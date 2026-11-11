@@ -522,7 +522,7 @@ pub(crate) fn release_cpu(lease: SpiritFrameLease) -> Result<(), SpiritSubmitErr
 fn release_gpgpu(
     lease: SpiritFrameLease,
     release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
-) -> Result<(), SpiritSubmitError> {
+) -> Result<bool, SpiritSubmitError> {
     if !release.matches(lease.surface.phys, lease.surface.byte_len) {
         return Err(SpiritSubmitError::InvalidGpuRelease);
     }
@@ -537,7 +537,8 @@ fn release_gpgpu(
     require_unreleased(pending, SpiritBarrierSet::GPU)?;
     pending.released = pending.released | SpiritBarrierSet::GPU;
     mailbox.last_gpgpu_release_sequence[surface_index] = release.sequence();
-    Ok(())
+    drop(mailbox);
+    Ok(crate::r::services::shell3_font_service::first_spirit_producer_retired())
 }
 
 fn submit_spirit_vfx_frame(
@@ -586,9 +587,14 @@ fn submit_spirit_vfx_frame(
         fx_color_a: snapshot.fx_color_a,
         fx_color_b: snapshot.fx_color_b,
     };
+    let Some(first_claim) = crate::r::services::shell3_font_service::claim_first_spirit_producer() else {
+        cancel_pending(lease);
+        return Err(SpiritSubmitError::Busy);
+    };
     let Some(submission) =
         crate::intel::gpgpu::submit_spirit_vfx_frame(target, source, control, present_fps)
     else {
+        crate::r::services::shell3_font_service::cancel_first_spirit_claim(first_claim);
         cancel_pending(lease);
         return Err(SpiritSubmitError::HardwareNotReady);
     };
@@ -1235,20 +1241,9 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
         );
         Timer::after(Duration::from_millis(SPIRIT_RETRY_MS)).await;
     }
-    if crate::r::services::shell3_font_service::native_font_first_bringup_enabled() {
-        bringup_diag::stage(id, "waiting-for-native-font");
+    if crate::r::services::shell3_font_service::laptop_context_bootstrap_enabled() {
         crate::log_important!(target: "gfx";
-            "trueos-spirit: native-font-first fence={} producer=held cursor_task=independent input=active\n",
-            fence_index);
-        if let Err(reason) = crate::r::services::shell3_font_service::prepare().await {
-            bringup_diag::failed(id, "native-font-first-failed");
-            crate::log_important!(target: "gfx";
-                "trueos-spirit: native-font-first fence={} result=failed reason={} action=hold-gpu-producer-until-reboot cursor_task=independent\n",
-                fence_index, reason);
-            return;
-        }
-        crate::log_important!(target: "gfx";
-            "trueos-spirit: native-font-first fence={} result=ready next=first-spirit-gpu-submit source=native-gpu fallback=none\n",
+            "trueos-spirit: context-bootstrap fence={} order=normal-first-producer-then-native-font-then-normal-producers initial_context=restore-inhibited cursor_task=independent input=active\n",
             fence_index);
     }
     bringup_diag::stage(id, "waiting-for-resident-source");
@@ -1343,24 +1338,27 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     continue;
                 }
                 crate::intel::gpgpu::SpiritVfxCompletion::Complete(release) => {
-                    if let Err(error) = release_gpgpu(producing.lease, release) {
-                        cancel_pending(producing.lease);
-                        gpu_inflight = None;
-                        stream_aborted = true;
-                        bringup_diag::failed(id, "producer-release-rejected");
-                        crate::log_error!(
-                            target: "gfx";
-                            "trueos-spirit: vfx producer release rejected frame={} shader_frame={} tag={} fence={} sequence={} polls={} error={:?} action=abort-stream\n",
-                            stream_queued_frames,
-                            producing.submission.frame(),
-                            producing.submission.tag(),
-                            fence_index,
-                            producing.lease.fence.sequence,
-                            producing.polls,
-                            error,
-                        );
-                        continue;
-                    }
+                    let first_retired = match release_gpgpu(producing.lease, release) {
+                        Ok(first_retired) => first_retired,
+                        Err(error) => {
+                            cancel_pending(producing.lease);
+                            gpu_inflight = None;
+                            stream_aborted = true;
+                            bringup_diag::failed(id, "producer-release-rejected");
+                            crate::log_error!(
+                                target: "gfx";
+                                "trueos-spirit: vfx producer release rejected frame={} shader_frame={} tag={} fence={} sequence={} polls={} error={:?} action=abort-stream\n",
+                                stream_queued_frames,
+                                producing.submission.frame(),
+                                producing.submission.tag(),
+                                fence_index,
+                                producing.lease.fence.sequence,
+                                producing.polls,
+                                error,
+                            );
+                            continue;
+                        }
+                    };
                     if spirit_should_trace_frame(stream_queued_frames) {
                         crate::log_info!(
                             target: "gfx";
@@ -1375,6 +1373,24 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     }
                     gpu_inflight = None;
                     bringup_diag::released(id);
+                    if first_retired {
+                        bringup_diag::stage(id, "waiting-for-native-font-after-first-producer");
+                        crate::log_important!(target: "gfx";
+                            "trueos-spirit: context-bootstrap fence={} first_retired=1 tag={} frame={} proof=normal-producer-marker-plus-saved-head-and-mailbox-release next=native-font\n",
+                            fence_index, producing.submission.tag(), producing.submission.frame());
+                        match crate::r::services::shell3_font_service::prepare().await {
+                            Ok(()) => crate::log_important!(target: "gfx";
+                                "trueos-spirit: context-bootstrap fence={} atlas_ready=1 source=native-r8 resumed=normal-spirit-producers context=existing-persistent-carrier restore_inhibit=see-saved-context-evidence proof_pending=post-atlas-retirement\n",
+                                fence_index),
+                            Err(reason) => {
+                                stream_aborted = true;
+                                bringup_diag::failed(id, "native-font-after-first-producer-failed");
+                                crate::log_important!(target: "gfx";
+                                    "trueos-spirit: context-bootstrap fence={} atlas_ready=0 reason={} resumed=0 action=retain-first-frame-stop-future-compute\n",
+                                    fence_index, reason);
+                            }
+                        }
+                    }
                     continue;
                 }
                 completion @ (crate::intel::gpgpu::SpiritVfxCompletion::Failed
@@ -1729,6 +1745,17 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     Timer::after(Duration::from_millis(SPIRIT_IDLE_POLL_MS)).await;
                     continue;
                 };
+                if stream_queued_frames == 0
+                    && crate::r::services::shell3_font_service::spirit_font_first_required()
+                {
+                    if let Err(reason) = crate::r::services::shell3_font_service::prepare().await {
+                        bringup_diag::failed(id, "native-font-before-first-producer-failed");
+                        crate::log_important!(target: "gfx";
+                            "trueos-spirit: context-bootstrap fence={} first_retired=0 atlas_ready=0 reason={} resumed=0 action=stop-before-first-compute\n",
+                            fence_index, reason);
+                        return;
+                    }
+                }
                 match submit_spirit_vfx_frame(id, presentation_rate.estimate_fps(), source_frame) {
                     Ok(producing) => {
                         let period = spirit_vfx_frame_period(&mut stream_cadence_phase);

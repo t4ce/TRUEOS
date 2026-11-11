@@ -239,6 +239,7 @@ pub const OP_BP_KEYBOARD_CONTROL_SUBMIT_JSON: u32 = 0xF3; // arg0 handle,payload
 pub const OP_BP_KEYBOARD_CONTROL_IDLE: u32 = 0xF4; // arg0 handle -> bool/rc
 pub const OP_BP_UI4_SCENE_FIRST_PRESENTATION_TAKE: u32 = 0xF5; // arg0 mode:window; mode0 first event, mode1 arg1 exact serial -> presented/empty/rc
 pub const OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS: u32 = 0xF6; // -> packed output width:height
+pub const OP_BP_UI4_SCENE_FRAME_MAX_EXTENT_V1: u32 = 0x18D; // -> packed admitted frame width:height
 pub const OP_BP_USB_SNAPSHOT_READ: u32 = 0xF7; // arg0 offset, arg1 cap -> USB inventory snapshot
 pub const OP_BP_UI4_SCENE_INPUT_ROUTES: u32 = 0xF8; // arg0 window,arg1 cap -> selected combo/keyboard routes
  // arg0 instance -> page image + release
@@ -2912,6 +2913,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 }
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_FRAME_MAX_EXTENT_V1 => {
+            let extent = crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_frame_max_extent_v1();
+            write_response(vm_id, seq, STATUS_OK, extent, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS => {

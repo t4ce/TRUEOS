@@ -1114,30 +1114,29 @@ enum OverlayAlphaMode {
 }
 
 const UI4_RGBA8_OVERLAY_CONTRACT: OverlayAlphaMode = OverlayAlphaMode::PremultipliedRgba;
-/// Give the firmware-compatible XRGB boot phase deterministic pixels. UI4
-/// discards this boot content when Slot0 becomes its transparent RGBA slice.
-fn initialize_primary_boot_surface_black(surface: PrimarySurface) -> bool {
+/// Initialize Slot0 in its final UI4 pixel contract before publishing scanout.
+/// Transparent premultiplied pixels expose the pipe's bottom color immediately.
+fn initialize_primary_ui4_surface(surface: PrimarySurface) -> bool {
     if surface.virt.is_null()
         || surface.width == 0
         || surface.height == 0
-        || surface.pitch_bytes < surface.width.saturating_mul(PRIMARY_BYTES_PER_PIXEL)
+        || surface.backing_width < surface.width
+        || surface.backing_height < surface.height
+        || surface.pitch_bytes < surface.backing_width.saturating_mul(PRIMARY_BYTES_PER_PIXEL)
+        || (surface.byte_len as u64)
+            < u64::from(surface.pitch_bytes) * u64::from(surface.backing_height)
     {
         return false;
     }
 
-    // Initialize the padding and edge-guard area as opaque black too. Only the
-    // width x height viewport is scanned out, but no uninitialized allocation
-    // bytes should border a display surface used by later GPU work.
-    let allocation_pixels = surface.byte_len / core::mem::size_of::<u32>();
-    let allocation =
-        unsafe { core::slice::from_raw_parts_mut(surface.virt.cast::<u32>(), allocation_pixels) };
-    for pixel in allocation {
-        *pixel = 0xFF00_0000;
-    }
+    // Initialize padding and edge guards as transparent pixels too. Only the
+    // width x height viewport is scanned out; all backing bytes used by later
+    // GPU work must already contain deterministic pixels.
+    unsafe { core::ptr::write_bytes(surface.virt, 0, surface.byte_len) };
 
     crate::intel::dma_flush(surface.virt, surface.byte_len);
     crate::log!(
-        "intel/display: primary-boot initialization pipe={} size={}x{} slot=0 xrgb=opaque-black ui4_handoff=transparent-rgba\n",
+        "intel/display: primary initialization pipe={} size={}x{} slot0=transparent-premultiplied-rgba padding_and_guards=zero initialization=once\n",
         surface.pipe.name,
         surface.width,
         surface.height,
@@ -1220,8 +1219,6 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     };
     bringup_diag::checkpoint("primary-backing-allocated", 0);
 
-    crate::intel::dma_flush(virt, byte_len);
-
     if !crate::intel::map_display_scanout_ggtt(dev, phys, byte_len, primary_gpu) {
         crate::log!(
             "intel/display: primary-boot-surface ggtt map failed bytes=0x{:X} gpu=0x{:X}\n",
@@ -1268,7 +1265,14 @@ pub(crate) fn init_primary_boot_surface(dev: crate::intel::Dev) {
     *primary_surface_owner(pipe).lock() = Some(primary_surface);
     log_primary_scanout_pte_window(dev, "after-primary-init", primary_gpu, byte_len);
 
-    let primary_initialized = initialize_primary_boot_surface_black(primary_surface);
+    let primary_initialized = initialize_primary_ui4_surface(primary_surface);
+    if !primary_initialized {
+        UI4_RGBA8_PLANE_STACK_STATE.store(UI4_RGBA8_PLANE_STACK_FAILED, Ordering::Release);
+        bringup_diag::failed("primary-initialization", dev);
+        crate::log_error!(target: "intel/display";
+            "intel/display: primary initialization failed action=preserve-live-scanout backing=retained\n");
+        return;
+    }
 
     log_primary_plane_probe(dev, pipe, "before-rgba8-stack-bootstrap");
     let ok = bootstrap_ui4_rgba8_plane_stack_once(dev, primary_surface);
@@ -2563,7 +2567,11 @@ fn primary_plane_contract_regs_match(dev: crate::intel::Dev, surface: PrimarySur
         return false;
     };
     let ctl = crate::intel::mmio_read(dev, surface.pipe.primary_plane().ctl());
-    let ctl_expected = primary_plane_ctl_enabled(ctl);
+    let ctl_expected = overlay_plane_ctl_enabled(ctl, UI4_RGBA8_OVERLAY_CONTRACT);
+    let color_ctl = crate::intel::mmio_read(
+        dev,
+        surface.pipe.primary_plane().base() + UNI_PLANE_COLOR_CTL_OFF,
+    );
     crate::intel::mmio_read(dev, surface.pipe.primary_plane().stride()) == stride_reg
         && crate::intel::mmio_read(dev, surface.pipe.primary_plane().base() + UNI_PLANE_POS_OFF)
             == plane_pos_reg_value(0, 0)
@@ -2578,6 +2586,7 @@ fn primary_plane_contract_regs_match(dev: crate::intel::Dev, surface: PrimarySur
         // The builder preserves unowned bits. Full equality checks every
         // normalized fetch field without letting this guard's mask drift.
         && ctl == ctl_expected
+        && color_ctl == plane_color_ctl_alpha(color_ctl, UI4_RGBA8_OVERLAY_CONTRACT)
 }
 
 #[inline]
@@ -3418,9 +3427,9 @@ fn ui4_rgba8_plane_stack_ready(pipe: PipeInfo) -> bool {
         && UI4_RGBA8_PLANE_STACK_PIPE_SLOT.load(Ordering::Acquire) == pipe.slot as u32
 }
 
-/// Prepare UI4's transparent Slot0 compositor.  The real Pipe A bottom color
-/// remains visible wherever Slot0 contains no application pixels, while the
-/// preallocated primary swap buffers carry the virtual stack.
+/// Validate Slot0's existing UI4 contract and prepare its composition buffers.
+/// Bootstrap already established transparent RGBA; startup never rewrites the
+/// live carrier's pixels or repairs its format while another service may use it.
 pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
@@ -3432,45 +3441,13 @@ pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
     if !ui4_rgba8_plane_stack_ready(pipe) || primary.virt.is_null() {
         return false;
     }
-    let mut plane_ready = overlay_plane_dynamic_flip_guard(
+    let plane_ready = overlay_plane_dynamic_flip_guard(
         dev,
         pipe,
         crate::ui4::PRIMARY_PLANE_SLOT,
         UI4_RGBA8_OVERLAY_CONTRACT,
     )
     .is_ok();
-    if !plane_ready {
-        // This is the only full clear in the Slot0 lifecycle.  Zero alpha is
-        // not black here: it exposes Pipe A's programmed bottom color.
-        unsafe { core::ptr::write_bytes(primary.virt, 0, primary.byte_len) };
-        crate::intel::dma_flush(primary.virt, primary.byte_len);
-
-        let plane = pipe.plane(crate::ui4::PRIMARY_PLANE_SLOT);
-        let ctl_before = crate::intel::mmio_read(dev, plane.ctl());
-        let ctl = overlay_plane_ctl_enabled(ctl_before, UI4_RGBA8_OVERLAY_CONTRACT);
-        let color_ctl_off = plane.base() + UNI_PLANE_COLOR_CTL_OFF;
-        let color_ctl = plane_color_ctl_alpha(
-            crate::intel::mmio_read(dev, color_ctl_off),
-            UI4_RGBA8_OVERLAY_CONTRACT,
-        );
-        let surface = crate::intel::mmio_read(dev, plane.surf());
-        crate::intel::mmio_write(dev, plane.ctl(), ctl & !PLANE_CTL_ENABLE);
-        crate::intel::mmio_write(dev, color_ctl_off, color_ctl);
-        crate::intel::mmio_write(dev, plane.base() + UNI_PLANE_KEYVAL_OFF, 0);
-        program_overlay_plane_constant_alpha(dev, plane.base(), u8::MAX);
-        crate::intel::mmio_write(dev, plane.ctl(), ctl);
-        crate::intel::mmio_write(dev, plane.surf(), surface);
-        let (_, _, _) = wait_for_pipe_next_frame(dev, pipe);
-        let (live, _) = wait_for_plane_live_for(dev, plane.base(), surface, 5_000_000);
-        plane_ready = live == surface
-            && overlay_plane_dynamic_flip_guard(
-                dev,
-                pipe,
-                crate::ui4::PRIMARY_PLANE_SLOT,
-                UI4_RGBA8_OVERLAY_CONTRACT,
-            )
-            .is_ok();
-    }
     let ready =
         plane_ready && prepare_ui4_primary_swap_surfaces(dev, pipe, primary.width, primary.height);
     crate::log_info!(target: "ui4";
@@ -3525,18 +3502,10 @@ fn program_rgba8_plane_static_contract(
     let plane = pipe.plane(slot);
     let stride = plane_stride_reg_value(pitch_bytes)?;
     let ctl_before = crate::intel::mmio_read(dev, plane.ctl());
-    let alpha = if slot == crate::ui4::PRIMARY_PLANE_SLOT {
-        OverlayAlphaMode::Opaque
-    } else {
-        // UI4 producers and the fixed overlay scanout buffers share native
-        // premultiplied RGBA8; no per-frame channel swizzle is required.
-        UI4_RGBA8_OVERLAY_CONTRACT
-    };
-    let ctl_enabled = if slot == crate::ui4::PRIMARY_PLANE_SLOT {
-        primary_plane_ctl_enabled(ctl_before)
-    } else {
-        overlay_plane_ctl_enabled(ctl_before, alpha)
-    };
+    // Every UI4 carrier, including the transparent Slot0 stack, starts in
+    // native premultiplied RGBA8; no later format/alpha handoff is needed.
+    let alpha = UI4_RGBA8_OVERLAY_CONTRACT;
+    let ctl_enabled = overlay_plane_ctl_enabled(ctl_before, alpha);
     let color_ctl_off = plane.base() + UNI_PLANE_COLOR_CTL_OFF;
     let color_ctl = plane_color_ctl_alpha(crate::intel::mmio_read(dev, color_ctl_off), alpha);
 
@@ -3565,9 +3534,9 @@ fn program_rgba8_plane_static_contract(
 
 /// Establish the complete active UI4 pipe contract (normally Pipe A) once.
 ///
-/// Slots 0-3 share one full-output 4-BPP composition lifecycle: slot 0 is the
-/// opaque primary and slots 1-3 are native premultiplied RGBA8 overlays. Slot
-/// 4 receives the same immutable overlay contract but remains independently
+/// Slots 0-3 share one full-output premultiplied RGBA8 composition lifecycle:
+/// slot 0 is the transparent shared application stack. Slot 4 receives the
+/// same immutable overlay contract but remains independently
 /// owned by UI4 interaction. Bootstrap fixes the pixel format, blend mode and
 /// DBUF allocation. A direct-present transaction may still change geometry,
 /// constant plane alpha and PLANE_SURF, with SURFLIVE proving the new surface.
@@ -3795,7 +3764,7 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
         );
     }
     crate::log!(
-        "intel/display: ui4-rgba8-plane-stack bootstrap ok=1 pipe={} universal_planes={} application_mask=0x{:02X} interaction_logical=4 size={}x{} slot0=xrgb8-opaque overlays=premultiplied-rgba8-linear contracts=once bootstrap_surf_writes=one-per-slot runtime=surf-flips-only commit_frame={}=>{} commit_wait={} live_iters={} live_mask=0x{:X}\n",
+        "intel/display: ui4-rgba8-plane-stack bootstrap ok=1 pipe={} universal_planes={} application_mask=0x{:02X} interaction_logical=4 size={}x{} slot0=transparent-premultiplied-rgba8 overlays=premultiplied-rgba8-linear contracts=once bootstrap_surf_writes=one-per-slot runtime=surf-flips-only commit_frame={}=>{} commit_wait={} live_iters={} live_mask=0x{:X}\n",
         pipe.name,
         count,
         application_plane_mask,

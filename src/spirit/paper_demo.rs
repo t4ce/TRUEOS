@@ -126,7 +126,7 @@ async fn exercise(
     owned: &mut Option<WindowSnapshot>,
     target: &mut Option<crate::shell3::MatrixTarget>,
 ) -> Result<(), &'static str> {
-    if crate::r::services::shell3_font_service::native_font_first_bringup_enabled() {
+    if crate::r::services::shell3_font_service::laptop_context_bootstrap_enabled() {
         // This automatic greeting draws and types immediately. Keep its RCS
         // work out of the laptop's isolated font proof; ordinary empty Paper
         // windows do not acquire a font dependency from this diagnostic order.

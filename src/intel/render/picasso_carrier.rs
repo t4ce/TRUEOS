@@ -48,6 +48,8 @@ const _: () = {
     assert!(PICASSO_HELIO_TRANSFORM_ARTIFACT_BASE < PICASSO_HELIO_TRANSFORM_ARTIFACT_LIMIT);
     assert!(PICASSO_RENDERER_VA_LIMIT <= PICASSO_UI4_ALIAS_VA_BASE);
     assert!(PICASSO_UI4_ALIAS_VA_LIMIT <= GPU_VA_RESIDENT_UI4_FRAME_LIMIT);
+    assert!(PICASSO_UI4_ALIAS_VA_LIMIT <= GPU_VA_RESIDENT_SCENE_LARGE_DEPTH_BASE);
+    assert!(GPU_VA_RESIDENT_SCENE_LARGE_DEPTH_BASE + RESIDENT_SCENE_LARGE_DEPTH_BYTES as u64 <= 1u64 << 32);
 };
 
 // These are GGTT control addresses, not the private PPGTT addresses used by
@@ -213,7 +215,6 @@ struct PicassoCarrierState {
     lease: PicassoCarrierLease,
     mappings: AllocVec<PicassoCarrierMapping>,
     next_renderer_va: u64,
-    next_ui4_alias_va: u64,
     lrc_initialized: bool,
     published_tail: usize,
     frame_active: bool,
@@ -221,6 +222,7 @@ struct PicassoCarrierState {
     quarantined: bool,
     scene_state: Option<PicassoCarrierAllocation>,
     scene_depth: Option<PicassoCarrierAllocation>,
+    scene_large_depth: Option<PicassoCarrierAllocation>,
 }
 
 #[derive(Copy, Clone)]
@@ -764,6 +766,42 @@ pub(crate) fn prepare_picasso_render1_scene_storage(
     })
 }
 
+/// Install the optional native depth cache before frame admission. Once a
+/// frame owns the carrier, this function can only return the existing cache.
+fn prepare_picasso_render1_large_depth_storage(
+    lease: PicassoCarrierLease,
+    physical: &'static dyn PhysicalGpuDevice,
+) -> Option<PicassoCarrierAllocation> {
+    let existing = || {
+        let slot = picasso_carrier_slot(lease.carrier()).lock();
+        slot.state.as_ref().filter(|state| state.lease == lease && !state.quarantined)
+            .and_then(|state| state.scene_large_depth)
+    };
+    if let Some(depth) = existing() {
+        return Some(depth);
+    }
+    let _mapping = begin_picasso_render1_mapping(lease)?;
+    if let Some(depth) = existing() {
+        return Some(depth);
+    }
+    let depth = allocate_picasso_scene_range(lease, physical,
+        GPU_VA_RESIDENT_SCENE_LARGE_DEPTH_BASE, RESIDENT_SCENE_LARGE_DEPTH_BYTES)?;
+    let mut slot = picasso_carrier_slot(lease.carrier()).lock();
+    if let Some(owner) = slot.state.as_mut().filter(|state| state.lease == lease)
+        && !owner.quarantined && owner.scene_large_depth.is_none()
+    {
+        owner.scene_large_depth = Some(depth);
+        return Some(depth);
+    }
+    drop(slot);
+    if unmap_picasso_render1_range_inner(lease, physical, depth.gpu, depth.bytes, true) {
+        crate::dma::dealloc(depth.virt, depth.bytes);
+    } else {
+        quarantine_picasso_render1(lease, "large-depth-rollback-unmap");
+    }
+    None
+}
+
 fn quarantine_picasso_render1(lease: PicassoCarrierLease, reason: &'static str) {
     {
         let mut slot = picasso_carrier_slot(lease.carrier()).lock();
@@ -1175,7 +1213,6 @@ pub(crate) fn claim_picasso_render1(
             lease,
             mappings: AllocVec::new(),
             next_renderer_va: PICASSO_RENDERER_VA_BASE,
-            next_ui4_alias_va: PICASSO_UI4_ALIAS_VA_BASE,
             lrc_initialized: false,
             published_tail: 0,
             frame_active: false,
@@ -1183,6 +1220,7 @@ pub(crate) fn claim_picasso_render1(
             quarantined: false,
             scene_state: None,
             scene_depth: None,
+            scene_large_depth: None,
         });
         crate::log_info!(target: "render";
             "picasso-carrier claim carrier={} device=0x{:X} epoch={} gpuvm={} root=0x{:X} max_vmx_domains={}\n",
@@ -1229,25 +1267,32 @@ pub(crate) fn reserve_picasso_render1_resource_va(
     Some(start)
 }
 
-/// Reserve one carrier-local direct UI4 alias.  The mapping itself must use
-/// `map_picasso_render1_scanout_range`, which installs PAT3/UC.
-pub(crate) fn reserve_picasso_render1_ui4_alias_va(
-    lease: PicassoCarrierLease,
+fn picasso_ui4_alias_first_fit(
+    mappings: &[PicassoCarrierMapping],
     bytes: usize,
 ) -> Option<u64> {
     let bytes = aligned_carrier_bytes(bytes)? as u64;
-    let mut slot = picasso_carrier_slot(lease.carrier()).lock();
-    let state = slot.state.as_mut().filter(|state| state.lease == lease)?;
-    if state.frame_active || state.mapping_in_flight || state.quarantined {
-        return None;
+    let mut start = PICASSO_UI4_ALIAS_VA_BASE;
+    loop {
+        let end = start.checked_add(bytes)?;
+        if end > PICASSO_UI4_ALIAS_VA_LIMIT {
+            return None;
+        }
+        // Mappings need not be sorted. Advance past every overlap, then
+        // retry from that boundary; removed aliases become reusable holes.
+        let next = mappings.iter().try_fold(start, |next, mapping| {
+            let mapping_end = mapping.gpu.checked_add(mapping.bytes as u64)?;
+            Some(if start < mapping_end && mapping.gpu < end {
+                next.max(mapping_end)
+            } else {
+                next
+            })
+        })?;
+        if next == start {
+            return Some(start);
+        }
+        start = next;
     }
-    let start = (state.next_ui4_alias_va + 4095) & !4095;
-    let end = start.checked_add(bytes)?;
-    if end > PICASSO_UI4_ALIAS_VA_LIMIT {
-        return None;
-    }
-    state.next_ui4_alias_va = end;
-    Some(start)
 }
 
 fn map_picasso_render1_range_inner(
@@ -1329,8 +1374,8 @@ pub(crate) fn map_picasso_render1_scanout_range(
 }
 
 /// Return a stable carrier PAT3/UC alias for one leased UI4 producer surface.
-/// The alias belongs to the carrier, never to Render0, and remains mapped
-/// until device teardown so a later frame cannot retarget a still-live leaf.
+/// The alias belongs to the carrier, never to Render0, and remains stable
+/// until UI4 releases its frame after every writer and reader has retired.
 pub(crate) fn prepare_picasso_render1_ui4_target(
     lease: PicassoCarrierLease,
     physical: &'static dyn PhysicalGpuDevice,
@@ -1338,28 +1383,80 @@ pub(crate) fn prepare_picasso_render1_ui4_target(
     bytes: usize,
 ) -> Option<u64> {
     let bytes = aligned_carrier_bytes(bytes)?;
-    if let Some(gpu) = picasso_carrier_slot(lease.carrier())
-        .lock()
-        .state
-        .as_ref()
-        .and_then(|state| {
-            (state.lease == lease)
-                .then(|| {
-                    state
-                        .mappings
-                        .iter()
-                        .find(|mapping| {
-                            mapping.scanout && mapping.phys == phys && mapping.bytes == bytes
-                        })
-                        .map(|mapping| mapping.gpu)
-                })
-                .flatten()
-        })
-    {
+    let existing = || {
+        let slot = picasso_carrier_slot(lease.carrier()).lock();
+        slot.state.as_ref().filter(|state| state.lease == lease && !state.quarantined)
+            .and_then(|state| state.mappings.iter().find(|mapping| {
+                picasso_mapping_is_ui4_alias(mapping)
+                    && mapping.phys == phys && mapping.bytes == bytes
+            }).map(|mapping| mapping.gpu))
+    };
+    if let Some(gpu) = existing() {
         return Some(gpu);
     }
-    let gpu = reserve_picasso_render1_ui4_alias_va(lease, bytes)?;
+    // Reserve and install under one mapping guard. A failed map consumes no
+    // VA, and neither another mapper nor frame admission can race the hole.
+    let _mapping = begin_picasso_render1_mapping(lease)?;
+    if let Some(gpu) = existing() {
+        return Some(gpu);
+    }
+    let gpu = {
+        let slot = picasso_carrier_slot(lease.carrier()).lock();
+        let state = slot.state.as_ref().filter(|state| state.lease == lease)?;
+        picasso_ui4_alias_first_fit(&state.mappings, bytes)?
+    };
     map_picasso_render1_scanout_range(lease, physical, gpu, phys, bytes).then_some(gpu)
+}
+
+fn picasso_mapping_is_ui4_alias(mapping: &PicassoCarrierMapping) -> bool {
+    mapping.scanout && mapping.gpu >= PICASSO_UI4_ALIAS_VA_BASE
+        && mapping.gpu.checked_add(mapping.bytes as u64)
+            .is_some_and(|end| end <= PICASSO_UI4_ALIAS_VA_LIMIT)
+}
+
+/// Called only with UI4's no-writer/no-reader proof. Remove every carrier's
+/// imported alias before the frame pool frees the underlying DMA surface.
+fn release_picasso_ui4_target_aliases(phys: u64, bytes: usize) -> bool {
+    let Some(bytes) = aligned_carrier_bytes(bytes) else {
+        return false;
+    };
+    for carrier in PicassoCarrierId::ALL {
+        let imported = {
+            let slot = picasso_carrier_slot(carrier).lock();
+            slot.state.as_ref().and_then(|state| {
+                state.mappings.iter().any(|mapping| {
+                    picasso_mapping_is_ui4_alias(mapping) && mapping.phys == phys
+                }).then_some(state.lease)
+            })
+        };
+        let Some(lease) = imported else {
+            continue;
+        };
+        let Some(_mapping) = begin_picasso_render1_mapping(lease) else {
+            return false;
+        };
+        let Some(physical) = crate::gpu::physical::physical_device() else {
+            return false;
+        };
+        loop {
+            let imported = {
+                let slot = picasso_carrier_slot(carrier).lock();
+                slot.state.as_ref().filter(|state| state.lease == lease)
+                    .and_then(|state| state.mappings.iter().find(|mapping| {
+                        picasso_mapping_is_ui4_alias(mapping) && mapping.phys == phys
+                    }).copied())
+            };
+            let Some(imported) = imported else {
+                break;
+            };
+            if imported.bytes != bytes || !unmap_picasso_render1_range_inner(
+                lease, physical, imported.gpu, bytes, true,
+            ) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn unmap_picasso_render1_range_inner(
@@ -1464,14 +1561,14 @@ pub(crate) fn teardown_picasso_render1(
         };
         state.mappings.swap_remove(index);
     }
-    let (scene_state, scene_depth) = {
+    let (scene_state, scene_depth, scene_large_depth) = {
         let mut slot = picasso_carrier_slot(lease.carrier()).lock();
         let Some(state) = slot.state.as_mut().filter(|state| state.lease == lease) else {
             return false;
         };
-        (state.scene_state.take(), state.scene_depth.take())
+        (state.scene_state.take(), state.scene_depth.take(), state.scene_large_depth.take())
     };
-    for allocation in [scene_state, scene_depth].into_iter().flatten() {
+    for allocation in [scene_state, scene_depth, scene_large_depth].into_iter().flatten() {
         crate::dma::dealloc(allocation.virt, allocation.bytes);
     }
     let mut slot = picasso_carrier_slot(lease.carrier()).lock();

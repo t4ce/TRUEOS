@@ -145,7 +145,7 @@ mod microfont {pub const FWIDTH:usize=6;pub const FHEIGHT:usize=11;}
     source += constant(FONT, "ATLAS_EM_HALF_MM") + "\n"
     source += constant(FONT, "LAPTOP_SHELL_EM_HALF_MM") + "\n"
     for name in ("cell_extent", "cell_extent_for_em", "Font", "cpu_bitmap_fallback_enabled", "effective_face",
-                 "native_font_first_bringup_enabled", "native_boot_preflight", "prepare_once"):
+                 "laptop_context_bootstrap_enabled", "native_boot_preflight", "prepare_once"):
         source += item(FONT, name) + "\n"
     source += "static FONT:spin::Once<Font>=spin::Once::new();\n"
     source += re.search(r"^static NATIVE_BOOT_PREFLIGHT:.*;$", font_source, re.MULTILINE).group() + "\n"
@@ -158,7 +158,7 @@ mod microfont {pub const FWIDTH:usize=6;pub const FHEIGHT:usize=11;}
  fn enable_tgl() {
   crate::TGL_ACTIVE.store(true,Ordering::Relaxed);
   crate::GPU_AVAILABLE.store(true,Ordering::Relaxed);
-  assert!(native_font_first_bringup_enabled());
+  assert!(laptop_context_bootstrap_enabled());
  }
  fn assert_preflight_failure_is_cached(mode:u8) {
   enable_tgl();crate::PROBE_MODE.store(mode,Ordering::Relaxed);
@@ -257,7 +257,7 @@ mod microfont {pub const FWIDTH:usize=6;pub const FHEIGHT:usize=11;}
  }
  #[test] fn desktop_does_not_call_or_cache_the_laptop_probe() {
   crate::PROBE_MODE.store(5,Ordering::Relaxed);
-  assert!(!native_font_first_bringup_enabled());
+  assert!(!laptop_context_bootstrap_enabled());
   native_boot_preflight().unwrap();prepare_once().unwrap();
   assert!(font_published());assert_eq!(atlas_calls(),1);
   assert_eq!(crate::PROBE_CALLS.load(Ordering::Relaxed),0);
