@@ -38,7 +38,7 @@ Knowledge grows as people pass on what they have learned, and each generation ad
 
 At some point, the operating system ends and your application begins. The boundary between Rust's standard library and the platform beneath it is where TRUEOS connects familiar Rust code to its own services. TRUEOS has adapted Tokio's multithreaded runtime as a first-class userspace runtime, giving applications a familiar foundation for asynchronous tasks, I/O, timers, and synchronization.
 
-<p align="center"><a href="https://tokio.rs/"><img src="docs/assets/tokio-stack.svg" width="746" alt="The Tokio ecosystem stack: Bytes, Tracing, Mio, Tokio Runtime, Hyper, Tower, and Tonic"></a><br><sub>Stack artwork from <a href="https://tokio.rs/">Tokio</a>.</sub></p>
+<p align="center"><a href="https://tokio.rs/"><img src="docs/assets/tokio-stack.svg" width="746" alt="The Tokio ecosystem stack: Bytes, Tracing, Mio, Tokio Runtime, Hyper, Tower, and Tonic"></a><br><sub>Reference image: “The stack” from <a href="https://tokio.rs/">tokio.rs</a> · Nov 11, 2026, 19:12 CET.</sub></p>
 
 If you already know the Tokio ecosystem, that experience carries over to native TRUEOS apps. Shared application logic can stay portable across platforms, while TRUEOS-specific integration uses `cfg(target_os = "trueos")` and the Blueprint APIs.
 
