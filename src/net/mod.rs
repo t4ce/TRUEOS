@@ -4,6 +4,7 @@ pub mod device;
 pub mod dhcpv6;
 pub mod e1000;
 pub mod i226;
+pub(crate) mod interrupts;
 pub mod iwl4965;
 pub mod iwl_ax211;
 pub mod iwl_ax201;
@@ -434,9 +435,10 @@ pub fn init() {
     }
 
     if ENABLE_R8125 {
-        for adapter in R8125Adapter::init_all() {
+        for mut adapter in R8125Adapter::init_all() {
             let ring = NetRing::new(RX_DESC_COUNT, RX_BUF_SIZE, POLL_BUDGET);
             let mut guard = DEVICES.lock();
+            adapter.configure_irq(guard.len());
             guard.push(ActiveDevice::R8125(NetCore::new(adapter, ring)));
             added += 1;
         }
@@ -559,6 +561,38 @@ pub fn poll_at(index: usize) -> bool {
     }
 
     busy
+}
+
+pub(crate) fn irq_supported_at(index: usize) -> bool {
+    interrupts::is_ready(index)
+}
+
+pub(crate) fn mask_irq_at(index: usize) {
+    interrupts::mask(index);
+}
+
+/// Drain/rearm handshake. Descriptor readiness closes the race where a DMA
+/// completion is visible before its interrupt status has reached the CPU.
+pub(crate) fn rearm_irq_at(index: usize) -> bool {
+    let descriptor_pending = || {
+        let mut devices = DEVICES.lock();
+        match devices.get_mut(index) {
+            Some(ActiveDevice::R8125(device)) => device.adapter_mut().irq_work_pending(),
+            _ => false,
+        }
+    };
+    if descriptor_pending() {
+        interrupts::mask(index);
+        return true;
+    }
+    if interrupts::rearm(index) {
+        return true;
+    }
+    if descriptor_pending() {
+        interrupts::mask(index);
+        return true;
+    }
+    false
 }
 
 pub fn drain_rx_packets_each_at(

@@ -72,6 +72,9 @@ const MI_STORE_DWORD_IMM_GEN4_LEN_DW4_PPGTT: u32 = MI_STORE_DWORD_IMM_GEN4 | (4 
 pub(super) const MI_FLUSH_DW: u32 = (0x26 << 23) | 3;
 pub(super) const MI_FLUSH_DW_VIDEO_PIPELINE_CACHE_INVALIDATE: u32 = 1 << 7;
 pub(super) const MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE: u32 = 1 << 14;
+const MI_FLUSH_DW_LEN_DW4: u32 = (0x26 << 23) | (4 - 2);
+const MI_FLUSH_DW_USE_GGTT: u32 = 1 << 2;
+const MI_USER_INTERRUPT: u32 = 0x0100_0000;
 pub(super) const MI_ARB_CHECK: u32 = 0x0280_0000;
 pub(super) const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
@@ -2713,6 +2716,69 @@ pub(super) fn append_ring_batch_start_words(
         padding.fill(MI_NOOP);
     }
     Some((ring_offset + ENTRY_BYTES) & (ring_bytes - 1))
+}
+
+/// Append an encoder entry whose completion breadcrumb executes in the ring,
+/// after the primary and codec batches have both returned. The first flush
+/// stalls outstanding writes; the second writes an immediate sequence through
+/// GGTT before MI_USER_INTERRUPT. This follows Linux's Gen12 XCS breadcrumb
+/// ordering. A post-sync MI_FLUSH_DW in a nonsecure PPGTT batch would have its
+/// write inhibited, so this epilogue must remain in the privileged ring.
+pub(super) fn append_ring_batch_start_completion_words(
+    ring_virt: *mut u8,
+    ring_bytes: usize,
+    ring_offset: usize,
+    result_gpu_addr: u64,
+    prelaunch_marker: u32,
+    batch_gpu_addr: u64,
+    completion_ggtt: u64,
+    completion_sequence: u32,
+    mode: MediaJobMode,
+) -> Option<usize> {
+    const ENTRY_BYTES: usize = 128;
+    if ring_virt.is_null()
+        || !(ring_virt as usize).is_multiple_of(core::mem::align_of::<u32>())
+        || ring_bytes < ENTRY_BYTES
+        || !ring_bytes.is_power_of_two()
+        || !ring_bytes.is_multiple_of(ENTRY_BYTES)
+        || ring_offset >= ring_bytes
+        || !ring_offset.is_multiple_of(ENTRY_BYTES)
+        || completion_ggtt == 0
+        || completion_ggtt > u32::MAX as u64
+        || !completion_ggtt.is_multiple_of(8)
+        // Address bit 5 is reserved by the Gen12 MI_FLUSH_DW format.
+        || completion_ggtt & (1 << 5) != 0
+        || completion_sequence == 0
+        || mode.batch_level != MediaBatchLevel::SecondLevelReturn
+    {
+        return None;
+    }
+    let end = ring_offset.checked_add(ENTRY_BYTES)?;
+    if end > ring_bytes {
+        return None;
+    }
+    build_ring_batch_start_words(
+        ring_virt,
+        ring_bytes,
+        ring_offset,
+        result_gpu_addr,
+        prelaunch_marker,
+        batch_gpu_addr,
+        mode,
+    )?;
+    let dwords = unsafe {
+        core::slice::from_raw_parts_mut(ring_virt.add(ring_offset).cast::<u32>(), ENTRY_BYTES / 4)
+    };
+    // The first-level batch return resumes at DW7, replacing the generic
+    // builder's ARB_CHECK. The 4-DW flush forms are also used by Linux i915.
+    dwords[7..].fill(MI_NOOP);
+    dwords[7] = MI_FLUSH_DW_LEN_DW4;
+    dwords[11] = MI_FLUSH_DW_LEN_DW4 | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE;
+    dwords[12] = completion_ggtt as u32 | MI_FLUSH_DW_USE_GGTT;
+    dwords[14] = completion_sequence;
+    dwords[15] = MI_USER_INTERRUPT;
+    dwords[16] = MI_ARB_CHECK;
+    Some(end & (ring_bytes - 1))
 }
 
 /// Build a first-level trampoline for a codec secondary. The ring enters this

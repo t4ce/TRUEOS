@@ -20,11 +20,13 @@ use super::engine as media;
 // 0x2800, the latter projects onto row 6 from x=1024, rows 7..14, and row 15
 // through x=511: the exact alternating-frame corruption fingerprint.
 const RING_GGTT: u64 = crate::intel::AVC_CONTROL_GGTT_BASE;
+const COMPLETION_GGTT: u64 = RING_GGTT + 0x0000_8000;
 const CONTEXT_GGTT: u64 = RING_GGTT + 0x0001_0000;
 // This arena is installed only in VDBOX PPGTT. Its numeric overlap with GGTT
 // reservations is intentional and does not alias their translations.
 const ARENA_PPGTT_BASE: u64 = 0x4110_0000;
 const RING_BYTES: usize = 16 * 1024;
+const COMPLETION_BYTES: usize = 4096;
 const CONTEXT_BYTES: usize = 22 * 4096;
 const ARENA_BYTES: usize = 32 * 1024 * 1024;
 
@@ -113,7 +115,6 @@ const DEBLOCK_ROWSTORE_GPU: u64 = ARENA_PPGTT_BASE + DEBLOCK_ROWSTORE_OFFSET as 
 const BSP_ROWSTORE_GPU: u64 = ARENA_PPGTT_BASE + BSP_ROWSTORE_OFFSET as u64;
 
 const TIMEOUT_NS: u64 = 100_000_000;
-const POLL_LIMIT: u32 = 2_000_000;
 const EXPECTED_IDR_CODEC_PACKETS: usize = 32;
 const EXPECTED_IDR_BATCH_BYTES: usize = 2_628;
 const EXPECTED_P_CODEC_PACKETS: usize = 31;
@@ -124,8 +125,10 @@ pub(crate) const GOP_PICTURES: u32 = 40;
 const _: () = {
     assert!(RING_GGTT % crate::intel::WARM_ALIGN as u64 == 0);
     assert!(CONTEXT_GGTT % crate::intel::WARM_ALIGN as u64 == 0);
+    assert!(COMPLETION_GGTT % crate::intel::WARM_ALIGN as u64 == 0);
     assert!(ARENA_PPGTT_BASE % crate::intel::WARM_ALIGN as u64 == 0);
-    assert!(RING_GGTT + RING_BYTES as u64 <= CONTEXT_GGTT);
+    assert!(RING_GGTT + RING_BYTES as u64 <= COMPLETION_GGTT);
+    assert!(COMPLETION_GGTT + COMPLETION_BYTES as u64 <= CONTEXT_GGTT);
     assert!(CONTEXT_GGTT + CONTEXT_BYTES as u64 <= crate::intel::DISPLAY_DIRECT_SCANOUT_GGTT_BASE);
     assert!(CODEC_BATCH_OFFSET + CODEC_BATCH_BYTES == BATCH_BYTES);
     assert!(FRAME_WIDTH % 16 == 0);
@@ -581,6 +584,7 @@ pub(crate) enum AvcEncodeProbeFailure {
     LaneBusy,
     LaneQuarantined,
     ForcewakeUnavailable,
+    CompletionInterruptUnavailable,
     BackingAllocation,
     SurfaceConversion,
     BatchBuild,
@@ -588,6 +592,7 @@ pub(crate) enum AvcEncodeProbeFailure {
     RegisterRejected,
     SubmitRejected,
     CompletionTimeout,
+    CompletionSequenceExhausted,
     MarkerMismatch,
     CodedOutputInvalid,
     ContextTeardown,
@@ -705,6 +710,7 @@ impl AvcEncodeProbeFailure {
             Self::LaneBusy => "vcs0-lane-busy",
             Self::LaneQuarantined => "vcs0-lane-quarantined",
             Self::ForcewakeUnavailable => "vcs0-forcewake-unavailable",
+            Self::CompletionInterruptUnavailable => "vcs0-completion-interrupt-unavailable",
             Self::BackingAllocation => "encode-probe-backing-allocation",
             Self::SurfaceConversion => "nv12-surface-preparation",
             Self::BatchBuild => "avc-picture-batch-build",
@@ -712,6 +718,7 @@ impl AvcEncodeProbeFailure {
             Self::RegisterRejected => "guc-register-rejected",
             Self::SubmitRejected => "guc-submit-rejected",
             Self::CompletionTimeout => "completion-timeout",
+            Self::CompletionSequenceExhausted => "completion-sequence-exhausted",
             Self::MarkerMismatch => "ordered-marker-mismatch",
             Self::CodedOutputInvalid => "coded-output-invalid",
             Self::ContextTeardown => "guc-context-teardown",
@@ -759,6 +766,15 @@ pub(crate) struct AvcEncodeProbeReport {
     pub(crate) codec_begin: u32,
     pub(crate) codec_end: u32,
     pub(crate) complete: u32,
+    pub(crate) completion_sequence: u32,
+    pub(crate) completion_observed: u32,
+    pub(crate) completion_watchdog: bool,
+    pub(crate) completion_route_failed: bool,
+    pub(crate) completion_wait_us: u64,
+    pub(crate) context_save_wait_us: u64,
+    pub(crate) context_save_poll_iters: u32,
+    // Wake notifications while waiting for the exact ring sequence; these
+    // are not timer-based samples of the result page.
     pub(crate) poll_iters: u32,
     pub(crate) elapsed_us: u64,
     pub(crate) timeout_diagnostics: AvcEncodeTimeoutDiagnostics,
@@ -804,6 +820,13 @@ impl AvcEncodeProbeReport {
         codec_begin: 0,
         codec_end: 0,
         complete: 0,
+        completion_sequence: 0,
+        completion_observed: 0,
+        completion_watchdog: false,
+        completion_route_failed: false,
+        completion_wait_us: 0,
+        context_save_wait_us: 0,
+        context_save_poll_iters: 0,
         poll_iters: 0,
         elapsed_us: 0,
         timeout_diagnostics: AvcEncodeTimeoutDiagnostics::EMPTY,
@@ -813,6 +836,7 @@ impl AvcEncodeProbeReport {
 struct ProbeBacking {
     ring_virt: *mut u8,
     context_virt: *mut u8,
+    completion_virt: *mut u8,
     arena_phys: u64,
     arena_virt: *mut u8,
     ppgtt: crate::intel::ppgtt::SparsePpgtt,
@@ -820,6 +844,7 @@ struct ProbeBacking {
     guc_token: Option<crate::intel::guc_submission::GucContextToken>,
     context_initialized: bool,
     ring_tail_bytes: usize,
+    completion_sequence: u32,
     submissions: u64,
 }
 
@@ -1066,6 +1091,13 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     if !report.forcewake {
         return fail(report, AvcEncodeProbeFailure::ForcewakeUnavailable, started_ns);
     }
+    if !crate::intel::interrupts::enable_vcs0_user(dev) {
+        return fail(
+            report,
+            AvcEncodeProbeFailure::CompletionInterruptUnavailable,
+            started_ns,
+        );
+    }
 
     let mut backing_slot = BACKING.lock();
     if backing_slot.is_none() {
@@ -1143,18 +1175,28 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     report.primary_batch_bytes = primary_batch_bytes;
 
     let old_ring_tail_bytes = backing.ring_tail_bytes;
-    let Some(ring_tail_bytes) = media::append_ring_batch_start_words(
+    let Some(completion_sequence) = next_completion_sequence(backing.completion_sequence) else {
+        return fail(
+            report,
+            AvcEncodeProbeFailure::CompletionSequenceExhausted,
+            started_ns,
+        );
+    };
+    let Some(ring_tail_bytes) = media::append_ring_batch_start_completion_words(
         backing.ring_virt,
         RING_BYTES,
         old_ring_tail_bytes,
         RESULT_GPU,
         KICKOFF_MARKER,
         BATCH_GPU,
+        COMPLETION_GGTT,
+        completion_sequence,
         lane.mode(),
     ) else {
         return fail(report, AvcEncodeProbeFailure::ContextBuild, started_ns);
     };
-    report.ring_bytes = 64;
+    report.ring_bytes = 128;
+    report.completion_sequence = completion_sequence;
     let Some(ring_ctl) = media::ring_ctl_value_for_size(RING_BYTES) else {
         return fail(report, AvcEncodeProbeFailure::ContextBuild, started_ns);
     };
@@ -1220,6 +1262,7 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     // Once TAIL is published to a live GuC context it must never be rolled
     // back, even if the schedule acknowledgement itself becomes ambiguous.
     backing.ring_tail_bytes = ring_tail_bytes;
+    backing.completion_sequence = completion_sequence;
 
     let submission = match crate::intel::guc_submission::INTEL_GUC_SCHEDULER.submit(dev, token) {
         Ok(submission) => submission,
@@ -1246,22 +1289,20 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     publish(report);
 
     let result_virt = unsafe { backing.arena_virt.add(RESULT_OFFSET) };
-    let deadline = crate::chronos::monotonic_nanos().saturating_add(TIMEOUT_NS);
-    while report.poll_iters < POLL_LIMIT {
-        crate::intel::dma_flush(result_virt, RESULT_BYTES);
-        report.complete = media::read_result_dword(result_virt, media::MEDIA_RESULT_COMPLETE_SLOT);
-        if report.complete == COMPLETE_MARKER {
-            report.retired = true;
-            break;
-        }
-        report.poll_iters = report.poll_iters.saturating_add(1);
-        if crate::chronos::monotonic_nanos() >= deadline {
-            break;
-        }
-        // Poll at most once per timer tick while VDBOX owns this frame.
-        // A zero-duration yield immediately requeues the task and keeps an
-        // otherwise idle executor busy for the whole hardware interval.
-        Timer::after(Duration::from_millis(1)).await;
+    let completion_started_ns = crate::chronos::monotonic_nanos();
+    let completion = wait_for_ring_completion(backing.completion_virt, completion_sequence).await;
+    report.retired = completion.sequence == completion_sequence;
+    report.completion_observed = completion.sequence;
+    report.completion_watchdog = completion.watchdog;
+    report.completion_route_failed = completion.route_failed;
+    report.completion_wait_us = elapsed_us(completion_started_ns);
+    report.poll_iters = completion.wakeups;
+    if completion.watchdog || completion.route_failed || !report.retired {
+        crate::log_warn!(target: "intel/media-encode";
+            "intel/media-encode: ring-completion expected={} observed={} retired={} wakeups={} watchdog={} route_failed={} wait_us={} irq={:?}\n",
+            completion_sequence, completion.sequence, report.retired as u8, completion.wakeups,
+            completion.watchdog as u8, completion.route_failed as u8,
+            report.completion_wait_us, crate::intel::interrupts::snapshot());
     }
 
     crate::intel::dma_flush(result_virt, RESULT_BYTES);
@@ -1274,10 +1315,13 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
         return quarantine(lane, report, AvcEncodeProbeFailure::CompletionTimeout, started_ns);
     }
 
-    // The terminal batch marker proves execution, but GuC still owns the
-    // cache line containing saved HEAD and software TAIL. Observe saved HEAD
-    // before a later picture advances that line in place.
-    let context_save_deadline = crate::chronos::monotonic_nanos().saturating_add(TIMEOUT_NS);
+    // The ring breadcrumb proves execution after both batch returns, but
+    // MI_USER_INTERRUPT does not stop the parser or prove context save. GuC
+    // still owns the cache line containing saved HEAD and software TAIL.
+    // Observe saved HEAD before a later picture updates that line or another
+    // media mode acquires this lane and resets the engine for reactivation.
+    let context_save_started_ns = crate::chronos::monotonic_nanos();
+    let context_save_deadline = context_save_started_ns.saturating_add(TIMEOUT_NS);
     loop {
         let saved_head =
             media::read_gen12_video_context_ring_head(backing.context_virt, CONTEXT_BYTES)
@@ -1286,10 +1330,21 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
         if saved_head == ring_tail_bytes as u32 {
             break;
         }
+        report.context_save_poll_iters = report.context_save_poll_iters.saturating_add(1);
         if crate::chronos::monotonic_nanos() >= context_save_deadline {
+            report.context_save_wait_us = elapsed_us(context_save_started_ns);
             return quarantine(lane, report, AvcEncodeProbeFailure::ContextTeardown, started_ns);
         }
         Timer::after(Duration::from_millis(1)).await;
+    }
+    report.context_save_wait_us = elapsed_us(context_save_started_ns);
+    if first_registration || backing.submissions.is_power_of_two() {
+        crate::log_info!(target: "gfx";
+            "intel/media-encode: completion submission={} sequence={} observed={} wakeups={} watchdog={} completion_wait_us={} saved_head_poll_iters={} saved_head_wait_us={} irq={:?}\n",
+            backing.submissions, completion_sequence, report.completion_observed, report.poll_iters,
+            report.completion_watchdog as u8, report.completion_wait_us,
+            report.context_save_poll_iters, report.context_save_wait_us,
+            crate::intel::interrupts::snapshot());
     }
     // False now means deliberately retained rather than teardown failure.
     report.context_destroyed = false;
@@ -1359,9 +1414,74 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     report
 }
 
+// Zero is the never-submitted value. Refuse exhaustion rather than allowing a
+// stale breadcrumb or delayed interrupt to match a wrapped sequence while a
+// retained context still owns the same physical page.
+fn next_completion_sequence(previous: u32) -> Option<u32> {
+    previous.checked_add(1)
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct RingCompletionWait {
+    sequence: u32,
+    wakeups: u32,
+    watchdog: bool,
+    route_failed: bool,
+}
+
+fn read_ring_completion(completion_virt: *mut u8) -> u32 {
+    crate::intel::dma_flush(completion_virt, core::mem::size_of::<u32>());
+    unsafe { core::ptr::read_volatile(completion_virt.cast::<u32>()) }
+}
+
+/// One serialized encoder owner follows one exact GPU-written sequence. IRQs
+/// only wake this task; stale/spurious wakes cannot retire a picture. Observe
+/// the generation before reading memory, then register/recheck in the IRQ
+/// helper, closing completion-before-register races with one watchdog timer.
+async fn wait_for_ring_completion(completion_virt: *mut u8, expected: u32) -> RingCompletionWait {
+    let deadline = crate::chronos::monotonic_nanos().saturating_add(TIMEOUT_NS);
+    let watchdog = Timer::after(Duration::from_nanos(TIMEOUT_NS));
+    let mut watchdog = core::pin::pin!(watchdog);
+    let mut result = RingCompletionWait {
+        sequence: 0,
+        wakeups: 0,
+        watchdog: false,
+        route_failed: false,
+    };
+    loop {
+        let observed = crate::intel::interrupts::vcs0_generation();
+        result.sequence = read_ring_completion(completion_virt);
+        if result.sequence == expected {
+            return result;
+        }
+        if !crate::intel::interrupts::vcs0_route_ready() {
+            result.route_failed = true;
+            return result;
+        }
+        // Bound even an interrupt storm whose generation continually changes
+        // before the wait helper gets as far as polling the timer.
+        if crate::chronos::monotonic_nanos() >= deadline {
+            result.watchdog = true;
+            result.sequence = read_ring_completion(completion_virt);
+            return result;
+        }
+        if !crate::intel::interrupts::wait_vcs0_after(observed, watchdog.as_mut()).await {
+            result.watchdog = true;
+            // Completion can race the final timer wake, or be visible despite
+            // a lost interrupt. It is still valid execution proof; report the
+            // missed wake so the hardware route can be validated separately.
+            result.sequence = read_ring_completion(completion_virt);
+            return result;
+        }
+        result.wakeups = result.wakeups.saturating_add(1);
+    }
+}
+
 fn build_backing(dev: crate::intel::Dev) -> Option<ProbeBacking> {
     let (ring_phys, ring_virt) = crate::dma::alloc(RING_BYTES, crate::intel::WARM_ALIGN)?;
     let (context_phys, context_virt) = crate::dma::alloc(CONTEXT_BYTES, crate::intel::WARM_ALIGN)?;
+    let (completion_phys, completion_virt) =
+        crate::dma::alloc(COMPLETION_BYTES, crate::intel::WARM_ALIGN)?;
     let (arena_phys, arena_virt) = crate::dma::alloc(ARENA_BYTES, crate::intel::WARM_ALIGN)?;
 
     // Establish deterministic first-use contents once. Recon, downscale,
@@ -1370,9 +1490,15 @@ fn build_backing(dev: crate::intel::Dev) -> Option<ProbeBacking> {
     // adds no visibility to the terminal media fence and burns a 7.7 MiB CPU
     // zero plus a 7.7 MiB cache flush for every 40 Hz encode.
     initialize_arena_work_ranges(arena_virt);
+    // Initialize once before registration. Thereafter only VCS0 writes the
+    // breadcrumb line; CPU cache maintenance can never write a dirty old
+    // sequence back over a later GPU completion.
+    unsafe { core::ptr::write_bytes(completion_virt, 0, COMPLETION_BYTES) };
+    crate::intel::dma_flush(completion_virt, COMPLETION_BYTES);
 
     if !crate::intel::map_ggtt(dev, ring_phys, RING_BYTES, RING_GGTT)
         || !crate::intel::map_ggtt(dev, context_phys, CONTEXT_BYTES, CONTEXT_GGTT)
+        || !crate::intel::map_ggtt(dev, completion_phys, COMPLETION_BYTES, COMPLETION_GGTT)
     {
         return None;
     }
@@ -1386,6 +1512,7 @@ fn build_backing(dev: crate::intel::Dev) -> Option<ProbeBacking> {
     Some(ProbeBacking {
         ring_virt,
         context_virt,
+        completion_virt,
         arena_phys,
         arena_virt,
         ppgtt,
@@ -1393,6 +1520,7 @@ fn build_backing(dev: crate::intel::Dev) -> Option<ProbeBacking> {
         guc_token: None,
         context_initialized: false,
         ring_tail_bytes: 0,
+        completion_sequence: 0,
         submissions: 0,
     })
 }

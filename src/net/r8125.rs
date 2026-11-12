@@ -10,6 +10,9 @@ use crate::net::device::LinkState;
 use crate::net::ring::{DmaRegion, NetRing};
 use crate::pci;
 
+mod stall_deadline;
+use stall_deadline::{StallAction, StallDeadline};
+
 const REALTEK_VENDOR_ID: u16 = 0x10EC;
 const RTL8125_DEVICE_ID: u16 = 0x8125;
 
@@ -357,6 +360,9 @@ pub struct R8125Adapter {
     mac: [u8; 6],
     snapshot: R8125Snapshot,
     ring: Option<*mut NetRing>,
+    irq_device: Option<usize>,
+    irq_health_due_ms: u64,
+    tx_stall_deadline: StallDeadline,
 
     _rx_desc_mem: DmaRegion,
     rx_desc_phys: u64,
@@ -409,6 +415,48 @@ pub struct R8125Adapter {
 unsafe impl Send for R8125Adapter {}
 
 impl R8125Adapter {
+    /// The first interrupt implementation targets the physical RTL8125B used
+    /// by the rig. Other MAC families retain their established poll path.
+    pub(crate) fn configure_irq(&mut self, index: usize) -> bool {
+        if self.snapshot.xid != 0x641 || self.snapshot.revision != 0x05 {
+            return false;
+        }
+        if !super::interrupts::configure_r8125(
+            index,
+            self.pci.bus,
+            self.pci.slot,
+            self.pci.function,
+            self.mmio.base.as_ptr() as usize,
+        ) {
+            return false;
+        }
+        // Linux v6.12 rtl_hw_start_8125b: ordinary MSI causes, no timer-based
+        // interrupt coalescing. The module keeps IMR masked until service arms.
+        unsafe {
+            self.mmio.write_u8(0x34, 0);
+            for register in (0xa00..0xa80).step_by(4) {
+                self.mmio.write_u32(register, 0);
+            }
+            self.mmio.write_u16(0x7a, 0);
+        }
+        self.irq_device = Some(index);
+        self.irq_health_due_ms = trueos_time::Instant::now().as_millis();
+        true
+    }
+
+    pub(crate) fn irq_work_pending(&mut self) -> bool {
+        let rx = unsafe { read_volatile(self.rx_desc.add(self.rx_idx)).opts1 & DESC_OWN == 0 };
+        let tx = !self.dbg_tx_quarantined && self.tx_head != self.tx_tail && {
+            let descriptor = unsafe { self.tx_desc.add(self.tx_head) };
+            Self::maybe_clflush(
+                descriptor.cast(),
+                core::mem::size_of::<TxDesc>(),
+                EXP_R8125_CLFLUSH_TX_DESC_ON_RECLAIM,
+            );
+            unsafe { read_volatile(descriptor).opts1 & DESC_OWN == 0 }
+        };
+        rx || tx
+    }
     unsafe fn read_mac_at(mmio: &Mmio, reg: u16) -> [u8; 6] {
         let mut mac = [0u8; 6];
         for (i, octet) in mac.iter_mut().enumerate() {
@@ -841,6 +889,7 @@ impl R8125Adapter {
         self.tx_head = Self::tx_start_index();
         self.tx_tail = Self::tx_start_index();
         self.dbg_tx_stall_checks = 0;
+        self.tx_stall_deadline.progress();
         self.dbg_tx_quarantined = false;
         self.ring_tx_doorbell("datapath-recovery");
         self.log_hw_state("datapath-recovery-post");
@@ -1472,6 +1521,9 @@ impl R8125Adapter {
             mac,
             snapshot,
             ring: None,
+            irq_device: None,
+            irq_health_due_ms: 0,
+            tx_stall_deadline: StallDeadline::new(),
             _rx_desc_mem: rx_desc_mem,
             rx_desc_phys,
             rx_desc,
@@ -1619,6 +1671,7 @@ impl R8125Adapter {
             self.tx_head = Self::tx_start_index();
             self.tx_tail = Self::tx_start_index();
             self.dbg_tx_stall_checks = 0;
+            self.tx_stall_deadline.progress();
 
             let cmd_re = self.mmio.read_u8(REG_CMD);
             self.mmio.write_u8(REG_CMD, cmd_re | CMD_TX_EN | CMD_RX_EN);
@@ -1669,11 +1722,17 @@ impl R8125Adapter {
                 // Seeing OWN set immediately after submission is normal; only treat it as a
                 // stall if it persists across many polls.
                 self.dbg_tx_stall_checks = self.dbg_tx_stall_checks.saturating_add(1);
-                if self.dbg_tx_submitted != 0
-                    && self
-                        .dbg_tx_stall_checks
-                        .is_multiple_of(TX_STALL_KICK_THRESHOLD)
-                {
+                let action = if self.irq_device.is_some() {
+                    self.tx_stall_deadline
+                        .pending(trueos_time::Instant::now().as_millis())
+                } else if self.dbg_tx_stall_checks >= TX_STALL_RESET_THRESHOLD {
+                    StallAction::Reset
+                } else if self.dbg_tx_stall_checks.is_multiple_of(TX_STALL_KICK_THRESHOLD) {
+                    StallAction::Kick
+                } else {
+                    StallAction::None
+                };
+                if self.dbg_tx_submitted != 0 && action == StallAction::Kick {
                     crate::log_warn!(
                         target: "net";
                         "net/r8125: tx stall checks={} head={} tail={} desc_opts1=0x{:08x} kicks={} resets={}\n",
@@ -1689,9 +1748,7 @@ impl R8125Adapter {
                     self.kick_tx_engine();
                 }
 
-                if self.dbg_tx_submitted != 0
-                    && self.dbg_tx_stall_checks >= TX_STALL_RESET_THRESHOLD
-                {
+                if self.dbg_tx_submitted != 0 && action == StallAction::Reset {
                     self.reset_tx_ring_controlled("stall-threshold");
                 }
                 break;
@@ -1699,6 +1756,7 @@ impl R8125Adapter {
             self.tx_head = (self.tx_head + 1) % TX_DESC_COUNT;
 
             self.dbg_tx_stall_checks = 0;
+            self.tx_stall_deadline.progress();
 
             self.dbg_tx_reclaimed = self.dbg_tx_reclaimed.saturating_add(1);
             if self.dbg_tx_reclaimed == 1 {
@@ -1709,11 +1767,17 @@ impl R8125Adapter {
 
     fn poll_rx_ring(&mut self) {
         self.dbg_poll_ticks = self.dbg_poll_ticks.saturating_add(1);
-
-        if self.dbg_poll_ticks <= RX_TRACE_EARLY_POLLS
-            || self
-                .dbg_poll_ticks
-                .is_multiple_of(DATAPATH_INTEGRITY_POLL_EVERY)
+        let now_ms = trueos_time::Instant::now().as_millis();
+        let health_due = self.irq_device.is_some() && now_ms >= self.irq_health_due_ms;
+        if health_due {
+            self.irq_health_due_ms = now_ms.saturating_add(1_000);
+        }
+        if health_due
+            || (self.irq_device.is_none()
+                && (self.dbg_poll_ticks <= RX_TRACE_EARLY_POLLS
+                    || self
+                        .dbg_poll_ticks
+                        .is_multiple_of(DATAPATH_INTEGRITY_POLL_EVERY)))
         {
             self.recover_datapath_if_needed("poll");
         }

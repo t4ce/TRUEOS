@@ -52,6 +52,7 @@ static APP_QUEUES: spin::Mutex<Vec<AppQueues>> = spin::Mutex::new(Vec::new());
 @REGISTER@
 @SERVICE_WAKE@
 @WAKE_SERVICE@
+@WAKE_SERVICE_INDEX@
 @SERVICE_WAIT@
 @OWNER_DEVICE@
 mod net {
@@ -207,6 +208,25 @@ fn registration_catches_existing_commands_and_explicit_nic_ignores_primary_chang
     APP_QUEUES.lock().clear();
 }
 #[test]
+fn removing_events_wakes_the_service_to_retry_retained_credit_and_receive_bytes() {
+    APP_QUEUES.lock().clear();
+    net::PRIMARY.store(1, Ordering::SeqCst);
+    let commands = NetQueue::new_leaked("space-commands", 1);
+    let events = NetQueue::new_leaked("space-events", 2);
+    register_app_queues("queue-space", commands, events);
+    events.push(NetEvent::Ready).ok().unwrap(); events.push(NetEvent::Ready).ok().unwrap();
+    let before = NET_SERVICE_WAKE[1].observe();
+    assert!(events.pop().is_some());
+    assert_ne!(NET_SERVICE_WAKE[1].observe(), before);
+    let after_pop = NET_SERVICE_WAKE[1].observe();
+    assert_eq!(events.drain(2).len(), 1);
+    assert_ne!(NET_SERVICE_WAKE[1].observe(), after_pop);
+    let empty = NET_SERVICE_WAKE[1].observe();
+    assert!(events.pop().is_none()); assert!(events.drain(3).is_empty());
+    assert_eq!(NET_SERVICE_WAKE[1].observe(), empty);
+    APP_QUEUES.lock().clear();
+}
+#[test]
 fn service_wait_still_runs_maintenance_without_new_commands() {
     MAINTENANCE_DUE.store(false, Ordering::SeqCst);
     let mut waiting = std::pin::pin!(wait_for_service_work(1, NET_SERVICE_WAKE[1].observe()));
@@ -230,6 +250,7 @@ def main():
         "SERVICE_WAKE": re.search(
             r"static NET_SERVICE_WAKE:[\s\S]*?;\n", source)[0],
         "WAKE_SERVICE": item(source, "fn wake_service_for_owner("),
+        "WAKE_SERVICE_INDEX": item(source, "fn wake_service("),
         "SERVICE_WAIT": item(source, "async fn wait_for_service_work("),
         "OWNER_DEVICE": item(source, "fn owner_device_index("),
     }

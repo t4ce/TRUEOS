@@ -59,6 +59,10 @@ impl<A: VendorAdapter> NetCore<A> {
     pub fn pci_device(&self) -> Option<crate::pci::PciDevice> {
         self.adapter.pci_device()
     }
+
+    pub(crate) fn adapter_mut(&mut self) -> &mut A {
+        &mut self.adapter
+    }
 }
 
 impl<A: VendorAdapter> NetDevice for NetCore<A> {

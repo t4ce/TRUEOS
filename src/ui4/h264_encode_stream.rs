@@ -524,7 +524,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
         .map(|profile| profile.core_kind_name())
         .unwrap_or("unknown");
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: service online carrier=bsp-cooperative worker_slot={} worker_kind={} exclusive_carrier=0 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=pipe-c-wd0-xyuv8888-mirror-map-slots0-5 encode_size={}x{} target_fps={} backend=gen12-vdenc-mfx vcs0_context=retained-hwlrca+persistent-ring completion_wait=timer-tick-poll output=udp-only live_high_water_cap={} pipeline=wd-capture+encode-producer->one-way-bounded-au-handoff udp_egress=ordinary-executor preparation=cooperative-bsp-serialized slots={} encoder_arena_cpu_maintenance=one-time-output-init+per-frame-command-result-only filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
+        "intel/media-encode: service online carrier=bsp-cooperative worker_slot={} worker_kind={} exclusive_carrier=0 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=pipe-c-wd0-xyuv8888-mirror-map-slots0-5 encode_size={}x{} target_fps={} backend=gen12-vdenc-mfx vcs0_context=retained-hwlrca+persistent-ring completion_wait=vcs0-user-interrupt+ring-ggtt-sequence saved_context_wait=timer-tick-poll output=authenticated-ssh live_high_water_cap={} pipeline=wd-capture+encode-producer->one-way-bounded-au-handoff media_egress=queue-readiness preparation=cooperative-bsp-serialized slots={} encoder_arena_cpu_maintenance=one-time-output-init+per-frame-command-result-only filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 media_protocol=tme1 carrier=ssh start_delay_ms={}\n",
         worker_slot,
         worker_kind,
         ENCODE_WIDTH,
@@ -532,7 +532,6 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
         crate::allcaps::media_encode::REALTIME_HZ,
         super::h264_encode_udp::encoded_access_unit_queue_cap(),
         PREPARE_SLOT_COUNT,
-        crate::allports::services::MEDIA_ENCODE_UDP_PORT,
         PROBE_START_DELAY_MS,
     );
 
@@ -619,7 +618,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
         }
         if avc_probe.state == crate::intel::media::avc_encode_probe::AvcEncodeProbeState::Passed {
             crate::log_info!(target: "intel/media-encode";
-                "intel/media-encode: avc-idr-probe accepted=1 engine=vcs0 codec_mode=avc-encode submission_owner=guc batch_level=second-level-return terminal_fence=primary-batch-return-marker source=procedural-nv12 source_layout=nv12-linear visible={}x{} pitch={} source_bytes={} source_fnv1a32=0x{:08X} embedded_probe_asset_bytes=0 backing={} surface_uploaded={} batch={} batch_bytes={} primary_batch_bytes={} ring_bytes={} codec_packets={} bitstream_buffer_bound={} registered={} submitted={} retired={} context_retained={} serial={} hwlrca=0x{:08X}:0x{:08X} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} poll_iters={} elapsed_us={} attempts={} coded_output_validated={} frame_bytes_no_excluded_headers={} excluded_header_bytes={} coded_bytes={} coded_fnv1a32=0x{:08X} nal_flags=0b{:04b} mfx_error=0x{:08X} image_status=0x{:08X} slice_bytes={} slices={} bitstream_head={:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X} hardware_encode=1\n",
+                "intel/media-encode: avc-idr-probe accepted=1 engine=vcs0 codec_mode=avc-encode submission_owner=guc batch_level=second-level-return terminal_fence=ring-ggtt-sequence-after-primary-return source=procedural-nv12 source_layout=nv12-linear visible={}x{} pitch={} source_bytes={} source_fnv1a32=0x{:08X} embedded_probe_asset_bytes=0 backing={} surface_uploaded={} batch={} batch_bytes={} primary_batch_bytes={} ring_bytes={} codec_packets={} bitstream_buffer_bound={} registered={} submitted={} retired={} context_retained={} serial={} hwlrca=0x{:08X}:0x{:08X} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} poll_iters={} elapsed_us={} attempts={} coded_output_validated={} frame_bytes_no_excluded_headers={} excluded_header_bytes={} coded_bytes={} coded_fnv1a32=0x{:08X} nal_flags=0b{:04b} mfx_error=0x{:08X} image_status=0x{:08X} slice_bytes={} slices={} bitstream_head={:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X} hardware_encode=1\n",
                 ENCODE_WIDTH,
                 ENCODE_HEIGHT,
                 ENCODE_WIDTH,
@@ -668,7 +667,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             );
         } else {
             crate::log_error!(target: "intel/media-encode";
-                "intel/media-encode: avc-idr-probe accepted=0 state={:?} failure={} codec_mode=avc-encode submission_owner=guc batch_level=second-level-return terminal_fence=primary-batch-return-marker forcewake={} backing={} surface_uploaded={} batch={} batch_bytes={} primary_batch_bytes={} ring_bytes={} codec_packets={} bitstream_buffer_bound={} registered={} submitted={} retired={} context_destroyed={} serial={} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} poll_iters={} elapsed_us={} attempts={} coded_output_validated={} frame_bytes_no_excluded_headers={} excluded_header_bytes={} coded_bytes={} coded_fnv1a32=0x{:08X} nal_flags=0b{:04b} mfx_error=0x{:08X} image_status=0x{:08X} slice_bytes={} slices={} bitstream_head={:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X} bitstream_tail={:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X} hardware_encode=0 software_fallback=0 action=park\n",
+                "intel/media-encode: avc-idr-probe accepted=0 state={:?} failure={} codec_mode=avc-encode submission_owner=guc batch_level=second-level-return terminal_fence=ring-ggtt-sequence-after-primary-return forcewake={} backing={} surface_uploaded={} batch={} batch_bytes={} primary_batch_bytes={} ring_bytes={} codec_packets={} bitstream_buffer_bound={} registered={} submitted={} retired={} context_destroyed={} serial={} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} poll_iters={} elapsed_us={} attempts={} coded_output_validated={} frame_bytes_no_excluded_headers={} excluded_header_bytes={} coded_bytes={} coded_fnv1a32=0x{:08X} nal_flags=0b{:04b} mfx_error=0x{:08X} image_status=0x{:08X} slice_bytes={} slices={} bitstream_head={:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X} bitstream_tail={:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X}/{:08X} hardware_encode=0 software_fallback=0 action=park\n",
                 avc_probe.state,
                 avc_probe.failure.name(),
                 avc_probe.forcewake as u8,

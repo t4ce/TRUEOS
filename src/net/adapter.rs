@@ -141,6 +141,8 @@ pub fn internal_netbench_submit(
         remote_port,
         request: request.to_vec(),
     });
+    drop(guard);
+    wake_service(device_index);
     true
 }
 
@@ -161,6 +163,8 @@ pub fn internal_netbench_submit_v6(
         remote_port,
         request: request.to_vec(),
     });
+    drop(guard);
+    wake_service(device_index);
     true
 }
 
@@ -205,6 +209,7 @@ const ICMP_VNET_MAX_INFLIGHT: usize = crate::allcaps::net::ICMP_VNET_MAX_INFLIGH
 const ICMP_VNET_TIMEOUT_MS: i64 = crate::allcaps::net::ICMP_VNET_TIMEOUT_MS;
 const NET_POLL_IDLE_SOFTCAP_US: u64 = crate::allcaps::net::NET_POLL_IDLE_SOFTCAP_MS * 1_000;
 const NET_SERVICE_SLEEP_US: u64 = crate::allcaps::net::NET_SERVICE_SLEEP_US;
+const IRQ_HEALTH_INTERVAL_MS: u64 = 1_000;
 // DHCPv6 bring-up is easy to misdiagnose because failures often look like
 // "nothing happens". Keep a tiny amount of always-on logging on state changes
 // and a small RX sample to make it obvious whether we transmit/receive.
@@ -791,6 +796,7 @@ pub struct NetQueue<T> {
     dropped: AtomicU32,
     changed: crate::wait::WaitQueue,
     push_wake: spin::Once<(&'static str, fn(&'static str))>,
+    pop_wake: spin::Once<(&'static str, fn(&'static str))>,
 }
 
 impl<T> NetQueue<T> {
@@ -802,6 +808,7 @@ impl<T> NetQueue<T> {
             dropped: AtomicU32::new(0),
             changed: crate::wait::WaitQueue::new(),
             push_wake: spin::Once::new(),
+            pop_wake: spin::Once::new(),
         };
         Box::leak(Box::new(q))
     }
@@ -850,6 +857,18 @@ impl<T> NetQueue<T> {
         }
     }
 
+    /// Event queue space may unblock retained TCP credit or receive bytes.
+    fn wake_on_pop(&self, owner: &'static str, wake: fn(&'static str)) {
+        self.pop_wake.call_once(|| (owner, wake));
+        let has_space = self.inner.lock().len() < self.capacity;
+        if has_space { wake(owner); }
+    }
+
+    fn notify_removed(&self) {
+        self.changed.notify_all();
+        if let Some(&(owner, wake)) = self.pop_wake.get() { wake(owner); }
+    }
+
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.inner.lock().is_empty()
@@ -858,7 +877,7 @@ impl<T> NetQueue<T> {
     pub fn pop(&self) -> Option<T> {
         let item = self.inner.lock().pop_front();
         if item.is_some() {
-            self.changed.notify_all();
+            self.notify_removed();
         }
         item
     }
@@ -875,7 +894,7 @@ impl<T> NetQueue<T> {
         }
         drop(guard);
         if !out.is_empty() {
-            self.changed.notify_all();
+            self.notify_removed();
         }
         out
     }
@@ -945,6 +964,7 @@ pub fn register_app_queues(
     guard.push(AppQueues { name, cmds, events });
     drop(guard);
     cmds.wake_on_push(name, wake_service_for_owner);
+    events.wake_on_pop(name, wake_service_for_owner);
 }
 
 fn pop_command_for_device(device_index: usize) -> Option<(&'static str, NetCommand)> {
@@ -2607,6 +2627,59 @@ impl NetService {
         } else {
             false
         }
+    }
+
+    /// Protocol timers are deadlines, not a fixed stack polling period.
+    /// The slow health deadline also preserves driver/link recovery in silence.
+    fn next_deadline(&mut self, timestamp: Instant, tx_ready: bool) -> Instant {
+        let mut deadline = timestamp + SmolDuration::from_millis(IRQ_HEALTH_INTERVAL_MS);
+        // A past deadline is runnable only when its work can make progress.
+        // A full/down NIC instead resumes on TX/link IRQ or the health timer;
+        // future protocol deadlines remain armed even under backpressure.
+        let mut earlier = |candidate: Instant, ready: bool| {
+            if candidate > timestamp || ready { deadline = deadline.min(candidate); }
+        };
+        if let Some(protocol) = self.iface.poll_at(timestamp, &self.sockets) { earlier(protocol, tx_ready); }
+
+        if self.router_ipv6.is_none() && self.local_ipv6_global.is_none() {
+            earlier(self.rs_last_sent.map(|last| last + SmolDuration::from_millis(IPV6_RS_RETRY_MS as u64))
+                .unwrap_or(timestamp), tx_ready && self.sockets.get::<raw::Socket>(self.raw_icmpv6).can_send());
+        }
+        let dhcp6_ready = tx_ready && self.sockets.get::<udp::Socket>(self.dhcp6_udp).can_send();
+        let want_address = self.ra_managed && !self.ipv6_global_is_dhcp;
+        let have_dns = self.ra_dns6_count != 0 || self.dhcp6_dns6_count != 0;
+        let want_dns = if DHCP6_EAGER_DNS { !have_dns }
+            else { self.ra_other && self.dhcp6_dns6_count == 0 };
+        if self.dhcp6_stage == Dhcp6Stage::Bound && want_address {
+            earlier(timestamp, dhcp6_ready);
+        } else if self.dhcp6_stage == Dhcp6Stage::Idle {
+            if want_address || want_dns { earlier(self.dhcp6_cooldown_until.unwrap_or(timestamp), dhcp6_ready); }
+        } else if let Some(last) = self.dhcp6_last_sent {
+            let backoff = (u64::from(self.dhcp6_retries) + 1).clamp(1, 8);
+            earlier(last + SmolDuration::from_millis(1500 * backoff), dhcp6_ready);
+        }
+        if self.link_up() {
+            let ping_ready = tx_ready && self.sockets.get::<icmp::Socket>(self.icmp).can_send();
+            if self.icmp_ping_pongs == 0 && self.router_ipv4.is_some() {
+                earlier(if let Some((_, sent)) = self.icmp_ping_inflight {
+                    sent + SmolDuration::from_millis(2000)
+                } else { self.icmp_ping_last_sent.map(|last| last + SmolDuration::from_millis(1000)).unwrap_or(timestamp) }, ping_ready);
+            }
+            if self.icmp6_ping_pongs == 0 && self.router_ipv6.is_some() {
+                earlier(if let Some((_, sent)) = self.icmp6_ping_inflight {
+                    sent + SmolDuration::from_millis(2500)
+                } else { self.icmp6_ping_last_sent.map(|last| last + SmolDuration::from_millis(1000)).unwrap_or(timestamp) }, ping_ready);
+            }
+        }
+        for pending in &self.icmp_vnet_inflight {
+            earlier(pending.sent_at + SmolDuration::from_millis(ICMP_VNET_TIMEOUT_MS as u64), true);
+        }
+        for run in &self.internal_netbench {
+            let micros = (u128::from(run.last_log_tick) * 1_000_000 / u128::from(embassy_time_driver::TICK_HZ))
+                .min(i64::MAX as u128) as i64;
+            earlier(Instant::from_micros(micros) + SmolDuration::from_secs(1), true);
+        }
+        deadline
     }
 
     fn link_up(&self) -> bool {
@@ -5930,6 +6003,11 @@ pub async fn net_poll_task(index: usize) {
         };
         let mut cadence = RxPollCadence::new(NET_POLL_IDLE_SOFTCAP_US, frame_counts());
         loop {
+            if crate::net::irq_supported_at(index) {
+                crate::log_info!(target: "net";
+                    "net-poll-task: dev={} scheduling=retired owner=irq-network-service\n", index);
+                return;
+            }
             loop_count = loop_count.saturating_add(1);
             let loop_started_ms = trueos_time::Instant::now().as_millis();
 
@@ -6010,6 +6088,10 @@ static NET_SERVICE_WAKE: [crate::wait::WaitQueue; MAX_NET_DEVICES] =
 
 fn wake_service_for_owner(owner: &'static str) {
     let index = owner_device_index(owner).unwrap_or_else(crate::net::primary_device_index);
+    wake_service(index);
+}
+
+fn wake_service(index: usize) {
     if let Some(wake) = NET_SERVICE_WAKE.get(index) {
         wake.notify_all();
     }
@@ -6030,6 +6112,36 @@ async fn wait_for_service_work(index: usize, observed: u32) {
     .await;
 }
 
+async fn yield_service() {
+    let mut yielded = false;
+    core::future::poll_fn(|cx| {
+        if yielded { core::task::Poll::Ready(()) } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            core::task::Poll::Pending
+        }
+    }).await;
+}
+
+fn service_deadline(index: usize) -> Instant {
+    let timestamp = now();
+    let tx_ready = crate::net::transmit_ready_at(index);
+    service_for_device(index).map(|service| service.lock().next_deadline(timestamp, tx_ready))
+        .unwrap_or(timestamp + SmolDuration::from_millis(IRQ_HEALTH_INTERVAL_MS))
+}
+
+async fn wait_for_irq_service_work(index: usize, observed: u32, irq_observed: u64, next: Instant) {
+    let mut notified = core::pin::pin!(NET_SERVICE_WAKE[index].wait_after(observed));
+    let mut interrupt = core::pin::pin!(super::interrupts::wait_after(index, irq_observed));
+    let mut deadline = core::pin::pin!(Timer::at(trueos_time::Instant::from_micros(next.total_micros().max(0) as u64)));
+    core::future::poll_fn(|cx| {
+        if notified.as_mut().poll(cx).is_ready() || interrupt.as_mut().poll(cx).is_ready() {
+            return core::task::Poll::Ready(());
+        }
+        deadline.as_mut().poll(cx)
+    }).await;
+}
+
 #[task(pool_size = MAX_NET_DEVICES)]
 pub async fn net_service_task(index: usize) {
     async move {
@@ -6043,9 +6155,39 @@ pub async fn net_service_task(index: usize) {
             return;
         }
         ensure_services(count);
+        let mut irq_passes = 0u64;
+        let mut irq_report_at = now();
 
         loop {
             let observed = NET_SERVICE_WAKE[index].observe();
+            if crate::net::irq_supported_at(index) {
+                let irq_observed = super::interrupts::generation(index);
+                crate::net::mask_irq_at(index);
+                crate::net::poll_at(index);
+                let busy = service_tick_once(index, false);
+                let pending = crate::net::rearm_irq_at(index);
+                let next = service_deadline(index);
+                irq_passes = irq_passes.saturating_add(1);
+                let timestamp = now();
+                if timestamp >= irq_report_at {
+                    let irq = super::interrupts::snapshot();
+                    crate::log_info!(target: "net";
+                        "net/irq: progress dev={} passes={} interrupts={} rearm_races={} last_status=0x{:x} faulted={} next_ms={} scheduling=irq+queue+protocol-deadlines health_ms={}\n",
+                        index, irq_passes, irq.interrupts, irq.rearm_races, irq.last_status, irq.faulted,
+                        next.total_millis().saturating_sub(timestamp.total_millis()), IRQ_HEALTH_INTERVAL_MS);
+                    irq_report_at = timestamp + SmolDuration::from_secs(5);
+                }
+                if super::interrupts::is_faulted(index) {
+                    // The original RX task retired when this route was
+                    // admitted. This task retains driver progress on fault.
+                    wait_for_service_work(index, observed).await;
+                } else if busy || pending || next <= now() {
+                    yield_service().await;
+                } else {
+                    wait_for_irq_service_work(index, observed, irq_observed, next).await;
+                }
+                continue;
+            }
             if service_tick_once(index, false) {
                 Timer::after(EmbassyDuration::from_micros(0)).await;
             } else {
