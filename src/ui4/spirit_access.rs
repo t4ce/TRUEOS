@@ -85,12 +85,14 @@ enum Bucket {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RemoteDevice {
     authority: RemoteInputAuthority,
-    vm: u8,
-    run: u64,
+    owner: RemoteOwner,
     kind: hut::HidDeviceKind,
     slot: u32,
     combo: u32,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RemoteOwner { Vm { vm: u8, run: u64 }, NativeSsh }
 
 fn remote_device(vm: u8, kind: hut::HidDeviceKind, slot: u32) -> Option<RemoteDevice> {
     if !vm_live(vm, None) {
@@ -112,12 +114,21 @@ fn remote_device(vm: u8, kind: hut::HidDeviceKind, slot: u32) -> Option<RemoteDe
     }
     Some(RemoteDevice {
         authority,
-        vm,
-        run,
+        owner: RemoteOwner::Vm { vm, run },
         kind,
         slot,
         combo: device.combo_id,
     })
+}
+
+fn native_remote_device(kind: hut::HidDeviceKind, slot: u32) -> Option<RemoteDevice> {
+    let (authority, combo) = crate::shell3::rdp::device_authority(kind, slot)?;
+    let member = hut::devices_snapshot().into_iter().any(|device| {
+        device.id.kind == kind && device.id.controller_id == 0 && device.id.slot_id == slot
+            && device.id.ep_target == 0 && device.virtual_device
+            && device.source_kind == HidSourceKind::Remote && device.combo_id == combo
+    });
+    member.then_some(RemoteDevice { authority, owner: RemoteOwner::NativeSsh, kind, slot, combo })
 }
 
 fn guest_bucket(vm: u8, kind: hut::HidDeviceKind, slot: u32) -> Bucket {
@@ -140,16 +151,22 @@ fn guest_bucket(vm: u8, kind: hut::HidDeviceKind, slot: u32) -> Bucket {
 
 fn remote_device_valid(device: RemoteDevice) -> bool {
     use crate::r::services::{keyboard_control_service as keyboard, mouse_motion_service as mouse};
-    let owned = match device.kind {
-        hut::HidDeviceKind::Mouse => matches!(mouse::cursor_principal(device.slot),
-            Some(mouse::MouseControlPrincipal::Vm(vm)) if vm == device.vm),
-        hut::HidDeviceKind::Keyboard => matches!(keyboard::keyboard_principal(device.slot),
-            Some(keyboard::KeyboardControlPrincipal::Vm(vm)) if vm == device.vm),
+    let owned = match (device.owner, device.kind) {
+        (RemoteOwner::Vm { vm, .. }, hut::HidDeviceKind::Mouse) => matches!(mouse::cursor_principal(device.slot),
+            Some(mouse::MouseControlPrincipal::Vm(owner)) if owner == vm),
+        (RemoteOwner::Vm { vm, .. }, hut::HidDeviceKind::Keyboard) => matches!(keyboard::keyboard_principal(device.slot),
+            Some(keyboard::KeyboardControlPrincipal::Vm(owner)) if owner == vm),
+        (RemoteOwner::NativeSsh, hut::HidDeviceKind::Mouse) => matches!(mouse::cursor_principal(device.slot), Some(mouse::MouseControlPrincipal::Kernel)),
+        (RemoteOwner::NativeSsh, hut::HidDeviceKind::Keyboard) => matches!(keyboard::keyboard_principal(device.slot), Some(keyboard::KeyboardControlPrincipal::Kernel)),
         _ => false,
     };
     owned
         && crate::shell3::tui::remote_input_authority_valid(device.authority)
-        && remote_device(device.vm, device.kind, device.slot) == Some(device)
+        && match device.owner {
+            RemoteOwner::Vm { vm, run } => crate::hv::vm_run_generation(vm) == Some(run)
+                && remote_device(vm, device.kind, device.slot) == Some(device),
+            RemoteOwner::NativeSsh => native_remote_device(device.kind, device.slot) == Some(device),
+        }
 }
 
 fn remote_target_allowed(device: RemoteDevice, frame: CursorFrameKey) -> bool {
@@ -183,6 +200,11 @@ fn cursor_bucket(source: Ui4CursorSource) -> Bucket {
     if let Some(MouseControlPrincipal::Vm(vm)) = principal {
         return guest_bucket(vm, hut::HidDeviceKind::Mouse, source.slot_id);
     }
+    if matches!(principal, Some(MouseControlPrincipal::Kernel)) {
+        if let Some(device) = native_remote_device(hut::HidDeviceKind::Mouse, source.slot_id) {
+            return Bucket::Remote(device);
+        }
+    }
     let kind = if source.hid_kind == crate::r::cursor::HID_KIND_TABLET {
         hut::HidDeviceKind::Tablet
     } else {
@@ -215,6 +237,11 @@ fn keyboard_bucket(event: &TrueosKeyboardOutputEvent) -> Bucket {
         .flatten();
     if let Some(KeyboardControlPrincipal::Vm(vm)) = principal {
         return guest_bucket(vm, hut::HidDeviceKind::Keyboard, event.slot_id);
+    }
+    if matches!(principal, Some(KeyboardControlPrincipal::Kernel)) {
+        if let Some(device) = native_remote_device(hut::HidDeviceKind::Keyboard, event.slot_id) {
+            return Bucket::Remote(device);
+        }
     }
     hut::devices_snapshot()
         .into_iter()
