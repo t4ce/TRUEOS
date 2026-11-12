@@ -392,4 +392,4 @@ mod tests {
 
 #[path = "vmedia_video.rs"]
 mod video;
-pub use video::{Video, VideoFrame, VideoPoll};
+pub use video::{LiveVideo, LiveVideoStatus, Video, VideoFrame, VideoPoll};

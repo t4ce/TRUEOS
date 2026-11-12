@@ -123,3 +123,61 @@ impl Drop for VideoFrame {
         let _ = command(4, self.stream.id as u64, self.sequence, &[], &mut []);
     }
 }
+
+/// Native UI4 playback of a bounded live Annex-B H.264 stream. The first
+/// access unit must include SPS, PPS and an IDR. Drop and reopen after loss or
+/// backpressure, then resume at a fresh parameter-set/IDR access unit.
+/// This owns its UI4 video window and never forwards remote input.
+pub struct LiveVideo {
+    id: u32,
+}
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum LiveVideoStatus {
+    Waiting,
+    /// The native window is prepared and hardware decoding has started.
+    /// This is not a first-frame presentation acknowledgement.
+    Playing,
+    Ended,
+}
+impl LiveVideo {
+    pub const MAX_ACCESS_UNIT_BYTES: usize = 4 * 1024 * 1024;
+
+    /// Reserve a shared native playback slot. The first SPS sets the window
+    /// extent. Supported fixed stream rates are 1 through 60 frames/second.
+    pub fn open(fps: u16) -> Result<Self, i32> {
+        let id = command(10, fps as u64, 0, &[], &mut []);
+        if id > 0 { Ok(Self { id: id as u32 }) }
+        else { Err(if id == 0 { -3 } else { id }) }
+    }
+
+    /// Upload one complete picture transactionally. Incomplete uploads never
+    /// reach the decoder. Returns -4 when the 8-picture/4-MiB queue is full;
+    /// the caller should reset and resynchronize at a fresh IDR.
+    pub fn submit_access_unit(&mut self, annex_b: &[u8]) -> Result<(), i32> {
+        if annex_b.is_empty() || annex_b.len() > Self::MAX_ACCESS_UNIT_BYTES { return Err(-3); }
+        let rc = command(11, self.id as u64, annex_b.len() as u64, &[], &mut []);
+        if rc != 0 { return Err(rc); }
+        let result = (|| {
+            for (index, chunk) in annex_b.chunks(3072).enumerate() {
+                let rc = command(12, self.id as u64, (index * 3072) as u64, chunk, &mut []);
+                if rc != 0 { return Err(rc); }
+            }
+            let rc = command(13, self.id as u64, 0, &[], &mut []);
+            if rc == 0 { Ok(()) } else { Err(rc) }
+        })();
+        if result.is_err() { let _ = command(16, self.id as u64, 0, &[], &mut []); }
+        result
+    }
+
+    pub fn status(&self) -> Result<LiveVideoStatus, i32> {
+        match command(14, self.id as u64, 0, &[], &mut []) {
+            0 => Ok(LiveVideoStatus::Waiting),
+            1 => Ok(LiveVideoStatus::Playing),
+            2 => Ok(LiveVideoStatus::Ended),
+            error => Err(error),
+        }
+    }
+}
+impl Drop for LiveVideo {
+    fn drop(&mut self) { let _ = command(15, self.id as u64, 0, &[], &mut []); }
+}

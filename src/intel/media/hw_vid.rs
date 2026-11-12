@@ -2988,6 +2988,49 @@ enum H264NalReader {
     Memory(H264MemoryNalReader),
     File(H264FileNalReader),
     Hls(H264HlsNalReader),
+    Live(H264LiveNalReader),
+}
+
+/// Complete access-unit transactions provide a natural NAL boundary. Append
+/// an AUD so the assembler can emit each picture immediately, even while the
+/// next network picture is pending. Decoding keeps its existing DPB session.
+struct H264LiveNalReader {
+    id: u32,
+    session: crate::ui4::VideoPlaybackSession,
+    memory: Option<H264MemoryNalReader>,
+    stream_offset: u64,
+    extent: (u32, u32),
+    failed: bool,
+}
+impl H264LiveNalReader {
+    fn install(&mut self, mut bytes: Vec<u8>) {
+        if let Ok(extent) = super::h264_cmd::parse_annexb_stream_extent(&bytes) {
+            if (extent.visible_width, extent.visible_height) != self.extent {
+                self.failed = true;
+                return;
+            }
+        }
+        bytes.extend_from_slice(&[0, 0, 0, 1, 9, 0xf0]);
+        let mut memory = H264MemoryNalReader::new(bytes, "live-udp");
+        // Per-AU readers are short lived; suppress repeated first-NAL probes.
+        memory.emitted_nals = 8;
+        self.memory = Some(memory);
+    }
+    async fn next_nal(&mut self) -> Option<H264BufferedNal> {
+        loop {
+            if self.failed || self.session.is_cancelled() { return None; }
+            if let Some(memory) = &mut self.memory {
+                if let Some(mut nal) = memory.try_take_nal() {
+                    nal.meta.stream_offset = nal.meta.stream_offset.saturating_add(self.stream_offset);
+                    return Some(nal);
+                }
+                self.stream_offset = self.stream_offset.saturating_add(memory.buffer.len() as u64);
+                self.memory = None;
+            }
+            let bytes = crate::r::services::live_video_service::next_access_unit(self.id, self.session).await?;
+            self.install(bytes);
+        }
+    }
 }
 
 impl H264NalReader {
@@ -2998,12 +3041,13 @@ impl H264NalReader {
         }
     }
     fn streaming(&self) -> bool {
-        matches!(self, Self::File(_) | Self::Hls(_))
+        matches!(self, Self::File(_) | Self::Hls(_) | Self::Live(_))
     }
     fn failed(&self) -> bool {
         match self {
             Self::File(r) => r.failed,
             Self::Hls(r) => r.failed,
+            Self::Live(r) => r.failed,
             _ => false,
         }
     }
@@ -3011,7 +3055,7 @@ impl H264NalReader {
         match self {
             Self::File(r) => r.replay = Some(H264MemoryNalReader::new(bytes, "fs-prefix")),
             Self::Memory(r) => r.scan_offset = 0,
-            Self::Hls(_) => {}
+            Self::Hls(_) | Self::Live(_) => {}
         }
     }
     async fn next_nal(&mut self) -> Option<H264BufferedNal> {
@@ -3019,6 +3063,7 @@ impl H264NalReader {
             Self::Memory(reader) => reader.next_nal().await,
             Self::File(reader) => reader.next_nal().await,
             Self::Hls(reader) => reader.next_nal().await,
+            Self::Live(reader) => reader.next_nal().await,
         }
     }
 }
@@ -3352,7 +3397,9 @@ async fn h264_i_p_playback_probe_with_reader(
         if unit.nal_type == 5 {
             idr_seen += 1;
         }
-        let indexed_frame = indexed_frames.len();
+        let indexed_frame = if matches!(reader, H264NalReader::Live(_)) {
+            current_decode_index
+        } else { indexed_frames.len() };
         if unit.nal_type == 5 {
             last_idr_frame = Some(indexed_frame);
         }
@@ -3382,17 +3429,20 @@ async fn h264_i_p_playback_probe_with_reader(
             _ => {}
         }
         let decodable = detail.is_some();
-        indexed_frames.push(H264IndexedFrame {
+        let index_entry = H264IndexedFrame {
             stream_offset: unit.stream_offset,
             bytes: unit.bytes,
             nal_type: unit.nal_type,
             stream_idr_index: idr_seen,
             decode_start_frame: last_idr_frame.unwrap_or(indexed_frame),
             detail,
-        });
+        };
         if mode.diagnostics() {
-            h264_log_frame_index(&indexed_frames[indexed_frame], indexed_frame);
+            h264_log_frame_index(&index_entry, indexed_frame);
         }
+        // File diagnostics retain a seek index; an unbounded live session
+        // must not accumulate one entry per picture.
+        if !matches!(reader, H264NalReader::Live(_)) { indexed_frames.push(index_entry); }
 
         let presentation_slot = if !decodable {
             skipped_unsupported_frames = skipped_unsupported_frames.saturating_add(1);
@@ -3473,6 +3523,13 @@ async fn h264_i_p_playback_probe_with_reader(
                     first_failure_frame = failed_frame;
                     first_failure_error = error;
                 }
+            }
+            if matches!(reader, H264NalReader::Live(_))
+                && (first_failure_frame != 0 || skipped_unsupported_frames != 0)
+            {
+                // Loss recovery restarts from a fresh client-supplied IDR.
+                // Report a failed decode rather than consuming broken P frames.
+                break;
             }
             continue;
         }
@@ -4239,4 +4296,39 @@ pub(crate) async fn run_memory_texture_video_playback(
     } else {
         Ok(report)
     }
+}
+
+/// View-only live ingress uses the same native UI4 window, media engine,
+/// decoder reservation, conversion queue and cancellation as file playback.
+pub(crate) async fn run_live_ui4_video_playback(
+    session: crate::ui4::VideoPlaybackSession,
+    id: u32,
+    fps: u16,
+) -> Result<H264PlaybackReport, &'static str> {
+    if !crate::intel::has_media_decode_engine() {
+        return Err("media decode engine unavailable");
+    }
+    let first = crate::r::services::live_video_service::next_access_unit(id, session)
+        .await.ok_or("live video cancelled before first picture")?;
+    let extent = super::h264_cmd::parse_annexb_stream_extent(&first)
+        .map_err(|_| "live video SPS unavailable or unsupported")?;
+    if !crate::ui4::open_shell_decoded_video_player(session, extent.visible_width, extent.visible_height) {
+        return Err("native UI4 live-video window unavailable");
+    }
+    let media_session = h264_reserve_decode_session(session).await?;
+    let _diagnostics = H264PlaybackGuard::begin();
+    let mut reader = H264LiveNalReader {
+        id, session, memory: None, stream_offset: 0,
+        extent: (extent.visible_width, extent.visible_height), failed: false,
+    };
+    reader.install(first);
+    crate::r::services::live_video_service::decoder_started(id);
+    let report = h264_i_p_playback_probe_with_reader(
+        session, H264NalReader::Live(reader), 0, Vec::new(),
+        "blueprint-live-annexb", "udp-view-only",
+        H264PlaybackOptions::new(fps, false, true), media_session.generation(),
+    ).await;
+    if report.first_failure_frame != 0 || report.skipped_unsupported != 0 {
+        Err("live video decode or publication failed")
+    } else { Ok(report) }
 }

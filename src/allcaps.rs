@@ -166,6 +166,10 @@ pub mod net {
     pub const MAX_DRAIN_PER_LOOP: usize = 128;
     pub const TCP_RX_BUF_BYTES: usize = 1024 * 1024;
     pub const TCP_TX_BUF_BYTES: usize = 1024 * 1024;
+    // Video keyframes arrive as a burst of MTU-sized UDP datagrams. Preserve
+    // a bounded burst between adapter polls instead of dropping after 2 KiB.
+    pub const UDP_RX_BUF_BYTES: usize = 128 * 1024;
+    pub const UDP_RX_PACKET_SLOTS: usize = 128;
     pub const ICMP_VNET_MAX_INFLIGHT: usize = 32;
     pub const ICMP_VNET_TIMEOUT_MS: i64 = 2000;
     pub const CHECKED_UDP_SEND_RESULTS_CAP: usize = 256;

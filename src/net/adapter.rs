@@ -195,7 +195,8 @@ const SOCKET_SOFT_CAP: usize = crate::allcaps::net::SOCKET_SOFT_CAP;
 const MAX_DRAIN_PER_LOOP: usize = crate::allcaps::net::MAX_DRAIN_PER_LOOP;
 const TCP_RX_BUF_BYTES: usize = crate::allcaps::net::TCP_RX_BUF_BYTES;
 const TCP_TX_BUF_BYTES: usize = crate::allcaps::net::TCP_TX_BUF_BYTES;
-const UDP_RX_BUF_BYTES: usize = 2 * 1024;
+const UDP_RX_BUF_BYTES: usize = crate::allcaps::net::UDP_RX_BUF_BYTES;
+const UDP_RX_PACKET_SLOTS: usize = crate::allcaps::net::UDP_RX_PACKET_SLOTS;
 const UDP_TX_BUF_BYTES_DEFAULT: usize = 2 * 1024;
 const UDP_TX_BUF_BYTES_MAX: usize = 64 * 1024;
 const ICMP_IDENT: u16 = 0x1234;
@@ -2624,7 +2625,7 @@ impl NetService {
             return Err("bad udp tx buffer size");
         }
 
-        let meta_rx = vec![udp::PacketMetadata::EMPTY; 8];
+        let meta_rx = vec![udp::PacketMetadata::EMPTY; UDP_RX_PACKET_SLOTS];
         let buf_rx = vec![0u8; UDP_RX_BUF_BYTES];
         let meta_tx = vec![udp::PacketMetadata::EMPTY; 8];
         let buf_tx = vec![0u8; tx_buffer_bytes];
