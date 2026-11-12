@@ -807,6 +807,31 @@ pub(crate) fn cursor_position(
     Ok((cursor.x, cursor.y))
 }
 
+/// One authenticated remote input report, applied immediately to its owned
+/// station. Relative deltas remain available to frame-centered mouse consumers.
+pub(crate) fn submit_remote_report(
+    principal: MouseControlPrincipal, handle: u64, x: i32, y: i32,
+    buttons: u32, wheel: i16, relative: Option<(i16, i16)>,
+) -> Result<(), MouseControlError> {
+    let mut station = STATION.lock();
+    let index = station.cursor_index(principal, handle)?;
+    let cursor = &mut station.cursors[index];
+    let (x, y) = clamp_position(x, y);
+    cursor.commands.clear();
+    cursor.active = None;
+    cursor.x = x;
+    cursor.y = y;
+    cursor.buttons_down = buttons;
+    let (width, height) = viewport_dimensions();
+    crate::usb2::hid::inject_virtual_cursor_report(
+        cursor.capability.slot_id,
+        f64::from(x) / f64::from(width.saturating_sub(1).max(1)),
+        f64::from(y) / f64::from(height.saturating_sub(1).max(1)),
+        buttons, wheel, cursor_event_flags(cursor, MOUSE_CONTROL_EVENT_FLAG_STATION), relative, true,
+    );
+    Ok(())
+}
+
 pub(crate) fn cursor_buttons(
     principal: MouseControlPrincipal,
     handle: u64,

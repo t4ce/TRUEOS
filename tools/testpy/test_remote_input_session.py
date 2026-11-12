@@ -17,14 +17,19 @@ def main():
         for signature in [
             "pub(crate) struct Frontend", "struct Owner",
             "pub(crate) struct RemoteInputOrigin", "pub(crate) struct RemoteInputAuthority",
+            "enum RemoteInputOwner",
         ]
     )
+    definitions += "\n" + item(source, "impl RemoteInputAuthority")
     functions = "\n".join(item(source, signature) for signature in [
         "pub(super) fn frontend_access_account(",
         "pub(super) fn capture_remote_input_origin(",
         "pub(crate) fn bind_remote_input_origin(",
         "pub(crate) fn remote_input_authority(",
         "pub(crate) fn remote_input_authority_valid(",
+        "pub(crate) fn open_rdp_input_session(",
+        "pub(crate) fn rdp_input_authority(",
+        "pub(crate) fn close_rdp_input_session(",
     ])
     service = (ROOT / "src/shell3/service.rs").read_text()
     launches = "\n".join(item(service, signature) for signature in [
@@ -74,6 +79,8 @@ mod hv {
 mod access_key_db {
     pub fn principal_for_vm(_:u8)->Option<crate::AccountId>{crate::WORLD.lock().account}
 }
+mod r { pub mod keyboard { pub fn output_event_frontiers()->(u32,u32){(100,200)} } }
+mod usb2 { pub mod hid { pub fn cursor_event_frontier()->u64{300} } }
 mod app_db {
     pub fn is_remote_input_controller(archive:&str, bytes:&[u8])->bool {
         archive=="commander.bp" && bytes==[1]
@@ -105,11 +112,18 @@ mod shell3 {
         struct Registry {
             routes:Vec<Route>,remote_frontends:Vec<(u64,())>,accounts:accounts::Bindings,
             navigation_holds:Vec<u64>,
+            native_input_sessions:Vec<RemoteInputAuthority>,
         }
         static ROUTES:Lock<Registry>=Lock::new(Registry {
             routes:Vec::new(),remote_frontends:Vec::new(),accounts:accounts::Bindings::new(),
             navigation_holds:Vec::new(),
+            native_input_sessions:Vec::new(),
         });
+        fn new_frontend()->u64 {
+            static NEXT:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1000);
+            NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed)
+        }
+        fn bind_remote_frontend(frontend:u64) { ROUTES.lock().remote_frontends.push((frontend,())); }
         @FUNCTIONS@
         #[cfg(test)] mod tests {
             use super::*;
@@ -117,7 +131,7 @@ mod shell3 {
             fn setup()->RemoteInputAuthority {
                 *crate::WORLD.lock()=crate::World{run:7,running:true,stopping:false,slot_live:true,account:Some(AccountId(1))};
                 *ROUTES.lock()=Registry{routes:Vec::new(),remote_frontends:vec![(10,())],
-                    accounts:accounts::Bindings::new(),navigation_holds:Vec::new()};
+                    accounts:accounts::Bindings::new(),navigation_holds:Vec::new(),native_input_sessions:Vec::new()};
                 ROUTES.lock().accounts.bind_human(10,Some(AccountId(1)));
                 let origin=capture_remote_input_origin(frontend()).unwrap();
                 ROUTES.lock().routes.push(Route{lease:90,frontend:Some(10),selected:true,
@@ -133,6 +147,27 @@ mod shell3 {
                 assert_eq!(authority.keyboard_frontiers,(100,200));
                 assert_eq!(authority.cursor_frontier,300);
                 assert!(remote_input_authority_valid(authority));
+            }
+            #[test] fn native_ssh_and_commander_share_validation_but_keep_separate_lifetimes(){
+                let commander=setup();
+                let native=open_rdp_input_session(AccountId(0));
+                let id=native.session_id().unwrap();
+                assert!(remote_input_authority_valid(native));
+                assert!(remote_input_authority_valid(commander));
+                close_rdp_input_session(id);
+                assert!(!remote_input_authority_valid(native));
+                assert!(remote_input_authority_valid(commander));
+                let replacement=open_rdp_input_session(AccountId(0));
+                assert_ne!(native,replacement);
+                assert!(!remote_input_authority_valid(native));
+                close_rdp_input_session(replacement.session_id().unwrap());
+            }
+            #[test] fn native_ssh_account_rebinding_revokes_its_control(){
+                setup(); let native=open_rdp_input_session(AccountId(1));
+                let id=native.session_id().unwrap();
+                ROUTES.lock().accounts.bind_human(id,Some(AccountId(2)));
+                assert!(!remote_input_authority_valid(native));
+                close_rdp_input_session(id);
             }
             #[test] fn inherited_guest_account_cannot_capture_human_control(){
                 setup();

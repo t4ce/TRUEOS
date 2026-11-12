@@ -116,7 +116,16 @@ pub(crate) use gpgpu_svg_probe_consumer::gpgpu_svg_probe_consumer_service_task;
 #[cfg(feature = "trueos_h264_encode_stream")]
 pub(crate) use h264_encode_stream::{ui4_h264_encode_prepare_task, ui4_h264_encode_stream_task};
 #[cfg(feature = "trueos_h264_encode_stream")]
-pub(crate) use h264_encode_udp::ui4_h264_encode_udp_egress_task;
+pub(crate) use h264_encode_udp::{
+    ui4_h264_encode_udp_egress_task, rdp_media_subscribe, rdp_media_unsubscribe,
+    rdp_media_take_packet,
+};
+#[cfg(not(feature = "trueos_h264_encode_stream"))]
+pub(crate) fn rdp_media_subscribe(_: u64) -> bool { false }
+#[cfg(not(feature = "trueos_h264_encode_stream"))]
+pub(crate) fn rdp_media_unsubscribe(_: u64) {}
+#[cfg(not(feature = "trueos_h264_encode_stream"))]
+pub(crate) fn rdp_media_take_packet(_: u64) -> Option<alloc::vec::Vec<u8>> { None }
 
 pub(crate) use input_broker::{
     Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PanEvent, Ui4PanPhase, Ui4PointerEvent,

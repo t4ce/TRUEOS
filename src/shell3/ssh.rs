@@ -80,6 +80,7 @@ pub(super) struct Session {
     authenticated: bool,
     access_account: Option<trueos_crypto::AccountId>,
     shell_requested: bool,
+    rdp: Option<super::rdp_channel::Channel>,
     size: Option<(usize, usize)>,
     pub finished: bool,
     pub closed: bool,
@@ -106,6 +107,7 @@ impl Session {
             authenticated: false,
             access_account: None,
             shell_requested: false,
+            rdp: None,
             size: None,
             closed: false,
             finished: false,
@@ -139,7 +141,8 @@ impl Session {
         if self.closed {
             return;
         }
-        if !self.shell_requested && trueos_time::Instant::now() >= self.deadline {
+        if !self.shell_requested && !self.rdp.as_ref().is_some_and(|rdp| rdp.initialized())
+            && trueos_time::Instant::now() >= self.deadline {
             self.closed = true;
             if let Some(completion) = &self.auth {
                 completion.cancelled.store(true, Ordering::Release);
@@ -149,6 +152,7 @@ impl Session {
         if self.drive(terminal).is_err() {
             self.closed = true;
         }
+        if self.closed { self.rdp.take(); }
     }
 
     fn drive(&mut self, mut terminal: Option<&mut Terminal>) -> sunset::Result<()> {
@@ -251,7 +255,7 @@ impl Session {
                         ServEvent::SessionPty(h) => {
                             let (columns, rows) = h.dimensions()?;
                             let initial = h.is_initial_request()?;
-                            if self
+                            if self.rdp.is_none() && self
                                 .channel
                                 .as_ref()
                                 .is_some_and(|c| c.num() == h.channel())
@@ -272,6 +276,7 @@ impl Session {
                             if self.authenticated
                                 && self.size.is_some()
                                 && !self.shell_requested
+                                && self.rdp.is_none()
                                 && self
                                     .channel
                                     .as_ref()
@@ -283,7 +288,17 @@ impl Session {
                                 h.fail()?;
                             }
                         }
-                        ServEvent::SessionExec(h) | ServEvent::SessionSubsystem(h) => h.fail()?,
+                        ServEvent::SessionSubsystem(h) => {
+                            if self.authenticated && !self.shell_requested && self.rdp.is_none()
+                                && self.access_account.is_some()
+                                && self.channel.as_ref().is_some_and(|c| c.num() == h.channel())
+                                && h.command()? == "trueos-rdp"
+                            {
+                                h.succeed()?;
+                                self.rdp = Some(super::rdp_channel::Channel::new(self.access_account.unwrap()));
+                            } else { h.fail()?; }
+                        }
+                        ServEvent::SessionExec(h) => h.fail()?,
                         ServEvent::SessionEnv(h) => h.fail()?,
                         ServEvent::Defunct => self.closed = true,
                         ServEvent::PollAgain => {}
@@ -295,6 +310,24 @@ impl Session {
                 if self.runner.is_channel_closed(channel) {
                     self.closed = true;
                     break;
+                }
+                if let Some(rdp) = &mut self.rdp {
+                    if self.runner.is_channel_eof(channel) {
+                        self.closed = true;
+                        break;
+                    }
+                    let mut bytes = [0; 1024];
+                    let count = self.runner.read_channel(channel, ChanData::Normal, &mut bytes)?;
+                    if count != 0 {
+                        rdp.receive(&bytes[..count]).map_err(sunset::Error::msg)?;
+                        progressed = true;
+                    }
+                    rdp.poll();
+                    if !rdp.output.is_empty() {
+                        let count = self.runner.write_channel(channel, ChanData::Normal, &rdp.output)?;
+                        rdp.output.drain(..count);
+                        progressed |= count != 0;
+                    }
                 }
                 if let Some(tty) = terminal.as_deref_mut() {
                     let mut bytes = [0; 1024];

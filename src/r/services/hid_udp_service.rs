@@ -18,13 +18,13 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use heapless::Vec;
 use trueos_executor::task;
-use trueos_time::{Duration, Instant, Timer};
+use trueos_time::Instant;
 
 #[path = "hid_udp_sequence.rs"]
 mod sequence;
 use sequence::SequenceWindow;
 
-use crate::r::net::VNet;
+
 
 pub const TRUEOS_HID_UDP_PORT: u16 = crate::allports::services::TRUEOS_HID_UDP_PORT;
 
@@ -256,96 +256,7 @@ fn handle_packet(data: &[u8], seqs: &mut Vec<DeviceSeq, DEVICE_STATE_CAP>) {
 
 #[task]
 pub async fn hid_udp_srv_task() {
-    crate::log_important!(
-        "hid-udp: task polling at_ms={} readiness=0x{:08x}\n",
-        Instant::now().as_millis(),
-        crate::r::readiness::mask()
-    );
-    crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
-
-    loop {
-        let Some(vnet) = VNet::open_primary() else {
-            Timer::after(Duration::from_millis(100)).await;
-            continue;
-        };
-
-        let mut handle = None;
-        let mut seqs: Vec<DeviceSeq, DEVICE_STATE_CAP> = Vec::new();
-        let _ = vnet.submit(v::vnet::Command::OpenUdp {
-            port: TRUEOS_HID_UDP_PORT,
-        });
-        crate::log_important!(
-            "hid-udp: starting listener udp_port={} controller=0x{:08X} owner={} at_ms={}\n",
-            TRUEOS_HID_UDP_PORT,
-            crate::usb2::hid::HID_UDP_CONTROLLER_ID,
-            vnet.owner(),
-            Instant::now().as_millis()
-        );
-
-        let mut last_status_ms = Instant::now().as_millis();
-        let mut status_count = 0u32;
-        loop {
-            let now_ms = Instant::now().as_millis();
-            if now_ms.saturating_sub(last_status_ms) >= 5_000 {
-                last_status_ms = now_ms;
-                status_count = status_count.saturating_add(1);
-                if status_count <= 3 || status_count.is_power_of_two() {
-                    crate::log_important!(
-                        "hid-udp: status bound={:?} received={} accepted={} stale={} invalid={} at_ms={}\n",
-                        handle,
-                        RX_SEEN.load(Ordering::Relaxed),
-                        RX_ACCEPTED.load(Ordering::Relaxed),
-                        RX_STALE.load(Ordering::Relaxed),
-                        RX_BAD.load(Ordering::Relaxed),
-                        now_ms
-                    );
-                }
-            }
-            if let Some(ev) = vnet.pop_event() {
-                match ev {
-                    v::vnet::Event::Opened { handle: h, kind }
-                        if kind == v::vnet::SocketKind::Udp =>
-                    {
-                        handle = Some(h);
-                        crate::log_important!(
-                            "hid-udp: listener bound handle={} port={}\n",
-                            h.0,
-                            TRUEOS_HID_UDP_PORT
-                        );
-                    }
-                    v::vnet::Event::Closed { handle: h } if handle == Some(h) => {
-                        handle = None;
-                        seqs.clear();
-                        crate::log_important!("hid-udp: listener closed, reopening\n");
-                        let _ = vnet.submit(v::vnet::Command::OpenUdp {
-                            port: TRUEOS_HID_UDP_PORT,
-                        });
-                    }
-                    v::vnet::Event::UdpPacket {
-                        handle: h, data, ..
-                    } if handle == Some(h) => {
-                        handle_packet(data.as_slice(), &mut seqs);
-                    }
-                    v::vnet::Event::UdpPacketV6 {
-                        handle: h, data, ..
-                    } if handle == Some(h) => {
-                        handle_packet(data.as_slice(), &mut seqs);
-                    }
-                    v::vnet::Event::Error { msg } => {
-                        crate::log_important!("hid-udp: net error {}\n", msg);
-                        Timer::after(Duration::from_millis(500)).await;
-                        if handle.is_none() {
-                            let _ = vnet.submit(v::vnet::Command::OpenUdp {
-                                port: TRUEOS_HID_UDP_PORT,
-                            });
-                        }
-                    }
-                    _ => {}
-                }
-                continue;
-            }
-
-            Timer::after(Duration::from_millis(5)).await;
-        }
-    }
+    // Remote HID now enters only through the account-bound SSH subsystem.
+    // A LAN datagram cannot establish a user or obtain desktop input authority.
+    crate::log_important!("hid-udp: disabled ingress=ssh-subsystem name=trueos-rdp\n");
 }

@@ -38,9 +38,17 @@ pub(crate) struct RemoteInputAuthority {
     pub keyboard_frontiers: (u32, u32),
     pub cursor_frontier: u64,
     origin: RemoteInputOrigin,
-    vm: u8,
-    run: u64,
-    surface_generation: u64,
+    owner: RemoteInputOwner,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RemoteInputOwner {
+    Commander { vm: u8, run: u64, surface_generation: u64 },
+    NativeSsh { session: u64 },
+}
+impl RemoteInputAuthority {
+    pub(crate) fn session_id(self) -> Option<u64> {
+        match self.owner { RemoteInputOwner::NativeSsh { session } => Some(session), _ => None }
+    }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Owner {
@@ -92,6 +100,7 @@ struct Registry {
     accounts: accounts::Bindings,
     pending_launches: Vec<(u64, QueuedBlueprint)>,
     navigation_holds: Vec<u64>,
+    native_input_sessions: Vec<RemoteInputAuthority>,
 }
 impl Registry {
     const fn new() -> Self {
@@ -104,6 +113,7 @@ impl Registry {
             accounts: accounts::Bindings::new(),
             pending_launches: Vec::new(),
             navigation_holds: Vec::new(),
+            native_input_sessions: Vec::new(),
         }
     }
     fn changed(&mut self, id: impl Into<Option<u64>>) {
@@ -802,15 +812,51 @@ pub(crate) fn remote_input_authority(vm: u8, run: u64) -> Option<RemoteInputAuth
     let (keyboard_frontiers, cursor_frontier) = route.remote_input_frontiers?;
     let lease = route.lease.clone();
     let authority = RemoteInputAuthority {
-        account, keyboard_frontiers, cursor_frontier, origin, vm, run,
-        surface_generation: route.surface_generation,
+        account, keyboard_frontiers, cursor_frontier, origin,
+        owner: RemoteInputOwner::Commander { vm, run, surface_generation: route.surface_generation },
     };
     drop(routes);
     matrix_slot_is_live(&lease).then_some(authority)
 }
 
 pub(crate) fn remote_input_authority_valid(authority: RemoteInputAuthority) -> bool {
-    remote_input_authority(authority.vm, authority.run) == Some(authority)
+    match authority.owner {
+        RemoteInputOwner::Commander { vm, run, .. } => remote_input_authority(vm, run) == Some(authority),
+        RemoteInputOwner::NativeSsh { session } => rdp_input_authority(session) == Some(authority),
+    }
+}
+
+/// Only the SSH transport calls this after its existing account admission.
+/// Development admission and signed-key/Cry proof therefore share one policy.
+pub(crate) fn open_rdp_input_session(account: trueos_crypto::AccountId) -> RemoteInputAuthority {
+    let session = new_frontend();
+    bind_remote_frontend(session);
+    let mut routes = ROUTES.lock();
+    routes.accounts.bind_human(session, Some(account));
+    let (_, session_epoch) = routes.accounts.human_session(session).expect("new SSH account binding");
+    let authority = RemoteInputAuthority {
+        account,
+        origin: RemoteInputOrigin { frontend: session, account, session_epoch },
+        keyboard_frontiers: crate::r::keyboard::output_event_frontiers(),
+        cursor_frontier: crate::usb2::hid::cursor_event_frontier(),
+        owner: RemoteInputOwner::NativeSsh { session },
+    };
+    routes.native_input_sessions.push(authority);
+    authority
+}
+
+pub(crate) fn rdp_input_authority(session: u64) -> Option<RemoteInputAuthority> {
+    let routes = ROUTES.lock();
+    let authority = *routes.native_input_sessions.iter().find(|entry| entry.session_id() == Some(session))?;
+    (routes.accounts.human_session(session) == Some((authority.account, authority.origin.session_epoch))
+        && routes.remote_frontends.iter().any(|entry| entry.0 == session)).then_some(authority)
+}
+
+pub(crate) fn close_rdp_input_session(session: u64) {
+    let mut routes = ROUTES.lock();
+    routes.native_input_sessions.retain(|entry| entry.session_id() != Some(session));
+    routes.accounts.remove(session);
+    routes.remote_frontends.retain(|entry| entry.0 != session);
 }
 
 /// Distinguish an anonymous guest from a human terminal when it requests a

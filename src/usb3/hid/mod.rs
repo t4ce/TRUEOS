@@ -440,18 +440,26 @@ pub(crate) fn inject_virtual_cursor_event(
     wheel: i16,
     flags: u32,
 ) {
+    inject_virtual_cursor_report(slot_id, x, y, buttons_down, wheel, flags, None, false);
+}
+
+/// A mediated remote station keeps raw relative motion even at display edges.
+pub(crate) fn inject_virtual_cursor_report(
+    slot_id: u32, x: f64, y: f64, buttons_down: u32, wheel: i16, flags: u32,
+    relative: Option<(i16, i16)>, remote_mouse: bool,
+) {
     let event = TrueosHidCursorEvent {
         t_ms: now_ms_u32(),
         seq: 0,
         controller_id: 0,
         slot_id,
         ep_target: 0,
-        hid_kind: HID_KIND_VIRTUAL_CURSOR,
-        reserved0: 0,
-        reserved1: 0,
+        hid_kind: if remote_mouse { HID_KIND_MOUSE } else { HID_KIND_VIRTUAL_CURSOR },
+        reserved0: u8::from(relative.is_some()),
+        reserved1: relative.map_or(0, |delta| delta.0 as u16),
         buttons_down,
         wheel,
-        reserved2: 0,
+        reserved2: relative.map_or(0, |delta| delta.1 as u16),
         x: clamp01(x),
         y: clamp01(y),
         flags,
@@ -459,7 +467,8 @@ pub(crate) fn inject_virtual_cursor_event(
     if flags & HID_CURSOR_EVENT_FLAG_VISUAL_ONLY == 0 {
         // Visual-only station cursors share delivery and presentation, not
         // mouse discovery, input snapshots, combo pairing or their budgets.
-        crate::r::cursor::upsert_snapshot(0, slot_id, 0, HID_KIND_VIRTUAL_CURSOR, x, y, buttons_down);
+        crate::r::cursor::upsert_snapshot(0, slot_id, 0,
+            if remote_mouse { HID_KIND_MOUSE } else { HID_KIND_VIRTUAL_CURSOR }, x, y, buttons_down);
         self::hut::upsert_mouse_state(
             0,
             slot_id,

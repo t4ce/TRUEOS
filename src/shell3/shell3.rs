@@ -50,6 +50,8 @@ pub(crate) mod sessions;
 mod captured;
 mod ssh;
 mod ssh_boot;
+pub(crate) mod rdp;
+mod rdp_channel;
 mod status;
 mod title;
 mod transition;

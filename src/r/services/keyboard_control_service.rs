@@ -410,6 +410,27 @@ pub(crate) fn submit_command(
     STATION.lock().submit(principal, handle, command)
 }
 
+/// Apply a complete remote boot report to an owned station. This preserves
+/// modifier-only changes and simultaneous held keys without an automation queue.
+pub(crate) fn submit_report(
+    principal: KeyboardControlPrincipal,
+    handle: u64,
+    modifiers: u8,
+    keys: [u8; 6],
+) -> Result<(), KeyboardControlError> {
+    if keys.iter().any(|key| (1..=3).contains(key)) { return Err(KeyboardControlError::Invalid); }
+    let mut station = STATION.lock();
+    let index = station.index(principal, handle)?;
+    let keyboard = &mut station.keyboards[index];
+    keyboard.commands.clear();
+    keyboard.active = None;
+    keyboard.modifiers = modifiers;
+    keyboard.keys = keys;
+    keyboard.device_seq = keyboard.device_seq.wrapping_add(1);
+    emit_report(keyboard);
+    Ok(())
+}
+
 pub(crate) fn submit_text(
     principal: KeyboardControlPrincipal,
     handle: u64,
