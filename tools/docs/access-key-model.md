@@ -149,6 +149,24 @@ frame lifetime. Disconnect, logout, reauthentication, terminal parking, device
 release and VM or frame reuse invalidate the old authority. Fresh terminal claims
 also record input ring frontiers so old reports cannot borrow a new session.
 
+Inbound RDP uses the `trueos-rdp` subsystem on the same SSH listener. Both View
+and NoView require the account admitted by SSH, including the existing
+`DEV_SKIP_SSH_ACCOUNT_PROOF` policy during development. There is no separate RDP
+authentication switch. Anonymous SSH connections cannot open the subsystem.
+With development proof skipping disabled, the existing enrolled Ed25519 key or
+Cry authenticator-code path supplies the account. This integration does not
+generate or enroll a new client key, change Cry's persisted profile, or add a
+TPM requirement or crypto dependency.
+
+The desktop client invokes the installed OpenSSH client with host verification
+enabled, using its existing configuration, keys, agent and authentication prompts.
+One encrypted channel carries framed HID/control records and, in View mode,
+bounded TME1 video fragments from the existing H.264 encoder. NoView requests no
+video but owns the same session-bound keyboard and pointer authority. SSH EOF,
+connection failure or malformed records revoke the grant and retire the devices.
+The former public UDP input listener and fixed-marker video subscription are
+retired; raw UDP packets cannot create a session or recover human input rights.
+
 ## Filesystem boundary
 
 Native file objects and caller-aware path operations check both ancestor and

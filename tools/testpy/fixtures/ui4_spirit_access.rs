@@ -20,6 +20,7 @@ struct World {
     remote: Vec<shell3::tui::RemoteInputAuthority>,
     combo_owners: Vec<(u32, u8, u64)>,
     protected: Vec<(u8, u64)>,
+    native_devices: Vec<(usb2::hid::hut::HidDeviceKind, u32, shell3::tui::RemoteInputAuthority, u32)>,
 }
 thread_local! { static WORLD: RefCell<World> = RefCell::new(World::default()); }
 fn world<R>(f: impl FnOnce(&mut World) -> R) -> R {
@@ -130,6 +131,13 @@ mod r {
     }
 }
 mod shell3 {
+    pub mod rdp {
+        pub fn device_authority(kind: crate::usb2::hid::hut::HidDeviceKind, slot: u32)
+            -> Option<(super::tui::RemoteInputAuthority, u32)> {
+            let entry = crate::world(|w| w.native_devices.iter().find(|d| d.0 == kind && d.1 == slot).copied())?;
+            super::tui::remote_input_authority_valid(entry.2).then_some((entry.2, entry.3))
+        }
+    }
     pub mod tui {
         #[derive(Clone, Copy, Debug, Eq, PartialEq)]
         pub struct RemoteInputAuthority {
@@ -373,6 +381,63 @@ mod tests {
             });
         });
         (cursor, keys)
+    }
+
+    fn native_pair(slot: u32, account: u64) -> (Ui4CursorSource, TrueosKeyboardOutputEvent) {
+        let (cursor, keys) = remote_pair(slot, account);
+        world(|w| {
+            w.mouse.last_mut().unwrap().1 = MouseControlPrincipal::Kernel;
+            w.keyboard.last_mut().unwrap().1 = KeyboardControlPrincipal::Kernel;
+            let authority = w.remote.last_mut().unwrap();
+            authority.vm = 255;
+            authority.run = 0;
+            let authority = *authority;
+            w.native_devices.push((HidDeviceKind::Mouse, slot, authority, slot));
+            w.native_devices.push((HidDeviceKind::Keyboard, slot + 1, authority, slot));
+        });
+        (cursor, keys)
+    }
+
+    #[test]
+    fn native_ssh_rdp_uses_human_authority_without_a_vm_or_spirit_grant() {
+        let (key, _, _) = setup(2001);
+        let (cursor, keys) = native_pair(2001, 0);
+        world(|w| w.vms.clear());
+        assert!(access::cursor_is_human(cursor));
+        assert!(access::keyboard_is_human(&keys));
+        assert!(access::cursor_target_allowed(cursor, key));
+        assert!(access::keyboard_target_allowed(&keys, key));
+        assert!(!access::is_granted(key));
+        let pointer = access::stamp_cursor(cursor, key).unwrap();
+        let keyboard = access::stamp_keyboard(&keys, key).unwrap();
+        world(|w| w.remote.clear());
+        assert!(!access::cursor_is_human(cursor));
+        assert!(!access::keyboard_is_human(&keys));
+        assert!(!access::stamp_valid(pointer, key));
+        assert!(!access::stamp_valid(keyboard, key));
+    }
+
+    #[test]
+    fn kernel_station_and_remote_label_cannot_impersonate_registered_rdp() {
+        let (key, _, _) = setup(2101);
+        let (cursor, keys) = native_pair(2101, 7);
+        world(|w| w.native_devices.clear());
+        assert!(!access::cursor_target_allowed(cursor, key));
+        assert!(!access::keyboard_target_allowed(&keys, key));
+    }
+
+    #[test]
+    fn native_rdp_cannot_cross_protected_accounts_or_reuse_changed_combo() {
+        let (key, _, _) = setup(2201);
+        let (cursor, keys) = native_pair(2201, 7);
+        let pointer = access::stamp_cursor(cursor, key).unwrap();
+        world(|w| w.protected[0].1 = 8);
+        assert!(!access::cursor_target_allowed(cursor, key));
+        assert!(!access::keyboard_target_allowed(&keys, key));
+        world(|w| { w.protected[0].1 = 7; w.devices.last_mut().unwrap().combo_id += 1; });
+        assert!(!access::keyboard_target_allowed(&keys, key));
+        world(|w| w.native_devices.clear());
+        assert!(!access::stamp_valid(pointer, key));
     }
 
     #[test]

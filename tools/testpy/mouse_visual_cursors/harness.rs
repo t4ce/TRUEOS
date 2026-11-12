@@ -61,9 +61,14 @@ pub mod usb2 { pub mod hid {
     use crate::*;
     pub const HID_CURSOR_EVENT_FLAG_VISUAL_ONLY:u32=1<<19;
     const HID_KIND_VIRTUAL_CURSOR:u8=0;
+    const HID_KIND_MOUSE:u8=1;
+    pub static LAST_REMOTE: std::sync::Mutex<Option<(u8,u8,u16,u16,f64,f64)>> = std::sync::Mutex::new(None);
     fn now_ms_u32()->u32 {0}
     fn clamp01(value:f64)->f64 {value.clamp(0.0,1.0)}
-    fn push_cursor_event(_:TrueosHidCursorEvent) { HID_WRITES.fetch_add(1,Ordering::Relaxed); }
+    fn push_cursor_event(event:TrueosHidCursorEvent) {
+        HID_WRITES.fetch_add(1,Ordering::Relaxed);
+        *LAST_REMOTE.lock().unwrap() = Some((event.hid_kind,event.reserved0,event.reserved1,event.reserved2,event.x,event.y));
+    }
     fn notify_cursor_event_ready() {}
     pub fn retire_virtual_cursor(_:u32) {}
     pub mod hut {
@@ -109,6 +114,22 @@ pub mod r {
     use graphics::primitives::Rgba8;
     use r::services::mouse_motion_service::*;
     const OWNER: MouseControlPrincipal = MouseControlPrincipal::KernelApp(0x53);
+
+    #[test]
+    fn owned_remote_reports_preserve_edge_deltas_and_foreign_handles_are_denied() {
+        let cursor = request_cursor(MouseControlPrincipal::Kernel, "rdp-test", None).unwrap();
+        assert!(submit_remote_report(MouseControlPrincipal::Vm(7), cursor.handle, 900,100,3,1,Some((12,-9))).is_err());
+        submit_remote_report(MouseControlPrincipal::Kernel,cursor.handle,900,100,3,1,Some((12,-9))).unwrap();
+        assert_eq!(cursor_position(MouseControlPrincipal::Kernel,cursor.handle).unwrap(), (319,100));
+        assert_eq!(cursor_buttons(MouseControlPrincipal::Kernel,cursor.handle).unwrap(),3);
+        let report = usb2::hid::LAST_REMOTE.lock().unwrap().unwrap();
+        assert_eq!((report.0,report.1,report.2,report.3),(1,1,12,(-9i16) as u16));
+        assert_eq!(report.4,1.0);
+        submit_remote_report(MouseControlPrincipal::Kernel,cursor.handle,900,100,0,0,Some((12,-9))).unwrap();
+        assert_eq!(usb2::hid::LAST_REMOTE.lock().unwrap().unwrap().2,12);
+        assert_eq!(cursor_buttons(MouseControlPrincipal::Kernel,cursor.handle).unwrap(),0);
+        release_cursor(MouseControlPrincipal::Kernel,cursor.handle).unwrap();
+    }
 
     #[test]
     fn idle_interactive_cursor_enrolls_in_hut_without_injecting_input_and_visual_cursor_stays_out() {

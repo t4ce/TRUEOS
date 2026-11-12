@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 const MAX_RECORD: usize = 65_536;
 const HEADER: usize = 5;
 
-pub(super) struct Channel {
+pub(crate) struct Channel {
     account: trueos_crypto::AccountId,
     input: Option<super::rdp::InputSession>,
     received: Vec<u8>,

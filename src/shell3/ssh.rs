@@ -138,7 +138,7 @@ impl Session {
     }
 
     pub fn pump(&mut self, terminal: Option<&mut Terminal>) {
-        if self.closed {
+        if self.closed || self.finished {
             return;
         }
         if !self.shell_requested && !self.rdp.as_ref().is_some_and(|rdp| rdp.initialized())
@@ -313,7 +313,9 @@ impl Session {
                 }
                 if let Some(rdp) = &mut self.rdp {
                     if self.runner.is_channel_eof(channel) {
-                        self.closed = true;
+                        self.rdp.take();
+                        self.runner.send_session_exit(channel)?;
+                        self.finished = true;
                         break;
                     }
                     let mut bytes = [0; 1024];

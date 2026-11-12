@@ -17,15 +17,69 @@ def main():
         "fn send_access_unit(", "fn encode_header(",
     ]).replace("pub(super)", "pub(crate)")
     definitions = definitions.replace("pub(crate) struct MediaUdpStreamReport", "#[derive(Default)] pub(crate) struct MediaUdpStreamReport")
+    definitions += "\n#[derive(Clone,Copy,Debug,Eq,PartialEq)]\n" + item(source, "enum EgressSessionPhase")
+    definitions += "\n#[derive(Clone,Copy)]\n" + item(source, "struct EgressSessionRequest")
+    definitions += "\n" + "\n".join(item(source, signature) for signature in [
+        "struct EgressPipeline", "impl EgressPipeline", "fn request_egress_session(",
+        "fn take_egress_session_request(", "fn mark_egress_session_ready(",
+        "fn egress_session_ready(", "fn finish_cancelled_start(",
+        "fn abort_egress_session(", "fn finish_egress_producer(",
+        "fn complete_egress_session(", "fn take_egress_report(",
+    ]).replace("pub(super)", "pub(crate)")
     constants = "\n".join(re.findall(r"^const (?:MAGIC|VERSION|HEADER_BYTES|DATAGRAM_BYTES|PAYLOAD_BYTES|MAX_FRAGMENT_COUNT|FLAG_START|FLAG_END|FLAG_KEYFRAME|FLAG_SESSION_END):[^\n]+", source, re.MULTILINE))
     harness = r'''
+#![allow(dead_code)]
 extern crate alloc;
-use alloc::vec::Vec;
+use alloc::{vec::Vec,collections::VecDeque};
 use spin::Mutex;
 #[path="@QUEUE@"] mod rdp_media_queue;
 static SSH_MEDIA: Mutex<rdp_media_queue::Queue> = Mutex::new(rdp_media_queue::Queue::new());
+static EGRESS_PIPELINE: Mutex<EgressPipeline> = Mutex::new(EgressPipeline::new());
+struct Wake;
+impl Wake {fn signal(&self,_:()){}}
+static EGRESS_WAKE:Wake=Wake;
+static PRODUCER_WAKE:Wake=Wake;
 @CONSTANTS@
 @DEFINITIONS@
+#[test] fn disconnect_before_producer_observes_ready_completes_without_hardware_work() {
+    *EGRESS_PIPELINE.lock() = EgressPipeline::new();
+    let request = EgressSessionRequest {session_id:91,access_unit_count:60,target_hz:60};
+    assert!(request_egress_session(request));
+    assert!(take_egress_session_request().is_some());
+    assert!(mark_egress_session_ready(91));
+    // SSH disconnect wins the scheduling race before the producer handles
+    // its readiness wake. Egress must await acknowledgement, not new frames.
+    abort_egress_session(91);
+    assert!(!egress_session_ready(91));
+    assert!(!EGRESS_PIPELINE.lock().producer_finished);
+    assert!(take_egress_report(91).is_none());
+    finish_cancelled_start(91);
+    assert!(EGRESS_PIPELINE.lock().producer_finished);
+    complete_egress_session(91,MediaUdpStreamReport {session_id:91,..Default::default()});
+    assert_eq!(take_egress_report(91).unwrap().sent_access_units,0);
+    assert_eq!(EGRESS_PIPELINE.lock().phase,EgressSessionPhase::Idle);
+    assert!(request_egress_session(EgressSessionRequest {session_id:92,..request}));
+    take_egress_session_request();
+    assert!(mark_egress_session_ready(92));
+    finish_cancelled_start(91);
+    finish_cancelled_start(92);
+    assert!(egress_session_ready(92));
+    assert!(!EGRESS_PIPELINE.lock().producer_finished);
+}
+#[test] fn active_abort_keeps_producer_completion_and_report_handshake() {
+    *EGRESS_PIPELINE.lock() = EgressPipeline::new();
+    request_egress_session(EgressSessionRequest {session_id:93,access_unit_count:60,target_hz:60});
+    take_egress_session_request(); mark_egress_session_ready(93);
+    assert!(egress_session_ready(93));
+    abort_egress_session(93);
+    finish_egress_producer(93,1,17);
+    complete_egress_session(93,MediaUdpStreamReport {session_id:93,..Default::default()});
+    let report=take_egress_report(93).unwrap();
+    assert_eq!(report.dropped_access_units,1);
+    assert_eq!(report.dropped_bytes,17);
+    assert!(take_egress_report(93).is_none());
+    assert_eq!(EGRESS_PIPELINE.lock().phase,EgressSessionPhase::Idle);
+}
 #[test] fn ssh_payload_keeps_complete_tme1_fragments_and_crc() {
     *SSH_MEDIA.lock() = rdp_media_queue::Queue::new();
     SSH_MEDIA.lock().subscribe(7);

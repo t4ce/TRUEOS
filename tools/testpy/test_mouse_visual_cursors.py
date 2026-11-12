@@ -104,6 +104,7 @@ microfont = { path = ''' + json.dumps(str(ROOT / "vendor/microfont")) + ''', def
             (work / "src" / f"{name}.rs").write_text(source)
         hid = item("crates/trueos-v/src/bp_abi.rs", "TrueosHidCursorEvent")
         hid += item("src/usb3/hid/mod.rs", "inject_virtual_cursor_event")
+        hid += item("src/usb3/hid/mod.rs", "inject_virtual_cursor_report")
         (work / "src/hid_injection.rs").write_text(hid)
         (work / "src/damage.rs").write_bytes((ROOT / "src/ui4/damage.rs").read_bytes())
         (work / "src/button_outline_geometry.rs").write_bytes((ROOT / "src/ui4/button_outline_geometry.rs").read_bytes())

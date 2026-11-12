@@ -242,6 +242,19 @@ fn egress_session_ready(session_id: u32) -> bool {
     pipeline.session_id == session_id && pipeline.phase == EgressSessionPhase::Ready
 }
 
+/// Ready can be cancelled before the producer observes the readiness wake.
+/// In that case no hardware work started, but egress still needs the producer
+/// acknowledgement before it can publish the final report and release view.
+fn finish_cancelled_start(session_id: u32) {
+    let mut pipeline = EGRESS_PIPELINE.lock();
+    if pipeline.session_id != session_id || pipeline.phase != EgressSessionPhase::Aborted {
+        return;
+    }
+    pipeline.producer_finished = true;
+    drop(pipeline);
+    EGRESS_WAKE.signal(());
+}
+
 fn enqueue_access_unit(session_id: u32, access_unit: EncodedAccessUnit) -> bool {
     let mut pipeline = EGRESS_PIPELINE.lock();
     if pipeline.session_id != session_id {
@@ -427,6 +440,7 @@ where
         if egress_session_ready(session_id) {
             break;
         }
+        finish_cancelled_start(session_id);
         if let Some(report) = take_egress_report(session_id) {
             return report;
         }
