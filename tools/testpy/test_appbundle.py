@@ -115,6 +115,27 @@ fn seeded_metadata_matches_source_and_is_not_a_launchable_app() {
     assert!(app_db::get("appbundle.json").unwrap().is_none());
 }
 #[test]
+fn controller_roles_are_pinned_to_seeded_archive_and_bytes() {
+    reset();
+    let original = app_db::get("apps.bp").unwrap().unwrap();
+    assert!(app_db::is_remote_input_controller("apps.bp", &original));
+    // Copying an approved executable under another name cannot lend its role.
+    assert!(!app_db::is_remote_input_controller("sqlite.bp", &original));
+    app_db::insert_downloads(&[("sqlite.bp".into(), original.clone())]).unwrap();
+    assert!(!app_db::is_remote_input_controller("sqlite.bp", &original));
+    // An update retaining the capability bit cannot replace the approved code.
+    let mut replacement = original.clone();
+    replacement.push(1);
+    assert!(!app_db::is_remote_input_controller("apps.bp", &replacement));
+    app_db::insert_downloads(&[("apps.bp".into(), replacement.clone())]).unwrap();
+    assert!(!app_db::is_remote_input_controller("apps.bp", &replacement));
+    assert!(app_db::is_remote_input_controller("apps.bp", &original));
+    // Reloading the database cannot approve a runtime replacement either.
+    reset();
+    assert!(app_db::is_remote_input_controller("apps.bp", &original));
+    assert!(!app_db::is_remote_input_controller("apps.bp", &replacement));
+}
+#[test]
 fn live_appdb_virtual_catalog_tracks_imports_without_changing_the_catalog() {
     reset();
     let before = app_db::list().unwrap();
@@ -263,7 +284,9 @@ def main():
         (path / 'src').mkdir()
         packages = path / 'packages'
         packages.mkdir()
-        (packages / 'apps.bp').write_bytes(b'TRBP' + bytes(20))
+        # A seeded approved controller in this fixture exercises the immutable
+        # role independently of actual application names or mutable hash rows.
+        (packages / 'apps.bp').write_bytes(b'TRBP' + bytes([1, 0, 3, 16]) + bytes(16))
         manifest = path / 'buildins.json'
         manifest.write_text('{"buildins":["apps"]}')
         seed = path / 'seed.db'

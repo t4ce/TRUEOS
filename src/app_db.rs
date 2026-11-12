@@ -12,7 +12,7 @@ use redb::{
     TableDefinition,
 };
 use sha2::{Digest, Sha256};
-use spin::Mutex;
+use spin::{Mutex, Once};
 
 const APP_DB_IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.db.lz4"));
 include!(concat!(env!("OUT_DIR"), "/appdb-seed.rs"));
@@ -22,6 +22,28 @@ const UPDATED: TableDefinition<&str, &str> = TableDefinition::new("updated");
 const METADATA: TableDefinition<&str, &[u8]> = TableDefinition::new("metadata");
 
 static APP_DB: Mutex<Option<Database>> = Mutex::new(None);
+// Only the kernel's embedded seed may approve a controller. Runtime AppDB
+// downloads can replace executable bytes, but cannot add or change these roles.
+static REMOTE_INPUT_CONTROLLERS: Once<Vec<(String, [u8; 32])>> = Once::new();
+const BLUEPRINT_CAP_REMOTE_INPUT_CONTROLLER: u16 = 1 << 12;
+
+fn declares_remote_input_controller(bytes: &[u8]) -> bool {
+    bytes.len() >= 24
+        && bytes.starts_with(b"TRBP")
+        && u16::from_le_bytes([bytes[4], bytes[5]]) == 1
+        && u16::from_le_bytes([bytes[6], bytes[7]]) & BLUEPRINT_CAP_REMOTE_INPUT_CONTROLLER != 0
+}
+
+/// A role declaration in downloaded bytes is insufficient: the exact archive
+/// and executable digest must have been approved by this kernel generation.
+pub(crate) fn is_remote_input_controller(archive: &str, bytes: &[u8]) -> bool {
+    let Some(controllers) = REMOTE_INPUT_CONTROLLERS.get() else { return false; };
+    let Some((_, approved)) = controllers.iter().find(|(name, _)| name == archive) else {
+        return false;
+    };
+    let actual: [u8; 32] = Sha256::digest(bytes).into();
+    *approved == actual
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AppEntry {
@@ -58,7 +80,7 @@ pub(crate) fn init_bsp() -> Result<usize, String> {
         .set_cache_size(64 * 1024 * 1024)
         .create_with_backend(backend)
         .map_err(|err| alloc::format!("open app.db image: {err}"))?;
-    let count = {
+    let (count, controllers) = {
         let read = database
             .begin_read()
             .map_err(|err| alloc::format!("begin app.db seed read: {err}"))?;
@@ -88,7 +110,14 @@ pub(crate) fn init_bsp() -> Result<usize, String> {
                 "app.db image does not contain the complete built-in set",
             ));
         }
-        count as usize
+        let mut controllers = Vec::new();
+        for row in apps.iter().map_err(|err| alloc::format!("iterate seeded roles: {err}"))? {
+            let (archive, bytes) = row.map_err(|err| alloc::format!("read seeded role: {err}"))?;
+            if declares_remote_input_controller(bytes.value()) {
+                controllers.push((archive.value().to_string(), Sha256::digest(bytes.value()).into()));
+            }
+        }
+        (count as usize, controllers)
     };
     {
         let read = database
@@ -103,6 +132,7 @@ pub(crate) fn init_bsp() -> Result<usize, String> {
             .ok_or("AppDB is missing appbundle.json")?;
         trueos_appbundle::AppBundles::parse(json.value())?;
     }
+    REMOTE_INPUT_CONTROLLERS.call_once(|| controllers);
     *APP_DB.lock() = Some(database);
     Ok(count)
 }

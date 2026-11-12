@@ -25,6 +25,7 @@ PRODUCTION = "\n".join([
     between("struct FetchTarget {", "#[derive(Clone, Copy)]\nstruct HttpsClientQueues"),
     between("fn request_has_header(", "fn parse_fetch_url("),
     between("fn parse_fetch_url(", "fn leak_str("),
+    between("fn find_http_header_end(", "fn decode_response_content("),
     between("fn success_body(", "async fn fetch_https_bytes("),
     between("fn fetch_target_url(", "async fn request_https_bytes("),
     between("pub(crate) async fn get_media_bytes_profile_shared(", "pub async fn post_protobuf_shared("),
@@ -44,7 +45,7 @@ VM_CONSTANTS = "\n".join(
     ])
 )
 VM_START = VMCALL[VMCALL.index("        OP_BP_FETCH_BYTES_START => {"):
-                  VMCALL.index("        OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1 => {")]
+                  VMCALL.index("        OP_BP_HTTP_REQUEST_START_V1 | OP_BP_HTTP_REQUEST_HEAD_V1")]
 VM_DISPATCH = r'''
 fn dispatch_start(vm_id:u8,arg0:u64,req_len:u32)->DispatchOutcome {
     let seq=7;
@@ -65,6 +66,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 const HTTPS_REQUEST_CANCELLED:&str="cancelled";
 const DEFAULT_USER_AGENT:&str="TRUEOS net-fetch";
+const HTTPS_PROBE_HEADER_MAX:usize=32768;
+const HTTPS_RESPONSE_OVERHEAD_MAX:usize=4096;
 #[macro_export]macro_rules! log_info {($($t:tt)*)=>{};}
 mod log_os {pub mod flags {pub const HTTP_FETCH_DIAG_PROFILE_ENABLED:bool=false;}}
 
@@ -114,6 +117,7 @@ struct RequestRecord {url:String,wire:String,timeout:u32,max_bytes:usize}
 enum Step {
     Reply {status:u16,location:Option<String>,body:Vec<u8>,elapsed:u64,cancel:bool},
     Error(&'static str),
+    RawReply(Vec<u8>),
     WaitForCancellation,
 }
 struct FenceGuard {needs_retirement:bool}
@@ -137,9 +141,10 @@ async fn request_https_response_once_cancellable(
         Step::Reply {status,location,body,elapsed,cancel}=> {
             CLOCK.with(|clock|clock.set(clock.get()+elapsed));
             if cancel {cancellation.unwrap().cancel();}
-            Ok(HttpsJsonResponse{status,location,body,content_encoding:None,content_type:None,content_disposition:None,retry_after:None,date:None})
+            Ok(HttpsJsonResponse{status,location,body,content_encoding:None,content_type:None,content_disposition:None,content_range:None,etag:None,last_modified:None,retry_after:None,date:None})
         }
         Step::Error(error)=>Err(error.into()),
+        Step::RawReply(response)=>http_response_from_bytes(&response,max_bytes),
         Step::WaitForCancellation=> {
             let cancellation=cancellation.expect("media TLS request must receive its cancellation fence");
             let mut guard=FenceGuard{needs_retirement:true};
@@ -233,6 +238,102 @@ TESTS = r'''
     }
     fn header<'a>(wire:&'a str,name:&str)->Option<&'a str> {
         wire.lines().find_map(|line|line.split_once(": ").filter(|(key,_)|key.eq_ignore_ascii_case(name)).map(|(_,value)|value))
+    }
+    fn range_reply(status:u16,range:Option<&str>,etag:Option<&str>,modified:Option<&str>,body:&[u8])->Step {
+        let mut wire=format!("HTTP/1.1 {status} Test\r\nContent-Length: {}\r\n",body.len());
+        for (name,value) in [("Content-Range",range),("ETag",etag),("Last-Modified",modified)] {
+            if let Some(value)=value {wire.push_str(&format!("{name}: {value}\r\n"));}
+        }
+        wire.push_str("\r\n");let mut wire=wire.into_bytes();wire.extend_from_slice(body);Step::RawReply(wire)
+    }
+    fn range(offset:u64,length:usize,expected:Option<&MediaRangeIdentity>)->Result<MediaRangeResponse,String> {
+        run(get_media_range_bytes_shared("https://page.test/movie.mp4?signature=a%2Fb",offset,length,50,
+            &MediaFetchCancellation::new(),Some("TRUEOS test-agent"),Some("https://page.test/watch?id=7#private"),expected))
+    }
+    #[test]fn bounded_range_uses_real_response_headers_and_pins_strong_etag() {
+        setup([range_reply(206,Some("bytes 0-3/12"),Some("\"asset-v1\""),None,b"abcd")]);
+        let first=range(0,4,None).unwrap();assert_eq!(first.bytes,b"abcd");assert_eq!(first.identity.total_len,12);
+        assert_eq!(first.identity.etag.as_deref(),Some("\"asset-v1\""));
+        setup([range_reply(206,Some("bytes 4-7/12"),Some("\"asset-v1\""),None,b"efgh")]);
+        let next=range(4,4,Some(&first.identity)).unwrap();assert_eq!(next.bytes,b"efgh");
+        TRANSPORT.with(|t| {
+            let t=t.borrow();let request=&t.requests[0];assert_eq!(request.max_bytes,4);
+            assert_eq!(header(&request.wire,"Range"),Some("bytes=4-7"));
+            assert_eq!(header(&request.wire,"If-Match"),Some("\"asset-v1\""));
+            assert_eq!(header(&request.wire,"User-Agent"),Some("TRUEOS test-agent"));
+            assert_eq!(header(&request.wire,"Referer"),Some("https://page.test/watch?id=7"));
+        });
+    }
+    #[test]fn bounded_range_allows_short_eof_and_small_complete_initial_responses() {
+        setup([range_reply(206,Some("Bytes 0-2/3"),None,None,b"abc")]);
+        let short=range(0,65536,None).unwrap();assert_eq!(short.bytes,b"abc");assert_eq!(short.identity.total_len,3);
+        setup([range_reply(200,None,None,None,b"abc")]);
+        let small=range(0,65536,None).unwrap();assert_eq!(small.bytes,b"abc");assert_eq!(small.identity.total_len,3);
+        setup([range_reply(200,None,None,None,b"abc")]);
+        assert_eq!(range(4,4,None).unwrap_err(),"media server ignored byte range");
+        setup([range_reply(200,None,None,None,b"abc")]);
+        assert_eq!(range(0,4,Some(&short.identity)).unwrap_err(),"media server ignored byte range");
+    }
+    #[test]fn ignored_large_ranges_and_malformed_or_misaligned_responses_are_rejected() {
+        setup([Step::RawReply(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000000\r\n\r\n".to_vec())]);
+        assert_eq!(range(0,4,None).unwrap_err(),"too large content_length=1000000000 max=4");
+        for value in [None,Some("bytes 1-4/12"),Some("bytes 0-2/12"),Some("bytes 0-4/12"),Some("bytes 0-3/*"),Some("bytes 0-3/3"),Some("bytes 0-18446744073709551615/12"),Some("bytes +0-3/12"),Some("bytes 0-3/12, bytes 0-3/12")] {
+            setup([range_reply(206,value,None,None,b"abcd")]);
+            assert!(range(0,4,None).is_err(),"accepted {value:?}");
+        }
+        setup([range_reply(206,Some("bytes 0-3/12"),None,None,b"abc")]);
+        assert_eq!(range(0,4,None).unwrap_err(),"media range does not match request");
+        setup([range_reply(416,None,None,None,b"")]);assert_eq!(range(0,4,None).unwrap_err(),"http status 416");
+        setup([Step::RawReply(b"HTTP/1.1 206 Test\r\nContent-Length: 4\r\nContent-Range: bytes 0-3/12\r\nContent-Encoding: gzip\r\n\r\nabcd".to_vec())]);
+        assert_eq!(range(0,4,None).unwrap_err(),"encoded media range response unsupported");
+    }
+    #[test]fn bounded_range_rejects_changed_length_validator_and_final_url() {
+        setup([range_reply(206,Some("bytes 0-3/12"),Some("\"asset-v1\""),None,b"abcd")]);
+        let identity=range(0,4,None).unwrap().identity;
+        for (range_header,etag) in [("bytes 4-7/13",Some("\"asset-v1\"")),("bytes 4-7/12",Some("\"asset-v2\"")),("bytes 4-7/12",None)] {
+            setup([range_reply(206,Some(range_header),etag,None,b"efgh")]);
+            assert_eq!(range(4,4,Some(&identity)).unwrap_err(),"media representation changed during playback");
+        }
+        setup([reply(302,Some("https://other.test/movie.mp4")),range_reply(206,Some("bytes 4-7/12"),Some("\"asset-v1\""),None,b"efgh")]);
+        assert_eq!(range(4,4,Some(&identity)).unwrap_err(),"media representation changed during playback");
+        setup([range_reply(412,None,None,None,b"")]);assert_eq!(range(4,4,Some(&identity)).unwrap_err(),"http status 412");
+    }
+    #[test]fn bounded_range_uses_last_modified_when_etag_is_weak() {
+        const MODIFIED:&str="Wed, 11 Nov 2026 12:00:00 GMT";
+        setup([range_reply(206,Some("bytes 0-3/12"),Some("W/\"weak\""),Some(MODIFIED),b"abcd")]);
+        let identity=range(0,4,None).unwrap().identity;assert!(identity.etag.is_none());
+        setup([range_reply(206,Some("bytes 4-7/12"),Some("W/\"weak\""),Some(MODIFIED),b"efgh")]);
+        range(4,4,Some(&identity)).unwrap();
+        TRANSPORT.with(|t| {
+            let t=t.borrow();assert_eq!(header(&t.requests[0].wire,"If-Unmodified-Since"),Some(MODIFIED));
+            assert!(header(&t.requests[0].wire,"If-Match").is_none());
+        });
+        setup([range_reply(206,Some("bytes 4-7/12"),None,None,b"efgh")]);
+        assert_eq!(range(4,4,Some(&identity)).unwrap_err(),"media representation changed during playback");
+    }
+    #[test]fn bounded_range_redirects_preserve_bounds_context_and_one_deadline() {
+        setup([Step::Reply{status:302,location:Some("https://cdn.test/movie.mp4?signature=a%2Fb".into()),body:vec![],elapsed:30,cancel:false},
+            range_reply(206,Some("bytes 0-3/12"),None,None,b"abcd")]);
+        let result=range(0,4,None).unwrap();assert_eq!(result.identity.final_url,"https://cdn.test:443/movie.mp4?signature=a%2Fb");
+        TRANSPORT.with(|t| {
+            let t=t.borrow();assert_eq!(t.requests.iter().map(|r|r.timeout).collect::<Vec<_>>(),[50,20]);
+            assert!(t.requests.iter().all(|r|r.max_bytes==4 && header(&r.wire,"Range")==Some("bytes=0-3")));
+            assert_eq!(header(&t.requests[1].wire,"Referer"),Some("https://page.test/"));
+        });
+    }
+    #[test]fn bounded_range_cancellation_waits_for_tls_owner_and_prevents_followup() {
+        setup([Step::WaitForCancellation]);let cancellation=MediaFetchCancellation::new();
+        assert_eq!(run(get_media_range_bytes_shared("https://page.test/movie",0,4,3,&cancellation,None,None,None)).unwrap_err(),"cancelled");
+        TRANSPORT.with(|t| {let t=t.borrow();assert!(t.fence_retired);assert!(!t.dropped_before_fence);});
+        setup([Step::Reply{status:302,location:Some("https://cdn.test/movie".into()),body:vec![],elapsed:0,cancel:true}]);
+        assert_eq!(range(0,4,None).unwrap_err(),"cancelled");
+        TRANSPORT.with(|t|assert_eq!(t.borrow().requests.len(),1));
+    }
+    #[test]fn bounded_range_admission_rejects_overflow_and_outside_identity_before_io() {
+        setup([]);for (offset,length) in [(0,0),(u64::MAX,2),(0,32*1024*1024+1)] {assert!(range(offset,length,None).is_err());}
+        let identity=MediaRangeIdentity{final_url:"https://page.test:443/movie.mp4?signature=a%2Fb".into(),total_len:4,etag:None,last_modified:None};
+        assert_eq!(range(4,4,Some(&identity)).unwrap_err(),"media range outside representation");
+        TRANSPORT.with(|t|assert!(t.borrow().requests.is_empty()));
     }
     #[test]fn follows_cross_host_302_preserving_signature_and_reducing_referrer() {
         setup([reply(302,Some("https://cdn.test/movie.mp4?token=a%2Fb&expires=999#drop")),reply(206,None)]);

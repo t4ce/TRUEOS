@@ -20,6 +20,9 @@ BROKER = "src/ui4/input_broker.rs"
 PRELUDE = r'''
 #![allow(dead_code, unused_imports, unused_variables)]
 extern crate alloc;
+mod shell3 {pub mod tui {
+ #[derive(Clone,Copy,Debug,Eq,PartialEq)] pub struct RemoteInputAuthority {pub account:u64,pub epoch:u64}
+}}
 #[macro_export] macro_rules! log_info { ($($token:tt)*) => {} }
 mod graphics { pub mod primitives {
  #[derive(Clone,Copy,Debug,Eq,PartialEq)] pub struct Rgba8(u8,u8,u8,u8);
@@ -60,6 +63,9 @@ mod ui4 {
  pub mod drag_drop {pub fn cursor_retired(_:super::cursor_frame_inout::Ui4CursorSource){}}
  pub mod context_menu {pub fn dismiss_for_source(_:super::cursor_frame_inout::Ui4CursorSource){}}
  pub mod spirit_access {
+  pub fn cursor_remote_authority(s:super::cursor_frame_inout::Ui4CursorSource)->Option<crate::shell3::tui::RemoteInputAuthority> {
+   super::input_broker::remote_authority(s)
+  }
   pub fn cursor_is_human(s:super::cursor_frame_inout::Ui4CursorSource)->bool {
    super::input_broker::metadata(s).2
   }
@@ -129,6 +135,10 @@ BROKER_FIXTURE = r'''
  type DesktopContextMenuAction=();
  #[derive(Clone,Copy)] struct QuadResizeGesture {source:Ui4CursorSource}
  thread_local! {static HUT:std::cell::RefCell<std::vec::Vec<(Ui4CursorSource,u32,bool,bool)>>=const{std::cell::RefCell::new(std::vec::Vec::new())};}
+ thread_local! {static REMOTE:std::cell::RefCell<std::vec::Vec<(Ui4CursorSource,crate::shell3::tui::RemoteInputAuthority)>>=const{std::cell::RefCell::new(std::vec::Vec::new())};}
+ pub(super) fn remote_authority(s:Ui4CursorSource)->Option<crate::shell3::tui::RemoteInputAuthority> {
+  REMOTE.with(|remote|remote.borrow().iter().find(|(source,_)|*source==s).map(|(_,authority)|*authority))
+ }
  pub(super) fn metadata(s:Ui4CursorSource)->(u32,bool,bool) {
   HUT.with(|hut|hut.borrow().iter().find(|(source,_,_,_)|*source==s).map(|(_,c,v,h)|(*c,*v,*h)).unwrap_or((0,false,false)))
  }
@@ -147,7 +157,7 @@ TESTS = r'''
  }
  fn reset()->std::sync::MutexGuard<'static,()> {
   let lock=SERIAL.lock().unwrap_or_else(|error|error.into_inner());
-  frames::reset();HUT.with(|hut|hut.borrow_mut().clear());lock
+  frames::reset();HUT.with(|hut|hut.borrow_mut().clear());REMOTE.with(|remote|remote.borrow_mut().clear());lock
  }
  fn keyboard()->KeyboardSource {KeyboardSource{controller_id:2,slot_id:200,ep_target:1}}
  fn event(s:Ui4CursorSource,flags:u32)->crate::usb2::hid::TrueosHidCursorEvent {
@@ -246,6 +256,55 @@ TESTS = r'''
   assert_eq!(broker.cursors.len(),1);assert_eq!(broker.cursors[0].source,surviving);
   assert_eq!(broker.cursors[0].keyboard_source,None);
  }
+
+ #[test] fn remote_session_change_clears_retained_gestures_but_same_token_preserves_them() {
+  let _lock=reset();let remote=source(11);let other=source(12);
+  let original=crate::shell3::tui::RemoteInputAuthority{account:0,epoch:1};
+  REMOTE.with(|state|state.borrow_mut().push((remote,original)));
+  let mut broker=InputBroker::new();let index=broker.cursor_index(remote,37,81);
+  let other_index=broker.cursor_index(other,91,18);
+  broker.cursors[other_index].buttons_down=2;
+  broker.refresh_remote_input_route(index);
+  let target=WindowTarget::from(frame(7));
+  fn arm(broker:&mut InputBroker,index:usize,target:WindowTarget){
+   let route=&mut broker.cursors[index];
+   route.capture=Some(target);route.resize_latch=Some((target,99));
+   route.collapse_drag=Some(target);route.collapse_press=Some((target,()));
+   route.screenshot_latch=true;route.selection_anchor=Some((7,8));
+   route.secondary_anchor=Some((9,10));route.secondary_dragged=true;
+   route.context_menu=Some((11,12));route.context_menu_owns_gesture=true;
+   route.requested_context_menu_gesture=Some(100);route.buttons_down=3;route.absorb_select=true;
+   broker.quad_resize=Some(QuadResizeGesture{source:route.source});
+  }
+  arm(&mut broker,index,target);
+  broker.refresh_remote_input_route(index);
+  let route=&broker.cursors[index];
+  assert_eq!(route.remote_input_authority,Some(original));
+  assert_eq!(route.capture,Some(target));assert_eq!(route.resize_latch,Some((target,99)));
+  assert_eq!(route.collapse_drag,Some(target));assert_eq!(route.collapse_press,Some((target,())));
+  assert_eq!(route.buttons_down,3);assert!(route.screenshot_latch);assert!(route.absorb_select);
+  assert_eq!(broker.quad_resize.unwrap().source,remote);
+  let next=crate::shell3::tui::RemoteInputAuthority{epoch:2,..original};
+  REMOTE.with(|state|state.borrow_mut()[0].1=next);
+  broker.refresh_remote_input_route(index);
+  let route=&broker.cursors[index];
+  assert_eq!(route.remote_input_authority,Some(next));
+  assert_eq!((route.x,route.y),(37,81));
+  assert_eq!(route.capture,None);assert_eq!(route.resize_latch,None);
+  assert_eq!(route.collapse_drag,None);assert_eq!(route.collapse_press,None);
+  assert!(!route.screenshot_latch);assert_eq!(route.selection_anchor,None);
+  assert_eq!(route.secondary_anchor,None);assert!(!route.secondary_dragged);
+  assert_eq!(route.context_menu,None);assert!(!route.context_menu_owns_gesture);
+  assert_eq!(route.requested_context_menu_gesture,None);
+  assert_eq!(route.buttons_down,0);assert!(!route.absorb_select);assert!(broker.quad_resize.is_none());
+  assert_eq!(broker.cursors[other_index].buttons_down,2);
+  arm(&mut broker,index,target);
+  REMOTE.with(|state|state.borrow_mut().clear());
+  broker.refresh_remote_input_route(index);
+  assert_eq!(broker.cursors[index].remote_input_authority,None);
+  assert_eq!(broker.cursors[index].buttons_down,0);
+  assert_eq!(broker.cursors[index].capture,None);assert!(broker.quad_resize.is_none());
+ }
 }
 }}
 '''
@@ -270,7 +329,7 @@ def harness() -> str:
         source += block(broker, marker)
     source += "}\nimpl InputBroker {\n"
     impl = broker[broker.index("impl InputBroker {"):]
-    for marker in ("const fn new()", "fn cursor_index(", "fn retire_pointer_group(",
+    for marker in ("const fn new()", "fn refresh_remote_input_route(", "fn cursor_index(", "fn retire_pointer_group(",
                    "fn retire_hid_slot(", "fn keyboard_route_index(", "    fn focused_keyboard_state("):
         source += block(impl, marker)
     prefix = impl[impl.index("fn process_cursor("):impl.index("        let Some((width, height))")]

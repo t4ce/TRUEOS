@@ -105,12 +105,16 @@ pub(crate) fn read_keyboard_snapshot_for_caller(
     })
 }
 
-fn authorize_input_combo_mutation(guest: Option<input_combo_policy::Guest>, combo_id: u32) -> Result<(), i32> {
-    let Some(guest) = guest else { return Ok(()) };
+pub(crate) fn remote_input_combo_owned(vm: u8, run: u64, combo_id: u32) -> bool {
+    INPUT_COMBO_OWNERS.lock().owns(combo_id, input_combo_policy::Guest { vm, run })
+}
+
+fn authorize_owned_input_combo(guest: input_combo_policy::Guest, combo_id: u32) -> Result<crate::usb2::hid::hut::HidSourceKind, i32> {
     if !INPUT_COMBO_OWNERS.lock().owns(combo_id, guest) { return Err(-2); }
     let combo = crate::usb2::hid::hut::combos_snapshot().into_iter()
         .find(|combo| combo.combo_id == combo_id).ok_or(-2)?;
-    if combo.source_kind != crate::usb2::hid::hut::HidSourceKind::Ai { return Err(-2); }
+    use crate::usb2::hid::hut::HidSourceKind;
+    if !matches!(combo.source_kind, HidSourceKind::Ai | HidSourceKind::Remote) { return Err(-2); }
     // A trusted LINK edit can add another user's/VM's device to this bucket.
     // That does not authorize the original guest to alter those devices.
     for (kind, controller, slot, ep) in [
@@ -120,6 +124,17 @@ fn authorize_input_combo_mutation(guest: Option<input_combo_policy::Guest>, comb
         (4, combo.gamepad_controller_id, combo.gamepad_slot_id, combo.gamepad_ep_target),
     ] {
         if slot != 0 && !guest_combo_device_owned(guest, kind, controller, slot, ep) { return Err(-2); }
+    }
+    Ok(combo.source_kind)
+}
+
+fn authorize_input_combo_mutation(guest: Option<input_combo_policy::Guest>, combo_id: u32) -> Result<(), i32> {
+    let Some(guest) = guest else { return Ok(()) };
+    let kind = authorize_owned_input_combo(guest, combo_id)?;
+    if kind == crate::usb2::hid::hut::HidSourceKind::Remote
+        && crate::shell3::tui::remote_input_authority(guest.vm, guest.run).is_none()
+    {
+        return Err(-2);
     }
     Ok(())
 }
@@ -1300,6 +1315,73 @@ pub unsafe extern "C" fn trueos_cabi_gamepad_control_snapshot(
     }
 }
 
+/// Combo inventory and its authority live on the host, just like the virtual
+/// keyboard/cursor stations. Never consult the Hull's private kernel statics.
+pub(crate) fn host_input_combo_control_v1(
+    vm: u8, operation: u32, combo_id: u64, request: &[u8], response: &mut [u8],
+) -> (i32, usize) {
+    let Ok(combo_id) = u32::try_from(combo_id) else { return (-1, 0); };
+    crate::hv::with_guest_broker_context(vm, || {
+        if operation == 0 {
+            if combo_id != 0 || request.len() <= 8 || request[1..4] != [0; 3]
+                || response.len() < input_wire::INPUT_COMBO_LEN { return (-1, 0); }
+            let color = i32::from_le_bytes(request[4..8].try_into().unwrap());
+            let mut combo = v::vinput::TrueosInputCombo::default();
+            let rc = unsafe { trueos_cabi_input_combo_request(
+                request[0], color, request[8..].as_ptr(), request.len() - 8, &mut combo,
+            ) };
+            if rc != 0 { return (rc, 0); }
+            input_wire::input_combo(&mut response[..input_wire::INPUT_COMBO_LEN], &combo);
+            return (0, input_wire::INPUT_COMBO_LEN);
+        }
+        let rc = match operation {
+            1 if request.len() == 1 => trueos_cabi_input_combo_set_color(combo_id, request[0]),
+            2..=5 if request.len() == 12 => {
+                let controller = u32::from_le_bytes(request[..4].try_into().unwrap());
+                let slot = u32::from_le_bytes(request[4..8].try_into().unwrap());
+                let ep = u32::from_le_bytes(request[8..12].try_into().unwrap());
+                match operation {
+                    2 => trueos_cabi_input_combo_bind_mouse(combo_id, controller, slot, ep),
+                    3 => trueos_cabi_input_combo_bind_keyboard(combo_id, controller, slot, ep),
+                    4 => trueos_cabi_input_combo_bind_tablet(combo_id, controller, slot, ep),
+                    _ => trueos_cabi_input_combo_bind_gamepad(combo_id, controller, slot, ep),
+                }
+            }
+            6 if request.is_empty() => trueos_cabi_input_combo_remove(combo_id),
+            _ => -1,
+        };
+        (rc, 0)
+    })
+}
+
+unsafe fn guest_input_combo_request(
+    kind: u8, color: i32, label: &[u8], out: *mut v::vinput::TrueosInputCombo,
+) -> i32 {
+    if label.len() > trueos_vm::vmcall::PAYLOAD_CAP.saturating_sub(8) { return -1; }
+    let mut request = alloc::vec![0; 8 + label.len()];
+    request[0] = kind;
+    request[4..8].copy_from_slice(&color.to_le_bytes());
+    request[8..].copy_from_slice(label);
+    let mut response = [0; input_wire::INPUT_COMBO_LEN];
+    let (status, result) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_INPUT_COMBO_CONTROL_V1, 0, 0, &request, &mut response,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK { return -1; }
+    let rc = result as i64 as i32;
+    if rc != 0 { return rc; }
+    let Some(combo) = input_wire::decode_input_combo(&response).filter(|combo| combo.combo_id != 0) else { return -1; };
+    unsafe { out.write(combo); }
+    0
+}
+
+fn guest_input_combo_bind(operation: u64, combo: u32, controller: u32, slot: u32, ep: u32) -> i32 {
+    let mut request = [0; 12];
+    request[..4].copy_from_slice(&controller.to_le_bytes());
+    request[4..8].copy_from_slice(&slot.to_le_bytes());
+    request[8..].copy_from_slice(&ep.to_le_bytes());
+    guest_control_call(trueos_vm::vmcall::OP_BP_INPUT_COMBO_CONTROL_V1, operation, u64::from(combo), &request)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_input_combo_request(
     source_kind: u8,
@@ -1311,8 +1393,22 @@ pub unsafe extern "C" fn trueos_cabi_input_combo_request(
     if out_combo.is_null() {
         return -1;
     }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let label = match unsafe { checked_utf8(label_ptr, label_len) } {
+            Ok(label) => label, Err(error) => return error,
+        };
+        return unsafe { guest_input_combo_request(source_kind, requested_color, label.as_bytes(), out_combo) };
+    }
     let guest = match input_combo_guest() { Ok(guest) => guest, Err(error) => return error };
-    if guest.is_some() && input_combo_source_kind(source_kind) != crate::usb2::hid::hut::HidSourceKind::Ai { return -2; }
+    if let Some(guest) = guest {
+        use crate::usb2::hid::hut::HidSourceKind;
+        match input_combo_source_kind(source_kind) {
+            HidSourceKind::Ai => {}
+            HidSourceKind::Remote
+                if crate::shell3::tui::remote_input_authority(guest.vm, guest.run).is_some() => {}
+            _ => return -2,
+        }
+    }
     let label = match unsafe { checked_utf8(label_ptr, label_len) } {
         Ok(label) if !label.is_empty() => label,
         _ => return -1,
@@ -1346,6 +1442,9 @@ pub unsafe extern "C" fn trueos_cabi_input_combo_request(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_input_combo_set_color(combo_id: u32, color_id: u8) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_control_call(trueos_vm::vmcall::OP_BP_INPUT_COMBO_CONTROL_V1, 1, u64::from(combo_id), &[color_id]);
+    }
     let guest = match input_combo_guest() { Ok(guest) => guest, Err(error) => return error };
     if let Err(error) = authorize_input_combo_mutation(guest, combo_id) { return error; }
 
@@ -1363,6 +1462,9 @@ pub extern "C" fn trueos_cabi_input_combo_bind_mouse(
     slot_id: u32,
     ep_target: u32,
 ) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_input_combo_bind(2, combo_id, controller_id, slot_id, ep_target);
+    }
     let guest = match input_combo_guest() { Ok(guest) => guest, Err(error) => return error };
     if let Err(error) = authorize_input_combo_mutation(guest, combo_id) { return error; }
     if guest.is_some_and(|guest| !guest_combo_device_owned(guest, 1, controller_id, slot_id, ep_target)) { return -2; }
@@ -1381,6 +1483,9 @@ pub extern "C" fn trueos_cabi_input_combo_bind_keyboard(
     slot_id: u32,
     ep_target: u32,
 ) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_input_combo_bind(3, combo_id, controller_id, slot_id, ep_target);
+    }
     let guest = match input_combo_guest() { Ok(guest) => guest, Err(error) => return error };
     if let Err(error) = authorize_input_combo_mutation(guest, combo_id) { return error; }
     if guest.is_some_and(|guest| !guest_combo_device_owned(guest, 2, controller_id, slot_id, ep_target)) { return -2; }
@@ -1399,6 +1504,9 @@ pub extern "C" fn trueos_cabi_input_combo_bind_tablet(
     slot_id: u32,
     ep_target: u32,
 ) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_input_combo_bind(4, combo_id, controller_id, slot_id, ep_target);
+    }
     let guest = match input_combo_guest() { Ok(guest) => guest, Err(error) => return error };
     if let Err(error) = authorize_input_combo_mutation(guest, combo_id) { return error; }
     if guest.is_some_and(|guest| !guest_combo_device_owned(guest, 3, controller_id, slot_id, ep_target)) { return -2; }
@@ -1417,6 +1525,9 @@ pub extern "C" fn trueos_cabi_input_combo_bind_gamepad(
     slot_id: u32,
     ep_target: u32,
 ) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_input_combo_bind(5, combo_id, controller_id, slot_id, ep_target);
+    }
     let guest = match input_combo_guest() { Ok(guest) => guest, Err(error) => return error };
     if let Err(error) = authorize_input_combo_mutation(guest, combo_id) { return error; }
     if guest.is_some_and(|guest| !guest_combo_device_owned(guest, 4, controller_id, slot_id, ep_target)) { return -2; }
@@ -1430,8 +1541,15 @@ pub extern "C" fn trueos_cabi_input_combo_bind_gamepad(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_input_combo_remove(combo_id: u32) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_control_call(trueos_vm::vmcall::OP_BP_INPUT_COMBO_CONTROL_V1, 6, u64::from(combo_id), &[]);
+    }
     let guest = match input_combo_guest() { Ok(guest) => guest, Err(error) => return error };
-    if let Err(error) = authorize_input_combo_mutation(guest, combo_id) { return error; }
+    // Releasing one's own devices remains possible after the controlling
+    // terminal disconnects. This grants no further input or binding authority.
+    if let Some(guest) = guest {
+        if let Err(error) = authorize_owned_input_combo(guest, combo_id) { return error; }
+    }
 
     if crate::usb2::hid::hut::remove_combo(combo_id) {
         INPUT_COMBO_OWNERS.lock().forget(combo_id);

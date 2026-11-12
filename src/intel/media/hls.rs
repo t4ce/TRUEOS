@@ -13,7 +13,7 @@ pub(super) enum Playlist {
     Variant(String),
     Vod(Vec<String>),
     /// A finite playlist indexes a contiguous prefix of one fMP4 resource.
-    /// The existing complete-file AVC demux can consume that resource directly.
+    /// The HTTP MP4 reader consumes its metadata and pictures incrementally.
     SingleFileMp4 {
         reference: String,
         length: usize,

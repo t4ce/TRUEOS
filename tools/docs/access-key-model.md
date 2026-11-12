@@ -126,6 +126,29 @@ reusing a VM slot cannot lend the new run's grants to old work. Protected retain
 runs reject another account's
 terminal takeover and lifecycle control.
 
+## Remote human input
+
+Storage identity and desktop input authority are distinct. A VM is not inherently
+an AI input source, and inheriting a user's account does not grant human control.
+Commander declares the remote-input-controller role in its Blueprint metadata.
+The kernel pins approved controller names and executable digests from its embedded
+AppDB; downloaded role flags, replacement bytes and app-provided usernames cannot
+create that authority.
+
+A direct command from an account-bound human SSH frontend captures that session's
+identity and epoch when it launches an approved controller. Guest child launches
+retain their storage account without receiving this input grant. The controller
+must own the active terminal, its exact VM run, combo and virtual devices. Remote
+input follows the human desktop path and respects protected target accounts.
+AI input continues to require the existing Spirit frame grants.
+Hull combo creation, binding, color changes and removal cross the typed VMCall
+boundary, so authorization and inventory use the host's session and device state.
+
+Input queues retain the remote session, terminal claim, device, combo and target
+frame lifetime. Disconnect, logout, reauthentication, terminal parking, device
+release and VM or frame reuse invalidate the old authority. Fresh terminal claims
+also record input ring frontiers so old reports cannot borrow a new session.
+
 ## Filesystem boundary
 
 Native file objects and caller-aware path operations check both ancestor and

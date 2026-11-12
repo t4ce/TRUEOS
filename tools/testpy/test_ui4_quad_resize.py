@@ -101,7 +101,9 @@ def harness_source():
 ''')
     start = input_source.index('        // The shared handle takes precedence')
     end = input_source.index('        let hit = snapped_window.or_else', start)
-    routing = input_source[start:end]
+    authority_start = input_source.index('        let allowed = |target: WindowTarget|')
+    authority_end = input_source.index('        let route = &self.cursors[index];', authority_start)
+    routing = input_source[authority_start:authority_end] + input_source[start:end]
     escape = block(input_source, 'if (self.quad_resize.is_some()\n            || self.quad_cancel_key')
     code = r'''
 mod graphics { pub mod primitives {
@@ -119,9 +121,23 @@ mod r { pub mod keyboard {
     # Insert inside ui4 before its closing brace; render/routing share real broker state.
     inner = r'''
     mod context_menu { pub(super) fn dismiss_for_source(_: u32) {} }
+    mod spirit_access {
+        pub(super) static DENIED_WINDOW: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        pub(super) fn cursor_target_allowed(_: u32, frame: (super::WindowOwner, super::WindowId)) -> bool {
+            frame.1.raw() != DENIED_WINDOW.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
     mod quad_input {
         use super::*;
         type Ui4CursorSource = u32;
+        #[derive(Copy, Clone)]
+        struct WindowTarget { owner: WindowOwner, window: WindowId }
+        impl From<WindowSnapshot> for WindowTarget {
+            fn from(window: WindowSnapshot) -> Self { Self { owner: window.owner, window: window.id } }
+        }
+        impl WindowTarget {
+            fn cursor_frame_key(self) -> (WindowOwner, WindowId) { (self.owner, self.window) }
+        }
         const PRIMARY_BUTTON_MASK: u32 = 1;
         const SECONDARY_BUTTON_MASK: u32 = 2;
         static VISUAL_WAKES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -144,6 +160,7 @@ mod r { pub mod keyboard {
             forwarded: usize, consumed_keys: Vec<Key> }
         impl Input {
             fn new() -> Self {
+                super::spirit_access::DENIED_WINDOW.store(0, std::sync::atomic::Ordering::SeqCst);
                 Self { quad_resize: None, quad_cancel_key: None, cursors: (0..2).map(|source| Route {
                     source, x: 0, y: 0, buttons_down: 0, visible_after_motion: false,
                     absorb_select: false, color: crate::graphics::primitives::Rgba8::new(source as u8, 2, 3, 255),
@@ -209,6 +226,19 @@ mod r { pub mod keyboard {
             input.pointer(0, 700, 400, 0);
             assert!(input.quad_resize.is_none());
             assert!(super::input_broker::RESIZES.lock().is_empty());
+        }
+        #[test]
+        fn account_authority_change_cancels_quad_before_commit() {
+            let windows = super::window_broker::setup_quad();
+            let mut input = Input::new();
+            input.pointer(0, 960, 540, 1);
+            input.pointer(0, 700, 400, 0);
+            assert!(input.quad_resize.is_some());
+            super::spirit_access::DENIED_WINDOW.store(windows[1].id.raw(), std::sync::atomic::Ordering::SeqCst);
+            input.pointer(0, 700, 400, 1);
+            assert!(input.quad_resize.is_none());
+            assert!(super::input_broker::RESIZES.lock().is_empty());
+            super::spirit_access::DENIED_WINDOW.store(0, std::sync::atomic::Ordering::SeqCst);
         }
         @RASTER@
     }

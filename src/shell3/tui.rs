@@ -21,6 +21,27 @@ pub(crate) struct Frontend {
     pub cols: usize,
     pub rows: usize,
 }
+/// Host-captured human session for a directly requested, admitted controller.
+/// Guest launches inherit accounts for storage, never this input authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RemoteInputOrigin {
+    frontend: u64,
+    account: trueos_crypto::AccountId,
+    session_epoch: u64,
+}
+
+/// One live controller lease. Retained input must revalidate this exact token
+/// rather than borrowing a later terminal claim or login for the same account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RemoteInputAuthority {
+    pub account: trueos_crypto::AccountId,
+    pub keyboard_frontiers: (u32, u32),
+    pub cursor_frontier: u64,
+    origin: RemoteInputOrigin,
+    vm: u8,
+    run: u64,
+    surface_generation: u64,
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Owner {
     vm: u8,
@@ -41,6 +62,8 @@ struct Route {
     selected: bool,
     vm: Option<u8>,
     owner: Option<Owner>,
+    remote_input_origin: Option<RemoteInputOrigin>,
+    remote_input_frontiers: Option<((u32, u32), u64)>,
     screen: Terminal,
     program_status: ProgramStatusParser,
     surface_generation: u64,
@@ -326,6 +349,8 @@ fn create_route(frontend: Option<Frontend>, target: &MatrixTarget) -> Result<(),
             selected,
             vm: None,
             owner: None,
+            remote_input_origin: None,
+            remote_input_frontiers: None,
             screen: Terminal::new(cols, rows),
             program_status: ProgramStatusParser::new(),
             surface_generation: 1,
@@ -363,6 +388,8 @@ pub(crate) fn bind_vm(target: &MatrixTarget, vm: u8) {
     {
         route.vm = None;
         route.owner = None;
+        route.remote_input_origin = None;
+        route.remote_input_frontiers = None;
         route.program_status.reset();
         changed.push(route.frontend);
     }
@@ -464,6 +491,10 @@ pub(crate) fn claim(target: &MatrixTarget, vm: u8) -> Option<bool> {
         route.suppressed_text = None;
         route.owner = Some(owner);
         route.surface_generation = route.surface_generation.wrapping_add(1).max(1);
+        route.remote_input_frontiers = route.remote_input_origin.map(|_| (
+            crate::r::keyboard::output_event_frontiers(),
+            crate::usb2::hid::cursor_event_frontier(),
+        ));
         routes.changed(frontend);
     }
     Some(true)
@@ -720,6 +751,66 @@ pub(super) fn native_transport_scope(target: &MatrixTarget) -> Option<u8> {
 /// session must never lend identity to another SSH connection or UI window.
 pub(super) fn frontend_access_account(frontend: Frontend) -> Option<trueos_crypto::AccountId> {
     ROUTES.lock().accounts.account(frontend.id)
+}
+
+/// Only a direct host command may capture this origin. The caller also checks
+/// the controller executable against the kernel's immutable role registry.
+pub(super) fn capture_remote_input_origin(frontend: Frontend) -> Option<RemoteInputOrigin> {
+    let routes = ROUTES.lock();
+    if !routes.remote_frontends.iter().any(|entry| entry.0 == frontend.id) {
+        return None;
+    }
+    let (account, session_epoch) = routes.accounts.human_session(frontend.id)?;
+    Some(RemoteInputOrigin { frontend: frontend.id, account, session_epoch })
+}
+
+/// Install immutable launch provenance before the admitted guest can run.
+pub(crate) fn bind_remote_input_origin(target: &MatrixTarget, origin: RemoteInputOrigin) {
+    let lease = crate::shell3::matrix_target_slot_lease(target);
+    let mut routes = ROUTES.lock();
+    if let Some(route) = routes.routes.iter_mut().find(|route| route.lease == lease) {
+        if route.frontend == Some(origin.frontend) && route.owner.is_none() {
+            route.remote_input_origin = Some(origin);
+        }
+    }
+}
+
+/// The input-control boundary checks the exact human session, current VM run,
+/// frozen launching account and already-claimed terminal. This never claims a
+/// reserved terminal or consults an app-supplied username/source label.
+pub(crate) fn remote_input_authority(vm: u8, run: u64) -> Option<RemoteInputAuthority> {
+    if run == 0 || crate::hv::vm_run_generation(vm) != Some(run) {
+        return None;
+    }
+    let state = crate::hv::vm_state(vm);
+    if !state.running || state.stop_requested {
+        return None;
+    }
+    let account = crate::access_key_db::principal_for_vm(vm)?;
+    let routes = ROUTES.lock();
+    let route = routes.routes.iter().find(|route| route.owner == Some(Owner { vm, run }))?;
+    let origin = route.remote_input_origin?;
+    if route.vm != Some(vm)
+        || route.frontend != Some(origin.frontend)
+        || (!route.selected && !routes.navigation_holds.contains(&origin.frontend))
+        || account != origin.account
+        || routes.accounts.human_session(origin.frontend) != Some((account, origin.session_epoch))
+        || !routes.remote_frontends.iter().any(|entry| entry.0 == origin.frontend)
+    {
+        return None;
+    }
+    let (keyboard_frontiers, cursor_frontier) = route.remote_input_frontiers?;
+    let lease = route.lease.clone();
+    let authority = RemoteInputAuthority {
+        account, keyboard_frontiers, cursor_frontier, origin, vm, run,
+        surface_generation: route.surface_generation,
+    };
+    drop(routes);
+    matrix_slot_is_live(&lease).then_some(authority)
+}
+
+pub(crate) fn remote_input_authority_valid(authority: RemoteInputAuthority) -> bool {
+    remote_input_authority(authority.vm, authority.run) == Some(authority)
 }
 
 /// Distinguish an anonymous guest from a human terminal when it requests a

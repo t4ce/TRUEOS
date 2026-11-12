@@ -17,6 +17,9 @@ struct World {
     notifications: usize,
     cursor_frontier: u64,
     keyboard_frontiers: (u32, u32),
+    remote: Vec<shell3::tui::RemoteInputAuthority>,
+    combo_owners: Vec<(u32, u8, u64)>,
+    protected: Vec<(u8, u64)>,
 }
 thread_local! { static WORLD: RefCell<World> = RefCell::new(World::default()); }
 fn world<R>(f: impl FnOnce(&mut World) -> R) -> R {
@@ -58,6 +61,7 @@ mod usb2 {
             #[derive(Clone, Copy)]
             pub struct Device {
                 pub id: DeviceId,
+                pub combo_id: u32,
                 pub source_kind: HidSourceKind,
                 pub virtual_device: bool,
             }
@@ -68,6 +72,13 @@ mod usb2 {
     }
 }
 mod r {
+    pub mod io {
+        pub mod input_cabi {
+            pub fn remote_input_combo_owned(vm: u8, run: u64, combo: u32) -> bool {
+                crate::world(|w| w.combo_owners.contains(&(combo, vm, run)))
+            }
+        }
+    }
     pub mod cursor {
         pub const HID_KIND_TABLET: u8 = 3;
     }
@@ -116,6 +127,34 @@ mod r {
                 })
             }
         }
+    }
+}
+mod shell3 {
+    pub mod tui {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub struct RemoteInputAuthority {
+            pub account: u64,
+            pub vm: u8,
+            pub run: u64,
+            pub frontend: u64,
+            pub epoch: u64,
+            pub keyboard_frontiers: (u32, u32),
+            pub cursor_frontier: u64,
+        }
+        pub fn remote_input_authority(vm: u8, run: u64) -> Option<RemoteInputAuthority> {
+            crate::world(|w| w.remote.iter().find(|a| a.vm == vm && a.run == run).copied())
+        }
+        pub fn remote_input_authority_valid(authority: RemoteInputAuthority) -> bool {
+            remote_input_authority(authority.vm, authority.run) == Some(authority)
+        }
+    }
+}
+mod access_key_db {
+    pub fn authorize_vm_control(vm: u8, actor: Option<u64>) -> Result<(), ()> {
+        crate::world(|w| match w.protected.iter().find(|p| p.0 == vm) {
+            Some((_, account)) if actor != Some(*account) => Err(()),
+            _ => Ok(()),
+        })
     }
 }
 mod hv {
@@ -271,6 +310,7 @@ mod tests {
                 ep_target: 0,
             },
             source_kind: source,
+            combo_id: 0,
             virtual_device,
         }
     }
@@ -314,6 +354,146 @@ mod tests {
             w.keyboard.push((slot + 1, KeyboardControlPrincipal::Vm(1)));
         });
         (mouse(slot, 0), keyboard(slot + 1, 0))
+    }
+
+    fn remote_pair(slot: u32, account: u64) -> (Ui4CursorSource, TrueosKeyboardOutputEvent) {
+        let (cursor, mut keys) = ai_pair(slot, HidSourceKind::Remote);
+        keys.seq = 11;
+        world(|w| {
+            for device in &mut w.devices {
+                if device.id.controller_id == 0 && [slot, slot + 1].contains(&device.id.slot_id) {
+                    device.combo_id = slot;
+                }
+            }
+            w.combo_owners.push((slot, 1, 7));
+            w.protected.push((1, account));
+            w.remote.push(shell3::tui::RemoteInputAuthority {
+                account, vm: 1, run: 7, frontend: 77, epoch: 1,
+                keyboard_frontiers: (10, 10), cursor_frontier: 10,
+            });
+        });
+        (cursor, keys)
+    }
+
+    #[test]
+    fn authenticated_remote_human_controls_own_frame_without_spirit_grant() {
+        let (key, _, _) = setup(1301);
+        let (cursor, keys) = remote_pair(1301, 0);
+        assert!(!access::is_granted(key));
+        assert!(access::cursor_is_human(cursor));
+        assert!(access::keyboard_is_human(&keys));
+        assert!(access::cursor_target_allowed(cursor, key));
+        assert!(access::keyboard_target_allowed(&keys, key));
+        assert!(access::cursor_event_allowed(cursor, 11));
+        assert!(access::keyboard_event_allowed(&keys));
+        assert!(matches!(access::stamp_cursor(cursor, key), Some(access::InputStamp::Remote { .. })));
+        assert_eq!(access::toggle_from_human(cursor, key), Ok(true));
+        access::frame_closed(key);
+    }
+
+    #[test]
+    fn remote_labels_and_logged_in_ai_do_not_grant_human_input() {
+        let (key, human, _) = setup(1401);
+        let (cursor, keys) = remote_pair(1401, 7);
+        access::toggle_from_human(human, key).unwrap();
+        // An anonymous/disconnected session cannot even borrow a Spirit grant.
+        world(|w| w.remote.clear());
+        assert!(!access::cursor_is_human(cursor));
+        assert!(!access::keyboard_is_human(&keys));
+        assert!(!access::cursor_target_allowed(cursor, key));
+        assert!(!access::keyboard_target_allowed(&keys, key));
+        // A session alone does not upgrade AI devices or foreign combos.
+        let (other, other_keys) = remote_pair(1411, 7);
+        world(|w| {
+            w.combo_owners.retain(|entry| entry.0 != 1411);
+        });
+        assert!(!access::cursor_is_human(other));
+        assert!(!access::keyboard_is_human(&other_keys));
+        let (ai, ai_keys) = ai_pair(1421, HidSourceKind::Ai);
+        assert!(!access::cursor_is_human(ai));
+        assert!(!access::keyboard_is_human(&ai_keys));
+        access::frame_closed(key);
+        assert!(!access::cursor_target_allowed(ai, key));
+        assert!(!access::keyboard_target_allowed(&ai_keys, key));
+    }
+
+    #[test]
+    fn remote_input_cannot_control_or_share_another_accounts_protected_frame() {
+        let (key, _, _) = setup(1501);
+        let (cursor, keys) = remote_pair(1501, 7);
+        world(|w| w.protected = vec![(1, 8)]);
+        assert!(!access::cursor_target_allowed(cursor, key));
+        assert!(!access::keyboard_target_allowed(&keys, key));
+        assert!(!access::cursor_sequence_allowed(cursor, key, 11));
+        assert_eq!(access::toggle_from_human(cursor, key), Err(()));
+        assert!(!access::is_granted(key));
+    }
+
+    #[test]
+    fn queued_remote_stamps_expire_on_session_account_run_or_frame_reuse() {
+        let (key, _, _) = setup(1601);
+        let (cursor, keys) = remote_pair(1601, 7);
+        let pointer_stamp = access::stamp_cursor(cursor, key).unwrap();
+        let key_stamp = access::stamp_keyboard(&keys, key).unwrap();
+        let original = world(|w| w.remote[0]);
+        assert_eq!(access::cursor_remote_authority(cursor), Some(original));
+        for replacement in [
+            None,
+            Some(shell3::tui::RemoteInputAuthority { epoch: 2, ..original }),
+            Some(shell3::tui::RemoteInputAuthority { frontend: 78, ..original }),
+            Some(shell3::tui::RemoteInputAuthority { account: 8, ..original }),
+        ] {
+            world(|w| w.remote = replacement.into_iter().collect());
+            assert_ne!(access::cursor_remote_authority(cursor), Some(original));
+            assert!(!access::stamp_valid(pointer_stamp, key));
+            assert!(!access::stamp_valid(key_stamp, key));
+        }
+        world(|w| w.remote = vec![original]);
+        assert_eq!(access::cursor_remote_authority(cursor), Some(original));
+        assert!(access::stamp_valid(pointer_stamp, key));
+        world(|w| w.vms[0].2 = 8);
+        assert!(!access::stamp_valid(pointer_stamp, key));
+        world(|w| { w.vms[0].2 = 7; w.windows[0].session = WindowSessionId(4); });
+        assert!(!access::stamp_valid(pointer_stamp, key));
+        assert!(!access::stamp_valid(key_stamp, key));
+    }
+
+    #[test]
+    fn remote_station_release_and_reassignment_invalidate_queued_input() {
+        let (key, _, _) = setup(1701);
+        let (cursor, keys) = remote_pair(1701, 7);
+        let pointer_stamp = access::stamp_cursor(cursor, key).unwrap();
+        let key_stamp = access::stamp_keyboard(&keys, key).unwrap();
+        world(|w| w.mouse.clear());
+        assert!(!access::stamp_valid(pointer_stamp, key));
+        world(|w| w.devices.iter_mut().for_each(|d| {
+            if d.id.slot_id == keys.slot_id { d.combo_id = 0; }
+        }));
+        assert!(!access::stamp_valid(key_stamp, key));
+    }
+
+    #[test]
+    fn raw_remote_reports_before_new_session_frontiers_cannot_borrow_its_authority() {
+        let (key, _, _) = setup(1801);
+        let (cursor, mut keys) = remote_pair(1801, 7);
+        assert!(!access::cursor_event_allowed(cursor, 10));
+        assert!(!access::cursor_sequence_allowed(cursor, key, 10));
+        keys.seq = 10;
+        assert!(!access::keyboard_event_allowed(&keys));
+        assert!(access::stamp_keyboard(&keys, key).is_none());
+        world(|w| {
+            w.remote[0].cursor_frontier = 20;
+            w.remote[0].keyboard_frontiers = (20, 20);
+            w.remote[0].epoch = 2;
+        });
+        assert!(!access::cursor_event_allowed(cursor, 11));
+        keys.seq = 11;
+        assert!(!access::keyboard_event_allowed(&keys));
+        assert!(access::stamp_keyboard(&keys, key).is_none());
+        keys.seq = 21;
+        assert!(access::keyboard_event_allowed(&keys));
+        assert!(access::stamp_keyboard(&keys, key).is_some());
+        assert!(access::cursor_event_allowed(cursor, 21));
     }
 
     #[test]

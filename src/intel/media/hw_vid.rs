@@ -5,9 +5,11 @@ use core::{
 };
 use trueos_time::{Duration as EmbassyDuration, Instant as EmbassyInstant, Timer};
 
+#[path = "http_mp4.rs"]
+mod http_mp4;
+
 const H264_DECODE_TIMEOUT_MS: u64 = 5_000;
 const H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
-const H264_ONLINE_MEDIA_FETCH_MAX_BYTES: usize = 512 * 1024 * 1024;
 const H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES: usize = 1024 * 1024 * 1024;
 const H264_TRUEOSFS_READ_CHUNK_BYTES: usize = 64 * 1024;
 const H264_FS_INDEX_READ_AHEAD_BYTES: usize = 64 * 1024;
@@ -515,7 +517,7 @@ pub(crate) async fn run_prepared_trueosfs_ui4_video(
 }
 
 
-/// Browser-resolved HTTPS media uses the same bounded download/demux/decode path
+/// Browser-resolved HTTPS media uses bounded range/segment reads and native decode
 /// as the fixed online demo. Resolution and page JavaScript stay in the browser.
 pub(crate) async fn run_resolved_ui4_framed_video_playback(
     session: crate::ui4::VideoPlaybackSession,
@@ -574,39 +576,20 @@ async fn run_mp4_url_playback(
     user_agent: Option<&str>,
     referrer: Option<&str>,
 ) -> Result<H264PlaybackReport, &'static str> {
-    if indexed_length.is_some_and(|length| length > H264_ONLINE_MEDIA_FETCH_MAX_BYTES) {
-        return Err("HLS MP4 resource exceeds playback byte limit");
-    }
-    let mut mp4_bytes = h264_fetch_media_url_bytes(session, url, log_scope, user_agent, referrer).await?;
-    if session.is_cancelled() {
-        return Err("playback cancelled");
-    }
-    if let Some(length) = indexed_length {
-        if mp4_bytes.len() < length {
-            return Err("HLS MP4 resource shorter than indexed byte ranges");
-        }
-        // The finite playlist defines the admitted prefix, even if its backing
-        // object also contains an index trailer or later, unlisted fragments.
-        mp4_bytes.truncate(length);
-    }
-    let demuxed = mp4_avc1_to_annexb(mp4_bytes.as_slice())?;
-    crate::log!(
-        "intel/hw_vid: {} demux accepted=1 container=mp4 codec=avc1 mp4_bytes={} annexb_bytes={} url={}\n",
-        log_scope,
-        mp4_bytes.len(),
-        demuxed.annexb.len(),
-        url
-    );
+    let http = http_mp4::HttpMp4Reader::open(session, url, indexed_length, user_agent, referrer).await?;
+    crate::log_info!(target: "intel-media";
+        "intel/hw_vid: {} demux accepted=1 container=mp4 codec=avc1 incremental=1\n", log_scope);
 
     let media_session = h264_reserve_decode_session(session).await?;
     let media_session_generation = media_session.generation();
     let decode_engine_name = media_session.engine_name();
     let _diagnostics = H264PlaybackGuard::begin();
-    let report = h264_i_p_playback_probe_annexb_bytes(
+    let report = h264_i_p_playback_probe_with_reader(
         session,
-        demuxed.annexb,
-        demuxed.timing,
-        "media-url-mp4-avc1",
+        H264NalReader::Http(H264HttpNalReader { http, memory: None, offset: 0, failed: false }),
+        0,
+        Vec::new(),
+        "media-url-stream-mp4-avc1",
         playback_path,
         options,
         media_session_generation,
@@ -705,7 +688,7 @@ async fn run_hls_url_playback(
                     return Err("HLS requires HTTPS segments");
                 }
                 crate::log_info!(target: "intel-media";
-                    "video/hls: prepared container=fragmented-mp4 single_resource=1 indexed_bytes={} existing_mp4_demux=1\n", length);
+                    "video/hls: prepared container=fragmented-mp4 single_resource=1 indexed_bytes={} incremental=1\n", length);
                 return run_mp4_url_playback(session, &media, Some(length), options,
                     "website-hls-single-file-mp4", path, user_agent, referrer).await;
             }
@@ -833,121 +816,6 @@ impl H264HlsNalReader {
             }
         }
     }
-}
-
-fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
-    !needle.is_empty()
-        && haystack
-            .windows(needle.len())
-            .any(|window| window == needle)
-}
-
-fn hex_prefix(bytes: &[u8], max_len: usize) -> String {
-    let mut out = String::new();
-    for (index, byte) in bytes.iter().take(max_len).copied().enumerate() {
-        if index != 0 {
-            out.push('_');
-        }
-        let _ = write!(out, "{:02X}", byte);
-    }
-    if out.is_empty() {
-        out.push('-');
-    }
-    out
-}
-
-async fn h264_fetch_media_url_bytes(
-    session: crate::ui4::VideoPlaybackSession,
-    url: &str,
-    log_scope: &'static str,
-    user_agent: Option<&str>,
-    referrer: Option<&str>,
-) -> Result<Vec<u8>, &'static str> {
-    let profiles = [
-        "media-range",
-        "plain-range",
-        "media-norange",
-        "plain-norange",
-    ];
-    for profile in profiles {
-        if session.is_cancelled() {
-            return Err("playback cancelled");
-        }
-        let started = EmbassyInstant::now();
-        crate::log!(
-            "intel/hw_vid: {} fetch begin profile={} timeout_ms={} max_bytes={} url={}\n",
-            log_scope,
-            profile,
-            H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS,
-            H264_ONLINE_MEDIA_FETCH_MAX_BYTES,
-            url
-        );
-        let cancellation = crate::r::net::https::MediaFetchCancellation::new();
-        let fetch = crate::r::net::https::get_media_bytes_profile_shared(
-            url,
-            profile,
-            H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS as u32,
-            H264_ONLINE_MEDIA_FETCH_MAX_BYTES,
-            &cancellation,
-            user_agent,
-            referrer,
-        );
-        let watch = async {
-            while !session.is_cancelled() {
-                Timer::after_millis(5).await;
-            }
-            cancellation.cancel();
-        };
-        let mut fetch = core::pin::pin!(fetch);
-        let mut watch = core::pin::pin!(watch);
-        let mut cancellation_sent = false;
-        let result = core::future::poll_fn(|cx| {
-            use core::future::Future;
-            if !cancellation_sent && watch.as_mut().poll(cx).is_ready() {
-                cancellation_sent = true;
-            }
-            // Always await the fetch's TLS-owner fence after requesting stop.
-            fetch.as_mut().poll(cx)
-        })
-        .await;
-        if session.is_cancelled() {
-            return Err("playback cancelled");
-        }
-        match result {
-            Ok(bytes) => {
-                crate::log!(
-                    "intel/hw_vid: {} fetch done profile={} bytes={} waited_ms={} marker_ftyp={} marker_moov={} marker_mdat={} marker_avcc={} head_hex={} url={}\n",
-                    log_scope,
-                    profile,
-                    bytes.len(),
-                    started.elapsed().as_millis(),
-                    bytes_contains(bytes.as_slice(), b"ftyp") as u8,
-                    bytes_contains(bytes.as_slice(), b"moov") as u8,
-                    bytes_contains(bytes.as_slice(), b"mdat") as u8,
-                    bytes_contains(bytes.as_slice(), b"avcC") as u8,
-                    hex_prefix(bytes.as_slice(), 24),
-                    url
-                );
-                return Ok(bytes);
-            }
-            Err(err) => {
-                crate::log_warn!(target: "intel-media";
-                    "intel/hw_vid: {} fetch failed profile={} err={} waited_ms={}\n",
-                    log_scope,
-                    profile,
-                    err,
-                    started.elapsed().as_millis(),
-                );
-            }
-        }
-    }
-    crate::log!(
-        "intel/hw_vid: {} fetch exhausted profiles={} action=check-server-or-asset url={}\n",
-        log_scope,
-        profiles.len(),
-        url
-    );
-    Err("online media fetch failed")
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1277,6 +1145,9 @@ fn mp4_parse_stsz(data: &[u8], stsz: Mp4Box) -> Result<Vec<usize>, &'static str>
         mp4_read_u32(data, stsz.payload_start + 4).ok_or("mp4 stsz missing sample size")? as usize;
     let sample_count =
         mp4_read_u32(data, stsz.payload_start + 8).ok_or("mp4 stsz missing sample count")? as usize;
+    if sample_count > 1_000_000 || (sample_size == 0 && sample_count > stsz.end.saturating_sub(stsz.payload_start + 12) / 4) {
+        return Err("mp4 stsz sample table outside limit");
+    }
     if sample_size != 0 {
         return Ok(alloc::vec![sample_size; sample_count]);
     }
@@ -1292,6 +1163,9 @@ fn mp4_parse_stsz(data: &[u8], stsz: Mp4Box) -> Result<Vec<usize>, &'static str>
 fn mp4_parse_stsc(data: &[u8], stsc: Mp4Box) -> Result<Vec<Mp4StscEntry>, &'static str> {
     let entry_count =
         mp4_read_u32(data, stsc.payload_start + 4).ok_or("mp4 stsc missing entry count")? as usize;
+    if entry_count > stsc.end.saturating_sub(stsc.payload_start + 8) / 12 {
+        return Err("mp4 stsc truncated table");
+    }
     let mut entries = Vec::with_capacity(entry_count);
     let mut cursor = stsc.payload_start + 8;
     for _ in 0..entry_count {
@@ -1311,6 +1185,10 @@ fn mp4_parse_stsc(data: &[u8], stsc: Mp4Box) -> Result<Vec<Mp4StscEntry>, &'stat
 fn mp4_parse_chunk_offsets(data: &[u8], box_: Mp4Box) -> Result<Vec<u64>, &'static str> {
     let entry_count = mp4_read_u32(data, box_.payload_start + 4)
         .ok_or("mp4 chunk offset missing count")? as usize;
+    let width = if box_.typ == *b"co64" { 8 } else { 4 };
+    if entry_count > 1_000_000 || entry_count > box_.end.saturating_sub(box_.payload_start + 8) / width {
+        return Err("mp4 chunk offset table outside limit");
+    }
     let mut offsets = Vec::with_capacity(entry_count);
     let mut cursor = box_.payload_start + 8;
     if box_.typ == *b"co64" {
@@ -1596,11 +1474,28 @@ fn mp4_parse_trun_samples(
     fallback_data_offset: usize,
     decode_time: &mut u64,
 ) -> Result<Vec<Mp4SampleRef>, &'static str> {
+    mp4_parse_trun_samples_with_len(data, moof, trun, tfhd, fallback_data_offset, decode_time, data.len())
+}
+
+// Fragment metadata can be resident independently of its media payload. Box
+// payload offsets address `data`; moof.start and sample offsets address the file.
+fn mp4_parse_trun_samples_with_len(
+    data: &[u8],
+    moof: Mp4Box,
+    trun: Mp4Box,
+    tfhd: &Mp4Tfhd,
+    fallback_data_offset: usize,
+    decode_time: &mut u64,
+    file_len: usize,
+) -> Result<Vec<Mp4SampleRef>, &'static str> {
     let version_flags = mp4_read_u32(data, trun.payload_start).ok_or("mp4 trun missing flags")?;
     let version = (version_flags >> 24) as u8;
     let flags = version_flags & 0x00ff_ffff;
     let sample_count =
         mp4_read_u32(data, trun.payload_start + 4).ok_or("mp4 trun missing sample count")? as usize;
+    if sample_count > 1_000_000 {
+        return Err("mp4 fragment sample count limit");
+    }
     let mut cursor = trun.payload_start + 8;
     let mut data_offset = fallback_data_offset as i64;
     if flags & 0x000001 != 0 {
@@ -1609,12 +1504,9 @@ fn mp4_parse_trun_samples(
         let signed = i32::from_be_bytes(raw.to_be_bytes()) as i64;
         let base = tfhd
             .base_data_offset
-            .unwrap_or(if tfhd.flags & 0x020000 != 0 {
-                moof.start as u64
-            } else {
-                moof.start as u64
-            }) as i64;
-        data_offset = base.saturating_add(signed);
+            .unwrap_or(moof.start as u64);
+        data_offset = i64::try_from(base).ok().and_then(|base| base.checked_add(signed))
+            .ok_or("mp4 trun data offset overflow")?;
     }
     let first_sample_flags = if flags & 0x000004 != 0 {
         let value = mp4_read_u32(data, cursor).ok_or("mp4 trun missing first sample flags")?;
@@ -1628,6 +1520,10 @@ fn mp4_parse_trun_samples(
     let has_size = flags & 0x000200 != 0;
     let has_flags = flags & 0x000400 != 0;
     let has_composition_time = flags & 0x000800 != 0;
+    let entry_bytes = 4 * (has_duration as usize + has_size as usize + has_flags as usize + has_composition_time as usize);
+    if cursor > trun.end || (entry_bytes != 0 && sample_count > (trun.end - cursor) / entry_bytes) {
+        return Err("mp4 trun truncated sample table");
+    }
     let mut sample_offset =
         usize::try_from(data_offset).map_err(|_| "mp4 trun negative data offset")?;
     let mut samples = Vec::with_capacity(sample_count);
@@ -1673,7 +1569,7 @@ fn mp4_parse_trun_samples(
         let sample_end = sample_offset
             .checked_add(size)
             .ok_or("mp4 trun sample offset overflow")?;
-        if sample_end > data.len() {
+        if sample_end > file_len {
             return Err("mp4 trun sample outside file");
         }
         samples.push(Mp4SampleRef {
@@ -2974,6 +2870,7 @@ async fn h264_next_stream_access_unit(
             match reader {
                 H264NalReader::File(r) => r.failed = true,
                 H264NalReader::Hls(r) => r.failed = true,
+                H264NalReader::Http(r) => r.failed = true,
                 _ => {}
             }
             return None;
@@ -2988,7 +2885,43 @@ enum H264NalReader {
     Memory(H264MemoryNalReader),
     File(H264FileNalReader),
     Hls(H264HlsNalReader),
+    Http(H264HttpNalReader),
     Live(H264LiveNalReader),
+}
+
+struct H264HttpNalReader {
+    http: http_mp4::HttpMp4Reader,
+    memory: Option<H264MemoryNalReader>,
+    offset: u64,
+    failed: bool,
+}
+impl H264HttpNalReader {
+    async fn next_nal(&mut self) -> Option<H264BufferedNal> {
+        loop {
+            if self.failed { return None; }
+            if let Some(memory) = &mut self.memory {
+                if let Some(mut nal) = memory.try_take_nal() {
+                    nal.meta.stream_offset += self.offset;
+                    return Some(nal);
+                }
+                self.offset += memory.buffer.len() as u64;
+                self.memory = None;
+            }
+            match self.http.next_sample().await {
+                Ok(Some((bytes, _))) => {
+                    let mut memory = H264MemoryNalReader::new(bytes, "http-mp4-sample");
+                    memory.emitted_nals = 8;
+                    self.memory = Some(memory);
+                }
+                Ok(None) => return None,
+                Err(error) => {
+                    crate::log_warn!(target: "intel-media"; "video/http: sample read failed reason={}\n", error);
+                    self.failed = true;
+                    return None;
+                }
+            }
+        }
+    }
 }
 
 /// Complete access-unit transactions provide a natural NAL boundary. Append
@@ -3041,12 +2974,13 @@ impl H264NalReader {
         }
     }
     fn streaming(&self) -> bool {
-        matches!(self, Self::File(_) | Self::Hls(_) | Self::Live(_))
+        matches!(self, Self::File(_) | Self::Hls(_) | Self::Http(_) | Self::Live(_))
     }
     fn failed(&self) -> bool {
         match self {
             Self::File(r) => r.failed,
             Self::Hls(r) => r.failed,
+            Self::Http(r) => r.failed,
             Self::Live(r) => r.failed,
             _ => false,
         }
@@ -3055,7 +2989,7 @@ impl H264NalReader {
         match self {
             Self::File(r) => r.replay = Some(H264MemoryNalReader::new(bytes, "fs-prefix")),
             Self::Memory(r) => r.scan_offset = 0,
-            Self::Hls(_) | Self::Live(_) => {}
+            Self::Hls(_) | Self::Http(_) | Self::Live(_) => {}
         }
     }
     async fn next_nal(&mut self) -> Option<H264BufferedNal> {
@@ -3063,6 +2997,7 @@ impl H264NalReader {
             Self::Memory(reader) => reader.next_nal().await,
             Self::File(reader) => reader.next_nal().await,
             Self::Hls(reader) => reader.next_nal().await,
+            Self::Http(reader) => reader.next_nal().await,
             Self::Live(reader) => reader.next_nal().await,
         }
     }
@@ -3285,7 +3220,7 @@ async fn h264_i_p_playback_probe_with_reader(
         access_units.iter().map(|unit| unit.timing).collect()
     };
     let access_unit_count = timing.len();
-    let incremental_mkv = reader.mkv_track().is_some() || matches!(reader, H264NalReader::Hls(_));
+    let incremental_mkv = reader.mkv_track().is_some() || matches!(reader, H264NalReader::Hls(_) | H264NalReader::Http(_));
     let presentation_reordering_required = incremental_mkv
         || timing.windows(2).any(|pair| {
             matches!((pair[0], pair[1]), (Some(previous), Some(next))
@@ -3353,10 +3288,15 @@ async fn h264_i_p_playback_probe_with_reader(
                 presentation_slots.resize(sample_timing.len(), H264PresentationSlot::Waiting);
             }
         }
-        if let H264NalReader::Hls(hls) = &reader {
+        let incremental_timing = match &reader {
+            H264NalReader::Hls(hls) => Some(&hls.timing),
+            H264NalReader::Http(http) => Some(&http.http.timing),
+            _ => None,
+        };
+        if let Some(timing) = incremental_timing {
             let first = sample_timing.len();
-            if first < hls.timing.len() {
-                let added = &hls.timing[first..];
+            if first < timing.len() {
+                let added = &timing[first..];
                 if first == 0 {
                     base_pts = added.iter().map(|t| t.pts).min().unwrap_or(0);
                 }

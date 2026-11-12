@@ -11,6 +11,8 @@ pub(crate) struct LaunchRequest {
     pub instance: super::BlueprintInstanceRequest,
     /// Frozen authenticated origin; presentation attachment cannot change it.
     pub access_account: Option<trueos_crypto::AccountId>,
+    /// Direct human command authority, separate from an inherited storage account.
+    pub remote_input_origin: Option<crate::shell3::tui::RemoteInputOrigin>,
     pub frontend: Option<crate::shell3::tui::Frontend>,
     pub console_surface: super::BlueprintConsoleSurface,
 }
@@ -23,6 +25,7 @@ impl LaunchRequest {
             script: None,
             instance: super::BlueprintInstanceRequest::default(),
             access_account: None,
+            remote_input_origin: None,
             frontend: None,
             console_surface: super::BlueprintConsoleSurface::Text,
         }
@@ -80,6 +83,9 @@ pub(crate) fn enqueue(
         if let Err(error) = crate::shell3::tui::attach(frontend, &target) {
             super::matrix::discard(&target);
             return Err(error);
+        }
+        if let Some(origin) = request.remote_input_origin {
+            crate::shell3::tui::bind_remote_input_origin(&target, origin);
         }
     }
     let queue = timing.span("launch_queue");

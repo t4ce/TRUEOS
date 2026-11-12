@@ -527,6 +527,9 @@ pub struct HttpsJsonResponse {
     pub content_encoding: Option<String>,
     pub content_type: Option<String>,
     pub content_disposition: Option<String>,
+    pub content_range: Option<String>,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
     pub retry_after: Option<String>,
     pub date: Option<String>,
 }
@@ -1132,6 +1135,15 @@ fn complete_http_response(
     let content_disposition = header_value(headers, b"content-disposition")
         .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
         .map(String::from);
+    let content_range = header_value(headers, b"content-range")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let etag = header_value(headers, b"etag")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let last_modified = header_value(headers, b"last-modified")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
     if let Some(te) = header_value(headers, b"transfer-encoding")
         && header_value_has_token(te, b"chunked")
     {
@@ -1143,6 +1155,9 @@ fn complete_http_response(
                 content_encoding,
                 content_type,
                 content_disposition,
+                content_range,
+                etag,
+                last_modified,
                 retry_after,
                 date,
             }),
@@ -1172,6 +1187,9 @@ fn complete_http_response(
             content_encoding,
             content_type,
             content_disposition,
+            content_range,
+            etag,
+            last_modified,
             retry_after,
             date,
             body: decoded,
@@ -1206,6 +1224,15 @@ fn complete_http_head_response(response: &[u8]) -> Result<Option<HttpsJsonRespon
     let content_disposition = header_value(headers, b"content-disposition")
         .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
         .map(String::from);
+    let content_range = header_value(headers, b"content-range")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let etag = header_value(headers, b"etag")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let last_modified = header_value(headers, b"last-modified")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
     // HEAD responses carry representation Content-Length metadata but never a
     // body. Stop at the header terminator instead of waiting for that length.
     Ok(Some(HttpsJsonResponse {
@@ -1215,6 +1242,9 @@ fn complete_http_head_response(response: &[u8]) -> Result<Option<HttpsJsonRespon
         content_encoding,
         content_type,
         content_disposition,
+        content_range,
+        etag,
+        last_modified,
         retry_after,
         date,
     }))
@@ -1273,6 +1303,15 @@ fn http_response_from_bytes(
     let content_disposition = header_value(headers, b"content-disposition")
         .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
         .map(String::from);
+    let content_range = header_value(headers, b"content-range")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let etag = header_value(headers, b"etag")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
+    let last_modified = header_value(headers, b"last-modified")
+        .and_then(|value| core::str::from_utf8(trim_ascii(value)).ok())
+        .map(String::from);
     if let Some(te) = header_value(headers, b"transfer-encoding")
         && header_value_has_token(te, b"chunked")
     {
@@ -1285,6 +1324,9 @@ fn http_response_from_bytes(
             content_encoding,
             content_type,
             content_disposition,
+            content_range,
+            etag,
+            last_modified,
             retry_after,
             date,
         });
@@ -1317,6 +1359,9 @@ fn http_response_from_bytes(
             content_encoding,
             content_type,
             content_disposition,
+            content_range,
+            etag,
+            last_modified,
             retry_after,
             date,
             body: decoded,
@@ -1335,6 +1380,9 @@ fn http_response_from_bytes(
         content_encoding,
         content_type,
         content_disposition,
+        content_range,
+        etag,
+        last_modified,
         retry_after,
         date,
         body: decoded,
@@ -2335,6 +2383,169 @@ pub(crate) async fn get_media_bytes_profile_shared(
         if hop==5{return Err(String::from("too many redirects"));}
         let location=response.location.ok_or_else(||String::from("redirect missing location"))?;
         current=resolve_fetch_redirect(&target,&location)?;
+    }
+    Err(String::from("too many redirects"))
+}
+
+/// Identity retained across independent range requests. Strong ETags are used
+/// with If-Match; Last-Modified is the fallback when the server has no strong
+/// validator. The final URL and representation length must remain stable too.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MediaRangeIdentity {
+    pub final_url: String,
+    pub total_len: u64,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct MediaRangeResponse {
+    pub bytes: Vec<u8>,
+    pub identity: MediaRangeIdentity,
+}
+
+fn media_content_range(value: &str) -> Result<(u64, u64, u64), String> {
+    let invalid = || String::from("invalid media Content-Range");
+    let (unit, value) = value.split_once(' ').ok_or_else(invalid)?;
+    if !unit.eq_ignore_ascii_case("bytes") {
+        return Err(invalid());
+    }
+    let (range, total) = value.split_once('/').ok_or_else(invalid)?;
+    let (start, end) = range.split_once('-').ok_or_else(invalid)?;
+    let number = |s: &str| -> Result<u64, String> {
+        if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(invalid());
+        }
+        s.parse().map_err(|_| invalid())
+    };
+    let (start, end, total) = (number(start)?, number(end)?, number(total)?);
+    if start > end || end >= total {
+        return Err(invalid());
+    }
+    Ok((start, end, total))
+}
+
+/// Fetch one bounded, validated portion of a media representation. This never
+/// requests the remaining file: servers ignoring Range hit the same body cap.
+/// A complete 200 response is useful only for an initial, small representation.
+pub(crate) async fn get_media_range_bytes_shared(
+    url: &str,
+    offset: u64,
+    length: usize,
+    timeout_ms: u32,
+    cancellation: &MediaFetchCancellation,
+    user_agent: Option<&str>,
+    referrer: Option<&str>,
+    expected: Option<&MediaRangeIdentity>,
+) -> Result<MediaRangeResponse, String> {
+    if length == 0 || length > 32 * 1024 * 1024 {
+        return Err(String::from("media range length outside limit"));
+    }
+    let end = offset.checked_add(length as u64 - 1)
+        .ok_or_else(|| String::from("media range overflow"))?;
+    if expected.is_some_and(|identity| offset >= identity.total_len) {
+        return Err(String::from("media range outside representation"));
+    }
+    let mut headers = vec![
+        (String::from("User-Agent"), String::from(user_agent.unwrap_or(DEFAULT_USER_AGENT))),
+        (String::from("Accept"), String::from("video/mp4,video/*;q=0.9,*/*;q=0.8")),
+        (String::from("Accept-Encoding"), String::from("identity")),
+        (String::from("Connection"), String::from("close")),
+        (String::from("Range"), format!("bytes={offset}-{end}")),
+    ];
+    if let Some(identity) = expected {
+        if let Some(etag) = &identity.etag {
+            headers.push((String::from("If-Match"), etag.clone()));
+        } else if let Some(modified) = &identity.last_modified {
+            headers.push((String::from("If-Unmodified-Since"), modified.clone()));
+        }
+    }
+    let mut request = HttpsRequest {
+        method: "GET", headers_only: false, content_type: None, headers, body: &[],
+    };
+    let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms.max(1) as u64);
+    let mut current = String::from(url);
+    let mut seen = alloc::collections::BTreeSet::new();
+    for hop in 0..=5 {
+        if cancellation.0.is_cancelled() {
+            return Err(String::from(HTTPS_REQUEST_CANCELLED));
+        }
+        let target = checked_media_target(&current)?;
+        let canonical = fetch_target_url(&target);
+        if !seen.insert(canonical.clone()) {
+            return Err(String::from("redirect loop"));
+        }
+        request.headers.retain(|(name, _)| !name.eq_ignore_ascii_case("Referer"));
+        if let Some(value) = media_referrer_for_target(referrer, &target)? {
+            request.headers.push((String::from("Referer"), value));
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
+        if remaining == 0 {
+            return Err(String::from("timeout"));
+        }
+        let response = request_https_response_once_cancellable(
+            &target, &request, remaining.min(u32::MAX as u64) as u32,
+            length, Some(&cancellation.0),
+        );
+        let mut response = core::pin::pin!(response);
+        let mut timer = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(remaining)));
+        let mut expired = false;
+        let response = core::future::poll_fn(|cx| {
+            if !expired && timer.as_mut().poll(cx).is_ready() {
+                expired = true;
+                cancellation.cancel();
+            }
+            // Cancellation retires the TLS owner before this future returns.
+            response.as_mut().poll(cx)
+        }).await?;
+        if cancellation.0.is_cancelled() {
+            return Err(String::from(HTTPS_REQUEST_CANCELLED));
+        }
+        if matches!(response.status, 301 | 302 | 303 | 307 | 308) {
+            if hop == 5 {
+                return Err(String::from("too many redirects"));
+            }
+            let location = response.location.ok_or_else(|| String::from("redirect missing location"))?;
+            current = resolve_fetch_redirect(&target, &location)?;
+            continue;
+        }
+        if response.content_encoding.as_deref().is_some_and(|value| !value.trim().eq_ignore_ascii_case("identity")) {
+            return Err(String::from("encoded media range response unsupported"));
+        }
+        if response.body.len() > length {
+            return Err(String::from("media range exceeds requested length"));
+        }
+        let total_len = match response.status {
+            206 => {
+                let (start, actual_end, total) = media_content_range(
+                    response.content_range.as_deref().ok_or_else(|| String::from("media range missing Content-Range"))?,
+                )?;
+                if start != offset || actual_end != end.min(total - 1)
+                    || actual_end - start + 1 != response.body.len() as u64 {
+                    return Err(String::from("media range does not match request"));
+                }
+                total
+            }
+            200 if offset == 0 && expected.is_none() && !response.body.is_empty()
+                && response.content_range.is_none() => response.body.len() as u64,
+            200 => return Err(String::from("media server ignored byte range")),
+            status => return Err(format!("http status {status}")),
+        };
+        let identity = MediaRangeIdentity {
+            final_url: canonical,
+            total_len,
+            // Weak tags cannot protect a byte-for-byte reconstruction.
+            etag: response.etag.filter(|value| value.starts_with('"') && value.ends_with('"')),
+            last_modified: response.last_modified,
+        };
+        if let Some(expected) = expected {
+            if identity.total_len != expected.total_len || identity.final_url != expected.final_url
+                || expected.etag.as_ref().is_some_and(|value| identity.etag.as_ref() != Some(value))
+                || expected.etag.is_none() && expected.last_modified.as_ref().is_some_and(|value| identity.last_modified.as_ref() != Some(value)) {
+                return Err(String::from("media representation changed during playback"));
+            }
+        }
+        return Ok(MediaRangeResponse { bytes: response.body, identity });
     }
     Err(String::from("too many redirects"))
 }

@@ -97,6 +97,9 @@ pub const OP_BP_INPUT_KEYBOARD_OUTPUT_POP: u32 = 0xCC;
 pub const OP_BP_INPUT_KEYBOARD_OUTPUT_SINCE: u32 = 0xCD;
 pub const OP_BP_INPUT_MIDI_READ_V1: u32 = 0x200;
 pub const OP_BP_INPUT_HUT_SNAPSHOT_V1: u32 = 0x257;
+/// arg0 operation 0=request, 1=color, 2..5=mouse/keyboard/tablet/gamepad bind,
+/// 6=remove; arg1 combo id. Request payloads and combo replies use input wire V1.
+pub const OP_BP_INPUT_COMBO_CONTROL_V1: u32 = 0x258;
 pub const OP_BP_MIO_SOCKET_POLL_READY: u32 = 0x201;
 pub const OP_BP_PLATFORM_WAIT_OBSERVE: u32 = 0x202;
 pub const OP_BP_PLATFORM_WAIT_AFTER: u32 = 0x203;

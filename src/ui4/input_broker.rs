@@ -332,6 +332,7 @@ impl From<crate::r::keyboard::TrueosKeyboardOutputEvent> for KeyboardSource {
 #[derive(Copy, Clone)]
 struct CursorRoute {
     source: Ui4CursorSource,
+    remote_input_authority: Option<crate::shell3::tui::RemoteInputAuthority>,
     /// Retained through canonical-device removal so a Human pointer group can
     /// keep its selected frame when another physical member takes over.
     combo_id: u32,
@@ -377,6 +378,7 @@ impl CursorRoute {
     fn new(source: Ui4CursorSource, x: u32, y: u32, buttons_down: u32) -> Self {
         Self {
             source,
+            remote_input_authority: None,
             combo_id: 0,
             human_pointer_group: false,
             x,
@@ -543,6 +545,23 @@ impl InputBroker {
             consumed_keys: Vec::new(),
             selection_serial: 0,
             cursors: Vec::new(),
+        }
+    }
+
+    fn refresh_remote_input_route(&mut self, index: usize) {
+        let source = self.cursors[index].source;
+        let authority = super::spirit_access::cursor_remote_authority(source);
+        if self.cursors[index].remote_input_authority == authority {
+            return;
+        }
+        let route = &mut self.cursors[index];
+        route.clear_window_interaction();
+        route.buttons_down = 0;
+        route.absorb_select = false;
+        route.remote_input_authority = authority;
+        super::context_menu::dismiss_for_source(source);
+        if self.quad_resize.is_some_and(|gesture| gesture.source == source) {
+            self.quad_resize = None;
         }
     }
 
@@ -740,6 +759,7 @@ impl InputBroker {
             (normalized_to_pixel(event.x, width), normalized_to_pixel(event.y, height))
         };
         let index = self.cursor_index(source, raw_x, raw_y);
+        self.refresh_remote_input_route(index);
         if visual_only {
             // These reports use the same mediated HID motion station but own
             // presentation only. Do not hit-test, hover, select, capture or
@@ -750,6 +770,9 @@ impl InputBroker {
             route.y = raw_y;
             route.buttons_down = 0;
             route.visible_after_motion = true;
+            return;
+        }
+        if !super::spirit_access::cursor_event_allowed(source, ring_sequence) {
             return;
         }
         let (combo_id, vcursor) = cursor_hut_metadata(source);
@@ -784,9 +807,22 @@ impl InputBroker {
             self.process_restricted_cursor(index, event, x, y, buttons_down, pressed, released, dx, dy, ring_sequence);
             return;
         }
+        // A retained gesture cannot keep access to a frame after its account
+        // authority changes. Check before desktop actions mutate geometry.
+        let allowed = |target: WindowTarget| super::spirit_access::cursor_target_allowed(
+            source, target.cursor_frame_key());
+        let route = &self.cursors[index];
+        if route.capture.is_some_and(|target| !allowed(target))
+            || route.collapse_drag.is_some_and(|target| !allowed(target))
+            || route.collapse_press.is_some_and(|(target, _)| !allowed(target))
+            || route.resize_latch.is_some_and(|(target, _)| !allowed(target))
+        {
+            self.cursors[index].clear_window_interaction();
+        }
         // The shared handle takes precedence over frame hit testing. Other
         // sources can keep using UI4 but cannot take this gesture's ownership.
-        let quad = current_quad_layout(width, height);
+        let quad = current_quad_layout(width, height).filter(|windows|
+            windows.iter().all(|window| allowed(WindowTarget::from(*window))));
         if self.quad_resize.is_some_and(|gesture| {
             !quad.is_some_and(|windows| quad_gesture_valid(gesture, windows))
                 || !self
@@ -852,7 +888,8 @@ impl InputBroker {
                 return;
             }
         }
-        let hit = snapped_window.or_else(|| topmost_window_at(x, y));
+        let hit = snapped_window.or_else(|| topmost_window_at(x, y))
+            .filter(|window| allowed(WindowTarget::from(*window)));
         if let Some(target) = self.cursors[index].collapse_drag {
             let following = super::window_broker::follow_collapsed_cursor(
                 target.owner, target.window, x, y,
@@ -1173,7 +1210,8 @@ impl InputBroker {
                 hit.filter(|window| {
                     selected == Some(WindowTarget::from(*window).cursor_frame_key())
                 })
-            });
+            })
+            .filter(|window| allowed(WindowTarget::from(*window)));
         if let Some(mut target) = target {
             let mut restored_this_event = false;
             let mut frame_geometry_changed = false;
@@ -1677,6 +1715,15 @@ impl InputBroker {
             );
             return;
         }
+        if !super::spirit_access::keyboard_event_allowed(&event) {
+            return;
+        }
+        // A key can arrive before the first pointer report after reentry.
+        for index in 0..self.cursors.len() {
+            if self.cursors[index].remote_input_authority.is_some() {
+                self.refresh_remote_input_route(index);
+            }
+        }
         if !super::spirit_access::keyboard_is_human(&event) {
             self.process_restricted_keyboard(event);
             return;
@@ -1774,6 +1821,11 @@ impl InputBroker {
                 );
                 return;
             };
+            let frame = WindowTarget::from(window).cursor_frame_key();
+            if !super::spirit_access::keyboard_target_allowed(&event, frame)
+                || !super::spirit_access::cursor_target_allowed(route.source, frame) {
+                return;
+            }
             super::screenshot::request_window_capture(window, route.x, route.y);
             return;
         }
@@ -1785,6 +1837,10 @@ impl InputBroker {
         let Some(key) = super::selected_frame_for_source(route_source) else {
             return;
         };
+        if !super::spirit_access::keyboard_target_allowed(&event, key)
+            || !super::spirit_access::cursor_target_allowed(route_source, key) {
+            return;
+        }
         let target = WindowTarget {
             owner: key.owner,
             window: key.window,

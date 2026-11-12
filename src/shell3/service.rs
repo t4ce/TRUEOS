@@ -155,7 +155,10 @@ pub(crate) fn launch_bytes_with_script(
     script: Option<alloc::string::String>,
 ) -> Result<QueuedBlueprint, alloc::string::String> {
     let account = super::tui::frontend_access_account(frontend);
-    launch_bytes_with_script_for_account(archive, bytes, frontend, script, account)
+    let remote_input_origin = crate::app_db::is_remote_input_controller(&archive, &bytes)
+        .then(|| super::tui::capture_remote_input_origin(frontend)).flatten();
+    let args = if archive == "os.bp" { super::os::arguments() } else { Vec::new() };
+    launch_bytes_with_args(archive, bytes, frontend, script, args, account, remote_input_origin)
 }
 
 /// Guest-originated requests carry their bound principal, including `None`.
@@ -172,7 +175,7 @@ pub(crate) fn launch_bytes_with_script_for_account(
     } else {
         Vec::new()
     };
-    launch_bytes_with_args(archive, bytes, frontend, script, args, access_account)
+    launch_bytes_with_args(archive, bytes, frontend, script, args, access_account, None)
 }
 fn launch_bytes_with_args(
     archive: alloc::string::String,
@@ -181,6 +184,7 @@ fn launch_bytes_with_args(
     script: Option<alloc::string::String>,
     args: Vec<alloc::string::String>,
     access_account: Option<trueos_crypto::AccountId>,
+    remote_input_origin: Option<super::tui::RemoteInputOrigin>,
 ) -> Result<QueuedBlueprint, alloc::string::String> {
     let observer = (archive == "os.bp").then(|| {
         alloc::boxed::Box::new(ShellLaunch)
@@ -190,6 +194,7 @@ fn launch_bytes_with_args(
     request.script = script;
     request.args = args;
     request.access_account = access_account;
+    request.remote_input_origin = remote_input_origin;
     request.frontend = Some(frontend);
     request.console_surface = crate::hv::BlueprintConsoleSurface::Terminal;
     crate::hv::launcher::enqueue(request, observer)
@@ -1005,7 +1010,7 @@ async fn edit_aka_task(frontend: super::tui::Frontend, access_account: Option<tr
     let result = async {
         let path = crate::r::startup_config::edit_path().await?;
         let bytes = crate::app_db::get("edit.bp")?.ok_or("Aka: edit builtin unavailable")?;
-        launch_bytes_with_args("edit.bp".into(), bytes, frontend, None, alloc::vec![path], access_account)
+        launch_bytes_with_args("edit.bp".into(), bytes, frontend, None, alloc::vec![path], access_account, None)
     }
     .await;
     match result {

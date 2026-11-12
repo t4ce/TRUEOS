@@ -1,8 +1,9 @@
 //! LINK bucket authority at UI4's frame boundary. Human input retains the desktop;
 //! AI input and Spirit observations require an explicit, revocable frame permit.
-//! Remote and unknown sources are not implicitly the local human bucket.
+//! Remote human input carries its live terminal authority through queued events.
 use super::{CursorFrameKey, Ui4CursorSource, WindowSnapshot, WindowState};
 use crate::r::keyboard::TrueosKeyboardOutputEvent;
+use crate::shell3::tui::RemoteInputAuthority;
 use crate::usb2::hid::hut::{self, HidSourceKind};
 use heapless::Vec;
 use spin::Mutex;
@@ -74,8 +75,92 @@ static REGISTRY: Mutex<Registry> = Mutex::new(Registry::new());
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Bucket {
     Human,
+    Remote(RemoteDevice),
     Ai,
     Restricted,
+}
+
+/// Keep station and combo provenance alongside the session, so moving or
+/// releasing a device also invalidates input already queued for that source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RemoteDevice {
+    authority: RemoteInputAuthority,
+    vm: u8,
+    run: u64,
+    kind: hut::HidDeviceKind,
+    slot: u32,
+    combo: u32,
+}
+
+fn remote_device(vm: u8, kind: hut::HidDeviceKind, slot: u32) -> Option<RemoteDevice> {
+    if !vm_live(vm, None) {
+        return None;
+    }
+    let run = crate::hv::vm_run_generation(vm)?;
+    let authority = crate::shell3::tui::remote_input_authority(vm, run)?;
+    let device = hut::devices_snapshot().into_iter().find(|device| {
+        device.id.kind == kind
+            && device.id.controller_id == 0
+            && device.id.slot_id == slot
+            && device.id.ep_target == 0
+            && device.virtual_device
+            && device.source_kind == HidSourceKind::Remote
+            && device.combo_id != 0
+    })?;
+    if !crate::r::io::input_cabi::remote_input_combo_owned(vm, run, device.combo_id) {
+        return None;
+    }
+    Some(RemoteDevice {
+        authority,
+        vm,
+        run,
+        kind,
+        slot,
+        combo: device.combo_id,
+    })
+}
+
+fn guest_bucket(vm: u8, kind: hut::HidDeviceKind, slot: u32) -> Bucket {
+    if !vm_live(vm, None) {
+        return Bucket::Restricted;
+    }
+    let remote = hut::devices_snapshot().into_iter().any(|device| {
+        device.id.kind == kind
+            && device.id.controller_id == 0
+            && device.id.slot_id == slot
+            && device.id.ep_target == 0
+            && device.source_kind == HidSourceKind::Remote
+    });
+    if remote {
+        remote_device(vm, kind, slot).map_or(Bucket::Restricted, Bucket::Remote)
+    } else {
+        Bucket::Ai
+    }
+}
+
+fn remote_device_valid(device: RemoteDevice) -> bool {
+    use crate::r::services::{keyboard_control_service as keyboard, mouse_motion_service as mouse};
+    let owned = match device.kind {
+        hut::HidDeviceKind::Mouse => matches!(mouse::cursor_principal(device.slot),
+            Some(mouse::MouseControlPrincipal::Vm(vm)) if vm == device.vm),
+        hut::HidDeviceKind::Keyboard => matches!(keyboard::keyboard_principal(device.slot),
+            Some(keyboard::KeyboardControlPrincipal::Vm(vm)) if vm == device.vm),
+        _ => false,
+    };
+    owned
+        && crate::shell3::tui::remote_input_authority_valid(device.authority)
+        && remote_device(device.vm, device.kind, device.slot) == Some(device)
+}
+
+fn remote_target_allowed(device: RemoteDevice, frame: CursorFrameKey) -> bool {
+    remote_device_valid(device)
+        && match frame.owner {
+            super::WindowOwner::Vm(vm) => {
+                crate::access_key_db::authorize_vm_control(vm, Some(device.authority.account))
+                    .is_ok()
+            }
+            _ => true,
+        }
 }
 
 fn bucket(kind: HidSourceKind, virtual_device: bool, owned_virtual: bool) -> Bucket {
@@ -96,11 +181,7 @@ fn cursor_bucket(source: Ui4CursorSource) -> Bucket {
         .then(|| mouse::cursor_principal(source.slot_id))
         .flatten();
     if let Some(MouseControlPrincipal::Vm(vm)) = principal {
-        return if vm_live(vm, None) {
-            Bucket::Ai
-        } else {
-            Bucket::Restricted
-        };
+        return guest_bucket(vm, hut::HidDeviceKind::Mouse, source.slot_id);
     }
     let kind = if source.hid_kind == crate::r::cursor::HID_KIND_TABLET {
         hut::HidDeviceKind::Tablet
@@ -133,11 +214,7 @@ fn keyboard_bucket(event: &TrueosKeyboardOutputEvent) -> Bucket {
         .then(|| keyboard::keyboard_principal(event.slot_id))
         .flatten();
     if let Some(KeyboardControlPrincipal::Vm(vm)) = principal {
-        return if vm_live(vm, None) {
-            Bucket::Ai
-        } else {
-            Bucket::Restricted
-        };
+        return guest_bucket(vm, hut::HidDeviceKind::Keyboard, event.slot_id);
     }
     hut::devices_snapshot()
         .into_iter()
@@ -157,11 +234,40 @@ fn keyboard_bucket(event: &TrueosKeyboardOutputEvent) -> Bucket {
 }
 
 pub(crate) fn cursor_is_human(source: Ui4CursorSource) -> bool {
-    cursor_bucket(source) == Bucket::Human
+    matches!(cursor_bucket(source), Bucket::Human | Bucket::Remote(_))
+}
+
+/// Broker gestures must not survive a terminal session or lease change even
+/// when the same account later resumes control of the same virtual cursor.
+pub(crate) fn cursor_remote_authority(source: Ui4CursorSource) -> Option<RemoteInputAuthority> {
+    match cursor_bucket(source) {
+        Bucket::Remote(device) => Some(device.authority),
+        _ => None,
+    }
 }
 
 pub(crate) fn keyboard_is_human(event: &TrueosKeyboardOutputEvent) -> bool {
-    keyboard_bucket(event) == Bucket::Human
+    matches!(keyboard_bucket(event), Bucket::Human | Bucket::Remote(_))
+}
+
+/// Raw reports can wait in a ring across terminal detach/reentry. An old
+/// report must not acquire the newly established human session's authority.
+pub(crate) fn cursor_event_allowed(source: Ui4CursorSource, sequence: u64) -> bool {
+    match cursor_bucket(source) {
+        Bucket::Remote(device) => sequence > device.authority.cursor_frontier,
+        Bucket::Restricted => false,
+        _ => true,
+    }
+}
+
+pub(crate) fn keyboard_event_allowed(event: &TrueosKeyboardOutputEvent) -> bool {
+    match keyboard_bucket(event) {
+        Bucket::Remote(device) => {
+            keyboard_sequence_allowed(event, device.authority.keyboard_frontiers)
+        }
+        Bucket::Restricted => false,
+        _ => true,
+    }
 }
 
 fn live(frame: CursorFrameKey) -> Option<WindowSnapshot> {
@@ -199,7 +305,7 @@ pub(crate) fn toggle_from_human(
     source: Ui4CursorSource,
     frame: CursorFrameKey,
 ) -> Result<bool, ()> {
-    if !cursor_is_human(source) {
+    if !cursor_is_human(source) || !cursor_target_allowed(source, frame) {
         return Err(());
     }
     let window = live(frame).ok_or(())?;
@@ -264,6 +370,11 @@ pub(crate) fn bind_input(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InputStamp {
     Human,
+    Remote {
+        device: RemoteDevice,
+        frame: CursorFrameKey,
+        session: u32,
+    },
     Ai {
         permit: Permit,
         owner: Option<(u8, u64)>,
@@ -281,6 +392,15 @@ fn vm_live(vm: u8, run: Option<u64>) -> bool {
 pub(crate) fn stamp_valid(stamp: InputStamp, frame: CursorFrameKey) -> bool {
     match stamp {
         InputStamp::Human => true,
+        InputStamp::Remote {
+            device,
+            frame: admitted,
+            session,
+        } => {
+            admitted == frame
+                && live(frame).is_some_and(|window| window.session.raw() == session)
+                && remote_target_allowed(device, frame)
+        }
         InputStamp::Ai { permit, owner } => {
             permit.frame == frame
                 && valid(permit)
@@ -310,6 +430,7 @@ fn ai_stamp(
 pub(crate) fn stamp_cursor(source: Ui4CursorSource, frame: CursorFrameKey) -> Option<InputStamp> {
     match cursor_bucket(source) {
         Bucket::Human => Some(InputStamp::Human),
+        Bucket::Remote(device) => remote_stamp(device, frame),
         Bucket::Restricted => None,
         Bucket::Ai => {
             let binding = REGISTRY
@@ -333,6 +454,16 @@ pub(crate) fn stamp_cursor(source: Ui4CursorSource, frame: CursorFrameKey) -> Op
     }
 }
 
+fn remote_stamp(device: RemoteDevice, frame: CursorFrameKey) -> Option<InputStamp> {
+    let session = live(frame)?.session.raw();
+    let stamp = InputStamp::Remote {
+        device,
+        frame,
+        session,
+    };
+    stamp_valid(stamp, frame).then_some(stamp)
+}
+
 fn sequence_after(sequence: u32, frontier: u32) -> bool {
     (sequence.wrapping_sub(frontier) as i32) > 0
 }
@@ -344,8 +475,13 @@ pub(crate) fn cursor_sequence_allowed(
     frame: CursorFrameKey,
     sequence: u64,
 ) -> bool {
-    let Some(InputStamp::Ai { permit, .. }) = stamp_cursor(source, frame) else {
-        return cursor_is_human(source);
+    let permit = match stamp_cursor(source, frame) {
+        Some(InputStamp::Human) => return true,
+        Some(InputStamp::Remote { device, .. }) => {
+            return sequence > device.authority.cursor_frontier;
+        }
+        Some(InputStamp::Ai { permit, .. }) => permit,
+        None => return false,
     };
     sequence > permit.cursor_frontier
         && REGISTRY
@@ -371,6 +507,7 @@ fn stamp_keyboard_source(
 ) -> Option<InputStamp> {
     match keyboard_bucket(event) {
         Bucket::Human => Some(InputStamp::Human),
+        Bucket::Remote(device) => remote_stamp(device, frame),
         Bucket::Restricted => None,
         Bucket::Ai => {
             let binding = REGISTRY
@@ -407,6 +544,11 @@ pub(crate) fn stamp_keyboard(
     frame: CursorFrameKey,
 ) -> Option<InputStamp> {
     let stamp = stamp_keyboard_source(event, frame)?;
+    if let InputStamp::Remote { device, .. } = stamp {
+        if !keyboard_sequence_allowed(event, device.authority.keyboard_frontiers) {
+            return None;
+        }
+    }
     if let InputStamp::Ai { permit, .. } = stamp {
         if !keyboard_sequence_allowed(event, permit.keyboard_frontiers) {
             return None;

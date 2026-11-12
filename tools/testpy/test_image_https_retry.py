@@ -44,6 +44,7 @@ use std::collections::VecDeque;
 const HTTPS_REQUEST_CANCELLED:&str="cancelled";
 const DEFAULT_USER_AGENT:&str="TRUEOS net-fetch";
 const HTTPS_PROBE_HEADER_MAX:usize=32768;
+const HTTPS_RESPONSE_OVERHEAD_MAX:usize=4096;
 #[macro_export]macro_rules! log_info {($($t:tt)*)=>{};}
 // Evaluate the production flat JSON field expressions without a serde build.
 // Debug strings preserve exact integers and distinguish string values.

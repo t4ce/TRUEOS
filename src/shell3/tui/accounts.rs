@@ -3,14 +3,16 @@ use alloc::vec::Vec;
 use trueos_crypto::AccountId;
 
 pub(super) struct Bindings {
-    human: Vec<(u64, AccountId)>,
+    human: Vec<(u64, AccountId, u64)>,
     guest: Vec<(u64, Option<AccountId>)>,
+    next_human_epoch: u64,
 }
 impl Bindings {
     pub(super) const fn new() -> Self {
         Self {
             human: Vec::new(),
             guest: Vec::new(),
+            next_human_epoch: 0,
         }
     }
     pub(super) fn account(&self, frontend: u64) -> Option<AccountId> {
@@ -22,6 +24,12 @@ impl Bindings {
             .find(|entry| entry.0 == frontend)
             .map(|entry| entry.1)
     }
+    /// An inherited account is not a human session. Reauthentication issues a
+    /// new epoch even for the same account, so old control grants stay retired.
+    pub(super) fn human_session(&self, frontend: u64) -> Option<(AccountId, u64)> {
+        self.human.iter().find(|entry| entry.0 == frontend)
+            .map(|entry| (entry.1, entry.2))
+    }
     pub(super) fn is_guest(&self, frontend: u64) -> bool {
         self.guest.iter().any(|entry| entry.0 == frontend)
     }
@@ -31,7 +39,9 @@ impl Bindings {
         }
         self.human.retain(|entry| entry.0 != frontend);
         if let Some(account) = account {
-            self.human.push((frontend, account));
+            self.next_human_epoch = self.next_human_epoch.checked_add(1)
+                .expect("human frontend session epoch exhausted");
+            self.human.push((frontend, account, self.next_human_epoch));
         }
         true
     }
@@ -96,5 +106,29 @@ mod tests {
         assert_eq!(bindings.account(10), None);
         bindings.bind_guest(10, None);
         assert_eq!(bindings.account(10), None);
+    }
+    #[test]
+    fn same_account_reauthentication_never_revives_old_control_grant() {
+        let mut bindings = Bindings::new();
+        bindings.bind_human(10, Some(ALICE));
+        let original = bindings.human_session(10).unwrap();
+        bindings.bind_human(10, None);
+        assert_eq!(bindings.human_session(10), None);
+        bindings.bind_human(10, Some(ALICE));
+        let reauthenticated = bindings.human_session(10).unwrap();
+        assert_eq!(original.0, reauthenticated.0);
+        assert_ne!(original.1, reauthenticated.1);
+        bindings.remove(10);
+        bindings.bind_human(10, Some(ALICE));
+        assert_ne!(bindings.human_session(10), Some(reauthenticated));
+    }
+    #[test]
+    fn inherited_account_never_supplies_a_human_session() {
+        let mut bindings = Bindings::new();
+        bindings.bind_guest(20, Some(ALICE));
+        assert_eq!(bindings.account(20), Some(ALICE));
+        assert_eq!(bindings.human_session(20), None);
+        assert!(!bindings.bind_human(20, Some(ALICE)));
+        assert_eq!(bindings.human_session(20), None);
     }
 }
