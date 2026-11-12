@@ -188,15 +188,6 @@ pub(crate) async fn wifi_service_task(spawner: trueos_executor::Spawner) {
         ticks = ticks.saturating_add(1);
         poll();
         connect_boot_profile(&mut boot_connect_attempted, &mut next_boot_scan_ms);
-        let wifi_state = state();
-        let color = match wifi_state {
-            WifiState::Connected => 0xff00_ff00,
-            WifiState::Scanning | WifiState::Connecting | WifiState::Authenticating => 0xff00_00ff,
-            WifiState::NoHardware | WifiState::Disabled | WifiState::Failed => 0xffff_0000,
-            WifiState::Disconnected if last_operation_error().is_some() => 0xffff_0000,
-            WifiState::Disconnected => 0xff00_00ff,
-        };
-        crate::r::services::microfont_log_service::wifi_color_changed(color);
         match register_network_interface(spawner) {
             Ok(_) => last_registration_error = None,
             Err(error) => {
@@ -207,9 +198,6 @@ pub(crate) async fn wifi_service_task(spawner: trueos_executor::Spawner) {
                 }
             }
         }
-        let wifi_index = NETWORK_REGISTRATION.lock().index;
-        let address = wifi_index.and_then(super::adapter::ipv4_at);
-        crate::r::services::microfont_log_service::wifi_ipv4_changed(address);
         let now_ms = trueos_time::Instant::now().as_millis();
         if state() != WifiState::Connected
             && now_ms.saturating_sub(last_heartbeat_ms) >= 5_000
@@ -255,8 +243,6 @@ fn connect_boot_profile(attempted: &mut bool, next_scan_ms: &mut u64) {
             return;
         }
         *next_scan_ms = now_ms.saturating_add(5_000);
-        #[cfg(not(test))]
-        crate::r::services::microfont_log_service::wifi_retry_started();
         diag::action_started(diag::Action::Recover, now_ms);
         let result = driver.recover();
         diag::action_finished(diag::Action::Recover, result, trueos_time::Instant::now().as_millis());
@@ -281,8 +267,6 @@ fn connect_boot_profile(attempted: &mut bool, next_scan_ms: &mut u64) {
     if !driver.scan_results().iter().any(|network| network.ssid == ssid) {
         if now_ms >= *next_scan_ms {
             *next_scan_ms = now_ms.saturating_add(5_000);
-            #[cfg(not(test))]
-            crate::r::services::microfont_log_service::wifi_retry_started();
             diag::action_started(diag::Action::Scan, now_ms);
             let result = driver.scan();
             diag::action_finished(diag::Action::Scan, result, trueos_time::Instant::now().as_millis());
@@ -303,8 +287,6 @@ fn connect_boot_profile(attempted: &mut bool, next_scan_ms: &mut u64) {
     }
     *attempted = true;
     *next_scan_ms = now_ms.saturating_add(5_000);
-    #[cfg(not(test))]
-    crate::r::services::microfont_log_service::wifi_retry_started();
     crate::log_warn!(target: "net"; "wifi-boot: state=connecting\n");
     diag::action_started(diag::Action::Connect, now_ms);
     let result = driver.connect(ssid, password);

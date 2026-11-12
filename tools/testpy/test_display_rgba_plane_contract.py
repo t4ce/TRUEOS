@@ -30,6 +30,7 @@ def harness() -> str:
         "plane_keymax_alpha", "plane_keymsk_alpha", "overlay_plane_constant_alpha_matches",
         "overlay_plane_constant_alpha_is_valid", "plane_watermarks_match", "plane_buf_cfg_value",
         "initialize_primary_ui4_surface", "activate_ui4_application_rgba_planes",
+        "ui4_plane_mask",
     )]
     declarations.extend(item(REGS, name) for name in (
         "plane_pos_reg_value", "plane_size_reg_value", "plane_stride_reg_value",
@@ -63,7 +64,7 @@ use std::{cell::RefCell,collections::BTreeMap};
 thread_local! {static HW:RefCell<Hardware>=RefCell::new(Hardware::default());}
 #[macro_export] macro_rules! log {($($args:tt)*)=>{let _=format_args!($($args)*);};}
 #[macro_export] macro_rules! log_info {(target:$target:literal;$($args:tt)*)=>{let _=format_args!($($args)*);};}
-mod ui4 {pub const PRIMARY_PLANE_SLOT:usize=0;}
+mod ui4 {pub const PRIMARY_PLANE_SLOT:usize=0;pub const INTERACTION_OVERLAY_PLANE_SLOT:usize=4;}
 mod intel {
  #[derive(Clone,Copy)] pub struct Dev;
  pub fn claimed_device()->Option<Dev> {Some(Dev)}
@@ -102,9 +103,9 @@ fn prepare_ui4_primary_swap_surfaces(_:super::Dev,_:PipeInfo,_:u32,_:u32)->bool 
 #[derive(Clone,Copy)] struct OverlaySurface {
  width:u32,height:u32,pitch_bytes:u32,pipe:PipeInfo,plane_slot:usize,gpu:u64,
 }
-mod screenlog {pub fn owns_plane(_:usize,_:usize)->bool {false}}
 // The guard's output routing and readiness boundaries do not sanitize CTLs.
 fn plane_slot_count(_:PipeInfo)->usize {7}
+fn application_plane_mask(_:PipeInfo)->u8 {0x2f}
 fn ui4_rgba8_plane_stack_ready(_:PipeInfo)->bool {true}
 fn overlay_plane_base(pipe:PipeInfo,slot:usize)->usize {pipe.plane(slot).base()}
 fn plane_dbuf_range(_:PipeInfo,slot:usize)->Option<(u16,u16)> {

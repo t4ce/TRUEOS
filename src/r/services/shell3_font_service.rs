@@ -537,7 +537,6 @@ pub(crate) async fn microfont_warm_task() {
     loop {
         match prepare().await {
             Ok(()) => {
-                super::microfont_log_service::font_ready();
                 crate::ui4::microfont_ready();
                 break;
             }

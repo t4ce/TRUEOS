@@ -1,7 +1,7 @@
 //! Reservations and pipe-A contracts for the adopted 3840x2160 Tiger Lake panel.
 //!
 //! Logical interaction slot 4 uses physical index 6. Extra application slot 5
-//! uses physical index 4, and diagnostic slot 6 uses physical index 5. Scanout
+//! uses physical index 4. Logical slot 6 maps to unused physical index 5. Scanout
 //! GGTT and compositor PPGTT are separate; neither remaps the retained native
 //! panel probe at E0000000.
 
@@ -16,6 +16,13 @@ pub(super) const fn plane_count(expanded: bool) -> usize {
 
 pub(super) const fn application_mask(expanded: bool) -> u8 {
     if expanded { 0x2F } else { 0x0F }
+}
+
+pub(super) const fn profile_physical_plane_active(physical: usize, expanded: bool) -> bool {
+    match profile_logical_slot(physical, expanded) {
+        Some(logical) => logical == 4 || application_mask(expanded) & (1 << logical) != 0,
+        None => false,
+    }
 }
 
 pub(super) const fn profile_physical_slot(logical: usize, expanded: bool) -> Option<usize> {
@@ -51,8 +58,6 @@ const PRIMARY_SOURCE_GPU: u64 = 0x3800_0000;
 const GGTT_LIMIT: u64 = 0x1_0000_0000;
 const COMPOSE_LIMIT: u64 = 0x4000_0000;
 
-pub(super) const DIAGNOSTIC_WIDTH: u32 = 1024;
-pub(super) const DIAGNOSTIC_HEIGHT: u32 = 128;
 pub(super) const DBUF_CTL_S2: usize = 0x44FE8;
 pub(super) const DBUF_POWER_REQUEST: u32 = 1 << 31;
 pub(super) const DBUF_POWER_STATE: u32 = 1 << 30;
@@ -90,7 +95,6 @@ pub(super) const fn dbuf_range(logical_slot: usize) -> Option<(u16, u16)> {
         0 => Some((0, 274)),
         1 => Some((275, 549)),
         2 => Some((550, 824)),
-        6 => Some((825, 976)),
         3 => Some((1024, 1298)),
         5 => Some((1299, 1573)),
         4 => Some((1574, 1848)),
@@ -100,12 +104,11 @@ pub(super) const fn dbuf_range(logical_slot: usize) -> Option<(u16, u16)> {
 
 /// Eight-scanline linear RGBA8 contract, sized for the actual plane width.
 /// TGL Display PRM pp. 423-424: blocks/line=ceil(width*4/512)+1, then add one
-/// result block. Full-width planes need 249; compact diagnostics need 73.
+/// result block. Full-width planes need 249.
 /// Allocations strictly exceed those blocks plus the rounded-up 10% margin.
 pub(super) const fn watermark(logical_slot: usize) -> Option<u32> {
     let width: u32 = match logical_slot {
         0..=5 => 3840,
-        6 => DIAGNOSTIC_WIDTH,
         _ => return None,
     };
     let blocks_per_line = (width * 4).div_ceil(512) + 1;
@@ -124,7 +127,7 @@ pub(super) const fn primary_swap_gpu(index: usize) -> Option<u64> {
 }
 
 /// Linear overlays need 32 MiB each; only the primary needs guarded 64 MiB
-/// buffers. Diagnostic slot 6 retains the probe instead of using this pool.
+/// buffers. Unused logical slot 6 has no allocation.
 pub(super) const fn overlay_gpu(logical_slot: usize, index: usize) -> Option<u64> {
     if logical_slot < 1 || logical_slot > 5 || index >= 2 {
         return None;
@@ -182,13 +185,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn physical_order_keeps_apps_below_diagnostics_and_interaction() {
+    fn physical_order_keeps_apps_below_interaction_and_unused_plane_disabled() {
         for (physical, logical) in [0, 1, 2, 3, 5, 6, 4].into_iter().enumerate() {
             assert_eq!(physical_slot(logical), Some(physical));
             assert_eq!(logical_slot(physical), Some(logical));
         }
         assert_eq!(physical_slot(7), None);
         assert_eq!(logical_slot(7), None);
+        for physical in 0..8 {
+            assert_eq!(profile_physical_plane_active(physical, false), physical < 5);
+            assert_eq!(profile_physical_plane_active(physical, true),
+                physical < 7 && physical != 5);
+        }
     }
 
     #[test]
@@ -201,9 +209,6 @@ mod tests {
         let overlay = ((3840u64 * 4 + 63) & !63) * 2160;
         assert_eq!(overlay, 33_177_600);
         assert!(overlay <= OVERLAY_SLOT_BYTES);
-        assert!(
-            u64::from(DIAGNOSTIC_WIDTH) * u64::from(DIAGNOSTIC_HEIGHT) * 4 <= PRIMARY_SLOT_BYTES
-        );
     }
 
     #[test]
@@ -258,7 +263,7 @@ mod tests {
     #[test]
     fn dbuf_ranges_preserve_every_cursor_reservation() {
         let mut ranges = Vec::new();
-        for logical in 0..7 {
+        for logical in 0..6 {
             let (start, end) = dbuf_range(logical).unwrap();
             assert!(start <= end && end < 2048);
             for (cursor_start, cursor_end) in [(1008, 1023), (2032, 2047)] {
@@ -274,14 +279,14 @@ mod tests {
 
     #[test]
     fn actual_width_watermarks_fit_with_strict_buffer_margin() {
-        for logical in 0..7 {
+        for logical in 0..6 {
             let raw = watermark(logical).unwrap();
             let blocks = raw & 0x7FF;
             assert_ne!(raw & (1 << 31), 0);
             assert_eq!((raw >> 14) & 0x1F, 8);
-            let width = if logical == 6 { DIAGNOSTIC_WIDTH } else { 3840 };
+            let width = 3840u32;
             assert_eq!(blocks, 8 * ((width * 4).div_ceil(512) + 1) + 1);
-            assert_eq!(blocks, if logical == 6 { 73 } else { 249 });
+            assert_eq!(blocks, 249);
             let (start, end) = dbuf_range(logical).unwrap();
             assert!(blocks + blocks.div_ceil(10) < u32::from(end - start + 1));
         }
@@ -299,5 +304,7 @@ mod tests {
         assert_eq!(extra_direct_scanout_gpu(4), None);
         assert_eq!(dbuf_range(7), None);
         assert_eq!(watermark(7), None);
+        assert_eq!(dbuf_range(6), None);
+        assert_eq!(watermark(6), None);
     }
 }

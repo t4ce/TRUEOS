@@ -35,7 +35,6 @@ static BSP_HEADLESS_SKIP_CRABUSB_XHCI_CLAIM: core::sync::atomic::AtomicBool =
 
 #[trueos_executor::task]
 pub async fn usb_controller_service_task() {
-    crate::r::services::microfont_log_service::usb_controller_stage("USB: find xHCI controllers");
     if BSP_HEADLESS_SKIP_CRABUSB_XHCI_CLAIM.load(core::sync::atomic::Ordering::Acquire) {
         crate::log!(
             "crabusb: BSP headless boot experiment enabled; xhci remains enumerated and unclaimed\n"
@@ -51,7 +50,6 @@ pub async fn usb_controller_service_task() {
             .collect::<alloc::vec::Vec<_>>()
     });
     let Some(&first) = controllers.first() else {
-        crate::r::services::microfont_log_service::usb_controller_stage("USB: no xHCI controller");
         return;
     };
     let spawner: trueos_executor::Spawner =
@@ -114,7 +112,6 @@ fn start_device_pool_worker(spawner: &trueos_executor::Spawner) {
 
 async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
     controller_stage(index, "admission", "unclaimed");
-    crate::r::services::microfont_log_service::usb_controller_stage("xHCI: backend admission");
     let selection = match heal_service::claim_backend(xhci_device, index == 0) {
         Ok(selection) => selection,
         Err(reason) => {
@@ -131,7 +128,6 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
         xhci_device.slot,
         xhci_device.function
     );
-    crate::r::services::microfont_log_service::usb_controller_stage("xHCI: map controller");
     controller_stage(index, "mapping", "claimed");
     let (mmio, mmio_len, kernel) = match lib::map_xhci_host_inputs(&xhci_device) {
         Ok(inputs) => inputs,
@@ -191,11 +187,7 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
     let _ =
         heal_service::register_pending_controller(index, xhci_device, &mut host, "initializing")
             .await;
-    crate::r::services::microfont_log_service::usb_controller_stage("xHCI: initialize controller");
     if let Err(err) = await_controller_operation(index, "initializing", host.init()).await {
-        crate::r::services::microfont_log_service::usb_controller_stage(
-            "xHCI: initialization failed",
-        );
         crate::log!(
             "crabusb: controller index={} init failed error={:?}\n",
             index,
@@ -232,7 +224,6 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
     }
     let mut heal_report =
         heal_service::register_live_controller(index, xhci_device, &mut host).await;
-    crate::r::services::microfont_log_service::usb_controller_stage("xHCI: discover USB devices");
     let mut retry_needed = false;
     if let Some(news) = probe_devices_with_log(&mut host, "initial", index).await {
         await_controller_operation(
@@ -244,9 +235,6 @@ async fn run_usb_controller(index: usize, xhci_device: crate::pci::PciDevice) {
     } else {
         retry_needed = true;
     }
-    crate::r::services::microfont_log_service::usb_controller_stage(
-        "USB: normal device discovery and class handoff",
-    );
 
     // The first root-hub pass can only *start* a USB2 port reset. Its
     // completion may arrive during device handoff, before we establish the

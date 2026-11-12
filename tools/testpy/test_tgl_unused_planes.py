@@ -6,6 +6,7 @@ only a successful frame boundary transfers its staged state to scanout.
 """
 
 from pathlib import Path
+import json
 import re
 import subprocess
 import tempfile
@@ -19,7 +20,10 @@ def main() -> None:
     source = r'''
 #![allow(dead_code)]
 mod display {
-    pub fn laptop_expanded_planes_enabled() -> bool { crate::panel::expanded() }
+    #[path=@LAYOUT@] mod layout;
+    pub fn laptop_ui4_owns_physical_plane(slot:usize)->bool {
+        layout::profile_physical_plane_active(slot,crate::panel::expanded())
+    }
 }
 mod panel {
 use std::cell::RefCell;
@@ -88,7 +92,7 @@ fn setup(staged_enabled: [bool;2], live_enabled: [bool;2]) {
         *h.borrow_mut()=value;
     });
 }
-'''
+'''.replace('@LAYOUT@',json.dumps(str(ROOT / 'src/intel/display/tgl_ui4_layout.rs')))
     for name in (
         "UNI_PLANE_BASE", "UNI_PLANE_SLOT_STRIDE", "UNI_PLANE_CTL_OFF",
         "UNI_PLANE_SURF_OFF", "PLANE_CTL_ENABLE",
@@ -160,14 +164,17 @@ fn desktop_and_unadopted_panel_do_not_touch_display_registers() {
     }
 }
 #[test]
-fn expanded_profile_preserves_the_extra_planes_without_mmio() {
+fn expanded_profile_retires_the_unowned_plane_and_preserves_interaction() {
     setup([true,true],[true,true]);
     HW.with(|h|h.borrow_mut().expanded=true);
     assert!(disable_unused_ui4_planes(NATIVE));
     HW.with(|h| {
         let h=h.borrow();
-        assert!(h.reads.is_empty());assert!(h.writes.is_empty());assert_eq!(h.frames,0);
-        for address in CTRL { assert_ne!(h.live[&address]&ENABLE,0); }
+        assert_eq!(h.frames,2);
+        assert_eq!(h.writes,[(CTRL[0],0x1410_0008),(SURF[0],SURFACES[0])]);
+        assert_eq!(h.live[&CTRL[0]]&ENABLE,0);
+        assert_ne!(h.live[&CTRL[1]]&ENABLE,0,"physical7 is the interaction plane");
+        assert!(!h.reads.contains(&CTRL[1])&&!h.reads.contains(&SURF[1]));
     });
 }
 }

@@ -559,7 +559,6 @@ fn spawn_codex_progress(spawner: Spawner) -> SpawnAttempt {
 
 fn ui4_slot4_service_gate() -> bool {
     ui4_compositor_gate()
-        && !super::microfont_log_service::owns_plane(0, crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT)
 }
 
 fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {

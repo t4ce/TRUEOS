@@ -28,14 +28,14 @@ The old Lumen-related import and VMCall numbers remain compatibility endpoints i
 
 The sibling Blueprint API separates its retired `api/src/lumen.rs` response path from `api/src/spirit.rs` silent text. Codex's Spirit tools and agent-snapshot publishers use the independent Spirit API; no sibling source was changed for this cleanup.
 
-## MicroFont polling removed and panel retained
+## Display status panel removed
 
-The name `microfont_log_service` no longer describes a generic log reader. Its laptop diagnostic surface now paints only a Wi-Fi square and the eight-bit IP octet, without a font or atlas. The seven-plane laptop layout centers that compact surface on logical slot 6, below the interaction plane on physical plane 7. Logical slot 4 remains UI4's software-cursor and interaction carrier. The old assignment-verdict, USB-stage and font-ready callbacks remain compatibility no-ops.
+The remaining `microfont_log_service` visual path was removed on 12 November 2026: the Wi-Fi square, binary IP row, retained-surface installation, display ownership guards and USB/font/network callbacks are gone. Its obsolete tests were removed with it. Normal UI4 interaction, software cursors and Color Picker remain.
 
-The retained allocation and its display ownership remain. The redundant 25 ms polling task and boot entry were removed; Wi-Fi state and address changes publish directly through callbacks. [The module](../../src/r/services/microfont_log_service.rs) has no executor task.
+UI4 bootstraps and checks only application and interaction carriers. The unused logical slot 6 in the parked expanded layout stays disabled. The ordinary native-panel handoff allocation and serial/MMIO observations remain; they do not paint network status onto a plane. Network information belongs to Shell3's `System/net` command.
 
 ## Validation
 
-Kernel type checks passed for default features and `trueos_ttstt` using the verified 12-application builtin set. A final repeat was blocked after the separate builtin configuration began referencing the missing `TRUEOS-Buildins/hyper/Cargo.toml`; that configuration was not changed for this cleanup. Behavioral tests cover unavailable inference endpoints, unchanged output buffers, preserved Spirit direct/guest presentation, Spirit agent transport and sequencer behavior, and retained Wi-Fi status painting. This cleanup does not claim a physical hardware boot or runtime liveness measurement.
+Kernel type checks passed for default features and `trueos_ttstt` using the verified 12-application builtin set. A final repeat was blocked after the separate builtin configuration began referencing the missing `TRUEOS-Buildins/hyper/Cargo.toml`; that configuration was not changed for this cleanup. Behavioral tests covered unavailable inference endpoints, unchanged output buffers, preserved Spirit direct/guest presentation, Spirit agent transport and sequencer behavior, and the then-present Wi-Fi status painting. This cleanup does not claim a physical hardware boot or runtime liveness measurement.
 
 The Unix FD probe follow-up passed the production socket-registry ownership/retirement host test. A kernel check was attempted but stopped in the builtin verification step because the prepared builtins are stale; it did not reach kernel compilation.

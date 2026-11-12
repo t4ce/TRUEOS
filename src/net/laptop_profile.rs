@@ -5,7 +5,7 @@ pub(crate) const MAC: [u8; 6] = [0xf4, 0x6b, 0x8c, 0x90, 0x36, 0x2c];
 pub(crate) const ADDRESS: [u8; 4] = [192, 168, 178, 50];
 pub(crate) const GATEWAY: [u8; 4] = [192, 168, 178, 1];
 pub(crate) const PREFIX_LEN: u8 = 24;
-// Pending, configured, failed. The display reads this without taking NIC locks.
+// Pending, configured, failed. Status readers do not need to take NIC locks.
 static RESULT: AtomicU8 = AtomicU8::new(0);
 
 pub(crate) fn matches(mac: [u8; 6], identity: Option<(u16, u16)>) -> bool {
@@ -14,8 +14,6 @@ pub(crate) fn matches(mac: [u8; 6], identity: Option<(u16, u16)>) -> bool {
 
 pub(crate) fn record_assignment(assigned: bool) {
     RESULT.store(if assigned { 1 } else { 2 }, Ordering::Release);
-    #[cfg(not(test))]
-    crate::r::services::microfont_log_service::assignment_changed(assigned);
 }
 
 pub(crate) fn assignment_result() -> Option<bool> {

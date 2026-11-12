@@ -91,7 +91,7 @@ fn expanded_profile_retains_its_original_physical_order_and_application_mask() {
         assert_eq!(tgl_ui4_layout::profile_logical_slot(invalid,true),None);
     }
     assert_eq!(tgl_ui4_layout::application_mask(true) & ((1 << 4) | (1 << 6)),0,
-        "interaction and diagnostics are not application leases");
+        "interaction and the unowned slot are not application leases");
 }
 
 #[test]
@@ -102,6 +102,12 @@ fn both_profiles_preserve_4k_watermarks_and_disjoint_cursor_safe_dbuf_ranges() {
         let count = tgl_ui4_layout::plane_count(expanded);
         for logical in 0..count {
             let physical = tgl_ui4_layout::profile_physical_slot(logical,expanded).unwrap();
+            if !tgl_ui4_layout::profile_physical_plane_active(physical,expanded) {
+                assert_eq!(logical,6);
+                assert_eq!(tgl_ui4_layout::dbuf_range(logical),None);
+                assert_eq!(tgl_ui4_layout::watermark(logical),None);
+                continue;
+            }
             assert_eq!(physical_mask & (1 << physical),0);
             physical_mask |= 1 << physical;
             let (start,end) = tgl_ui4_layout::dbuf_range(logical).unwrap();
@@ -113,14 +119,14 @@ fn both_profiles_preserve_4k_watermarks_and_disjoint_cursor_safe_dbuf_ranges() {
             let blocks = wm & 0x7ff;
             assert_ne!(wm & (1 << 31),0);
             assert_eq!((wm >> 14) & 0x1f,8);
-            assert_eq!(blocks,if expanded && logical == 6 { 73 } else { 249 });
+            assert_eq!(blocks,249);
             assert!(blocks + blocks.div_ceil(10) < u32::from(end - start + 1));
             if !expanded {
                 assert_eq!(end - start + 1,275);
             }
             ranges.push((start,end));
         }
-        assert_eq!(physical_mask,if expanded { 0x7f } else { 0x1f });
+        assert_eq!(physical_mask,if expanded { 0x5f } else { 0x1f });
         assert!(ranges.iter().any(|&(start,_)| start >= 1024),
             "both profiles still need DBUF slice 2 at native width");
         ranges.sort_unstable();

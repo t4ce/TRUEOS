@@ -310,4 +310,4 @@ source modification and redistribution require the permissions described there.
 Independent Blueprint authors retain their own rights subject to their dependencies.
 See the [license](lic/TrueOS.LICENSE), [notice](lic/NOTICE), and [third-party notices](lic/THIRD_PARTY_NOTICES.md).
 
-Copyright © 2026 Jonas Baethke. All rights reserved.
+<iframe src="https://github.com/sponsors/t4ce/card" title="Sponsor t4ce" height="225" width="600" style="border: 0;"></iframe>
