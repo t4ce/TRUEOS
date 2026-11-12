@@ -1,6 +1,7 @@
 use alloc::{boxed::Box, collections::VecDeque, sync::Arc, vec, vec::Vec};
 use core::{
     fmt,
+    future::Future,
     sync::atomic::{AtomicU32, AtomicU64, Ordering},
 };
 
@@ -788,6 +789,8 @@ pub struct NetQueue<T> {
     capacity: usize,
     inner: spin::Mutex<VecDeque<T>>,
     dropped: AtomicU32,
+    changed: crate::wait::WaitQueue,
+    push_wake: spin::Once<(&'static str, fn(&'static str))>,
 }
 
 impl<T> NetQueue<T> {
@@ -797,6 +800,8 @@ impl<T> NetQueue<T> {
             capacity: capacity.max(1),
             inner: spin::Mutex::new(VecDeque::with_capacity(capacity)),
             dropped: AtomicU32::new(0),
+            changed: crate::wait::WaitQueue::new(),
+            push_wake: spin::Once::new(),
         };
         Box::leak(Box::new(q))
     }
@@ -814,7 +819,35 @@ impl<T> NetQueue<T> {
             return Err(item);
         }
         guard.push_back(item);
+        drop(guard);
+        self.changed.notify_all();
+        if let Some(&(owner, wake)) = self.push_wake.get() {
+            wake(owner);
+        }
         Ok(())
+    }
+
+    /// Observe before checking for data or attempting a bounded enqueue.
+    /// Every successful queue mutation changes this generation, including
+    /// removals that make room for a blocked producer.
+    pub fn change_generation(&self) -> u32 {
+        self.changed.observe()
+    }
+
+    /// Wait for data or capacity to change, then recheck the queue condition.
+    pub async fn wait_change_after(&self, observed: u32) {
+        self.changed.wait_after(observed).await;
+    }
+
+    /// Registered command queues additionally wake their network service.
+    /// The callback resolves the current NIC when publishing, so changing
+    /// the primary device cannot leave this queue tied to the old service.
+    fn wake_on_push(&self, owner: &'static str, wake: fn(&'static str)) {
+        self.push_wake.call_once(|| (owner, wake));
+        // Cover commands published before registration installed the hook.
+        if !self.is_empty() {
+            wake(owner);
+        }
     }
 
     #[inline]
@@ -823,7 +856,11 @@ impl<T> NetQueue<T> {
     }
 
     pub fn pop(&self) -> Option<T> {
-        self.inner.lock().pop_front()
+        let item = self.inner.lock().pop_front();
+        if item.is_some() {
+            self.changed.notify_all();
+        }
+        item
     }
 
     pub fn drain(&self, max: usize) -> Vec<T> {
@@ -835,6 +872,10 @@ impl<T> NetQueue<T> {
             } else {
                 break;
             }
+        }
+        drop(guard);
+        if !out.is_empty() {
+            self.changed.notify_all();
         }
         out
     }
@@ -902,6 +943,8 @@ pub fn register_app_queues(
         return;
     }
     guard.push(AppQueues { name, cmds, events });
+    drop(guard);
+    cmds.wake_on_push(name, wake_service_for_owner);
 }
 
 fn pop_command_for_device(device_index: usize) -> Option<(&'static str, NetCommand)> {
@@ -1778,6 +1821,7 @@ struct SocketRecord {
     kind: SocketKind,
     socket: SocketHandle,
     tcp_tx: TcpTxQueue,
+    tcp_sent_pending: usize,
     tcp_finish_pending: bool,
     tcp_write_closed: bool,
     tcp_loopback_peer: Option<NetHandle>,
@@ -2645,6 +2689,7 @@ impl NetService {
             kind: SocketKind::Udp,
             socket: sh,
             tcp_tx: TcpTxQueue::new(),
+            tcp_sent_pending: 0,
             tcp_finish_pending: false,
             tcp_write_closed: false,
             tcp_loopback_peer: None,
@@ -2702,6 +2747,7 @@ impl NetService {
             kind: SocketKind::Tcp,
             socket: sh,
             tcp_tx: TcpTxQueue::new(),
+            tcp_sent_pending: 0,
             tcp_finish_pending: false,
             tcp_write_closed: false,
             tcp_loopback_peer: None,
@@ -2801,6 +2847,7 @@ impl NetService {
             kind: SocketKind::Tcp,
             socket: client_socket,
             tcp_tx: TcpTxQueue::new(),
+            tcp_sent_pending: 0,
             tcp_finish_pending: false,
             tcp_write_closed: false,
             tcp_loopback_peer: Some(server_handle),
@@ -2993,6 +3040,7 @@ impl NetService {
             kind: SocketKind::Tcp,
             socket: sh,
             tcp_tx: TcpTxQueue::new(),
+            tcp_sent_pending: 0,
             tcp_finish_pending: false,
             tcp_write_closed: false,
             tcp_loopback_peer: None,
@@ -3085,6 +3133,7 @@ impl NetService {
             kind: SocketKind::Tcp,
             socket: sh,
             tcp_tx: TcpTxQueue::new(),
+            tcp_sent_pending: 0,
             tcp_finish_pending: false,
             tcp_write_closed: false,
             tcp_loopback_peer: None,
@@ -3132,6 +3181,19 @@ impl NetService {
         TcpRoute::Loopback(Ok(()))
     }
 
+    /// Acceptance credit must survive a full application event queue. Keep
+    /// one coalesced count on the socket and retry before accepting more data.
+    fn flush_tcp_sent(&mut self, idx: usize) -> bool {
+        let record = &mut self.records[idx];
+        if record.tcp_sent_pending == 0 { return true; }
+        if !push_event(record.owner, NetEvent::TcpSent {
+            handle: record.handle,
+            len: record.tcp_sent_pending,
+        }) { return false; }
+        record.tcp_sent_pending = 0;
+        true
+    }
+
     fn flush_loopback_tcp_tx(&mut self, idx: usize) -> bool {
         let Some(peer) = self.records[idx].tcp_loopback_peer else { return false; };
         if self.records[idx].tcp_access.is_some_and(|(client, server, port)|
@@ -3139,14 +3201,13 @@ impl NetService {
             let handle = self.records[idx].handle;
             return self.close_loopback_tcp(handle);
         }
+        if !self.flush_tcp_sent(idx) { return false; }
         if crate::mio_compat::tcp_receive_paused(self.device_index, peer.0) {
             return false;
         }
         let Some(peer_owner) = self.records.iter().find(|record| record.handle == peer)
             .map(|record| record.owner)
         else { return false; };
-        let owner = self.records[idx].owner;
-        let handle = self.records[idx].handle;
         for _ in 0..64 {
         if self.records[idx].tcp_access.is_some_and(|(client, server, port)|
             crate::access_key_db::authorize_tcp_connect(client, server, port).is_err()) {
@@ -3161,7 +3222,8 @@ impl NetService {
                 break;
             }
             self.records[idx].tcp_tx.advance(len);
-            let _ = push_event(owner, NetEvent::TcpSent { handle, len });
+            self.records[idx].tcp_sent_pending = len;
+            if !self.flush_tcp_sent(idx) { break; }
         }
         // EOF shares the data queue and is retried on pressure, so it cannot
         // overtake accepted bytes or disappear when the receiver is paused.
@@ -3285,6 +3347,7 @@ impl NetService {
             self.flush_loopback_tcp_tx(idx);
             return;
         }
+        if !self.flush_tcp_sent(idx) { return; }
 
         let owner = self.records[idx].owner;
         let handle = self.records[idx].handle;
@@ -3369,13 +3432,8 @@ impl NetService {
                     );
                 }
             }
-            let _ = push_event(
-                owner,
-                NetEvent::TcpSent {
-                    handle,
-                    len: total_sent,
-                },
-            );
+            self.records[idx].tcp_sent_pending = total_sent;
+            self.flush_tcp_sent(idx);
         }
     }
 
@@ -4785,6 +4843,9 @@ impl NetService {
         if self.records[idx].tcp_loopback_peer.is_some() {
             return self.flush_loopback_tcp_tx(idx);
         }
+        // Retry acceptance credit before inbound traffic can refill the same
+        // bounded event queue. A graceful Closed event must not overtake it.
+        if !self.flush_tcp_sent(idx) { return false; }
 
         let (owner, handle, socket_handle) = {
             let rec = &self.records[idx];
@@ -4955,6 +5016,7 @@ impl NetService {
 
         if should_remove {
             // Preserve the record until EOF can follow the delivered data.
+            if self.records[idx].tcp_sent_pending != 0 { return false; }
             if !push_event(owner, NetEvent::Closed { handle }) {
                 return false;
             }
@@ -5943,6 +6005,30 @@ pub async fn net_poll_task(index: usize) {
 
 static NET_SERVICE_STARTED: [core::sync::atomic::AtomicBool; MAX_NET_DEVICES] =
     [const { core::sync::atomic::AtomicBool::new(false) }; MAX_NET_DEVICES];
+static NET_SERVICE_WAKE: [crate::wait::WaitQueue; MAX_NET_DEVICES] =
+    [const { crate::wait::WaitQueue::new() }; MAX_NET_DEVICES];
+
+fn wake_service_for_owner(owner: &'static str) {
+    let index = owner_device_index(owner).unwrap_or_else(crate::net::primary_device_index);
+    if let Some(wake) = NET_SERVICE_WAKE.get(index) {
+        wake.notify_all();
+    }
+}
+
+async fn wait_for_service_work(index: usize, observed: u32) {
+    let mut notified = core::pin::pin!(NET_SERVICE_WAKE[index].wait_after(observed));
+    // Keep the existing periodic stack/driver progress until NIC interrupts
+    // and all protocol deadlines have their own readiness paths.
+    let mut maintenance =
+        core::pin::pin!(Timer::after(EmbassyDuration::from_micros(NET_SERVICE_SLEEP_US)));
+    core::future::poll_fn(|cx| {
+        if notified.as_mut().poll(cx).is_ready() {
+            return core::task::Poll::Ready(());
+        }
+        maintenance.as_mut().poll(cx)
+    })
+    .await;
+}
 
 #[task(pool_size = MAX_NET_DEVICES)]
 pub async fn net_service_task(index: usize) {
@@ -5959,10 +6045,11 @@ pub async fn net_service_task(index: usize) {
         ensure_services(count);
 
         loop {
+            let observed = NET_SERVICE_WAKE[index].observe();
             if service_tick_once(index, false) {
                 Timer::after(EmbassyDuration::from_micros(0)).await;
             } else {
-                Timer::after(EmbassyDuration::from_micros(NET_SERVICE_SLEEP_US)).await;
+                wait_for_service_work(index, observed).await;
             }
         }
     }

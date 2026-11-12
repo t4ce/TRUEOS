@@ -46,6 +46,15 @@ pub struct Subscription { signal: Arc<Signal> }
 impl Subscription {
     /// Consume the latest notification without blocking.
     pub fn take(&mut self) -> Option<Tick> { self.signal.pending.lock().take() }
+
+    /// Await a boundary or clock correction without periodically checking it.
+    pub async fn next(&mut self) -> Tick {
+        loop {
+            let observed = self.signal.changed.observe();
+            if let Some(tick) = self.take() { return tick; }
+            self.signal.changed.wait_after(observed).await;
+        }
+    }
 }
 
 fn current() -> Tick {

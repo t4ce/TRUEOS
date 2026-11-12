@@ -381,10 +381,14 @@ mod shell3 {
 @ERROR_TEXT@
 @REMOTE_LOGIN@
  }}
+ pub(crate) mod net {
+  pub(crate) fn notify_owner(_:u32) {}
+ }
  pub(crate) mod ssh {
   use alloc::{string::String,sync::Arc};use core::sync::atomic::{AtomicBool,Ordering};use zeroize::Zeroizing;
 @OUTCOME@
 @COMPLETION@
+@COMPLETION_IMPL@
 @REQUEST@
 static AUTH_REQUESTS:spin::Once<&'static crate::net::adapter::NetQueue<AuthRequest>>=spin::Once::new();
 @INIT@
@@ -397,7 +401,7 @@ static AUTH_REQUESTS:spin::Once<&'static crate::net::adapter::NetQueue<AuthReque
   }
   pub(crate) fn clear_queue(){init();AUTH_REQUESTS.get().unwrap().drain(64);}
   pub(crate) fn enqueue(username:&str,code:&str,seconds:u64)->Ticket{
-   init();let completion=Arc::new(AuthCompletion{result:spin::Mutex::new(None),cancelled:AtomicBool::new(false)});
+   init();let completion=Arc::new(AuthCompletion{result:spin::Mutex::new(None),cancelled:AtomicBool::new(false),owner_slot:7});
    assert!(AUTH_REQUESTS.get().unwrap().push(AuthRequest{username:username.into(),code:Zeroizing::new(code.into()),deadline:trueos_time::Instant::now()+trueos_time::Duration::from_secs(seconds),completion:completion.clone()}).is_ok());Ticket(completion)
   }
  }
@@ -406,13 +410,15 @@ static AUTH_REQUESTS:spin::Once<&'static crate::net::adapter::NetQueue<AuthReque
 
 def production_remote_harness():
     from test_sdk_metadata_v2 import item
+    from test_net_queue_wake import production_wait_queue
     command=(ROOT/'src/shell3/system/cry.rs').read_text();ssh=(ROOT/'src/shell3/ssh.rs').read_text();queue=(ROOT/'src/net/adapter.rs').read_text()
     tui=(ROOT/'src/shell3/tui.rs').read_text()
     fields={'NET_QUEUE':item(queue,'pub struct NetQueue<T>'),'NET_QUEUE_IMPL':item(queue,'impl<T> NetQueue<T>'),
       'ROUTE_ACTIVE':item(tui,'fn active(&self)'),'BIND_AUTHENTICATED_FRONTEND':item(tui,'pub(super) fn bind_authenticated_frontend('),
       'PENDING':re.search(r'struct PendingProof\(u64\);',command)[0],
       'PENDING_DROP':item(command,'impl Drop for PendingProof'),'ERROR_TEXT':item(command,'pub(crate) fn error_text('),'REMOTE_LOGIN':item(command,'pub(crate) async fn remote_login('),
-      'OUTCOME':'#[derive(Clone,Copy)]\n'+item(ssh,'enum AuthOutcome'),'COMPLETION':item(ssh,'pub(super) struct AuthCompletion'),'REQUEST':item(ssh,'pub(super) struct AuthRequest'),
+      'OUTCOME':'#[derive(Clone,Copy)]\n'+item(ssh,'enum AuthOutcome'),'COMPLETION':item(ssh,'pub(super) struct AuthCompletion'),
+      'COMPLETION_IMPL':item(ssh,'impl AuthCompletion'),'REQUEST':item(ssh,'pub(super) struct AuthRequest'),
       'INIT':item(ssh,'pub(super) fn init()'),'SERVICE_AUTH':item(ssh,'pub(super) async fn service_auth()')}
     text=REMOTE_HARNESS.replace('__METAFMTSTR__',str(ROOT/'src/shell3/metafmtstr.rs')).replace('__TITLE__',str(ROOT/'src/shell3/title.rs'))
     for key,value in fields.items():text=text.replace('@'+key+'@',value)
@@ -432,7 +438,7 @@ def production_remote_harness():
         'pub(crate) mod local_account {\n'+local+'\n}\n'
         'pub(crate) mod local_account_disabled {\n'+local_disabled+'\n}\n'
         'pub(crate) mod ssh {')
-    return text
+    return production_wait_queue() + text
 
 
 def main():

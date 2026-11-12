@@ -387,6 +387,7 @@ pub fn start<S: Send>(
 /// Notify resident pool tasks that instance work may be available.
 pub fn notify_work() {
     SHELL_WORK_AVAILABLE.notify_all();
+    super::net::notify_work();
 }
 
 /// Executor-local collection. Shells created through this owner remain in
@@ -500,7 +501,17 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
         }
     };
     let mut appdb_generation = appdb_names_snapshot().0;
-    let mut terminals = super::net::WorkerTerminals::new(expected_slot);
+    // SSH retains this executor's affinity but owns an independent readiness
+    // task, so UI maintenance and presentation cannot pace video delivery.
+    let spawner = unsafe { trueos_executor::Spawner::for_current_executor().await };
+    match super::net::owner_task(expected_slot) {
+        Ok(task) => spawner.spawn(task),
+        Err(error) => {
+            crate::log_error!(target: "service";
+                "shell3-ssh: owner unavailable slot={} error={:?}\n", expected_slot, error);
+            return;
+        }
+    }
     let mut command_sessions = super::sessions::Worker::new(expected_slot);
 
     static PASS: crate::r::input_timing::Site =
@@ -510,7 +521,6 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
 
     loop {
         let pass_started = crate::r::input_timing::now_ms();
-        terminals.poll();
         command_sessions.poll();
         for shell in &mut owned_shells.shells {
             shell.reconcile_matrix_selection();
@@ -829,10 +839,9 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
         }
 
         PASS.record(crate::r::input_timing::now_ms().saturating_sub(pass_started));
-        if owned_shells.is_empty() && terminals.is_empty() && command_sessions.is_empty() {
+        if owned_shells.is_empty() && command_sessions.is_empty() {
             let observed = SHELL_WORK_AVAILABLE.observe();
             if !has_pending_for_executor(expected_slot)
-                && !terminals.has_events()
                 && !command_sessions.pending()
             {
                 SHELL_WORK_AVAILABLE.wait_after(observed).await;

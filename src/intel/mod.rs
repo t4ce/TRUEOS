@@ -16,6 +16,7 @@ mod gt_state;
 mod guc;
 pub(crate) mod guc_ctb;
 pub(crate) mod guc_submission;
+pub(crate) mod interrupts;
 #[path = "sound/hda.rs"]
 pub mod hda;
 pub(crate) mod media;
@@ -770,6 +771,7 @@ pub(crate) fn laptop_diagnostic_snapshot_text() -> alloc::string::String {
     let _ = writeln!(out, "guc_scheduler={:?}", self::guc_submission::scheduler_status());
     let _ = writeln!(out, "guc_contexts={:?}", self::guc_submission::context_status());
     let _ = writeln!(out, "=== GPU Client Progress ===");
+    let _ = writeln!(out, "wd_irq={:?}", self::interrupts::snapshot());
     out.push_str(&gpu_client_diagnostic_snapshot_text());
     let _ = writeln!(out, "=== Spirit Producer and Cursor Progress ===");
     out.push_str(&crate::spirit::bringup_diag::snapshot_text());
@@ -786,6 +788,7 @@ pub(crate) use self::display::{
     Ui4DirectRgbaFrame, Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll, WdCapturePoll,  WdXyuv8888Frame, begin_ui4_wd_xyuv8888_capture,
     pin_ui4_wd_frame_for_copy, poll_ui4_wd_xyuv8888_capture,
     start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture,
+    wait_ui4_wd_xyuv8888_capture,
 };
 
 pub(crate) fn set_pipe_a_bottom_color_rgb8(red: u8, green: u8, blue: u8) -> bool {

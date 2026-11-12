@@ -1276,6 +1276,9 @@ pub(super) fn selection_strip_stack_changed() {
 
 fn signal_visual_change() {
     super::input_broker::notify_slot4_visual_change();
+    // NoView also needs pointer-mode control updates when selection or a
+    // frame's centered-capture policy changes without incoming SSH input.
+    crate::shell3::net::notify_work();
 }
 
 pub(crate) fn cursor_color(source: Ui4CursorSource) -> crate::graphics::primitives::Rgba8 {

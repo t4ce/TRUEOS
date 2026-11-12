@@ -31,9 +31,19 @@ def main():
 #![allow(dead_code)]
 extern crate alloc;
 use alloc::{vec::Vec,collections::VecDeque};
+use core::sync::atomic::{AtomicU32,AtomicUsize,Ordering};
 use spin::Mutex;
 #[path="@QUEUE@"] mod rdp_media_queue;
 static SSH_MEDIA: Mutex<rdp_media_queue::Queue> = Mutex::new(rdp_media_queue::Queue::new());
+static SSH_MEDIA_OWNER_SLOT: AtomicU32 = AtomicU32::new(3);
+static MEDIA_WAKES: AtomicUsize = AtomicUsize::new(0);
+mod shell3 {pub mod net {
+    pub fn notify_owner(slot:u32) {
+        assert_eq!(slot,3);
+        assert!(crate::SSH_MEDIA.try_lock().is_some(),"media lock held during wake");
+        crate::MEDIA_WAKES.fetch_add(1,crate::Ordering::SeqCst);
+    }
+}}
 static EGRESS_PIPELINE: Mutex<EgressPipeline> = Mutex::new(EgressPipeline::new());
 struct Wake;
 impl Wake {fn signal(&self,_:()){}}
@@ -87,7 +97,9 @@ static PRODUCER_WAKE:Wake=Wake;
     let unit = EncodedAccessUnit { sequence: 3, keyframe: true, bytes: bytes.clone() };
     let mut report = MediaUdpStreamReport { session_id: 91, ..Default::default() };
     let mut sequence = 4;
+    MEDIA_WAKES.store(0,Ordering::SeqCst);
     assert!(send_access_unit(7, &unit, true, &mut sequence, &mut report));
+    assert_eq!(MEDIA_WAKES.load(Ordering::SeqCst),1,"publish one wake for the complete AU");
     let mut decoded = Vec::new();
     for fragment in 0..3 {
         let packet = SSH_MEDIA.lock().pop(7).unwrap();

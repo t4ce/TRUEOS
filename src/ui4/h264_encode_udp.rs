@@ -13,10 +13,16 @@ use trueos_time::{Duration, Instant, Timer};
 #[path = "rdp_media_queue.rs"]
 mod rdp_media_queue;
 static SSH_MEDIA: Mutex<rdp_media_queue::Queue> = Mutex::new(rdp_media_queue::Queue::new());
+static SSH_MEDIA_OWNER_SLOT: AtomicU32 = AtomicU32::new(u32::MAX);
 
 /// Called only after the SSH subsystem has bound its authenticated account.
 pub(crate) fn rdp_media_subscribe(session: u64) -> bool {
-    let admitted = SSH_MEDIA.lock().subscribe(session);
+    let mut media = SSH_MEDIA.lock();
+    let admitted = media.subscribe(session);
+    if admitted {
+        SSH_MEDIA_OWNER_SLOT.store(crate::percpu::current_slot() as u32, Ordering::Release);
+    }
+    drop(media);
     if admitted { EGRESS_WAKE.signal(()); }
     admitted
 }
@@ -39,7 +45,6 @@ const FLAG_END: u8 = 1 << 1;
 const FLAG_KEYFRAME: u8 = 1 << 2;
 const FLAG_SESSION_END: u8 = 1 << 3;
 const SSH_SUBSCRIBER_POLL_MS: u64 = 10;
-const PREPARED_FRAME_POLL_MS: u64 = 1;
 const ENCODED_ACCESS_UNIT_QUEUE_CAP: usize = 4;
 
 /// Preserve an exact average cadence when the timer frequency is not evenly
@@ -450,7 +455,7 @@ where
     let prefill_started_ns = crate::chronos::monotonic_nanos();
     begin_preparation();
     while !prepared(0) {
-        Timer::after(Duration::from_millis(PREPARED_FRAME_POLL_MS)).await;
+        PRODUCER_WAKE.wait().await;
     }
     let prefill_us = crate::chronos::monotonic_nanos().saturating_sub(prefill_started_ns) / 1_000;
     crate::log_info!(target: "intel/media-encode";
@@ -478,7 +483,7 @@ where
 
         let sequence = index as u32;
         while !prepared(sequence) {
-            Timer::after(Duration::from_millis(PREPARED_FRAME_POLL_MS)).await;
+            PRODUCER_WAKE.wait().await;
         }
         if index != 0 {
             let now = Instant::now();
@@ -631,6 +636,9 @@ fn send_access_unit(
         report.sent_datagrams += 1;
         report.sent_payload_bytes += payload.len();
     }
+    // One wake per completed AU. The queue and session ownership are already
+    // published; the SSH owner can now drain without a terminal polling tick.
+    crate::shell3::net::notify_owner(SSH_MEDIA_OWNER_SLOT.load(Ordering::Acquire));
     true
 }
 

@@ -1,11 +1,12 @@
 //! Port 22: SSH terminals; non-SSH connections receive a greeting and FIN.
-//! The listener routes socket events; AP pool tasks own and execute each model.
+//! The listener routes socket events; event-driven AP tasks own each SSH model.
 use super::tty::Terminal;
 use crate::allports::services::SHELL3_TCP_PORT;
 use crate::net::adapter::{
     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
 };
 use alloc::vec::Vec;
+use core::{future::Future, task::Poll};
 use trueos_time::{Duration, Instant, Timer};
 
 const MAX_CONNECTIONS: usize = super::MAX_SHELL3_INSTANCES;
@@ -32,6 +33,7 @@ struct Connection {
     in_flight: usize,
     deadline: Option<Instant>,
     finishing: bool,
+    command_blocked: bool,
 }
 
 impl Connection {
@@ -47,6 +49,7 @@ impl Connection {
             in_flight: 0,
             deadline: None,
             finishing: false,
+            command_blocked: false,
         }
     }
 
@@ -90,6 +93,7 @@ impl Connection {
 
     /// False means an immediate close was admitted and the model can be freed.
     fn flush(&mut self, commands: &NetQueue<NetCommand>, now: Instant) -> bool {
+        self.command_blocked = false;
         if !self.rejected && self.ssh.is_none() && self.pending.as_ref().is_some_and(|pending| now >= pending.until) {
             self.greeting = true;
         }
@@ -102,17 +106,25 @@ impl Connection {
                 crate::log_info!(target: "service";
                     "shell3-tcp: protocol=ssh handle={:?} action=shell-authenticated plaintext=0\n", self.handle,
                 );
+                // The initial terminal paint is ready even if the peer's
+                // shell request did not ask for an SSH success reply.
+                ssh.pump(self.terminal.as_mut());
             }
         }
         let force_close = self.rejected || self.terminal.as_ref().is_some_and(|tty| tty.overflow)
             || self.ssh.as_ref().is_some_and(|ssh| ssh.closed)
             || self.deadline.is_some_and(|deadline| now >= deadline);
         if force_close {
-            return commands
+            // Closing is now pending queue capacity. An expired deadline must
+            // not repeatedly wake us while the command queue remains full.
+            self.rejected = true;
+            self.deadline = None;
+            self.command_blocked = commands
                 .push(NetCommand::Close {
                     handle: self.handle,
                 })
                 .is_err();
+            return self.command_blocked;
         }
         if self.finishing || self.in_flight != 0 {
             return true;
@@ -126,11 +138,14 @@ impl Connection {
                     ssh.consume_output(len);
                     self.in_flight = len;
                     self.deadline = Some(now + Duration::from_millis(WRITE_TIMEOUT_MS));
+                } else {
+                    self.command_blocked = true;
                 }
-            } else if ssh.finished
-                && commands.push(NetCommand::FinishTcp { handle: self.handle }).is_ok() {
-                self.finishing = true;
-                self.deadline = Some(now + Duration::from_millis(5_000));
+            } else if ssh.finished {
+                if commands.push(NetCommand::FinishTcp { handle: self.handle }).is_ok() {
+                    self.finishing = true;
+                    self.deadline = Some(now + Duration::from_millis(5_000));
+                } else { self.command_blocked = true; }
             }
             return true;
         }
@@ -140,13 +155,29 @@ impl Connection {
                     self.greeting_sent = true;
                     self.in_flight = GREETING.len();
                     self.deadline = Some(now + Duration::from_millis(WRITE_TIMEOUT_MS));
+                } else {
+                    self.command_blocked = true;
                 }
-            } else if commands.push(NetCommand::FinishTcp { handle: self.handle }).is_ok() {
-                self.finishing = true;
-                self.deadline = Some(now + Duration::from_millis(5_000));
+            } else {
+                if commands.push(NetCommand::FinishTcp { handle: self.handle }).is_ok() {
+                    self.finishing = true;
+                    self.deadline = Some(now + Duration::from_millis(5_000));
+                } else { self.command_blocked = true; }
             }
         }
         true
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        if self.rejected { return None; }
+        let protocol = (!self.greeting && self.ssh.is_none())
+            .then(|| self.pending.as_ref().map(|pending| pending.until)).flatten();
+        [self.deadline, protocol, self.ssh.as_ref().and_then(|ssh| ssh.next_deadline())]
+            .into_iter().flatten().min()
+    }
+
+    fn needs_progress(&self) -> bool {
+        !self.rejected && self.ssh.as_ref().is_some_and(|ssh| ssh.needs_progress())
     }
 }
 
@@ -167,6 +198,19 @@ enum WorkerEvent {
 static COMMANDS: spin::Once<&'static NetQueue<NetCommand>> = spin::Once::new();
 static WORKER_QUEUES: spin::Mutex<Vec<(u32, &'static NetQueue<WorkerEvent>)>> =
     spin::Mutex::new(Vec::new());
+static OWNER_WAKE: [crate::wait::WaitQueue; crate::percpu::CPU_SLOT_LIMIT] =
+    [const { crate::wait::WaitQueue::new() }; crate::percpu::CPU_SLOT_LIMIT];
+static ROUTER_WAKE: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+
+pub(crate) fn notify_owner(slot: u32) {
+    if let Some(wake) = OWNER_WAKE.get(slot as usize) { wake.notify_all(); }
+}
+
+/// Matrix output and shared shell state can affect any resident SSH terminal.
+pub(crate) fn notify_work() {
+    let slots: Vec<u32> = WORKER_QUEUES.lock().iter().map(|(slot, _)| *slot).collect();
+    for slot in slots { notify_owner(slot); }
+}
 
 fn queue_for(slot: u32) -> Option<&'static NetQueue<WorkerEvent>> {
     WORKER_QUEUES
@@ -176,7 +220,7 @@ fn queue_for(slot: u32) -> Option<&'static NetQueue<WorkerEvent>> {
         .map(|(_, queue)| *queue)
 }
 
-/// Lives in shell_worker_task, alongside the UI shells on this AP.
+/// Owned by the SSH readiness task on the same AP as its UI shell owner.
 pub(super) struct WorkerTerminals {
     slot: u32,
     events: &'static NetQueue<WorkerEvent>,
@@ -187,6 +231,7 @@ impl WorkerTerminals {
     pub fn new(slot: u32) -> Self {
         let events = NetQueue::new_leaked("shell3-ap-events", 256);
         WORKER_QUEUES.lock().push((slot, events));
+        ROUTER_WAKE.notify_all();
         Self {
             slot,
             events,
@@ -199,6 +244,18 @@ impl WorkerTerminals {
     }
     pub fn has_events(&self) -> bool {
         !self.events.is_empty()
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        self.connections.iter().filter_map(Connection::next_deadline).min()
+    }
+
+    fn needs_progress(&self) -> bool {
+        self.has_events() || self.connections.iter().any(Connection::needs_progress)
+    }
+
+    fn commands_blocked(&self) -> bool {
+        self.connections.iter().any(|connection| connection.command_blocked)
     }
 
     pub fn poll(&mut self) {
@@ -244,6 +301,61 @@ impl WorkerTerminals {
     }
 }
 
+async fn wait_until(deadline: Option<Instant>) {
+    if let Some(deadline) = deadline { Timer::at(deadline).await; }
+    else { core::future::pending::<()>().await; }
+}
+
+/// Yield after a bounded pass without introducing another timer period.
+async fn yield_ready() {
+    let mut yielded = false;
+    core::future::poll_fn(|cx| {
+        if yielded { Poll::Ready(()) } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }).await;
+}
+
+#[trueos_executor::task(pool_size = crate::percpu::CPU_SLOT_LIMIT)]
+pub(super) async fn owner_task(slot: u32) {
+    if crate::percpu::current_slot() as u32 != slot { return; }
+    let mut terminals = WorkerTerminals::new(slot);
+    let wake = &OWNER_WAKE[slot as usize];
+    let mut clock = crate::chronos::signals::subscribe(crate::chronos::signals::Every::MINUTE);
+    crate::log_info!(target: "service";
+        "shell3-ssh: owner online slot={} scheduling=queue-readiness maintenance=civil-minute+protocol-deadlines\n", slot);
+    loop {
+        // Observe before processing/checking state. A publication anywhere
+        // before registration then prevents sleeping through that work.
+        let observed = wake.observe();
+        let events_observed = terminals.events.change_generation();
+        let commands = COMMANDS.get().copied();
+        let commands_observed = commands.map(|queue| queue.change_generation()).unwrap_or(0);
+        terminals.poll();
+        if terminals.needs_progress() { yield_ready().await; continue; }
+        let commands_blocked = terminals.commands_blocked();
+
+        let mut owner = core::pin::pin!(wake.wait_after(observed));
+        let mut events = core::pin::pin!(terminals.events.wait_change_after(events_observed));
+        let mut capacity = core::pin::pin!(async {
+            if let Some(commands) = commands.filter(|_| commands_blocked) {
+                commands.wait_change_after(commands_observed).await;
+            }
+            else { core::future::pending::<()>().await; }
+        });
+        let mut deadline = core::pin::pin!(wait_until(terminals.next_deadline()));
+        let mut clock_tick = core::pin::pin!(clock.next());
+        core::future::poll_fn(|cx| {
+            if owner.as_mut().poll(cx).is_ready() || events.as_mut().poll(cx).is_ready()
+                || capacity.as_mut().poll(cx).is_ready() || deadline.as_mut().poll(cx).is_ready()
+                || clock_tick.as_mut().poll(cx).is_ready()
+            { Poll::Ready(()) } else { Poll::Pending }
+        }).await;
+    }
+}
+
 #[trueos_executor::task]
 pub async fn terminal_task() {
     crate::log_info!(target: "service";
@@ -258,31 +370,37 @@ pub async fn terminal_task() {
     let events = NetQueue::new_leaked("shell3-tcp-evt", 256);
     register_app_queues("shell3-tcp", commands, events);
     COMMANDS.call_once(|| commands);
+    notify_work();
     let mut listener = None;
     let mut opening = false;
     let mut retry_at = Instant::now();
     // Only transport routing lives here. Shell3 and Terminal never do.
     let mut routes: Vec<(NetHandle, u32)> = Vec::new();
-    let mut deferred: Option<(u32, WorkerEvent)> = None;
+    let mut deferred: Option<(u32, WorkerEvent, u32)> = None;
     let mut rejected = None;
     let mut errors = 0u64;
 
     static PASS: crate::r::input_timing::Site = crate::r::input_timing::Site::new("ssh-routing-pass");
-    static OVERRUN: crate::r::input_timing::Site = crate::r::input_timing::Site::new("ssh-routing-sleep-overrun");
-
     loop {
+        let router_observed = ROUTER_WAKE.observe();
+        let events_observed = events.change_generation();
+        let commands_observed = commands.change_generation();
         let pass_started = crate::r::input_timing::now_ms();
+        let mut commands_blocked = false;
         if let Some(handle) = rejected {
             if commands.push(NetCommand::Close { handle }).is_ok() {
                 rejected = None;
+            } else {
+                commands_blocked = true;
             }
         }
-        if let Some((slot, event)) = deferred.take() {
+        if let Some((slot, event, _)) = deferred.take() {
             if let Some(queue) = queue_for(slot) {
+                let observed = queue.change_generation();
                 if let Err(event) = queue.try_push(event) {
-                    deferred = Some((slot, event));
+                    deferred = Some((slot, event, observed));
                 } else {
-                    super::service::notify_work();
+                    notify_owner(slot);
                 }
             }
         }
@@ -322,13 +440,14 @@ pub async fn terminal_task() {
                                     // Established is informational; early data must follow
                                     // Accepted in FIFO order on the same permanent owner.
                                     if matches!(event, NetEvent::TcpData { .. }) {
+                                        let observed = queue.change_generation();
                                         if let Err(event) =
                                             queue.try_push(WorkerEvent::Socket(event))
                                         {
-                                            deferred = Some((slot, event));
+                                            deferred = Some((slot, event, observed));
                                         }
                                     }
-                                    super::service::notify_work();
+                                    notify_owner(slot);
                                     continue;
                                 }
                             }
@@ -350,10 +469,11 @@ pub async fn terminal_task() {
                             routes.remove(index);
                         }
                         if let Some(queue) = queue_for(slot) {
+                            let observed = queue.change_generation();
                             if let Err(event) = queue.try_push(WorkerEvent::Socket(event)) {
-                                deferred = Some((slot, event));
+                                deferred = Some((slot, event, observed));
                             }
-                            super::service::notify_work();
+                            notify_owner(slot);
                         }
                     }
                 }
@@ -381,10 +501,29 @@ pub async fn terminal_task() {
                     port: SHELL3_TCP_PORT,
                 })
                 .is_ok();
+            commands_blocked |= !opening;
         }
         PASS.record(crate::r::input_timing::now_ms().saturating_sub(pass_started));
-        let sleeping = crate::r::input_timing::now_ms();
-        Timer::after(Duration::from_millis(10)).await;
-        OVERRUN.record(crate::r::input_timing::now_ms().saturating_sub(sleeping).saturating_sub(10));
+        let retry_deadline = (listener.is_none() && !opening && routes.len() < MAX_CONNECTIONS
+            && !WORKER_QUEUES.lock().is_empty() && Instant::now() < retry_at).then_some(retry_at);
+        let mut incoming = core::pin::pin!(events.wait_change_after(events_observed));
+        let mut registration = core::pin::pin!(ROUTER_WAKE.wait_after(router_observed));
+        let mut capacity = core::pin::pin!(async {
+            if commands_blocked { commands.wait_change_after(commands_observed).await; }
+            else { core::future::pending::<()>().await; }
+        });
+        let mut worker_capacity = core::pin::pin!(async {
+            if let Some((slot, _, observed)) = &deferred {
+                if let Some(queue) = queue_for(*slot) { queue.wait_change_after(*observed).await; return; }
+            }
+            core::future::pending::<()>().await;
+        });
+        let mut retry = core::pin::pin!(wait_until(retry_deadline));
+        core::future::poll_fn(|cx| {
+            if incoming.as_mut().poll(cx).is_ready() || registration.as_mut().poll(cx).is_ready()
+                || capacity.as_mut().poll(cx).is_ready()
+                || worker_capacity.as_mut().poll(cx).is_ready() || retry.as_mut().poll(cx).is_ready()
+            { Poll::Ready(()) } else { Poll::Pending }
+        }).await;
     }
 }

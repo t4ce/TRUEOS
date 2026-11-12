@@ -93,7 +93,7 @@ def main():
         '@CONNECT_DISPATCH@': keep('OpenTcpConnectFrom dispatch', item(sources['adapter'], r'NetCommand::OpenTcpConnectFrom \{ local, remote \} => match \(local, remote\) \{')),
         '@PRIVATE_ADAPTER_METHODS@': '\n'.join(keep(name, function(sources['adapter'], name)) for name in [
             'open_tcp_listener_for_actor', 'open_loopback_tcp_connect', 'route_tcp_send',
-            'flush_loopback_tcp_tx', 'close_loopback_tcp', 'revoke_tcp_access', 'remove_record']),
+            'flush_tcp_sent', 'flush_loopback_tcp_tx', 'close_loopback_tcp', 'revoke_tcp_access', 'remove_record']),
         '@TCP_TX_QUEUE@': json.dumps(str(ROOT / 'src/net/tcp_tx_queue.rs')),
     }
     harness = (ROOT / 'tools/testpy/native_mio/tcp_socket_kernel.rs').read_text()

@@ -309,60 +309,47 @@ async fn prepare_scanout(job: PrepareJob) {
             error,
         );
     } else {
-        loop {
-            match crate::intel::poll_ui4_wd_xyuv8888_capture() {
-                crate::intel::WdCapturePoll::Pending => {
-                    if crate::chronos::monotonic_nanos().saturating_sub(capture_started_ns)
-                        >= WD_CAPTURE_TIMEOUT_MS * 1_000_000
+        match crate::intel::wait_ui4_wd_xyuv8888_capture(WD_CAPTURE_TIMEOUT_MS).await {
+            crate::intel::WdCapturePoll::Pending => {
+                crate::log_error!(target: "intel/media-encode";
+                    "intel/media-encode: live frame rejected session={} sequence={} stage=wd-completion reason=timeout timeout_ms={} software_fallback=0\n",
+                    job.session_id, job.sequence, WD_CAPTURE_TIMEOUT_MS,
+                );
+                reset_wd = true;
+            }
+            crate::intel::WdCapturePoll::Complete(frame) => {
+                source_width = frame.width;
+                source_height = frame.height;
+                xyuv8888 = unsafe {
+                    crate::intel::media::wd_xyuv8888::WdXyuv8888DmaSurface::from_writeback(
+                        frame,
+                    )
+                };
+                if let Some(surface) = xyuv8888 {
+                    if crate::intel::media::wd_xyuv8888::try_refresh_requested_screenshot(
+                        surface,
+                    )
+                    .await
                     {
-                        crate::log_error!(target: "intel/media-encode";
-                            "intel/media-encode: live frame rejected session={} sequence={} stage=wd-completion reason=timeout timeout_ms={} software_fallback=0\n",
-                            job.session_id,
-                            job.sequence,
-                            WD_CAPTURE_TIMEOUT_MS,
+                        crate::log_info!(target: "ui4/screenshot";
+                            "ui4/screenshot: raw WD frame acquired route=live-rdp borrow=next-completed-frame wd_sequence={} encode_flow=await-owned-bcs-snapshot\n",
+                            surface.sequence(),
                         );
-                        reset_wd = true;
-                        break;
                     }
-                    Timer::after(Duration::from_millis(1)).await;
+                    valid = surface.encoder_surface().is_some();
                 }
-                crate::intel::WdCapturePoll::Complete(frame) => {
-                    source_width = frame.width;
-                    source_height = frame.height;
-                    xyuv8888 = unsafe {
-                        crate::intel::media::wd_xyuv8888::WdXyuv8888DmaSurface::from_writeback(
-                            frame,
-                        )
-                    };
-                    if let Some(surface) = xyuv8888 {
-                        if crate::intel::media::wd_xyuv8888::try_refresh_requested_screenshot(
-                            surface,
-                        )
-                        .await
-                        {
-                            crate::log_info!(target: "ui4/screenshot";
-                                "ui4/screenshot: raw WD frame acquired route=live-rdp borrow=next-completed-frame wd_sequence={} encode_flow=await-owned-bcs-snapshot\n",
-                                surface.sequence(),
-                            );
-                        }
-                        valid = surface.encoder_surface().is_some();
-                    }
-                    break;
-                }
-                crate::intel::WdCapturePoll::Failed { status } => {
-                    crate::log_error!(target: "intel/media-encode";
-                        "intel/media-encode: live frame rejected session={} sequence={} stage=wd-completion status=0x{:08X} software_fallback=0\n",
-                        job.session_id,
-                        job.sequence,
-                        status,
-                    );
-                    reset_wd = true;
-                    break;
-                }
-                crate::intel::WdCapturePoll::Idle => {
-                    reset_wd = true;
-                    break;
-                }
+            }
+            crate::intel::WdCapturePoll::Failed { status } => {
+                crate::log_error!(target: "intel/media-encode";
+                    "intel/media-encode: live frame rejected session={} sequence={} stage=wd-completion status=0x{:08X} software_fallback=0\n",
+                    job.session_id,
+                    job.sequence,
+                    status,
+                );
+                reset_wd = true;
+            }
+            crate::intel::WdCapturePoll::Idle => {
+                reset_wd = true;
             }
         }
     }
@@ -410,6 +397,8 @@ async fn prepare_scanout(job: PrepareJob) {
         slot.state = PrepareSlotState::Empty;
         slot.reset_metadata();
     }
+    drop(pipeline);
+    super::h264_encode_udp::wake_producer();
 }
 
 fn begin_preparation_session(session_id: u32, access_unit_count: usize) {
@@ -879,9 +868,8 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
         };
         let target_millifps = crate::allcaps::media_encode::REALTIME_HZ as u64 * 1_000;
         let cadence_tolerance = target_millifps.saturating_mul(CADENCE_TOLERANCE_PERCENT) / 100;
-        // Delivery success and cadence quality are deliberately separate.
-        // Recovered adapter backpressure or a missed real-time deadline does
-        // not invalidate an access unit that reached the subscribed viewer.
+        // This boundary proves admission to the authenticated SSH media
+        // queue, not TCP/NIC/client delivery. Cadence is evaluated separately.
         let delivered = udp_report.queued_access_units == expected_units
             && udp_report.sent_access_units == expected_units
             && udp_report.dropped_access_units == 0
@@ -901,7 +889,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             Ordering::Release,
         );
         crate::log_info!(target: "intel/media-encode";
-            "intel/media-encode: udp-live complete accepted={} delivery_complete={} cadence_target_met={} retry_free={} source=pipe-c-wd0-xyuv8888-mirror-map-slots0-5 source_size={}x{} encode_size={}x{} mapping=one-to-one conversion=vdenc-fixed-function-xyuv8888-to-avc420 cpu_pixel_math=0 omitted=none cpu_rgba_copy_bytes=0 cpu_rgba_flush_bytes=0 source_import=wd-phys-to-vcs0-ppgtt-uc source_sampling=none dma_buffers=xyuv8888-resident-single vdbox_source=packed-xyuv8888-dma-direct vdbox_context=retained-hwlrca+persistent-ring cpu_nv12_copy_bytes=0 active_size={}x{} padding=top:0,bottom:0 legacy_slot3_frames={} legacy_slot3_pixels={} spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=wd-frame-complete-before-vdbox format=xyuv8888-raw-to-avc420 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx engine=vcs0 submission_owner=guc direct_execlist_submit=0 hardware_encode=1 gop=idr+p gop_pictures={} idr_units={} p_units={} protocol=tme1 version=1 egress_path=smoltcp-borrowed-direct-nic-dma-fill session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} producer_queue_wait_events={} producer_queue_wait_us={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} capture_avg_us={} capture_max_us={} convert_wall_avg_us={} convert_wall_max_us={} convert_gpu_avg_us={} convert_gpu_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=capture+encode+independent-egress buffering=serialized+bounded-au-queue prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} egress_worker_slot={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
+            "intel/media-encode: ssh-live encode-complete accepted={} queue_complete={} cadence_target_met={} retry_free={} source=pipe-c-wd0-xyuv8888-mirror-map-slots0-5 source_size={}x{} encode_size={}x{} mapping=one-to-one conversion=vdenc-fixed-function-xyuv8888-to-avc420 cpu_pixel_math=0 omitted=none cpu_rgba_copy_bytes=0 cpu_rgba_flush_bytes=0 source_import=wd-phys-to-vcs0-ppgtt-uc source_sampling=none dma_buffers=xyuv8888-resident-single vdbox_source=packed-xyuv8888-dma-direct vdbox_context=retained-hwlrca+persistent-ring cpu_nv12_copy_bytes=0 active_size={}x{} padding=top:0,bottom:0 legacy_slot3_frames={} legacy_slot3_pixels={} spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=wd-frame-complete-before-vdbox format=xyuv8888-raw-to-avc420 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx engine=vcs0 submission_owner=guc direct_execlist_submit=0 hardware_encode=1 gop=idr+p gop_pictures={} idr_units={} p_units={} protocol=tme1 version=1 egress_path=authenticated-ssh-media-queue session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} producer_queue_wait_events={} producer_queue_wait_us={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} capture_avg_us={} capture_max_us={} convert_wall_avg_us={} convert_wall_max_us={} convert_gpu_avg_us={} convert_gpu_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=capture+encode+independent-egress buffering=serialized+bounded-au-queue prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} egress_worker_slot={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
             delivered as u8,
             delivered as u8,
             cadence_target_met as u8,

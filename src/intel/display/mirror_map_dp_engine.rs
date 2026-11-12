@@ -104,6 +104,7 @@ pub(crate) enum WdCaptureError {
     Quarantined,
     AlreadyCapturing,
     ConsumerBusy,
+    InterruptUnavailable,
     NotRunning,
 }
 
@@ -181,6 +182,7 @@ struct WdCaptureState {
     phys: u64,
     virt: *mut u8,
     frame_number: u8,
+    generation: u64,
     sequence: u64,
     saved_power_well_ctl2: u32,
     saved_dbuf_ctl_s2: u32,
@@ -224,6 +226,7 @@ impl WdCaptureState {
             phys: 0,
             virt: core::ptr::null_mut(),
             frame_number: 1,
+            generation: 0,
             sequence: 0,
             saved_power_well_ctl2: 0,
             saved_dbuf_ctl_s2: 0,
@@ -371,6 +374,7 @@ fn restore_pipe_c_output_color(dev: crate::intel::Dev, saved: PipeOutputColorSta
 }
 
 static STATE: Mutex<WdCaptureState> = Mutex::new(WdCaptureState::new());
+static CAPTURE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static CAPTURE_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 static MAP_MODE: AtomicU8 = AtomicU8::new(MirrorMapMode::Identity as u8);
 
@@ -804,6 +808,7 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
         phys,
         virt,
         frame_number: 1,
+        generation: CAPTURE_GENERATION.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
         sequence: 0,
         saved_power_well_ctl2,
         saved_dbuf_ctl_s2,
@@ -819,6 +824,11 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
         drop(state);
         let _ = stop_ui4_wd_xyuv8888_capture();
         return Err(WdCaptureError::WdEnableTimeout);
+    }
+    if !crate::intel::interrupts::enable_wd(dev) {
+        drop(state);
+        let _ = stop_ui4_wd_xyuv8888_capture();
+        return Err(WdCaptureError::InterruptUnavailable);
     }
 
     let (pipe_misc, csc_mode, _, _, _) = pipe_c_output_color_registers();
@@ -860,11 +870,17 @@ pub(crate) fn begin_ui4_wd_xyuv8888_capture() -> Result<u64, WdCaptureError> {
 }
 
 pub(crate) fn poll_ui4_wd_xyuv8888_capture() -> WdCapturePoll {
+    poll_capture_sequence(None)
+}
+
+fn poll_capture_sequence(sequence: Option<(u64, u64)>) -> WdCapturePoll {
     let Some(dev) = crate::intel::claimed_device() else {
         return WdCapturePoll::Failed { status: u32::MAX };
     };
     let mut state = STATE.lock();
-    if !state.running || !state.pending {
+    if !state.running || !state.pending
+        || sequence.is_some_and(|value| value != (state.generation, state.sequence))
+    {
         return WdCapturePoll::Idle;
     }
     let status = crate::intel::mmio_read(dev, WD0_FRAME_STATUS);
@@ -879,6 +895,47 @@ pub(crate) fn poll_ui4_wd_xyuv8888_capture() -> WdCapturePoll {
     };
     crate::intel::mmio_write(dev, WD0_FRAME_STATUS, WD_FRAME_COMPLETE);
     WdCapturePoll::Complete(state.frame())
+}
+
+/// Park until the currently owned WD frame completes, with one watchdog.
+/// An interrupt is only a wake notification: recheck the sticky completion
+/// status and capture sequence after every wake, including the final timeout.
+/// `Pending` means the watchdog expired without retirement proof.
+pub(crate) async fn wait_ui4_wd_xyuv8888_capture(timeout_ms: u64) -> WdCapturePoll {
+    let sequence = {
+        let state = STATE.lock();
+        if !state.running || !state.pending { return WdCapturePoll::Idle; }
+        (state.generation, state.sequence)
+    };
+    let watchdog = trueos_time::Timer::after_millis(timeout_ms);
+    let mut watchdog = core::pin::pin!(watchdog);
+    loop {
+        let observed = crate::intel::interrupts::wd_generation();
+        match poll_capture_sequence(Some(sequence)) {
+            WdCapturePoll::Pending => {}
+            result => return result,
+        }
+        if !crate::intel::interrupts::wd_route_ready() {
+            crate::log_error!(target: "intel/media-encode";
+                "intel/irq: WD completion route failed sequence={:?} snapshot={:?}\n",
+                sequence, crate::intel::interrupts::snapshot());
+            return WdCapturePoll::Failed { status: u32::MAX };
+        }
+        if !crate::intel::interrupts::wait_wd_after(observed, watchdog.as_mut()).await {
+            let result = poll_capture_sequence(Some(sequence));
+            if matches!(result, WdCapturePoll::Pending) {
+                crate::log_error!(target: "intel/media-encode";
+                    "intel/irq: WD completion watchdog sequence={:?} timeout_ms={} snapshot={:?}\n",
+                    sequence, timeout_ms, crate::intel::interrupts::snapshot());
+            }
+            if matches!(result, WdCapturePoll::Complete(_)) {
+                crate::log_warn!(target: "gfx";
+                    "intel/irq: WD watchdog found completed frame without wake sequence={:?} timeout_ms={} snapshot={:?}\n",
+                    sequence, timeout_ms, crate::intel::interrupts::snapshot());
+            }
+            return result;
+        }
+    }
 }
 
 fn disable_mirror_planes(dev: crate::intel::Dev) {
@@ -923,6 +980,9 @@ pub(crate) fn stop_ui4_wd_xyuv8888_capture() -> Result<(), WdCaptureError> {
         }
         state.pending = false;
     }
+    // Quiesce the shared ISR while WD registers are still powered. An AP
+    // screenshot worker may stop capture while MSI targets the BSP.
+    crate::intel::interrupts::disable_wd(dev);
     // Disable only Pipe C's mirrored fetchers before the WD transcoder.
     // Pipe A remains independently owned by UI4 throughout teardown.
     disable_mirror_planes(dev);

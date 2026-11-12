@@ -15,6 +15,14 @@ enum AuthOutcome { Denied, Verified(trueos_crypto::AccountId) }
 pub(super) struct AuthCompletion {
     result: spin::Mutex<Option<AuthOutcome>>,
     cancelled: AtomicBool,
+    owner_slot: u32,
+}
+
+impl AuthCompletion {
+    fn finish(&self, outcome: AuthOutcome) {
+        *self.result.lock() = Some(outcome);
+        super::net::notify_owner(self.owner_slot);
+    }
 }
 pub(super) struct AuthRequest {
     username: String,
@@ -44,7 +52,7 @@ pub(super) async fn service_auth() {
         if request.completion.cancelled.load(Ordering::Acquire)
             || trueos_time::Instant::now() >= request.deadline
         {
-            *request.completion.result.lock() = Some(AuthOutcome::Denied);
+            request.completion.finish(AuthOutcome::Denied);
             continue;
         }
         let result = super::cry::remote_login(&request.username, &request.code).await;
@@ -58,7 +66,7 @@ pub(super) async fn service_auth() {
                 AuthOutcome::Denied
             }
         };
-        *request.completion.result.lock() = Some(outcome);
+        request.completion.finish(outcome);
     }
 }
 
@@ -81,6 +89,7 @@ pub(super) struct Session {
     access_account: Option<trueos_crypto::AccountId>,
     shell_requested: bool,
     rdp: Option<super::rdp_channel::Channel>,
+    runnable: bool,
     size: Option<(usize, usize)>,
     pub finished: bool,
     pub closed: bool,
@@ -108,6 +117,7 @@ impl Session {
             access_account: None,
             shell_requested: false,
             rdp: None,
+            runnable: false,
             size: None,
             closed: false,
             finished: false,
@@ -138,6 +148,7 @@ impl Session {
     }
 
     pub fn pump(&mut self, terminal: Option<&mut Terminal>) {
+        self.runnable = false;
         if self.closed || self.finished {
             return;
         }
@@ -169,7 +180,10 @@ impl Session {
             self.runner.finish_deferred_auth(self.access_account.is_some())?;
         }
         // Bound per-poll CPU work; unread input and output stay queued.
-        for _ in 0..64 {
+        for turn in 0..64 {
+            // Set this before dispatch: a rejected request can continue the
+            // loop directly and must still resume after its last budget slot.
+            self.runnable = turn == 63;
             let count = self.runner.input(&self.received)?;
             self.received.drain(..count);
             let mut progressed = count != 0;
@@ -209,6 +223,7 @@ impl Session {
                             let completion = Arc::new(AuthCompletion {
                                 result: spin::Mutex::new(None),
                                 cancelled: AtomicBool::new(false),
+                                owner_slot: crate::percpu::current_slot() as u32,
                             });
                             let request = AuthRequest {
                                 username,
@@ -222,6 +237,7 @@ impl Session {
                             {
                                 h.defer();
                                 self.auth = Some(completion);
+                                self.runnable = false;
                                 return Ok(());
                             }
                             h.reject()?;
@@ -356,6 +372,7 @@ impl Session {
                 }
             }
             if self.closed || !progressed {
+                self.runnable = false;
                 break;
             }
         }
@@ -378,6 +395,16 @@ impl Session {
     }
     pub fn consume_output(&mut self, count: usize) {
         self.runner.consume_output(count);
+    }
+
+    pub(super) fn needs_progress(&self) -> bool {
+        self.runnable && !self.closed && !self.finished
+    }
+
+    pub(super) fn next_deadline(&self) -> Option<trueos_time::Instant> {
+        (!self.closed && !self.finished && !self.shell_requested
+            && !self.rdp.as_ref().is_some_and(|rdp| rdp.initialized()))
+            .then_some(self.deadline)
     }
 }
 
