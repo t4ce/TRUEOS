@@ -30,6 +30,7 @@ HARNESS = r'''
 #![allow(dead_code)]
 extern crate alloc;
 use std::{cell::RefCell, io, rc::Rc, time::Instant};
+mod stdext { pub mod platform { pub mod time { pub use std::time::Duration; } } }
 use trueos_ide::protocol;
 #[derive(Default)]
 struct World {

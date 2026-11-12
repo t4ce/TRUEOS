@@ -816,6 +816,7 @@ struct ProbeBacking {
     arena_phys: u64,
     arena_virt: *mut u8,
     ppgtt: crate::intel::ppgtt::SparsePpgtt,
+    source_mapping: Option<(AvcRawSurfaceFormat, u64)>,
     guc_token: Option<crate::intel::guc_submission::GucContextToken>,
     context_initialized: bool,
     ring_tail_bytes: usize,
@@ -823,6 +824,34 @@ struct ProbeBacking {
 }
 
 unsafe impl Send for ProbeBacking {}
+
+impl ProbeBacking {
+    fn ensure_source_mapping(&mut self, raw_format: AvcRawSurfaceFormat, phys: u64) -> Option<()> {
+        // Format fixes the GPU address, byte count and PAT policy. This backing
+        // exclusively owns the PPGTT, so an unchanged source needs no PTE writes,
+        // table flush or verification. Pixel visibility still follows the WD
+        // completion, UC source mapping and per-frame media ordering contract.
+        let mapping = (raw_format, phys);
+        if self.source_mapping == Some(mapping) {
+            return Some(());
+        }
+
+        // A failed replacement can roll back leaves from the previous mapping.
+        // Never retain a cache hit until the new mapping has been verified.
+        self.source_mapping = None;
+        let range = crate::intel::ppgtt::PpgttRange {
+            gpu: raw_format.gpu(),
+            phys,
+            bytes: raw_format.bytes(),
+        };
+        match raw_format {
+            AvcRawSurfaceFormat::Nv12 => self.ppgtt.map_range(range),
+            AvcRawSurfaceFormat::Xyuv8888 => self.ppgtt.map_scanout_range(range),
+        }?;
+        self.source_mapping = Some(mapping);
+        Some(())
+    }
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum AvcRawSurfaceFormat {
@@ -1076,20 +1105,11 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
             (surface.phys, 0)
         }
     };
-    let source_range = crate::intel::ppgtt::PpgttRange {
-        gpu: raw_format.gpu(),
-        phys: source_phys,
-        bytes: raw_format.bytes(),
-    };
     // WD is an external display-engine writer, not an RCS producer with a
     // terminal HDC/L3 flush. Map that aperture UC so consecutive captures
     // cannot be satisfied from stale VDBOX/cache lines. The established NV12
     // producer path keeps its ordinary WB mapping.
-    let mapped = match raw_format {
-        AvcRawSurfaceFormat::Nv12 => backing.ppgtt.map_range(source_range),
-        AvcRawSurfaceFormat::Xyuv8888 => backing.ppgtt.map_scanout_range(source_range),
-    };
-    if mapped.is_none() {
+    if backing.ensure_source_mapping(raw_format, source_phys).is_none() {
         return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
     }
     report.surface_uploaded = true;
@@ -1369,6 +1389,7 @@ fn build_backing(dev: crate::intel::Dev) -> Option<ProbeBacking> {
         arena_phys,
         arena_virt,
         ppgtt,
+        source_mapping: None,
         guc_token: None,
         context_initialized: false,
         ring_tail_bytes: 0,

@@ -50,7 +50,11 @@ pub(crate) fn queue_ui4_blueprint_alpha_rects(
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
 
-    let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
+    // Conversion and Blueprint drawing share this runtime across cores. A
+    // caller must retry instead of spinning behind GPU preparation on a peer.
+    let Some(mut runtime) = UI4_COMPOSITOR_RUNTIME.try_lock() else {
+        return Err(Ui4CompositorSubmitError::Busy);
+    };
     if !runtime.pending.is_empty() {
         return Err(Ui4CompositorSubmitError::Busy);
     }
@@ -203,7 +207,9 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         return Err(Ui4CompositorSubmitError::InvalidWorklist);
     }
 
-    let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
+    let Some(mut runtime) = UI4_COMPOSITOR_RUNTIME.try_lock() else {
+        return Err(Ui4CompositorSubmitError::Busy);
+    };
     if runtime.pending.len() >= UI4_COMPOSITOR_RCS_JOB_SLOTS {
         return Err(Ui4CompositorSubmitError::Busy);
     }
@@ -435,7 +441,11 @@ pub(crate) fn poll_ui4_compositor_submission(
 ) -> Ui4CompositorCompletion {
     const FAILURE_TIMEOUT_MS: u64 = 1_000;
 
-    let mut runtime = UI4_COMPOSITOR_RUNTIME.lock();
+    let Some(mut runtime) = UI4_COMPOSITOR_RUNTIME.try_lock() else {
+        // Ownership stays with the accepted submission until its exact marker
+        // can be observed. Contention is pending, never failure or retirement.
+        return Ui4CompositorCompletion::Pending;
+    };
     if let Some((_, completion)) = runtime
         .completions
         .iter()
@@ -727,11 +737,14 @@ pub(crate) async fn gpu_completion_reaper_task() {
 
     let mut active: Option<(Ui4CompositorSubmission, crate::gpu::executor::GpuFence)> = None;
     loop {
-        let pending = UI4_COMPOSITOR_RUNTIME
-            .lock()
-            .pending
-            .front()
-            .map(|pending| pending.submission);
+        let observed = UI4_COMPOSITOR_RUNTIME.try_lock()
+            .map(|runtime| runtime.pending.front().map(|pending| pending.submission));
+        let Some(pending) = observed else {
+            // Preserve the active fence while its owner prepares another
+            // request; a busy observation does not imply an empty queue.
+            Timer::after(Duration::from_millis(1)).await;
+            continue;
+        };
         let Some(submission) = pending else {
             active = None;
             Timer::after(Duration::from_millis(4)).await;
@@ -754,10 +767,8 @@ pub(crate) async fn gpu_completion_reaper_task() {
         // Keep this task observer-only; every current submission class has a
         // persistent owner which polls and retires it.
         if UI4_COMPOSITOR_RUNTIME
-            .lock()
-            .pending
-            .front()
-            .is_none_or(|pending| pending.submission != submission)
+            .try_lock()
+            .is_some_and(|runtime| runtime.pending.front().is_none_or(|pending| pending.submission != submission))
         {
             active = None;
         }

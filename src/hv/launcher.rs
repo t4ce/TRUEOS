@@ -136,6 +136,9 @@ async fn launch_task(
                 "hv launcher: {}: {}\n",
                 request.archive, error
             ));
+            if request.frontend.is_some() {
+                crate::shell3::service::report_launch_error(error.clone());
+            }
         }
         if vm.is_none() {
             super::matrix::discard(&target);
@@ -194,7 +197,7 @@ async fn launch_task(
                         (vm, run)
                     })
                     .map_err(|error| match error {
-                        super::StartError::CodexAlreadyRunning => String::from("Codex is already starting or running; only one Codex VM is allowed"),
+                        super::StartError::CodexAlreadyRunning => String::from("One Codex CLI is already running. Launching another is currently disabled."),
                         _ => alloc::format!("{error:?}"),
                     })
             }
