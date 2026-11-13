@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the real CHROMATIC grading/transport code against a modeled MMIO port."""
+"""Run the real CHROMATIC grading/transport code against independent modeled A/B MMIO ports."""
 from pathlib import Path
 import re
 import subprocess

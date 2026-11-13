@@ -62,6 +62,22 @@ impl Layout {
             cell_height,
         })
     }
+    pub fn pipe_button(&self, index: usize) -> Rect {
+        let available = self.controls_width - 2 * self.margin;
+        let width = 2 * self.cell_width + 8;
+        let height = 2 * self.cell_height + 8;
+        let label_top = self.curve.y - self.cell_height - 10;
+        let center = self.controls_x + self.margin + available * (2 * index.min(1) as u32 + 1) / 4;
+        Rect {
+            x: center - width / 2,
+            y: (self.height / 32).min(label_top.saturating_sub(height + 3)),
+            width,
+            height,
+        }
+    }
+    pub fn pipe_at(&self, x: i32, y: i32) -> Option<usize> {
+        (0..2).find(|&index| self.pipe_button(index).contains(x, y))
+    }
     pub fn slider_track(&self, index: usize) -> Rect {
         Rect {
             x: self.controls_x + self.margin,
@@ -146,6 +162,52 @@ mod tests {
         assert_eq!(l.slider_at(640, 360), None);
         assert_eq!(l.curve_value(-1000), 1.0);
         assert_eq!(l.curve_value(10000), -1.0);
+    }
+    #[test]
+    fn pipe_letters_are_double_sized_separate_and_clear_the_curve_label() {
+        for (width, height) in [(640, 360), (641, 361), (1920, 1080), (3840, 2160)] {
+            let mut layout = Layout::new(width, height).unwrap();
+            // The control painter halves the shared-font metrics at warm-up.
+            for half_size in [false, true] {
+                if half_size {
+                    layout.cell_width = (layout.cell_width / 2).max(1);
+                    layout.cell_height = (layout.cell_height / 2).max(1);
+                }
+                for index in 0..2 {
+                    let button = layout.pipe_button(index);
+                    assert_eq!(button.width, 2 * layout.cell_width + 8);
+                    assert_eq!(button.height, 2 * layout.cell_height + 8);
+                    assert!(button.x >= layout.controls_x);
+                    assert!(button.x + button.width <= width);
+                    assert!(button.y + button.height <= layout.curve.y - layout.cell_height - 10);
+                    assert_eq!(
+                        layout.pipe_at(button.x as i32, button.y as i32),
+                        Some(index)
+                    );
+                    assert_eq!(
+                        layout.pipe_at(
+                            (button.x + button.width - 1) as i32,
+                            (button.y + button.height - 1) as i32
+                        ),
+                        Some(index)
+                    );
+                    if index == 0 {
+                        let next = layout.pipe_button(index + 1);
+                        assert!(button.x + button.width < next.x);
+                        assert_eq!(
+                            layout.pipe_at((button.x + button.width) as i32, button.y as i32),
+                            None
+                        );
+                    }
+                }
+                assert_eq!(layout.pipe_at(-1, -1), None);
+                assert_eq!(layout.pipe_at(0, 0), None);
+                assert_eq!(
+                    layout.pipe_at(layout.curve.x as i32, layout.curve.y as i32),
+                    None
+                );
+            }
+        }
     }
     #[test]
     fn hue_handle_hit_tests_follow_the_current_curve() {

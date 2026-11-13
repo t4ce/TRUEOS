@@ -2,6 +2,15 @@
 pub(super) const ATLAS_WIDTH: usize = 128;
 pub(super) const ATLAS_HEIGHT: usize = 64;
 
+/// Physical Pipe A already applies A's cube to its input-colored dots. A B
+/// preview instead supplies B's stored output; the physical A look still
+/// affects the whole editor, and selecting B never replaces that look.
+pub(super) fn node_color(input: u32, output: u32, selected_pipe: usize) -> [u8; 4] {
+    let packed = if selected_pipe == 0 { input } else { output };
+    let encode = |shift: u32| ((((packed >> shift) & 1023u32) * 255 + 511) / 1023) as u8;
+    [encode(20), encode(10), encode(0), 255]
+}
+
 pub(super) fn atlas_uv(index: usize) -> [f32; 2] {
     [
         ((index % ATLAS_WIDTH) as f32 + 0.5) / ATLAS_WIDTH as f32,
@@ -74,6 +83,24 @@ pub(super) fn ease_node(position: &mut [f32; 3], target: [f32; 3], step: f32) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_colors_preview_b_outputs_without_double_applying_a() {
+        let red = 1023 << 20;
+        let gray = (512 << 20) | (512 << 10) | 512;
+        assert_eq!(node_color(red, gray, 0), [255, 0, 0, 255]);
+        assert_eq!(node_color(red, gray, 1), [128, 128, 128, 255]);
+        assert_eq!(node_color(0x3fff_ffff, 0, 1), [0, 0, 0, 255]);
+        assert_eq!(node_color(0, 0x3fff_ffff, 1), [255; 4]);
+        for code in 0..=1023 {
+            let expected = ((code * 255 + 511) / 1023) as u8;
+            let packed = (code << 20) | (code << 10) | code;
+            assert_eq!(
+                node_color(0, packed, 1),
+                [expected, expected, expected, 255]
+            );
+        }
+    }
 
     #[test]
     fn rotated_nodes_keep_opaque_footprints_out_of_controls_at_supported_sizes() {

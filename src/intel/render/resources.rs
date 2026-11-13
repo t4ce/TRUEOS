@@ -3092,6 +3092,31 @@ fn create_resident_sampled_rgba8_texture_for_carrier(
     })
 }
 
+/// Replace a complete owned texture without changing its PPGTT allocation.
+/// Caller proves that every preceding GPU sampler reference has retired.
+/// Imported/borrowed textures remain immutable through this API.
+pub(crate) fn update_resident_sampled_rgba8_texture(
+    texture: &mut ResidentSampledTexture,
+    bytes: &[u8],
+) -> Result<(), &'static str> {
+    let expected = (texture.pitch as usize).checked_mul(texture.height as usize);
+    if texture.width == 0
+        || texture.height == 0
+        || texture.width.checked_mul(4).is_none_or(|row| row > texture.pitch)
+        || !texture.pitch.is_multiple_of(4)
+        || expected != Some(bytes.len())
+        || bytes.len() > texture.storage.storage_bytes
+        || texture.storage.borrowed
+        || texture.storage.storage_virt.is_null()
+    {
+        return Err("resident-texture-update-shape");
+    }
+    if !texture.storage.write_and_flush(0, bytes) {
+        return Err("resident-texture-update-write");
+    }
+    Ok(())
+}
+
 /// Import an immutable leased source without a CPU readback or pixel copy.
 /// Caller pins the producer allocation until exact renderer retirement; an
 /// ambiguous submission must retain both this mapping and that producer lease.

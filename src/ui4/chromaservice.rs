@@ -3,7 +3,7 @@
 //! commits finish.
 //!
 //! The grade belongs to the service, not the editor window: Escape retires the
-//! UI while leaving the accepted Pipe A look in place, like the color picker.
+//! UI while leaving each accepted pipe look in place, like the color picker.
 
 use alloc::{boxed::Box, vec};
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -18,11 +18,13 @@ use super::{
     WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId,
     chroma_color::{self, LUT_ENTRIES, Settings},
     chroma_controls::Controls,
+    chroma_pipes::{PIPE_COUNT, PipeBuckets},
     chroma_render::ChromaPoints,
 };
 
 const OWNER: WindowOwner = WindowOwner::CHROMA_SERVICE;
 const POLL_MS: u64 = 16;
+const INACTIVE_POLL_MS: u64 = 250;
 const PRIMARY: u32 = 1;
 static OPEN: Mutex<Option<(Ui4CursorSource, (u32, u32))>> = Mutex::new(None);
 static WAKE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
@@ -46,8 +48,8 @@ fn escape(event: &crate::r::keyboard::TrueosKeyboardOutputEvent) -> GlobalKeyboa
 #[derive(Clone, Copy)]
 enum Drag {
     Cube,
-    Slider(usize),
-    Curve(usize),
+    Slider { index: usize, pipe: usize },
+    Curve { index: usize, pipe: usize },
 }
 
 struct Editor {
@@ -66,6 +68,7 @@ struct Editor {
     pitch: f32,
     drag: Option<(Ui4CursorSource, Drag)>,
     dirty: bool,
+    preview_dirty: bool,
     poisoned: bool,
     close_requested: bool,
 }
@@ -73,36 +76,51 @@ struct Editor {
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_chroma_service_task() {
     let mut editor: Option<Editor> = None;
-    let mut settings = Settings::default();
-    // Allocate the LUT on the heap, never a 20-KiB task-stack temporary.
-    let mut table: Box<[u32; LUT_ENTRIES]> = vec![0; LUT_ENTRIES]
-        .into_boxed_slice()
-        .try_into()
-        .expect("chroma-lut-length");
-    settings.build_table(&mut table);
-    let mut grade_dirty = false;
-    let mut hardware_dirty = false;
+    let mut buckets = PipeBuckets::default();
+    // Each pipe retains an independent table. Heap allocation avoids large
+    // LUT temporaries on the cooperative task's stack.
+    let mut tables: [Box<[u32; LUT_ENTRIES]>; PIPE_COUNT] = core::array::from_fn(|pipe| {
+        let mut table: Box<[u32; LUT_ENTRIES]> = vec![0; LUT_ENTRIES]
+            .into_boxed_slice()
+            .try_into()
+            .expect("chroma-lut-length");
+        buckets.settings(pipe).build_table(&mut table);
+        table
+    });
+    let mut grade_dirty = 0u8;
+    let mut hardware_dirty = 0u8;
+    let mut inactive = 0u8;
     let mut last_tick = Instant::now();
-    let mut hardware_error = None;
+    let mut hardware_errors = [None; PIPE_COUNT];
     let mut quarantined = false;
-    let mut grade_owned = false;
+    let mut grade_owned = 0u8;
     loop {
-        if editor.is_none() && !hardware_dirty && !grade_dirty {
+        if editor.is_none() && hardware_dirty == 0 && grade_dirty == 0 {
             WAKE.wait().await;
         }
         let request = OPEN.lock().take();
         if let Some((source, anchor)) = request {
             if editor.is_none() && !quarantined {
-                // Reopening after a pipe reset restores only a grade already
-                // accepted by this service. First open preserves existing LUTs.
-                if grade_owned {
-                    match chroma_color::rearm_pipe_a_if_lost(&table) {
-                        Ok(_) | Err("chroma-3dlut-busy") => {}
-                        Err(reason) => crate::log_warn!(target: "ui4/chroma";
-                            "chroma: LUT recovery deferred reason={}\n", reason),
+                // Restore only service-owned looks. Opening the editor or
+                // changing its selection never overwrites another pipe's LUT.
+                for pipe in 0..PIPE_COUNT {
+                    if grade_owned & (1 << pipe) != 0 {
+                        match chroma_color::rearm_pipe_if_lost(pipe, &tables[pipe]) {
+                            Ok(_) | Err("chroma-3dlut-busy" | "chroma-pipe-unavailable") => {}
+                            Err(reason) => crate::log_warn!(target: "ui4/chroma";
+                                "chroma: pipe={} LUT recovery deferred reason={}\n",
+                                (b'A' + pipe as u8) as char, reason),
+                        }
                     }
                 }
-                match open(source, anchor, &table).await {
+                match open(
+                    source,
+                    anchor,
+                    &tables[buckets.selected()],
+                    buckets.selected(),
+                )
+                .await
+                {
                     Ok(value) => {
                         editor = Some(value);
                         last_tick = Instant::now();
@@ -120,42 +138,70 @@ pub(crate) async fn ui4_chroma_service_task() {
             for event in super::take_owner_input_events(OWNER) {
                 match event {
                     Ui4InputEvent::Pointer(event) if event.window == active.window => {
-                        grade_dirty |= active.pointer(event, &mut settings);
+                        grade_dirty |= active.pointer(event, &mut buckets);
                     }
                     _ => {}
                 }
             }
         }
-        if grade_dirty {
-            settings.build_table(&mut table);
-            hardware_dirty = true;
-            grade_dirty = false;
-        }
-        if hardware_dirty {
-            match chroma_color::program_pipe_a(&table) {
-                Ok(()) => {
-                    hardware_dirty = false;
-                    hardware_error = None;
-                    grade_owned = true;
+        for pipe in 0..PIPE_COUNT {
+            let bit = 1 << pipe;
+            if grade_dirty & bit != 0 {
+                buckets.settings(pipe).build_table(&mut tables[pipe]);
+                hardware_dirty |= bit;
+                if pipe == buckets.selected() {
                     if let Some(active) = editor.as_mut() {
-                        active.points.set_table(&table);
-                        active.dirty = true;
+                        active.preview_dirty = true;
                     }
                 }
-                Err("chroma-3dlut-busy" | "chroma-pipe-a-unavailable") => {}
+            }
+        }
+        grade_dirty = 0;
+        // A pending/disabled B never prevents A's commit, or vice versa.
+        for pipe in 0..PIPE_COUNT {
+            let bit = 1 << pipe;
+            if hardware_dirty & bit == 0 {
+                continue;
+            }
+            match chroma_color::program_pipe(pipe, &tables[pipe]) {
+                Ok(()) => {
+                    hardware_dirty &= !bit;
+                    inactive &= !bit;
+                    hardware_errors[pipe] = None;
+                    grade_owned |= bit;
+                }
+                Err("chroma-3dlut-busy") => {
+                    inactive &= !bit;
+                }
+                Err("chroma-pipe-unavailable") => {
+                    inactive |= bit;
+                }
                 Err(reason) => {
-                    if hardware_error != Some(reason) {
+                    if hardware_errors[pipe] != Some(reason) {
                         crate::log_warn!(target: "ui4/chroma";
-                            "chroma: LUT commit failed reason={}\n", reason);
-                        hardware_error = Some(reason);
+                            "chroma: pipe={} LUT commit failed reason={}\n",
+                            (b'A' + pipe as u8) as char, reason);
+                        hardware_errors[pipe] = Some(reason);
                     }
-                    // Retry on the next open/edit rather than spinning a
-                    // background service forever on an unsupported device.
-                    hardware_dirty = false;
+                    hardware_dirty &= !bit;
+                    inactive &= !bit;
                 }
             }
         }
         if let Some(active) = editor.as_mut() {
+            if active.preview_dirty {
+                match active
+                    .points
+                    .set_table(&tables[buckets.selected()], buckets.selected())
+                {
+                    Ok(()) => {
+                        active.preview_dirty = false;
+                        active.dirty = true;
+                    }
+                    Err(reason) => crate::log_trace!(target: "ui4/chroma";
+                        "chroma: preview deferred reason={}\n", reason),
+                }
+            }
             if active.close_requested {
                 if close(active) {
                     editor = None;
@@ -175,7 +221,10 @@ pub(crate) async fn ui4_chroma_service_task() {
                 last_tick = Instant::now();
                 active.dirty |= active.points.animate(elapsed.min(0.1));
                 if active.dirty {
-                    match active.paint(&settings).await {
+                    match active
+                        .paint(buckets.displayed_settings(), buckets.selected())
+                        .await
+                    {
                         Ok(()) => {
                             active.dirty = false;
                             if active.focus_pending {
@@ -209,8 +258,13 @@ pub(crate) async fn ui4_chroma_service_task() {
                 }
             }
         }
-        if editor.is_some() || hardware_dirty {
-            Timer::after(Duration::from_millis(POLL_MS)).await;
+        if editor.is_some() || hardware_dirty != 0 {
+            let poll_ms = if editor.is_none() && hardware_dirty & !inactive == 0 {
+                INACTIVE_POLL_MS
+            } else {
+                POLL_MS
+            };
+            Timer::after(Duration::from_millis(poll_ms)).await;
         }
     }
 }
@@ -219,15 +273,16 @@ async fn open(
     source: Ui4CursorSource,
     anchor: (u32, u32),
     table: &[u32; LUT_ENTRIES],
+    selected_pipe: usize,
 ) -> Result<Editor, &'static str> {
-    chroma_color::pipe_a_status()?;
+    chroma_color::pipe_status(0)?;
     let (width, height) = super::output_dimensions().ok_or("chroma-output-unavailable")?;
     if !crate::intel::render::active_output_color_extent_supported(width, height) {
         return Err("chroma-resolution-exceeds-native-render-target");
     }
     let controls = Controls::new(width, height).await?;
     let mut points = ChromaPoints::new()?;
-    points.set_table(table);
+    points.set_table(table, selected_pipe)?;
     let output = OutputId::from_slot(0).ok_or("chroma-output-unavailable")?;
     let session = super::begin_window_session(OWNER).map_err(|_| "chroma-session-create")?;
     let frame = match super::create_frame(FrameSpec {
@@ -291,7 +346,7 @@ async fn open(
     ESCAPE.store(false, Ordering::Release);
     let _ = super::set_window_title(OWNER, window, "CHROMATIC · drag to rotate · Esc closes");
     crate::log_info!(target: "ui4/chroma";
-        "chroma: opened fullscreen={}x{} background=transparent dots=4913 primitive=point-list color=pipe-a-3dlut controls=bcs0-cache+microfont grade-persists-on-escape=1\n",
+        "chroma: opened fullscreen={}x{} background=transparent dots=4913 primitive=point-list color=per-pipe-3dlut controls=bcs0-cache+microfont grade-persists-on-escape=1\n",
         width, height);
     Ok(Editor {
         session,
@@ -309,6 +364,7 @@ async fn open(
         pitch: 0.40,
         drag: None,
         dirty: true,
+        preview_dirty: false,
         poisoned: false,
         close_requested: false,
     })
@@ -333,15 +389,23 @@ impl Editor {
     fn pointer(
         &mut self,
         event: super::input_broker::Ui4PointerEvent,
-        settings: &mut Settings,
-    ) -> bool {
+        buckets: &mut PipeBuckets,
+    ) -> u8 {
         let (x, y) = (event.local_x, event.local_y);
         if event.buttons_pressed & PRIMARY != 0 && self.drag.is_none() {
             let layout = &self.controls.layout;
+            if let Some(pipe) = layout.pipe_at(x, y) {
+                if buckets.select(pipe) {
+                    self.preview_dirty = true;
+                    self.dirty = true;
+                }
+                return 0;
+            }
+            let pipe = buckets.selected();
             let drag = if let Some(index) = layout.slider_at(x, y) {
-                Some(Drag::Slider(index))
-            } else if let Some(index) = layout.curve_point_at(x, y, settings) {
-                Some(Drag::Curve(index))
+                Some(Drag::Slider { index, pipe })
+            } else if let Some(index) = layout.curve_point_at(x, y, buckets.displayed_settings()) {
+                Some(Drag::Curve { index, pipe })
             } else if x >= 0 && (x as u32) < layout.cube_width {
                 Some(Drag::Cube)
             } else {
@@ -349,7 +413,7 @@ impl Editor {
             };
             self.drag = drag.map(|drag| (event.source, drag));
         }
-        let mut changed = false;
+        let mut changed = 0;
         if let Some((source, drag)) = self.drag {
             if source == event.source {
                 match drag {
@@ -360,26 +424,13 @@ impl Editor {
                             self.dirty = true;
                         }
                     }
-                    Drag::Slider(index) => {
+                    Drag::Slider { index, pipe } => {
                         let value = self.controls.layout.slider_value(index, x);
-                        let slot = match index {
-                            0 => &mut settings.yellow,
-                            1 => &mut settings.shadows,
-                            2 => &mut settings.highlights,
-                            3 => &mut settings.saturation,
-                            _ => &mut settings.strength,
-                        };
-                        changed = *slot != value;
-                        *slot = value;
+                        changed = buckets.edit_slider_for(pipe, index, value);
                     }
-                    Drag::Curve(index) => {
+                    Drag::Curve { index, pipe } => {
                         let value = self.controls.layout.curve_value(y);
-                        changed = settings.sat_curve[index] != value;
-                        settings.sat_curve[index] = value;
-                        if index == 0 || index == 6 {
-                            settings.sat_curve[0] = value;
-                            settings.sat_curve[6] = value;
-                        }
+                        changed = buckets.edit_curve_for(pipe, index, value);
                     }
                 }
                 if event.buttons_down & PRIMARY == 0 {
@@ -387,11 +438,15 @@ impl Editor {
                 }
             }
         }
-        self.dirty |= changed;
+        self.dirty |= changed != 0;
         changed
     }
 
-    async fn paint(&mut self, settings: &Settings) -> Result<(), &'static str> {
+    async fn paint(
+        &mut self,
+        settings: &Settings,
+        selected_pipe: usize,
+    ) -> Result<(), &'static str> {
         let lease = super::acquire_frame_buffer(self.frame).map_err(|_| "chroma-frame-busy")?;
         let destination = match super::gpgpu_rgba_surface(lease) {
             Ok(surface) => surface,
@@ -408,7 +463,11 @@ impl Editor {
             height: destination.height,
             pitch_bytes: destination.pitch_bytes,
         };
-        if let Err(reason) = self.controls.paint(bcs, settings, &mut self.poisoned).await {
+        if let Err(reason) = self
+            .controls
+            .paint(bcs, settings, selected_pipe, &mut self.poisoned)
+            .await
+        {
             if !self.poisoned {
                 let _ = super::cancel_frame_buffer(lease);
             }

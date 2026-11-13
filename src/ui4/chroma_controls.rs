@@ -14,6 +14,8 @@ const GRAY: u32 = u32::from_le_bytes([64, 64, 64, 128]);
 const TEXT_COLOR: [u8; 4] = [0, 0, 0, 255];
 // The font API takes straight RGBA and premultiplies it into the cached cell.
 const TEXT_BACKGROUND: [u8; 4] = [128, 128, 128, 128];
+const PIPE_BORDER: u32 = u32::from_le_bytes([0, 0, 0, 128]);
+const PIPE_SELECTED: u32 = u32::from_le_bytes([0, 0, 0, 255]);
 const LABELS: [&str; 5] = [
     "SOFTEN YELLOWS",
     "SHADOW TINT",
@@ -79,6 +81,21 @@ impl Controls {
         let mut operations = Vec::new();
         // Static tracks, curve baseline and labels are drawn exactly once per size.
         let l = controls.layout;
+        for (index, label) in ["A", "B"].into_iter().enumerate() {
+            let mut button = l.pipe_button(index);
+            button.x -= l.controls_x;
+            fill(&mut operations, button, GRAY);
+            border(&mut operations, button, 1, PIPE_BORDER);
+            text_sized(
+                &mut operations,
+                &l,
+                label,
+                button.x + 4,
+                button.y + 4,
+                2 * l.cell_width,
+                2 * l.cell_height,
+            )?;
+        }
         for i in 0..5 {
             let mut r = l.slider_track(i);
             r.x -= l.controls_x;
@@ -162,6 +179,7 @@ impl Controls {
         &mut self,
         destination: GucBcs0RgbaSurface,
         settings: &Settings,
+        selected_pipe: usize,
         poisoned: &mut bool,
     ) -> Result<(), &'static str> {
         if *poisoned || self.in_flight {
@@ -195,6 +213,9 @@ impl Controls {
             backend: CopyBackend::PreferFast,
             source_cache: SourceCache::WriteBack,
         });
+        if selected_pipe < 2 {
+            border(&mut ops, l.pipe_button(selected_pipe), 1, PIPE_SELECTED);
+        }
         let values = [
             settings.yellow,
             settings.shadows,
@@ -250,16 +271,61 @@ fn fill(ops: &mut Vec<BcsOp>, r: Rect, color: u32) {
         }));
     }
 }
+fn border(ops: &mut Vec<BcsOp>, r: Rect, thickness: u32, color: u32) {
+    let thickness = thickness.min(r.width / 2).min(r.height / 2);
+    if thickness == 0 {
+        return;
+    }
+    for edge in [
+        Rect {
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: thickness,
+        },
+        Rect {
+            x: r.x,
+            y: r.y + r.height - thickness,
+            width: r.width,
+            height: thickness,
+        },
+        Rect {
+            x: r.x,
+            y: r.y + thickness,
+            width: thickness,
+            height: r.height - 2 * thickness,
+        },
+        Rect {
+            x: r.x + r.width - thickness,
+            y: r.y + thickness,
+            width: thickness,
+            height: r.height - 2 * thickness,
+        },
+    ] {
+        fill(ops, edge, color);
+    }
+}
 fn text(ops: &mut Vec<BcsOp>, l: &Layout, label: &str, x: u32, y: u32) -> Result<(), &'static str> {
+    text_sized(ops, l, label, x, y, l.cell_width, l.cell_height)
+}
+fn text_sized(
+    ops: &mut Vec<BcsOp>,
+    l: &Layout,
+    label: &str,
+    x: u32,
+    y: u32,
+    cell_width: u32,
+    cell_height: u32,
+) -> Result<(), &'static str> {
     for (i, ch) in label.chars().enumerate() {
-        let left = x + i as u32 * l.cell_width;
-        if left + l.cell_width > l.controls_width || y + l.cell_height > l.height {
+        let left = x + i as u32 * cell_width;
+        if left + cell_width > l.controls_width || y + cell_height > l.height {
             break;
         }
         let mut copy = crate::r::services::shell3_font_service::glyph(
             ch,
-            l.cell_width,
-            l.cell_height,
+            cell_width,
+            cell_height,
             TEXT_COLOR,
             TEXT_BACKGROUND,
             false,

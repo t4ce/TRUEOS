@@ -9,6 +9,7 @@ mod collapse_animation;
 mod color_picker;
 mod chroma_color;
 mod chroma_controls;
+mod chroma_pipes;
 mod chroma_render;
 mod chromaservice;
 mod codex_prompt;

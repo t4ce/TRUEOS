@@ -3,14 +3,14 @@
 //! Maxpix's dot groundwork is the native point rasterizer. Its app-owned VS
 //! animates a tornado and its PS is fixed cyan, so neither binary expresses a
 //! color cube. The kernel's embedded clip-position/UV shaders instead sample
-//! a small immutable color atlas, keeping all 4,913 dots in one point draw.
+//! a small retained color atlas, keeping all 4,913 dots in one point draw.
 use super::chroma_color::{LUT_EDGE, LUT_ENTRIES, identity_code, unpack_node};
 use crate::intel::{gpgpu::GpgpuRgba8Surface, render};
 use alloc::vec::Vec;
 
 #[path = "chroma_geometry.rs"]
 mod geometry;
-use geometry::{ATLAS_HEIGHT, ATLAS_WIDTH, Projection, atlas_uv, ease_node};
+use geometry::{ATLAS_HEIGHT, ATLAS_WIDTH, Projection, atlas_uv, ease_node, node_color};
 
 const _: () = assert!(LUT_ENTRIES <= ATLAS_WIDTH * ATLAS_HEIGHT);
 // apps/maxpix/scene.rs POINT_WIDTHS_RAW: the next step after 2px is 4px.
@@ -19,6 +19,8 @@ const POINT_WIDTH_PX: u32 = 4;
 pub(super) struct ChromaPoints {
     mesh: render::ResidentTriangleMesh,
     atlas: render::ResidentSampledTexture,
+    atlas_bytes: Vec<u8>,
+    atlas_dirty: bool,
     vertices: Vec<[f32; 5]>,
     positions: Vec<[f32; 3]>,
     targets: Vec<[f32; 3]>,
@@ -41,13 +43,10 @@ impl ChromaPoints {
                     positions.push([r, g, b].map(|axis| identity_code(axis) as f32 / 1023.0));
                     let uv = atlas_uv(index);
                     vertices.push([0.0, 0.0, 0.5, uv[0], uv[1]]);
-                    let encode = |axis: usize| ((identity_code(axis) * 255 + 511) / 1023) as u8;
-                    atlas_bytes[index * 4..index * 4 + 4].copy_from_slice(&[
-                        encode(r),
-                        encode(g),
-                        encode(b),
-                        255,
-                    ]);
+                    let input =
+                        (identity_code(r) << 20) | (identity_code(g) << 10) | identity_code(b);
+                    atlas_bytes[index * 4..index * 4 + 4]
+                        .copy_from_slice(&node_color(input, input, 0));
                 }
             }
         }
@@ -76,6 +75,8 @@ impl ChromaPoints {
         Ok(Self {
             mesh,
             atlas,
+            atlas_bytes,
+            atlas_dirty: false,
             vertices,
             positions,
             targets,
@@ -84,10 +85,39 @@ impl ChromaPoints {
     }
 
     /// Hardware order: red outermost, blue fastest, packed R10G10B10.
-    pub(super) fn set_table(&mut self, entries: &[u32; LUT_ENTRIES]) {
+    pub(super) fn set_table(
+        &mut self,
+        entries: &[u32; LUT_ENTRIES],
+        selected_pipe: usize,
+    ) -> Result<(), &'static str> {
+        if self.unretired {
+            return Err("chroma-point-retirement-unproven");
+        }
+        if selected_pipe >= 2 {
+            return Err("chroma-point-pipe");
+        }
+        for (index, &output) in entries.iter().enumerate() {
+            let r = index / (LUT_EDGE * LUT_EDGE);
+            let g = index / LUT_EDGE % LUT_EDGE;
+            let b = index % LUT_EDGE;
+            let input = (identity_code(r) << 20) | (identity_code(g) << 10) | identity_code(b);
+            let color = node_color(input, output, selected_pipe);
+            let pixel = &mut self.atlas_bytes[index * 4..index * 4 + 4];
+            if pixel != color {
+                pixel.copy_from_slice(&color);
+                self.atlas_dirty = true;
+            }
+        }
+        // Slider edits and selection changes are the only atlas update path.
+        // Rotation and easing reuse the existing texture without any upload.
+        if self.atlas_dirty {
+            render::update_resident_sampled_rgba8_texture(&mut self.atlas, &self.atlas_bytes)?;
+            self.atlas_dirty = false;
+        }
         for (target, &entry) in self.targets.iter_mut().zip(entries) {
             *target = unpack_node(entry);
         }
+        Ok(())
     }
 
     /// Ease node positions toward their new RGB outputs; stationary cubes
