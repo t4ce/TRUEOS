@@ -205,6 +205,9 @@ fn full_pack_upload_alignment_and_legacy_playback_contract() {
         if key == "wave.two_hands" {
             assert_eq!(replacement, "Waving_up/smile");
         }
+        if key == "idle.uncrossed.scheming" {
+            assert_eq!(replacement, "Idle_up/Uncrossed-Arms/idle-quiet-laugh");
+        }
         count += 1;
     }
     assert_eq!(count, 70);

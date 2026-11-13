@@ -78,7 +78,7 @@ half = { version = "2.7.1", default-features = false }
 libm = { version = "0.2", default-features = false }
 serde = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false }
-sha2 = { version = "=0.10.9", default-features = false }
+sha2 = { version = "=0.11.1", default-features = false }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 
 [[bin]]
@@ -136,7 +136,7 @@ sunset = { path = "vendor/sunset", default-features = false, features = ["alloc"
 trueos-credential-store = { path = "crates/trueos-credential-store" }
 ed25519-dalek = { version = "2.2", default-features = false, features = ["zeroize"] }
 qrcodegen = { package = "qrcodegen-no-heap", version = "1.8.1", default-features = false }
-heapless = { version = "0.9", default-features = false }
+heapless = { version = "0.9.3", default-features = false }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 bytes = { version = "1.11.1", default-features = false }
 limine = { version = "0.6", default-features = false }
@@ -214,7 +214,7 @@ mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net
 hyper = { version = "1.10.0", default-features = false, features = ["client", "http1", "server"] }
 httpdate = { version = "1.0.3", default-features = false }
 rdrand = { version = "0.8", default-features = false }
-redb = { version = "=4.4.0", default-features = false, features = ["experimental-api-5"] }
+redb = { version = "=4.5.0", default-features = false, features = ["experimental-api-5"] }
 trueos-ide = { path = "../TRUEOS-Blueprints/crates/trueos-ide", default-features = false, features = ["store-core"] }
 trueos-redb = { path = "../TRUEOS-Blueprints/crates/trueos-redb", default-features = false }
 trueos-appbundle = { path = "../TRUEOS-Blueprints/crates/trueos-appbundle" }
@@ -265,4 +265,4 @@ symphonia-core = { path = "vendor/symphonia-core-0.5.5-trueos" }
 symphonia-codec-aac = { path = "vendor/symphonia-codec-aac-0.5.5-trueos" }
 
 [build-dependencies]
-sha2 = { workspace = true, features = ["std"] }
+sha2 = { workspace = true }

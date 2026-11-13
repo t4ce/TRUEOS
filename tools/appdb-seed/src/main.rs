@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if bytes.len() < 24 || &bytes[..4] != b"TRBP" {
                     return Err(format!("invalid Blueprint package: {archive}").into());
                 }
-                let hash = format!("{:x}", Sha256::digest(&bytes));
+                let hash = sha256_hex(&bytes);
                 apps.insert(archive.as_str(), bytes.as_slice())?;
                 hashes.insert(archive.as_str(), hash.as_str())?;
                 dates.insert(archive.as_str(), updated)?;
@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         for name in names {
             let archive = format!("{}.bp", name.as_str().unwrap());
             let bytes = apps.get(archive.as_str())?.ok_or("missing app")?;
-            let expected = format!("{:x}", Sha256::digest(bytes.value()));
+            let expected = sha256_hex(bytes.value());
             if hashes.get(archive.as_str())?.ok_or("missing hash")?.value() != expected {
                 return Err(format!("seed hash mismatch: {archive}").into());
             }
@@ -93,4 +93,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         fs::metadata(destination)?.len()
     );
     Ok(())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hex = String::with_capacity(64);
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    for byte in Sha256::digest(bytes) {
+        hex.push(DIGITS[(byte >> 4) as usize] as char);
+        hex.push(DIGITS[(byte & 0xf) as usize] as char);
+    }
+    hex
 }

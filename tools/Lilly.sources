@@ -3,6 +3,7 @@
 # Legacy source 1..7 maps to packed frame_02..frame_08.
 # Keep the reviewed seven-slot playback, cadence and repeat maps in Lilly.catalog.
 # wave.two_hands uses a non-transition smile wave by explicit user choice.
+# idle.uncrossed.scheming uses uncrossed quiet-laugh to preserve posture, by user choice.
 Angry/fists-clenched_frames|Angry_up/fists-clenched
 Angry/fists_frames|Angry_up/fists
 Blow-Kiss/blow-kiss_frames|Blow-Kiss_up
@@ -42,7 +43,7 @@ Idle/Uncrossed-Arms/idle-1_frames|Idle_up/Uncrossed-Arms/idle-1
 Idle/Uncrossed-Arms/idle-2_frames|Idle_up/Uncrossed-Arms/idle-2
 Idle/Uncrossed-Arms/idle-evil-smirk_frames|Idle_up/Uncrossed-Arms/idle-evil-smirk
 Idle/Uncrossed-Arms/idle-quiet-laugh_frames|Idle_up/Uncrossed-Arms/idle-quiet-laugh
-Idle/Uncrossed-Arms/idle-scheming_frames|Idle_up/Crossed-Arms/idle-scheming
+Idle/Uncrossed-Arms/idle-scheming_frames|Idle_up/Uncrossed-Arms/idle-quiet-laugh
 Nod/nod-firm_frames|Nod_up
 Scared/scared_frames|Scared_up
 Silly/silly-cat-mouth_frames|Silly_up/cat-mouth
