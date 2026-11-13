@@ -162,46 +162,7 @@ mod paint_tests {
     }
 
     #[test]
-    fn native_output_keeps_raster_even_when_guest_requests_hex_shader() {
-        CPU_BITMAP_FALLBACK.with(|enabled| enabled.set(false));
-        let mut surface = surface();
-        let settings = settings();
-        surface.set_hex_region(Some(&settings));
-        assert_eq!(surface.font_face(3, 2), FontFace::Raster);
-        assert!(surface.hex_region.is_none());
-        assert_eq!(surface.clear_buffers, [false; 2]);
-
-        effect_present::present(&mut surface, &[], Some(&settings), true);
-        assert_eq!(effect_calls(), EffectCalls::default(),
-            "native output must not capture, register or touch the Hex effect backend");
-        assert!(surface.edit_life.is_none());
-        assert!(surface.edit_life_page.is_none());
-    }
-
-    #[test]
-    fn native_policy_clears_existing_hex_region_and_detaches_retained_effect() {
-        let mut surface = surface();
-        let settings = settings();
-        surface.set_hex_region(Some(&settings));
-        effect_present::present(&mut surface, &[], Some(&settings), true);
-        assert_eq!(effect_calls().captures, 1);
-        assert_eq!(effect_calls().publishes, 1);
-        assert!(surface.edit_life_page.is_some());
-        drawn(&mut surface);
-        EFFECT_CALLS.with(|calls| *calls.borrow_mut() = EffectCalls::default());
-
-        CPU_BITMAP_FALLBACK.with(|enabled| enabled.set(false));
-        surface.set_hex_region(Some(&settings));
-        invalidated(&surface);
-        assert_eq!(surface.font_face(3, 2), FontFace::Raster);
-        effect_present::present(&mut surface, &[], Some(&settings), true);
-        assert_eq!(effect_calls(), EffectCalls { removes: 1, ..EffectCalls::default() });
-        assert!(surface.edit_life.is_none());
-        assert!(surface.edit_life_page.is_none());
-    }
-
-    #[test]
-    fn laptop_bitmap_policy_preserves_requested_effect_publication() {
+    fn every_output_preserves_requested_effect_publication() {
         let mut surface = surface();
         let settings = settings();
         surface.set_hex_region(Some(&settings));
@@ -223,7 +184,6 @@ EFFECT_FIXTURE = r'''
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct EffectCalls { captures: usize, publishes: usize, removes: usize, pauses: usize, failure_checks: usize }
 std::thread_local! {
-    static CPU_BITMAP_FALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     static EFFECT_CALLS: std::cell::RefCell<EffectCalls> = Default::default();
 }
 fn effect_calls() -> EffectCalls { EFFECT_CALLS.with(|calls| calls.borrow().clone()) }
@@ -257,7 +217,7 @@ def main() -> None:
     source += "#[path=" + json.dumps(str(ROOT / "crates/trueos-terminal/src/edit_life.rs")) + "] pub mod edit_life;\n"
     source += item(font, "#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]\npub(crate) enum FontFace")
     source += item(font, "#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]\nstruct CellKey")
-    source += "mod r { pub mod services { pub mod shell3_font_service { pub(crate) use crate::FontFace; pub(crate) fn cpu_bitmap_fallback_enabled() -> bool { crate::CPU_BITMAP_FALLBACK.with(|enabled| enabled.get()) } } } }\n"
+    source += "mod r { pub mod services { pub mod shell3_font_service { pub(crate) use crate::FontFace; } } }\n"
     source += item(show, "fn bitmap_edit_settings(")
     source += item(show, "#[derive(Clone, Debug, PartialEq, Eq)]\nstruct HexRegion")
     source += item(show, "impl HexRegion")

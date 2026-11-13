@@ -58,6 +58,7 @@ mod ui4 {
     }
 }
 #[path="@PARSER@"] mod edit_life;
+@SETTINGS@
 mod capture {
     @CAPTURE@
     @TESTS@
@@ -188,8 +189,11 @@ def main() -> None:
     source = (ROOT / "src/ui4/edit_life.rs").read_text()
     start = source.index("#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]")
     page = source[start:source.index("\n#[derive(Clone)]\nstruct Registration", start)]
+    show = (ROOT / "src/shell3/show/show.rs").read_text()
+    settings = show[show.index("fn bitmap_edit_settings("):show.index("/// The page font follows")]
     fixture = (STUBS.replace("@FONT@", str(ROOT / "src/r/services/shell3_hex_font.rs"))
                .replace("@PAGE@", page)
+               .replace("@SETTINGS@", settings)
                .replace("@PARSER@", str(ROOT / "crates/trueos-terminal/src/edit_life.rs"))
                .replace("@CAPTURE@", (ROOT / "src/shell3/show/edit_life.rs").read_text().replace("//!", "//"))
                .replace("@TESTS@", TESTS))

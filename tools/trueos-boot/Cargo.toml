@@ -14,7 +14,7 @@ bench = false
 
 [dependencies]
 r-efi = "=5.3.0"
-font8x8 = { version = "0.3.1", default-features = false, features = ["unicode"] }
+microfont = { path = "../../vendor/microfont", default-features = false, features = ["hex"] }
 
 [profile.dev]
 panic = "abort"

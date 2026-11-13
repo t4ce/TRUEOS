@@ -24,21 +24,16 @@ const OWNER: WindowOwner = WindowOwner::SHELL3_SERVICE;
 const BACKGROUND: [u8; 4] = super::update::MATRIX_BACKGROUND;
 const FOREGROUND: RgbaColor = RgbaColor::White;
 
-/// The bitmap editor effect is confined to the laptop's CPU font fallback.
-/// Native font outputs keep their line/quad face even when a guest requests
-/// the Hex-based effect.
+/// Edit may select its embedded Hex font and Conway effect on every output.
 fn bitmap_edit_settings(
     settings: Option<&trueos_terminal::edit_life::EditLife>,
 ) -> Option<&trueos_terminal::edit_life::EditLife> {
-    if !crate::r::services::shell3_font_service::cpu_bitmap_fallback_enabled() {
-        return None;
-    }
     settings.filter(|settings| {
         settings.enabled && settings.viewport.width != 0 && settings.viewport.height != 0
     })
 }
 
-/// Within the bitmap fallback, the page font follows the Shader preference,
+/// The page font follows the Shader preference on every output,
 /// including while paused. Overlay rectangles retain the terminal face.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct HexRegion {

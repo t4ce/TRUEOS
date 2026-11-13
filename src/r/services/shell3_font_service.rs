@@ -1,6 +1,7 @@
 //! Shell3's shared native raster font authority. Styled RGBA cells are warmed
 //! once and copied by either the CPU or legacy BLT. Shell3 owns layout,
-//! clipping and sink choice; every output shares the native line/quad atlas.
+//! clipping and sink choice. Shader-enabled Edit pages use embedded Hex masks;
+//! other text shares the native line/quad atlas.
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use embassy_sync::signal::Signal;
@@ -67,15 +68,6 @@ struct Font {
 /// Edit's shader viewport selects Hex explicitly; layout remains shared.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) enum FontFace { Raster, Hex }
-
-/// Compatibility query for callers that formerly exposed a laptop bitmap mode.
-pub(crate) fn cpu_bitmap_fallback_enabled() -> bool {
-    false
-}
-
-fn effective_face(_face: FontFace) -> FontFace {
-    FontFace::Raster
-}
 
 /// Temporary physical-laptop comparison: save one normal Spirit GPGPU context,
 /// build the native atlas, then exercise restoration for subsequent frames.
@@ -310,7 +302,6 @@ pub(crate) fn glyph_with_face(
     background: [u8; 4],
     underline: bool,
 ) -> Result<GucBcs0RgbaCopy, &'static str> {
-    let face = effective_face(face);
     let font = FONT.get().ok_or("shell3-font-not-ready")?;
     if cell_width == 0 || cell_height == 0 || cell_width > 256 || cell_height > 256 {
         return Err("shell3-font-cell-size");
@@ -434,10 +425,14 @@ pub(crate) fn with_cell_coverage_with_face(
 }
 
 #[derive(Clone, Copy)]
-enum CellMask<'a> { Raster(&'a [u8]), TabLabel(hex::tab_label_cell::TabLabelCell) }
+enum CellMask<'a> { Raster(&'a [u8]), Hex(u32), TabLabel(hex::tab_label_cell::TabLabelCell) }
 
-fn resolved_face(font: &Font, _face: FontFace, character: char, foreground: [u8; 4])
+fn resolved_face(font: &Font, face: FontFace, character: char, foreground: [u8; 4])
     -> Result<(CellMask<'_>, [u8; 4]), &'static str> {
+    if face == FontFace::Hex {
+        let (glyph, foreground) = hex::resolve(character, foreground);
+        return Ok((CellMask::Hex(glyph), foreground));
+    }
     if let Some(label) = hex::tab_label_cell::TabLabelCell::from_character(character) {
         return Ok((CellMask::TabLabel(label), foreground));
     }
@@ -448,6 +443,7 @@ fn resolved_face(font: &Font, _face: FontFace, character: char, foreground: [u8;
 fn sample_face(font: &Font, mask: CellMask<'_>, x: u32, y: u32,
     width: u32, height: u32, underline: bool) -> u8 {
     match mask {
+        CellMask::Hex(glyph) => hex::sample(glyph, x, y, width, height, underline),
         CellMask::Raster(mask) => sample_cell(font.alpha, mask, x, y, width, height, underline),
         CellMask::TabLabel(label) => {
             let Some((character, px, py, w, h)) = label.point(x, y, width, height) else { return 0; };

@@ -144,7 +144,7 @@ mod microfont {pub const FWIDTH:usize=6;pub const FHEIGHT:usize=11;}
     source += constant(FONT, "DEFAULT_UI4_FONT_SCALE") + "\n"
     source += constant(FONT, "ATLAS_EM_HALF_MM") + "\n"
     source += constant(FONT, "LAPTOP_SHELL_EM_HALF_MM") + "\n"
-    for name in ("cell_extent", "cell_extent_for_em", "Font", "cpu_bitmap_fallback_enabled", "effective_face",
+    for name in ("cell_extent", "cell_extent_for_em", "Font",
                  "laptop_context_bootstrap_enabled", "native_boot_preflight", "prepare_once"):
         source += item(FONT, name) + "\n"
     source += "static FONT:spin::Once<Font>=spin::Once::new();\n"
@@ -172,7 +172,6 @@ mod microfont {pub const FWIDTH:usize=6;pub const FHEIGHT:usize=11;}
   assert_eq!(*crate::STARTUP_EVENTS.lock().unwrap(),["preflight"]);
  }
  #[test] fn every_output_uses_native_atlas_and_retains_one_publication() {
-  assert!(!cpu_bitmap_fallback_enabled());
   crate::ui4::PHYSICAL.with(|p|p.set(Some((999,94))));
   prepare_once().unwrap();prepare_once().unwrap();
   assert_eq!(NATIVE_CALLS.load(Ordering::Relaxed),1);
@@ -197,14 +196,19 @@ mod microfont {pub const FWIDTH:usize=6;pub const FHEIGHT:usize=11;}
   assert_eq!(prepare_once(),Err("shell3-font-physical-size-unavailable"));
   assert_eq!(NATIVE_CALLS.load(Ordering::Relaxed),0);
  }
- #[test] fn legacy_hex_requests_share_native_masks_and_missing_glyph_policy() {
+ #[test] fn explicit_hex_requests_use_embedded_masks_and_raster_keeps_native_masks() {
   prepare_once().unwrap();let font=FONT.get().unwrap();
-  for requested in [FontFace::Raster,FontFace::Hex] {
-   assert_eq!(effective_face(requested),FontFace::Raster);
+  for requested in [FontFace::Raster] {
    let (mask,ink)=resolved_face(font,requested,'A',[1,2,3,127]).unwrap();
    assert!(matches!(mask,CellMask::Raster(&[17,128])));assert_eq!(ink,[1,2,3,127]);
    let (mask,ink)=resolved_face(font,requested,'漢',[1,2,3,127]).unwrap();
    assert!(matches!(mask,CellMask::Raster(&[34,255])));assert_eq!(ink,[255,0,0,127]);
+  }
+  for character in ['A','漢'] {
+   let (expected,expected_ink)=hex::resolve(character,[1,2,3,127]);
+   let (mask,ink)=resolved_face(font,FontFace::Hex,character,[1,2,3,127]).unwrap();
+   assert!(matches!(mask,CellMask::Hex(glyph) if glyph == expected));
+   assert_eq!(ink,expected_ink);
   }
  }
  #[test] fn tgl_successful_preflight_runs_once_before_atlas_and_publication() {

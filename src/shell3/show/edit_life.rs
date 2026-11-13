@@ -21,8 +21,8 @@ pub(super) fn present(
     settings: Option<&EditLife>,
     source_changed: bool,
 ) {
-    // Apply the same policy as the ordinary cell painter before capture or
-    // registration: native font outputs must never submit a Hex effect frame.
+    // Match the ordinary cell painter: enabled shader pages use embedded Hex
+    // coverage on every output, independently of the native font backend.
     let Some(settings) = super::bitmap_edit_settings(settings) else {
         if surface.edit_life.take().is_some() {
             crate::ui4::edit_life::remove(surface.window);
