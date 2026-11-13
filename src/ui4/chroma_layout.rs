@@ -46,8 +46,9 @@ impl Layout {
             width: track_width,
             height: height / 5,
         };
-        let slider_start = curve.y + curve.height + height / 18;
-        let row_height = (height - slider_start - height / 12) / 5;
+        let slider_start = curve.y + curve.height + (height / 90).max(4);
+        let motion_reserve = (height / 12).clamp(80, 192);
+        let row_height = (height - slider_start - motion_reserve - 2 * margin) / 5;
         Ok(Self {
             width,
             height,
@@ -78,6 +79,22 @@ impl Layout {
     pub fn pipe_at(&self, x: i32, y: i32) -> Option<usize> {
         (0..2).find(|&index| self.pipe_button(index).contains(x, y))
     }
+    pub fn motion_button(&self, index: usize) -> Rect {
+        let available = self.controls_width - 2 * self.margin;
+        let width = (6 * self.cell_width + 12).max(36).min(available);
+        let height = (self.height / 36).clamp(14, 28).max(self.cell_height + 6);
+        let gap = (self.height / 180).clamp(3, 8);
+        let top = self.height - self.margin - (4 * height + 3 * gap);
+        Rect {
+            x: self.controls_x + self.margin,
+            y: top + index.min(3) as u32 * (height + gap),
+            width,
+            height,
+        }
+    }
+    pub fn motion_at(&self, x: i32, y: i32) -> Option<usize> {
+        (0..4).find(|&index| self.motion_button(index).contains(x, y))
+    }
     pub fn slider_track(&self, index: usize) -> Rect {
         Rect {
             x: self.controls_x + self.margin,
@@ -89,11 +106,12 @@ impl Layout {
     pub fn slider_at(&self, x: i32, y: i32) -> Option<usize> {
         (0..5).find(|&i| {
             let r = self.slider_track(i);
+            let bar = self.slider_bar(i, 0.0);
             Rect {
                 x: r.x.saturating_sub(5),
-                y: r.y.saturating_sub(10),
+                y: bar.y.saturating_sub(2),
                 width: r.width + 10,
-                height: 24,
+                height: (bar.height + 4).min(self.row_height - self.cell_height + 2),
             }
             .contains(x, y)
         })
@@ -121,7 +139,7 @@ impl Layout {
             x,
             y: r.y.saturating_sub(8),
             width: bar_width,
-            height: 20,
+            height: 20.min(self.row_height.saturating_sub(self.cell_height).max(8)),
         }
     }
     pub fn curve_point(&self, index: usize, value: f32) -> (u32, u32) {
@@ -206,6 +224,59 @@ mod tests {
                     layout.pipe_at(layout.curve.x as i32, layout.curve.y as i32),
                     None
                 );
+            }
+        }
+    }
+    #[test]
+    fn motion_list_is_below_sliders_and_has_independent_hit_targets() {
+        for (width, height) in [
+            (640, 360),
+            (641, 361),
+            (1920, 1080),
+            (3840, 2160),
+            (3840, 360),
+            (640, 2160),
+        ] {
+            let original = Layout::new(width, height).unwrap();
+            for font_case in 0..3 {
+                let mut l = original;
+                if font_case == 1 {
+                    l.cell_width = (l.cell_width / 2).max(1);
+                    l.cell_height = (l.cell_height / 2).max(1);
+                } else if font_case == 2 {
+                    let available = l.controls_width - 2 * l.margin;
+                    let fitted = (l.row_height / 3).min(available * 11 / (18 * 6)).max(1);
+                    l.cell_height = (fitted / 2).max(1);
+                    l.cell_width = (fitted * 6 / 11 / 2).max(1);
+                }
+                let first = l.motion_button(0);
+                let last_slider = l.slider_bar(4, 0.5);
+                let last_label = l.slider_start + 4 * l.row_height;
+                assert!(last_slider.y + last_slider.height < first.y);
+                assert!(last_label + l.cell_height < first.y);
+                for index in 0..4 {
+                    let r = l.motion_button(index);
+                    assert!(r.x >= l.controls_x && r.x + r.width <= l.width);
+                    assert!(r.y + r.height <= l.height - l.margin);
+                    assert!(r.height >= l.cell_height + 6);
+                    for (x, y) in [
+                        (r.x, r.y),
+                        (r.x + r.width / 2, r.y + r.height / 2),
+                        (r.x + r.width - 1, r.y + r.height - 1),
+                    ] {
+                        assert_eq!(l.motion_at(x as i32, y as i32), Some(index));
+                        assert_eq!(l.slider_at(x as i32, y as i32), None);
+                        assert_eq!(l.pipe_at(x as i32, y as i32), None);
+                    }
+                    assert_eq!(l.motion_at((r.x + r.width) as i32, r.y as i32), None);
+                    if index < 3 {
+                        let next = l.motion_button(index + 1);
+                        assert!(r.y + r.height < next.y);
+                        assert_eq!(l.motion_at(r.x as i32, (r.y + r.height) as i32), None);
+                    }
+                }
+                assert_eq!(l.motion_at(-1, -1), None);
+                assert_eq!(l.motion_at(l.curve.x as i32, l.curve.y as i32), None);
             }
         }
     }

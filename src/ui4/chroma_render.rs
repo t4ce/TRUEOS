@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 
 #[path = "chroma_geometry.rs"]
 mod geometry;
+pub(super) use geometry::view_gravity;
 use geometry::{ATLAS_HEIGHT, ATLAS_WIDTH, Projection, atlas_uv, ease_node, node_color};
 
 const _: () = assert!(LUT_ENTRIES <= ATLAS_WIDTH * ATLAS_HEIGHT);
@@ -117,6 +118,17 @@ impl ChromaPoints {
         for (target, &entry) in self.targets.iter_mut().zip(entries) {
             *target = unpack_node(entry);
         }
+        Ok(())
+    }
+
+    /// Motion tables already contain their smoothed positions. Keep those
+    /// positions aligned with the accepted hardware LUT instead of easing a
+    /// second time. Only CPU projection data changes here.
+    pub(super) fn snap_to_targets(&mut self) -> Result<(), &'static str> {
+        if self.unretired {
+            return Err("chroma-point-retirement-unproven");
+        }
+        self.positions.copy_from_slice(&self.targets);
         Ok(())
     }
 

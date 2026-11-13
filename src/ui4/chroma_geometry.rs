@@ -2,6 +2,12 @@
 pub(super) const ATLAS_WIDTH: usize = 128;
 pub(super) const ATLAS_HEIGHT: usize = 64;
 
+/// Screen-down gravity expressed in the cube's color-space axes. Rotation is
+/// [sin(yaw), cos(yaw), sin(pitch), cos(pitch)], matching Projection below.
+pub(crate) fn view_gravity([sy, cy, sp, cp]: [f32; 4]) -> [f32; 3] {
+    [sy * sp, -cp, cy * sp]
+}
+
 /// Physical Pipe A already applies A's cube to its input-colored dots. A B
 /// preview instead supplies B's stored output; the physical A look still
 /// affects the whole editor, and selecting B never replaces that look.
@@ -83,6 +89,29 @@ pub(super) fn ease_node(position: &mut [f32; 3], target: [f32; 3], step: f32) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gravity_remains_screen_down_as_the_cube_rotates() {
+        assert_eq!(view_gravity([0.0, 1.0, 0.0, 1.0]), [0.0, -1.0, 0.0]);
+        assert_eq!(view_gravity([0.0, 1.0, 1.0, 0.0]), [0.0, -0.0, 1.0]);
+        for yaw in [-2.7f32, -0.63, 0.0, 0.8, 2.3] {
+            for pitch in [-1.4f32, -0.4, 0.0, 0.4, 1.4] {
+                let (sy, cy) = (yaw.sin(), yaw.cos());
+                let (sp, cp) = (pitch.sin(), pitch.cos());
+                let [x, y, z] = view_gravity([sy, cy, sp, cp]);
+                assert!((x * x + y * y + z * z - 1.0).abs() < 1e-5);
+                // Apply Projection's exact forward transform. Since image Y
+                // is negated, camera -Y is always downward on the display.
+                let rx = x * cy - z * sy;
+                let rz = x * sy + z * cy;
+                let ry = y * cp - rz * sp;
+                let depth = y * sp + rz * cp;
+                assert!(rx.abs() < 1e-5);
+                assert!((ry + 1.0).abs() < 1e-5);
+                assert!(depth.abs() < 1e-5);
+            }
+        }
+    }
 
     #[test]
     fn node_colors_preview_b_outputs_without_double_applying_a() {

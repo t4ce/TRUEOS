@@ -5,7 +5,6 @@
 //! The grade belongs to the service, not the editor window: Escape retires the
 //! UI while leaving each accepted pipe look in place, like the color picker.
 
-use alloc::{boxed::Box, vec};
 use core::sync::atomic::{AtomicBool, Ordering};
 use embassy_sync::signal::Signal;
 use spin::Mutex;
@@ -16,8 +15,10 @@ use super::{
     GlobalKeyboardDisposition, GlobalKeyboardHookId, OutputId, PremultipliedRgba8, ScanoutFormat,
     Ui4CursorSource, Ui4InputEvent, WindowCreate, WindowId, WindowInteraction, WindowOwner,
     WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId,
+    chroma_animation::Animations,
     chroma_color::{self, LUT_ENTRIES, Settings},
     chroma_controls::Controls,
+    chroma_motion::MotionMode,
     chroma_pipes::{PIPE_COUNT, PipeBuckets},
     chroma_render::ChromaPoints,
 };
@@ -77,16 +78,7 @@ struct Editor {
 pub(crate) async fn ui4_chroma_service_task() {
     let mut editor: Option<Editor> = None;
     let mut buckets = PipeBuckets::default();
-    // Each pipe retains an independent table. Heap allocation avoids large
-    // LUT temporaries on the cooperative task's stack.
-    let mut tables: [Box<[u32; LUT_ENTRIES]>; PIPE_COUNT] = core::array::from_fn(|pipe| {
-        let mut table: Box<[u32; LUT_ENTRIES]> = vec![0; LUT_ENTRIES]
-            .into_boxed_slice()
-            .try_into()
-            .expect("chroma-lut-length");
-        buckets.settings(pipe).build_table(&mut table);
-        table
-    });
+    let mut animations = Animations::new(core::array::from_fn(|pipe| *buckets.settings(pipe)));
     let mut grade_dirty = 0u8;
     let mut hardware_dirty = 0u8;
     let mut inactive = 0u8;
@@ -95,7 +87,7 @@ pub(crate) async fn ui4_chroma_service_task() {
     let mut quarantined = false;
     let mut grade_owned = 0u8;
     loop {
-        if editor.is_none() && hardware_dirty == 0 && grade_dirty == 0 {
+        if editor.is_none() && hardware_dirty == 0 && grade_dirty == 0 && !animations.any_active() {
             WAKE.wait().await;
         }
         let request = OPEN.lock().take();
@@ -105,7 +97,7 @@ pub(crate) async fn ui4_chroma_service_task() {
                 // changing its selection never overwrites another pipe's LUT.
                 for pipe in 0..PIPE_COUNT {
                     if grade_owned & (1 << pipe) != 0 {
-                        match chroma_color::rearm_pipe_if_lost(pipe, &tables[pipe]) {
+                        match chroma_color::rearm_pipe_if_lost(pipe, animations.table(pipe)) {
                             Ok(_) | Err("chroma-3dlut-busy" | "chroma-pipe-unavailable") => {}
                             Err(reason) => crate::log_warn!(target: "ui4/chroma";
                                 "chroma: pipe={} LUT recovery deferred reason={}\n",
@@ -116,7 +108,7 @@ pub(crate) async fn ui4_chroma_service_task() {
                 match open(
                     source,
                     anchor,
-                    &tables[buckets.selected()],
+                    animations.table(buckets.selected()),
                     buckets.selected(),
                 )
                 .await
@@ -130,6 +122,8 @@ pub(crate) async fn ui4_chroma_service_task() {
                 }
             }
         }
+        let elapsed = (last_tick.elapsed().as_micros() as f32 / 1_000_000.0).min(0.1);
+        last_tick = Instant::now();
         if let Some(active) = editor.as_mut() {
             active.close_requested |= ESCAPE.swap(false, Ordering::AcqRel)
                 || super::window_is_closed(OWNER, active.window);
@@ -138,43 +132,70 @@ pub(crate) async fn ui4_chroma_service_task() {
             for event in super::take_owner_input_events(OWNER) {
                 match event {
                     Ui4InputEvent::Pointer(event) if event.window == active.window => {
-                        grade_dirty |= active.pointer(event, &mut buckets);
+                        grade_dirty |= active.pointer(event, &mut buckets, &mut animations);
                     }
                     _ => {}
                 }
             }
         }
+        if let Some(active) = editor.as_ref() {
+            animations.set_gravity(
+                buckets.selected(),
+                super::chroma_render::view_gravity([
+                    libm::sinf(active.yaw),
+                    libm::cosf(active.yaw),
+                    libm::sinf(active.pitch),
+                    libm::cosf(active.pitch),
+                ]),
+            );
+        }
         for pipe in 0..PIPE_COUNT {
             let bit = 1 << pipe;
             if grade_dirty & bit != 0 {
-                buckets.settings(pipe).build_table(&mut tables[pipe]);
-                hardware_dirty |= bit;
-                if pipe == buckets.selected() {
-                    if let Some(active) = editor.as_mut() {
-                        active.preview_dirty = true;
-                    }
-                }
+                animations.set_base(pipe, buckets.settings(pipe));
+            }
+            // An unseen inactive simulation sleeps at the slow retry cadence.
+            // Probe it even if its last generated table happened to equal base.
+            if inactive & bit != 0
+                && animations.mode(pipe).is_some()
+                && hardware_dirty & bit == 0
+                && chroma_color::pipe_status(pipe).is_ok()
+            {
+                inactive &= !bit;
             }
         }
         grade_dirty = 0;
+        let preview_pipe = editor.as_ref().map(|_| buckets.selected());
+        let generated = animations.advance(elapsed, preview_pipe, inactive);
+        hardware_dirty |= generated;
         // A pending/disabled B never prevents A's commit, or vice versa.
         for pipe in 0..PIPE_COUNT {
             let bit = 1 << pipe;
             if hardware_dirty & bit == 0 {
                 continue;
             }
-            match chroma_color::program_pipe(pipe, &tables[pipe]) {
+            match chroma_color::program_pipe(pipe, animations.table(pipe)) {
                 Ok(()) => {
                     hardware_dirty &= !bit;
                     inactive &= !bit;
                     hardware_errors[pipe] = None;
                     grade_owned |= bit;
+                    if pipe == buckets.selected() {
+                        if let Some(active) = editor.as_mut() {
+                            active.preview_dirty = true;
+                        }
+                    }
                 }
                 Err("chroma-3dlut-busy") => {
                     inactive &= !bit;
                 }
                 Err("chroma-pipe-unavailable") => {
                     inactive |= bit;
+                    if pipe == buckets.selected() && generated & bit != 0 {
+                        if let Some(active) = editor.as_mut() {
+                            active.preview_dirty = true;
+                        }
+                    }
                 }
                 Err(reason) => {
                     if hardware_errors[pipe] != Some(reason) {
@@ -192,9 +213,12 @@ pub(crate) async fn ui4_chroma_service_task() {
             if active.preview_dirty {
                 match active
                     .points
-                    .set_table(&tables[buckets.selected()], buckets.selected())
+                    .set_table(animations.table(buckets.selected()), buckets.selected())
                 {
                     Ok(()) => {
+                        if animations.mode(buckets.selected()).is_some() {
+                            let _ = active.points.snap_to_targets();
+                        }
                         active.preview_dirty = false;
                         active.dirty = true;
                     }
@@ -217,12 +241,16 @@ pub(crate) async fn ui4_chroma_service_task() {
                     WAKE.signal(());
                 }
             } else {
-                let elapsed = last_tick.elapsed().as_micros() as f32 / 1_000_000.0;
-                last_tick = Instant::now();
-                active.dirty |= active.points.animate(elapsed.min(0.1));
+                active.dirty |= active.points.animate(elapsed);
                 if active.dirty {
                     match active
-                        .paint(buckets.displayed_settings(), buckets.selected())
+                        .paint(
+                            buckets.displayed_settings(),
+                            buckets.selected(),
+                            animations
+                                .mode(buckets.selected())
+                                .map(|mode| mode as usize),
+                        )
                         .await
                     {
                         Ok(()) => {
@@ -258,8 +286,11 @@ pub(crate) async fn ui4_chroma_service_task() {
                 }
             }
         }
-        if editor.is_some() || hardware_dirty != 0 {
-            let poll_ms = if editor.is_none() && hardware_dirty & !inactive == 0 {
+        if editor.is_some() || hardware_dirty != 0 || animations.any_active() {
+            let poll_ms = if editor.is_none()
+                && hardware_dirty & !inactive == 0
+                && !animations.runnable(None, inactive)
+            {
                 INACTIVE_POLL_MS
             } else {
                 POLL_MS
@@ -390,6 +421,7 @@ impl Editor {
         &mut self,
         event: super::input_broker::Ui4PointerEvent,
         buckets: &mut PipeBuckets,
+        animations: &mut Animations,
     ) -> u8 {
         let (x, y) = (event.local_x, event.local_y);
         if event.buttons_pressed & PRIMARY != 0 && self.drag.is_none() {
@@ -402,6 +434,17 @@ impl Editor {
                 return 0;
             }
             let pipe = buckets.selected();
+            if let Some(index) = layout.motion_at(x, y) {
+                if let Some(mode) = MotionMode::from_index(index) {
+                    let next = if animations.mode(pipe) == Some(mode) {
+                        None
+                    } else {
+                        Some(mode)
+                    };
+                    self.dirty |= animations.select_mode(pipe, next);
+                }
+                return 0;
+            }
             let drag = if let Some(index) = layout.slider_at(x, y) {
                 Some(Drag::Slider { index, pipe })
             } else if let Some(index) = layout.curve_point_at(x, y, buckets.displayed_settings()) {
@@ -446,6 +489,7 @@ impl Editor {
         &mut self,
         settings: &Settings,
         selected_pipe: usize,
+        active_mode: Option<usize>,
     ) -> Result<(), &'static str> {
         let lease = super::acquire_frame_buffer(self.frame).map_err(|_| "chroma-frame-busy")?;
         let destination = match super::gpgpu_rgba_surface(lease) {
@@ -465,7 +509,13 @@ impl Editor {
         };
         if let Err(reason) = self
             .controls
-            .paint(bcs, settings, selected_pipe, &mut self.poisoned)
+            .paint(
+                bcs,
+                settings,
+                selected_pipe,
+                active_mode,
+                &mut self.poisoned,
+            )
             .await
         {
             if !self.poisoned {

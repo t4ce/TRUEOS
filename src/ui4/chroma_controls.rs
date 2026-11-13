@@ -23,6 +23,7 @@ const LABELS: [&str; 5] = [
     "SATURATION",
     "STRENGTH",
 ];
+const MOTION_LABELS: [&str; 4] = ["ORBS", "VORTEX", "WATER", "LIFE"];
 
 #[path = "chroma_layout.rs"]
 mod layout;
@@ -94,6 +95,19 @@ impl Controls {
                 button.y + 4,
                 2 * l.cell_width,
                 2 * l.cell_height,
+            )?;
+        }
+        for (index, label) in MOTION_LABELS.into_iter().enumerate() {
+            let mut button = l.motion_button(index);
+            button.x -= l.controls_x;
+            fill(&mut operations, button, GRAY);
+            border(&mut operations, button, 1, PIPE_BORDER);
+            text(
+                &mut operations,
+                &l,
+                label,
+                button.x + 6,
+                button.y + (button.height - l.cell_height) / 2,
             )?;
         }
         for i in 0..5 {
@@ -180,6 +194,7 @@ impl Controls {
         destination: GucBcs0RgbaSurface,
         settings: &Settings,
         selected_pipe: usize,
+        active_mode: Option<usize>,
         poisoned: &mut bool,
     ) -> Result<(), &'static str> {
         if *poisoned || self.in_flight {
@@ -215,6 +230,9 @@ impl Controls {
         });
         if selected_pipe < 2 {
             border(&mut ops, l.pipe_button(selected_pipe), 1, PIPE_SELECTED);
+        }
+        if let Some(index) = active_mode.filter(|index| *index < MOTION_LABELS.len()) {
+            border(&mut ops, l.motion_button(index), 1, PIPE_SELECTED);
         }
         let values = [
             settings.yellow,
