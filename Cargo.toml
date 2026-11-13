@@ -42,6 +42,7 @@ members = [
     "crates/trueos-lfm25-cpu",
     "crates/trueos-lfm25-model",
     "crates/trueos-locale",
+    "crates/trueos-lily-pack",
     "crates/trueos-math",
     "crates/trueos-terminal",
     "crates/trueos-ttstt-cpu",
@@ -53,6 +54,7 @@ members = [
 exclude = [
     # Standalone host tools own their manifests, lockfiles, and patch policy.
     "tools/helio-sprite-atlas-bake",
+    "tools/lilly/lily-pack",
     "tools/kokoro-native-oracle",
     "tools/remoteai",
     "tools/wgpu-video-mesh",
@@ -77,6 +79,7 @@ libm = { version = "0.2", default-features = false }
 serde = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false }
 sha2 = { version = "=0.10.9", default-features = false }
+miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 
 [[bin]]
 name = "TRUEOS"
@@ -163,7 +166,7 @@ rustls = { version = "0.23", default-features = false, features = ["custom-provi
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12", "zeroize"] }
 chacha20poly1305 = { version = "0.10.1", default-features = false }
 webpki-roots = { version = "1.0.7", default-features = false }
-miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
+miniz_oxide = { workspace = true }
 lz4_flex = { version = "0.11.6", default-features = false, features = ["safe-encode", "safe-decode", "checked-decode"] }
 twox-hash = { version = "2.1.2", default-features = false, features = ["xxhash32"] }
 png = { version = "0.18.1", default-features = false }
@@ -202,6 +205,7 @@ infer = { path = "vendor/infer", default-features = false }
 v = { path = "crates/trueos-v" }
 trueos-vm = { path = "crates/trueos-vm" }
 trueos-locale = { path = "crates/trueos-locale", default-features = false }
+trueos-lily-pack = { path = "crates/trueos-lily-pack" }
 trueos-helio-artifact = { path = "crates/trueos-helio-artifact" }
 trueos-helio-runtime = { path = "crates/trueos-helio-runtime" }
 serde = { workspace = true, features = ["alloc", "derive"] }

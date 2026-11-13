@@ -1,0 +1,22 @@
+[package]
+name = "trueos-lily-pack-tool"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+lily-asset-pack = { package = "trueos-lily-pack", path = "../../../crates/trueos-lily-pack" }
+miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
+png = "0.18"
+serde_json = "1"
+zstd = "0.13"
+xz2 = "0.1"
+
+[[bin]]
+name = "lily-pack"
+path = "src/main.rs"
+
+[profile.release]
+lto = "thin"

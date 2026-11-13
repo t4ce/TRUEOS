@@ -1,0 +1,10 @@
+# This standalone packer runs on the host, independent of the kernel target.
+[build]
+target = "x86_64-unknown-linux-gnu"
+target-dir = "target"
+
+[unstable]
+build-std = []
+
+[target.x86_64-unknown-linux-gnu]
+linker = "cc"

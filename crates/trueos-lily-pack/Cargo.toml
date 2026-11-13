@@ -1,0 +1,10 @@
+[package]
+name = "trueos-lily-pack"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+miniz_oxide = { workspace = true }
+ruzstd = { version = "0.8.3", default-features = false }
+lzma-rust2 = { version = "0.21", default-features = false, features = ["xz"] }

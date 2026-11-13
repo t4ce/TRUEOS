@@ -1,4 +1,4 @@
-//! Embedded Lilly frame archive and its execution-context-owned catalog.
+//! Packed LillyDS frames and the unchanged Spirit playback catalog.
 
 extern crate alloc;
 
@@ -6,14 +6,13 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use spin::Mutex;
 
-const LILLY_ARCHIVE_LZ4: &[u8] = include_bytes!("../../tools/Lilly.tar.lz4");
+const LILLY_PACK: &[u8] = include_bytes!("../../tools/Lilly.lpak");
+const LILLY_SOURCES: &str = include_str!("../../tools/Lilly.sources");
 const LILLY_CATALOG: &str = include_str!("../../tools/Lilly.catalog");
 const LILLY_EXPECTED_ASSETS: usize = 70;
 const LILLY_FRAMES_PER_ASSET: usize = 7;
 const LILLY_EXPECTED_LOGICAL_FRAMES: usize = LILLY_EXPECTED_ASSETS * LILLY_FRAMES_PER_ASSET;
 const LILLY_IDENTITY_SOURCE_MAP: [u8; LILLY_FRAMES_PER_ASSET] = [1, 2, 3, 4, 5, 6, 7];
-const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1A\n";
-const PNG_IHDR: &[u8; 4] = b"IHDR";
 const GPU_PAGE_BYTES: usize = 4096;
 const LILLY_EXECUTION_GPU_BASE: u64 = 0x3000_0000;
 const LILLY_EXECUTION_GPU_LIMIT: u64 = 0x4000_0000;
@@ -125,23 +124,15 @@ struct LillyCatalogEntry {
 
 #[derive(Debug)]
 enum LillyLoadError {
-    Archive(crate::r::tar::Error),
-    ArchiveShape,
-    PngHeader,
-    PngDecode(i32),
+    Pack(trueos_lily_pack::Error),
+    PackShape,
     Catalog(&'static str),
     AddressOverflow,
     Resident(&'static str),
     ResidentWrite,
 }
 
-impl From<crate::r::tar::Error> for LillyLoadError {
-    fn from(value: crate::r::tar::Error) -> Self {
-        Self::Archive(value)
-    }
-}
-
-/// Spirit's cold first job. The archive, decoded PNGs, DMA allocation, and
+/// Spirit's cold first job. The pack, aligned RGBA8 frames, DMA allocation, and
 /// engine-neutral DMA storage are established before continuous frame work.
 /// The Spirit execution PPGTT maps the physical pages under its own VA when
 /// the VFX context starts; Render is not part of this cold path.
@@ -152,17 +143,17 @@ pub(super) fn prepare_resident_once() -> bool {
 
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: first-job start job=lilly-resident-assets source=embedded-tar-lz4 archive_bytes=0x{:X} decode=kernel-lz4+tar+png target=spirit-execution-ppgtt lifetime=runtime render_dependency=0\n",
-        LILLY_ARCHIVE_LZ4.len(),
+        "trueos-spirit: first-job start job=lilly-resident-assets source=embedded-lillyds-pack pack_bytes=0x{:X} decode=rust-xz+shared-tiles+palette-rgba8 placement=bottom-center-256x256 target=spirit-execution-ppgtt lifetime=runtime render_dependency=0\n",
+        LILLY_PACK.len(),
     );
     let assets = match load_resident_assets() {
         Ok(assets) => assets,
         Err(error) => {
             crate::log_error!(
                 target: "gfx";
-                "trueos-spirit: first-job failed job=lilly-resident-assets error={:?} archive_bytes=0x{:X} action=retain-existing-spirit-stream\n",
+                "trueos-spirit: first-job failed job=lilly-resident-assets error={:?} pack_bytes=0x{:X} action=retain-existing-spirit-stream\n",
                 error,
-                LILLY_ARCHIVE_LZ4.len(),
+                LILLY_PACK.len(),
             );
             return false;
         }
@@ -186,10 +177,13 @@ pub(super) fn prepare_resident_once() -> bool {
 /// owner. Both archive-relative and `Lilly/`-prefixed names are accepted.
 pub(crate) fn resident_frame(name: &str) -> Option<LillyResidentFrame> {
     let resident = LILLY_RESIDENT.lock();
-    resident.as_ref()?.frames.iter().find_map(|frame| {
-        let archive_relative = frame.name.strip_prefix("Lilly/").unwrap_or(&frame.name);
-        (frame.name == name || archive_relative == name).then_some(frame.surface)
-    })
+    let frames = &resident.as_ref()?.frames;
+    let relative = name.strip_prefix("Lilly/").unwrap_or(name);
+    if let Some(frame) = frames.iter().find(|frame| frame.name == relative) {
+        return Some(frame.surface);
+    }
+    let (directory, index) = split_frame_name(name)?;
+    find_source_frame(frames, directory, index).map(|frame| frame.surface)
 }
 
 /// Resolve a complete resident asset by semantic identity. This is the normal
@@ -231,20 +225,13 @@ pub(crate) fn resident_frame_count() -> usize {
 
 fn load_resident_assets() -> Result<LillyResidentAssets, LillyLoadError> {
     let catalog = parse_catalog()?;
-    let tar = crate::r::lz4::decompress_frame_cpu(LILLY_ARCHIVE_LZ4, 256 * 1024 * 1024)
-        .map_err(|_| LillyLoadError::ArchiveShape)?;
-    let mut entries = crate::r::tar::unpack(&tar, 4096, 16 * 1024 * 1024, 256 * 1024 * 1024)?;
-    entries.sort_unstable_by(|left, right| left.name.cmp(&right.name));
-    validate_archive_shape(entries.as_slice(), catalog.as_slice())?;
-
-    let mut storage_bytes = 0usize;
-    for entry in &entries {
-        let (width, height) = png_ihdr_dimensions(entry.bytes.as_slice())?;
-        validate_dimensions(width, height)?;
-        storage_bytes = storage_bytes
-            .checked_add(frame_storage_bytes(width, height)?)
-            .ok_or(LillyLoadError::AddressOverflow)?;
-    }
+    let pack = trueos_lily_pack::decode(LILLY_PACK).map_err(LillyLoadError::Pack)?;
+    validate_packed_sources(&pack, &catalog)?;
+    let storage_bytes = pack
+        .frames
+        .len()
+        .checked_mul(frame_storage_bytes(256, 256)?)
+        .ok_or(LillyLoadError::AddressOverflow)?;
 
     let storage_bytes_u64 =
         u64::try_from(storage_bytes).map_err(|_| LillyLoadError::AddressOverflow)?;
@@ -257,7 +244,7 @@ fn load_resident_assets() -> Result<LillyResidentAssets, LillyLoadError> {
     let allocation =
         crate::gpu::resident::ResidentDmaBuffer::allocate_zeroed(storage_bytes, GPU_PAGE_BYTES)
             .ok_or(LillyLoadError::Resident("spirit-resident-dma"))?;
-    let (frames, rgba_bytes) = populate_resident_frames(&allocation, entries, storage_bytes)?;
+    let (frames, rgba_bytes) = populate_resident_frames(&allocation, pack, storage_bytes)?;
     let semantic_assets = build_semantic_assets(frames.as_slice(), catalog.as_slice())?;
     allocation.flush();
     Ok(LillyResidentAssets {
@@ -270,21 +257,20 @@ fn load_resident_assets() -> Result<LillyResidentAssets, LillyLoadError> {
 
 fn populate_resident_frames(
     allocation: &crate::gpu::resident::ResidentDmaBuffer,
-    entries: Vec<crate::r::tar::Entry>,
+    pack: trueos_lily_pack::DecodedPack,
     expected_storage_bytes: usize,
 ) -> Result<(Vec<LillyFrameEntry>, usize), LillyLoadError> {
-    let mut frames = Vec::with_capacity(entries.len());
+    let mut frames = Vec::with_capacity(pack.frames.len());
     let mut offset = 0usize;
-    let mut rgba_bytes = 0usize;
-    for entry in entries {
-        let decoded = crate::graphics::png_codec::decode_png_rgba(entry.bytes.as_slice())
-            .map_err(|error| LillyLoadError::PngDecode(error.code()))?;
-        validate_dimensions(decoded.width, decoded.height)?;
-        let expected_rgba_bytes = rgba_bytes_for(decoded.width, decoded.height)?;
-        if decoded.rgba.len() != expected_rgba_bytes || !offset.is_multiple_of(GPU_PAGE_BYTES) {
-            return Err(LillyLoadError::ArchiveShape);
+    let frame_bytes = rgba_bytes_for(256, 256)?;
+    for (index, entry) in pack.frames.iter().enumerate() {
+        let rgba = pack
+            .frame_rgba8_bottom_center(index)
+            .map_err(LillyLoadError::Pack)?;
+        if rgba.len() != frame_bytes || !offset.is_multiple_of(GPU_PAGE_BYTES) {
+            return Err(LillyLoadError::PackShape);
         }
-        if !allocation.write(offset, decoded.rgba.as_slice()) {
+        if !allocation.write(offset, &rgba) {
             return Err(LillyLoadError::ResidentWrite);
         }
         let phys = allocation
@@ -295,30 +281,81 @@ fn populate_resident_frames(
             .checked_add(offset as u64)
             .ok_or(LillyLoadError::AddressOverflow)?;
         frames.push(LillyFrameEntry {
-            name: entry.name,
+            name: entry.path.clone(),
             surface: LillyResidentFrame {
                 phys,
                 gpu,
-                bytes: expected_rgba_bytes,
-                width: decoded.width,
-                height: decoded.height,
-                pitch_bytes: decoded
-                    .width
-                    .checked_mul(4)
-                    .ok_or(LillyLoadError::AddressOverflow)?,
+                bytes: frame_bytes,
+                width: 256,
+                height: 256,
+                pitch_bytes: 1024,
             },
         });
-        rgba_bytes = rgba_bytes
-            .checked_add(expected_rgba_bytes)
-            .ok_or(LillyLoadError::AddressOverflow)?;
         offset = offset
-            .checked_add(frame_storage_bytes(decoded.width, decoded.height)?)
+            .checked_add(frame_storage_bytes(256, 256)?)
             .ok_or(LillyLoadError::AddressOverflow)?;
     }
     if offset != expected_storage_bytes || offset != allocation.bytes() {
-        return Err(LillyLoadError::ArchiveShape);
+        return Err(LillyLoadError::PackShape);
     }
-    Ok((frames, rgba_bytes))
+    Ok((frames, offset))
+}
+
+fn replacement_directory(directory: &str) -> Option<&'static str> {
+    LILLY_SOURCES
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (legacy, packed) = line.split_once('|')?;
+            (legacy == directory).then_some(packed)
+        })
+        .next()
+}
+
+fn validate_packed_sources(
+    pack: &trueos_lily_pack::DecodedPack,
+    catalog: &[LillyCatalogEntry],
+) -> Result<(), LillyLoadError> {
+    let mut seen = Vec::new();
+    for line in LILLY_SOURCES
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+    {
+        let (legacy, packed) = line
+            .split_once('|')
+            .ok_or(LillyLoadError::Catalog("replacement-map-format"))?;
+        if packed.is_empty()
+            || packed.starts_with('/')
+            || packed
+                .split('/')
+                .any(|p| p.is_empty() || p == "." || p == "..")
+            || packed.contains('|')
+            || seen.contains(&legacy)
+            || !catalog.iter().any(|entry| entry.directory == legacy)
+        {
+            return Err(LillyLoadError::Catalog("replacement-map-identity"));
+        }
+        seen.push(legacy);
+    }
+    if seen.len() != catalog.len() {
+        return Err(LillyLoadError::Catalog("replacement-map-count"));
+    }
+    for entry in catalog {
+        let directory = replacement_directory(entry.directory)
+            .ok_or(LillyLoadError::Catalog("replacement-directory-missing"))?;
+        for index in 2..=8 {
+            let path = alloc::format!("{directory}/frame_{index:02}.png");
+            if !pack.frames.iter().any(|frame| frame.path == path) {
+                return Err(LillyLoadError::Catalog("replacement-frame-missing"));
+            }
+        }
+    }
+    // Extra frames remain resident, but are never added to the playback selector.
+    Ok(())
 }
 
 fn parse_catalog() -> Result<Vec<LillyCatalogEntry>, LillyLoadError> {
@@ -457,11 +494,9 @@ fn find_source_frame<'a>(
     directory: &str,
     source_index: u8,
 ) -> Option<&'a LillyFrameEntry> {
-    frames.iter().find(|frame| {
-        split_frame_name(frame.name.as_str()).is_some_and(|(frame_directory, frame_index)| {
-            frame_directory == directory && frame_index == source_index
-        })
-    })
+    let directory = replacement_directory(directory)?;
+    let path = alloc::format!("{directory}/frame_{:02}.png", source_index + 1);
+    frames.iter().find(|frame| frame.name == path)
 }
 
 fn build_semantic_assets(
@@ -495,50 +530,8 @@ fn build_semantic_assets(
     Ok(assets)
 }
 
-fn expected_archive_frame_count(catalog: &[LillyCatalogEntry]) -> usize {
-    catalog
-        .iter()
-        .map(|entry| {
-            let mut seen = [false; LILLY_FRAMES_PER_ASSET + 1];
-            let mut count = 0usize;
-            for source in entry.sources {
-                let slot = &mut seen[usize::from(source)];
-                if !*slot {
-                    *slot = true;
-                    count += 1;
-                }
-            }
-            count
-        })
-        .sum()
-}
-
-fn validate_archive_shape(
-    entries: &[crate::r::tar::Entry],
-    catalog: &[LillyCatalogEntry],
-) -> Result<(), LillyLoadError> {
-    if entries.len() != expected_archive_frame_count(catalog) {
-        return Err(LillyLoadError::ArchiveShape);
-    }
-    for catalog_entry in catalog {
-        for (position, source_index) in catalog_entry.sources.iter().enumerate() {
-            if catalog_entry.sources[..position].contains(source_index) {
-                continue;
-            }
-            if !entries.iter().any(|entry| {
-                split_frame_name(entry.name.as_str()).is_some_and(|(directory, frame_index)| {
-                    directory == catalog_entry.directory && frame_index == *source_index
-                })
-            }) {
-                return Err(LillyLoadError::Catalog("catalog-frame-missing"));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn split_frame_name(name: &str) -> Option<(&str, u8)> {
-    let relative = name.strip_prefix("Lilly/")?;
+    let relative = name.strip_prefix("Lilly/").unwrap_or(name);
     let (directory, file) = relative.rsplit_once('/')?;
     if !directory.ends_with("_frames") {
         return None;
@@ -552,37 +545,6 @@ fn split_frame_name(name: &str) -> Option<(&str, u8)> {
         return None;
     }
     Some((directory, index))
-}
-
-fn png_ihdr_dimensions(bytes: &[u8]) -> Result<(u32, u32), LillyLoadError> {
-    if bytes.get(..8) != Some(PNG_SIGNATURE)
-        || bytes.get(12..16) != Some(PNG_IHDR)
-        || bytes.get(8..12) != Some(&13u32.to_be_bytes())
-    {
-        return Err(LillyLoadError::PngHeader);
-    }
-    let width = u32::from_be_bytes(
-        bytes
-            .get(16..20)
-            .ok_or(LillyLoadError::PngHeader)?
-            .try_into()
-            .map_err(|_| LillyLoadError::PngHeader)?,
-    );
-    let height = u32::from_be_bytes(
-        bytes
-            .get(20..24)
-            .ok_or(LillyLoadError::PngHeader)?
-            .try_into()
-            .map_err(|_| LillyLoadError::PngHeader)?,
-    );
-    Ok((width, height))
-}
-
-fn validate_dimensions(width: u32, height: u32) -> Result<(), LillyLoadError> {
-    match (width, height) {
-        (128, 128) => Ok(()),
-        _ => Err(LillyLoadError::ArchiveShape),
-    }
 }
 
 fn rgba_bytes_for(width: u32, height: u32) -> Result<usize, LillyLoadError> {
