@@ -38,7 +38,7 @@ storage, retry policy, and account authorization remain runtime responsibilities
 
 Repository-owned SHA-2 dependencies in TRUEOS, Buildins, and Blueprints stay
 pinned to `=0.10.9`. Upgrading only our hashing calls to SHA-2 0.11 leaves the
-existing crypto consumers on 0.10 and adds another digest dependency family;
+existing crypto consumers on 0.10 and keeps both digest dependency families;
 that isolated upgrade does not meet our dependency-consolidation goal.
 
 Before lifting the pin, coordinate the migration of Sunset and
