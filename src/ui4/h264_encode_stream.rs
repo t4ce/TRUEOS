@@ -1,21 +1,26 @@
-//! Resident UI4 scanout-to-Intel-H.264-to-UDP service.
+//! Resident UI4 scanout-to-Intel-H.264-to-authenticated-SSH service.
 //!
-//! After a boot-time hardware proof, each subscriber receives a fresh,
-//! deadline-paced ten-second session. MirrorMapDPEngine reflects Pipe A's six
+//! After a boot-time hardware proof, the authenticated viewer receives bounded,
+//! deadline-paced TME1 windows beginning with fresh IDRs. Capture backing and
+//! ownership remain resident across successful windows for the same viewer.
+//! MirrorMapDPEngine reflects Pipe A's six
 //! display slots through Pipe C into WD0's packed-XYUV8888 surface; Gen12 VDEnc
 //! consumes that surface directly and hands AVC to the bounded TME1 transport.
-//! The same serialized capture/encoder also serves Shell2 `film` while no RDP
+//! The same serialized capture/encoder also serves Shell3 `film` while no RDP
 //! viewer owns it. No CPU frame copy, RCS conversion, or software codec participates.
 
 
 #[path = "screenfilm.rs"]
 pub(super) mod film;
+#[path = "h264_capture_timing.rs"]
+mod capture_timing;
 
 use alloc::vec::Vec;
+use core::cell::Cell;
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use spin::Mutex;
-use trueos_time::{Duration, Timer};
+use trueos_time::{Duration, Instant, Timer};
 
 const PROBE_START_DELAY_MS: u64 = 15_000;
 const VCS0_PROBE_RETRY_MS: u64 = 50;
@@ -31,6 +36,10 @@ const CADENCE_TOLERANCE_PERCENT: u64 = 5;
 // VCS0 is still reading.
 const PREPARE_SLOT_COUNT: usize = 1;
 const WD_CAPTURE_TIMEOUT_MS: u64 = 100;
+// Filling can also await an explicitly requested BCS screenshot. An expired
+// drain leaves all capture ownership/backing quarantined rather than freeing
+// a surface whose reader has not proved retirement.
+const PREPARE_DRAIN_TIMEOUT_MS: u64 = 2_000;
 // A foreground decode stream owns a session-level VCS0 reservation. Keep the
 // boot proof retryable until that stream drains instead of permanently parking
 // the encoder after an arbitrary startup window.
@@ -42,6 +51,8 @@ static SOURCE_BYTES: AtomicUsize = AtomicUsize::new(0);
 static ENCODED_BYTES: AtomicUsize = AtomicUsize::new(0);
 static PREPARE_WORKER_SLOT: AtomicU32 = AtomicU32::new(u32::MAX);
 static PREPARE_WAKE: embassy_sync::signal::Signal<crate::wait::EmbassySpinRawMutex, ()> =
+    embassy_sync::signal::Signal::new();
+static PREPARE_DRAIN_WAKE: embassy_sync::signal::Signal<crate::wait::EmbassySpinRawMutex, ()> =
     embassy_sync::signal::Signal::new();
 static PREPARE_PIPELINE: Mutex<PreparePipeline> = Mutex::new(PreparePipeline::new());
 
@@ -63,6 +74,15 @@ struct LiveEncodeStats {
     source_height: u32,
     capture_us: u64,
     capture_max_us: u64,
+    first_capture_us: u64,
+    steady_capture_max_us: u64,
+    prepared_samples: usize,
+    prepared_age_us: u64,
+    prepared_age_max_us: u64,
+    capture_to_consume_us: u64,
+    capture_to_consume_max_us: u64,
+    wd_complete_to_ready_us: u64,
+    wd_complete_to_ready_max_us: u64,
     convert_wall_us: u64,
     convert_wall_max_us: u64,
     convert_gpu_us: u64,
@@ -75,6 +95,26 @@ struct LiveEncodeStats {
     slot3_scanout_pixels: usize,
     spirit_overlay_frames: usize,
     spirit_overlay_pixels: usize,
+}
+
+impl LiveEncodeStats {
+    fn record_prepared_timing(&mut self, prepared: &PreparedScanout) {
+        if !prepared.valid {
+            return;
+        }
+        let prepared_age_us = prepared.consume_begin_ns.saturating_sub(prepared.ready_ns) / 1_000;
+        let capture_to_consume_us =
+            prepared.consume_begin_ns.saturating_sub(prepared.capture_begin_ns) / 1_000;
+        let wd_complete_to_ready_us =
+            prepared.ready_ns.saturating_sub(prepared.wd_complete_ns) / 1_000;
+        self.prepared_samples = self.prepared_samples.saturating_add(1);
+        self.prepared_age_us = self.prepared_age_us.saturating_add(prepared_age_us);
+        self.prepared_age_max_us = self.prepared_age_max_us.max(prepared_age_us);
+        self.capture_to_consume_us = self.capture_to_consume_us.saturating_add(capture_to_consume_us);
+        self.capture_to_consume_max_us = self.capture_to_consume_max_us.max(capture_to_consume_us);
+        self.wd_complete_to_ready_us = self.wd_complete_to_ready_us.saturating_add(wd_complete_to_ready_us);
+        self.wd_complete_to_ready_max_us = self.wd_complete_to_ready_max_us.max(wd_complete_to_ready_us);
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -94,6 +134,10 @@ struct PrepareSlot {
     source_width: u32,
     source_height: u32,
     capture_us: u64,
+    capture_begin_ns: u64,
+    wd_complete_ns: u64,
+    ready_ns: u64,
+    consume_begin_ns: u64,
     convert_wall_us: u64,
     convert_gpu_us: u64,
     slot3_scanout_pixels: usize,
@@ -112,6 +156,10 @@ impl PrepareSlot {
             source_width: 0,
             source_height: 0,
             capture_us: 0,
+            capture_begin_ns: 0,
+            wd_complete_ns: 0,
+            ready_ns: 0,
+            consume_begin_ns: 0,
             convert_wall_us: 0,
             convert_gpu_us: 0,
             slot3_scanout_pixels: 0,
@@ -125,31 +173,50 @@ impl PrepareSlot {
         self.source_width = 0;
         self.source_height = 0;
         self.capture_us = 0;
+        self.capture_begin_ns = 0;
+        self.wd_complete_ns = 0;
+        self.ready_ns = 0;
+        self.consume_begin_ns = 0;
         self.convert_wall_us = 0;
         self.convert_gpu_us = 0;
         self.slot3_scanout_pixels = 0;
         self.spirit_overlay_pixels = 0;
         self.valid = false;
+        self.xyuv8888 = None;
     }
 }
 
 struct PreparePipeline {
     active: bool,
+    capture_claimed: bool,
+    quarantined: bool,
     generation: u64,
     session_id: u32,
     access_unit_count: usize,
     next_sequence: usize,
+    next_capture_deadline: Option<CaptureDeadline>,
+    capture_timing: capture_timing::CaptureTiming,
     slots: [PrepareSlot; PREPARE_SLOT_COUNT],
+}
+
+#[derive(Clone, Copy)]
+struct CaptureDeadline {
+    sequence: u32,
+    encode_ticks: u64,
 }
 
 impl PreparePipeline {
     const fn new() -> Self {
         Self {
             active: false,
+            capture_claimed: false,
+            quarantined: false,
             generation: 0,
             session_id: 0,
             access_unit_count: 0,
             next_sequence: 0,
+            next_capture_deadline: None,
+            capture_timing: capture_timing::CaptureTiming::new(),
             slots: [PrepareSlot::new()],
         }
     }
@@ -170,6 +237,10 @@ struct PreparedScanout {
     source_width: u32,
     source_height: u32,
     capture_us: u64,
+    capture_begin_ns: u64,
+    wd_complete_ns: u64,
+    ready_ns: u64,
+    consume_begin_ns: u64,
     convert_wall_us: u64,
     convert_gpu_us: u64,
     slot3_scanout_pixels: usize,
@@ -226,7 +297,7 @@ pub(crate) async fn ui4_h264_encode_prepare_task() {
         .unwrap_or("unknown");
     PREPARE_WORKER_SLOT.store(worker_slot, Ordering::Release);
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: preparation service online carrier=bsp-cooperative worker_slot={} worker_kind={} pipeline=pipe-c-wd0-xyuv8888-to-vdenc cpu_pixel_math=0 gpu_shader=0 source_scope=mirror-map-slots0-5 dma_buffers=wd-xyuv8888-resident producer_buffering=serialized slots={} encode_size={}x{} mapping=one-to-one synchronization=wd-frame-complete-before-vdbox\n",
+        "intel/media-encode: preparation service online carrier=bsp-cooperative worker_slot={} worker_kind={} pipeline=pipe-c-wd0-xyuv8888-to-vdenc cpu_pixel_math=0 gpu_shader=0 source_scope=mirror-map-slots0-5 dma_buffers=wd-xyuv8888-resident producer_buffering=serialized slots={} encode_size={}x{} mapping=one-to-one synchronization=wd-frame-complete-before-vdbox capture_schedule=encode-deadline-minus-recent8-peak-and-2ms first_frame=immediate\n",
         worker_slot,
         worker_kind,
         PREPARE_SLOT_COUNT,
@@ -236,26 +307,46 @@ pub(crate) async fn ui4_h264_encode_prepare_task() {
 
     loop {
         let Some(job) = take_prepare_job() else {
-            PREPARE_WAKE.wait().await;
+            wait_for_prepare_work(preparation_wake_deadline()).await;
             continue;
         };
         prepare_scanout(job).await;
     }
 }
 
+async fn wait_for_prepare_work(deadline: Option<Instant>) {
+    if let Some(deadline) = deadline {
+        let mut timer = core::pin::pin!(Timer::at(deadline));
+        let mut changed = core::pin::pin!(PREPARE_WAKE.wait());
+        core::future::poll_fn(|cx| {
+            use core::future::Future;
+            if changed.as_mut().poll(cx).is_ready() {
+                return core::task::Poll::Ready(());
+            }
+            timer.as_mut().poll(cx)
+        }).await;
+    } else {
+        PREPARE_WAKE.wait().await;
+    }
+}
+
 fn take_prepare_job() -> Option<PrepareJob> {
     let mut pipeline = PREPARE_PIPELINE.lock();
-    if !pipeline.active || pipeline.next_sequence >= pipeline.access_unit_count {
+    if !pipeline.active || pipeline.quarantined || pipeline.next_sequence >= pipeline.access_unit_count {
         return None;
     }
     let slot_index = pipeline
         .slots
         .iter()
         .position(|slot| slot.state == PrepareSlotState::Empty)?;
+    if capture_not_before(&pipeline).is_some_and(|deadline| Instant::now().as_ticks() < deadline) {
+        return None;
+    }
     let generation = pipeline.generation;
     let session_id = pipeline.session_id;
     let sequence = pipeline.next_sequence as u32;
     pipeline.next_sequence = pipeline.next_sequence.saturating_add(1);
+    pipeline.next_capture_deadline = None;
     let slot = &mut pipeline.slots[slot_index];
     slot.state = PrepareSlotState::Filling;
     slot.generation = generation;
@@ -270,26 +361,70 @@ fn take_prepare_job() -> Option<PrepareJob> {
     })
 }
 
+fn capture_not_before(pipeline: &PreparePipeline) -> Option<u64> {
+    let deadline = pipeline.next_capture_deadline?;
+    if deadline.sequence as usize != pipeline.next_sequence {
+        return None;
+    }
+    let lead = pipeline.capture_timing.lead_ticks(
+        trueos_time::TICK_HZ,
+        crate::allcaps::media_encode::REALTIME_HZ,
+    );
+    Some(deadline.encode_ticks.saturating_sub(lead))
+}
+
+/// Return the timer even when it just became due. A due deadline must cause
+/// another predicate check rather than sleeping for an unrelated signal.
+fn preparation_wake_deadline() -> Option<Instant> {
+    let pipeline = PREPARE_PIPELINE.lock();
+    if !pipeline.active || pipeline.quarantined
+        || pipeline.next_sequence >= pipeline.access_unit_count
+        || !pipeline.slots.iter().any(|slot| slot.state == PrepareSlotState::Empty)
+    {
+        return None;
+    }
+    capture_not_before(&pipeline).map(Instant::from_ticks)
+}
+
+/// The producer publishes this before encoding the current frame can release
+/// the single target. Deadlines belong to one exact session/next sequence.
+fn schedule_next_capture(session_id: u32, sequence: u32, encode_deadline: Instant) -> bool {
+    let mut pipeline = PREPARE_PIPELINE.lock();
+    if !pipeline.active || pipeline.quarantined || pipeline.session_id != session_id
+        || sequence as usize != pipeline.next_sequence
+        || sequence as usize >= pipeline.access_unit_count
+    {
+        return false;
+    }
+    pipeline.next_capture_deadline = Some(CaptureDeadline {
+        sequence,
+        encode_ticks: encode_deadline.as_ticks(),
+    });
+    drop(pipeline);
+    PREPARE_WAKE.signal(());
+    true
+}
+
 async fn prepare_scanout(job: PrepareJob) {
     // A shell `shot` that arrived before the subscriber owns WD for only one
     // frame. Do not race its trigger or backing teardown; resume the stream as
     // soon as that bounded manual capture releases the display path.
-    while !crate::intel::media::wd_xyuv8888::try_claim_stream_capture() {
-        {
-            let mut pipeline = PREPARE_PIPELINE.lock();
-            if !pipeline.active || pipeline.generation != job.generation {
-                let slot = &mut pipeline.slots[job.slot_index];
-                if slot.generation == job.generation && slot.state == PrepareSlotState::Filling {
-                    slot.state = PrepareSlotState::Empty;
-                }
+    loop {
+        match claim_prepare_capture(&job) {
+            Some(true) => break,
+            Some(false) => Timer::after(Duration::from_millis(1)).await,
+            None => {
+                PREPARE_DRAIN_WAKE.signal(());
+                super::h264_encode_udp::wake_producer();
                 return;
             }
         }
-        Timer::after(Duration::from_millis(1)).await;
     }
     let mut source_width = 0;
     let mut source_height = 0;
     let capture_started_ns = crate::chronos::monotonic_nanos();
+    let mut capture_begin_ns = capture_started_ns;
+    let mut wd_complete_ns = 0;
     let mut xyuv8888 = None;
     let mut valid = false;
     let mut reset_wd = false;
@@ -301,7 +436,11 @@ async fn prepare_scanout(job: PrepareJob) {
             job.sequence,
             error,
         );
-    } else if let Err(error) = crate::intel::begin_ui4_wd_xyuv8888_capture() {
+    } else if let Err(error) = {
+        // Source age begins at the trigger, excluding one-time target setup.
+        capture_begin_ns = crate::chronos::monotonic_nanos();
+        crate::intel::begin_ui4_wd_xyuv8888_capture()
+    } {
         crate::log_error!(target: "intel/media-encode";
             "intel/media-encode: live frame rejected session={} sequence={} stage=wd-trigger error={:?} software_fallback=0\n",
             job.session_id,
@@ -318,6 +457,7 @@ async fn prepare_scanout(job: PrepareJob) {
                 reset_wd = true;
             }
             crate::intel::WdCapturePoll::Complete(frame) => {
+                wd_complete_ns = crate::chronos::monotonic_nanos();
                 source_width = frame.width;
                 source_height = frame.height;
                 xyuv8888 = unsafe {
@@ -371,11 +511,13 @@ async fn prepare_scanout(job: PrepareJob) {
         );
     }
 
+    let ready_ns = crate::chronos::monotonic_nanos();
     let mut pipeline = PREPARE_PIPELINE.lock();
     let session_current = pipeline.active
         && pipeline.generation == job.generation
         && pipeline.session_id == job.session_id;
     let slot = &mut pipeline.slots[job.slot_index];
+    let mut published = false;
     if session_current
         && slot.state == PrepareSlotState::Filling
         && slot.generation == job.generation
@@ -384,6 +526,9 @@ async fn prepare_scanout(job: PrepareJob) {
         slot.source_width = source_width;
         slot.source_height = source_height;
         slot.capture_us = capture_us;
+        slot.capture_begin_ns = capture_begin_ns;
+        slot.wd_complete_ns = wd_complete_ns;
+        slot.ready_ns = ready_ns;
         slot.convert_wall_us = 0;
         slot.convert_gpu_us = 0;
         slot.slot3_scanout_pixels = 0;
@@ -391,24 +536,68 @@ async fn prepare_scanout(job: PrepareJob) {
         slot.valid = valid;
         slot.xyuv8888 = xyuv8888;
         slot.state = PrepareSlotState::Ready;
+        published = true;
     } else if slot.state == PrepareSlotState::Filling && slot.generation == job.generation {
         // Session shutdown waits for the in-flight WD operation to leave
         // Filling before disabling or freeing the capture target.
         slot.state = PrepareSlotState::Empty;
         slot.reset_metadata();
     }
+    if published && valid {
+        pipeline.capture_timing.observe(ready_ns.saturating_sub(capture_begin_ns));
+    }
     drop(pipeline);
+    PREPARE_DRAIN_WAKE.signal(());
     super::h264_encode_udp::wake_producer();
 }
 
-fn begin_preparation_session(session_id: u32, access_unit_count: usize) {
-    let _ = crate::intel::media::wd_xyuv8888::try_claim_stream_capture();
+/// Check cancellation and publish the stream claim under the same pipeline
+/// lock. Shutdown must never stop a manual capture which this job did not own.
+fn claim_prepare_capture(job: &PrepareJob) -> Option<bool> {
     let mut pipeline = PREPARE_PIPELINE.lock();
+    let current = pipeline.active
+        && !pipeline.quarantined
+        && pipeline.generation == job.generation
+        && pipeline.session_id == job.session_id;
+    let slot = &mut pipeline.slots[job.slot_index];
+    if !current {
+        if slot.generation == job.generation && slot.state == PrepareSlotState::Filling {
+            slot.state = PrepareSlotState::Empty;
+            slot.reset_metadata();
+        }
+        return None;
+    }
+    if slot.generation != job.generation || slot.state != PrepareSlotState::Filling {
+        return None;
+    }
+    if pipeline.capture_claimed
+        || crate::intel::media::wd_xyuv8888::try_claim_stream_capture()
+    {
+        pipeline.capture_claimed = true;
+        Some(true)
+    } else {
+        Some(false)
+    }
+}
+
+fn begin_preparation_session(session_id: u32, access_unit_count: usize) -> bool {
+    let mut pipeline = PREPARE_PIPELINE.lock();
+    if pipeline.active || pipeline.quarantined || access_unit_count == 0
+        || pipeline.slots.iter().any(|slot| slot.state != PrepareSlotState::Empty)
+    {
+        return false;
+    }
+    // A manual screenshot may briefly own WD. The worker retries acquisition;
+    // capture_claimed remains false until it can safely own teardown as well.
+    if !pipeline.capture_claimed {
+        pipeline.capture_claimed = crate::intel::media::wd_xyuv8888::try_claim_stream_capture();
+    }
     pipeline.generation = pipeline.generation.wrapping_add(1);
     pipeline.active = true;
     pipeline.session_id = session_id;
     pipeline.access_unit_count = access_unit_count;
     pipeline.next_sequence = 0;
+    pipeline.next_capture_deadline = None;
     let generation = pipeline.generation;
     for slot in &mut pipeline.slots {
         slot.state = PrepareSlotState::Empty;
@@ -419,16 +608,36 @@ fn begin_preparation_session(session_id: u32, access_unit_count: usize) {
     }
     drop(pipeline);
     PREPARE_WAKE.signal(());
+    true
 }
 
 async fn end_preparation_session(session_id: u32) -> bool {
+    finish_preparation_session(session_id, false).await
+}
+
+async fn release_retained_preparation_capture() -> bool {
+    let session_id = {
+        let pipeline = PREPARE_PIPELINE.lock();
+        if pipeline.active || pipeline.quarantined {
+            return false;
+        }
+        pipeline.session_id
+    };
+    end_preparation_session(session_id).await
+}
+
+async fn finish_preparation_session(session_id: u32, retain_target: bool) -> bool {
     {
         let mut pipeline = PREPARE_PIPELINE.lock();
-        if pipeline.session_id != session_id {
+        if pipeline.session_id != session_id || pipeline.quarantined {
             return false;
         }
         pipeline.active = false;
     }
+    // A job awaiting its capture timer has not entered Filling yet. Wake it
+    // to recheck cancellation before taking the target or triggering WD.
+    PREPARE_WAKE.signal(());
+    let mut watchdog = core::pin::pin!(Timer::after(Duration::from_millis(PREPARE_DRAIN_TIMEOUT_MS)));
     loop {
         let (filling, retained) = {
             let pipeline = PREPARE_PIPELINE.lock();
@@ -449,17 +658,62 @@ async fn end_preparation_session(session_id: u32) -> bool {
             // An ambiguous VDBOX submission may still read the WD target.
             // Retain the target and capture ownership; no new shot or stream
             // can overwrite it before a real hardware reset.
+            PREPARE_PIPELINE.lock().quarantined = true;
             return false;
         }
         if !filling {
             break;
         }
-        Timer::after(Duration::from_millis(1)).await;
+        let mut changed = core::pin::pin!(PREPARE_DRAIN_WAKE.wait());
+        let drained = core::future::poll_fn(|cx| {
+            use core::future::Future;
+            if changed.as_mut().poll(cx).is_ready() {
+                return core::task::Poll::Ready(true);
+            }
+            watchdog.as_mut().poll(cx).map(|()| false)
+        }).await;
+        if !drained {
+            // A reader/capture may still be live. Keep its slot, claim, target
+            // and authenticated lease; the caller parks instead of reusing it.
+            let mut pipeline = PREPARE_PIPELINE.lock();
+            if !pipeline.slots.iter().any(|slot| slot.state == PrepareSlotState::Filling) {
+                // Completion can race the watchdog's final wake.
+                continue;
+            }
+            pipeline.quarantined = true;
+            drop(pipeline);
+            crate::log_error!(target: "gfx";
+                "intel/media-encode: preparation drain timeout session={} timeout_ms={} action=retain-target-and-claim\n",
+                session_id, PREPARE_DRAIN_TIMEOUT_MS);
+            return false;
+        }
+    }
+    let capture_claimed = {
+        let mut pipeline = PREPARE_PIPELINE.lock();
+        for slot in &mut pipeline.slots {
+            slot.state = PrepareSlotState::Empty;
+            slot.reset_metadata();
+        }
+        pipeline.next_capture_deadline = None;
+        pipeline.capture_claimed
+    };
+    if retain_target && capture_claimed {
+        return true;
+    }
+    if !capture_claimed {
+        PREPARE_PIPELINE.lock().capture_timing = capture_timing::CaptureTiming::new();
+        return true;
     }
     if crate::intel::stop_ui4_wd_xyuv8888_capture().is_err() {
+        PREPARE_PIPELINE.lock().quarantined = true;
         return false;
     }
     crate::intel::media::wd_xyuv8888::release_stream_capture();
+    {
+        let mut pipeline = PREPARE_PIPELINE.lock();
+        pipeline.capture_claimed = false;
+        pipeline.capture_timing = capture_timing::CaptureTiming::new();
+    }
     true
 }
 
@@ -479,6 +733,7 @@ fn take_prepared_scanout(session_id: u32, sequence: u32) -> Option<PreparedScano
             && slot.sequence == sequence
     })?;
     let slot = &mut pipeline.slots[slot_index];
+    slot.consume_begin_ns = crate::chronos::monotonic_nanos();
     slot.state = PrepareSlotState::Consuming;
     Some(PreparedScanout {
         slot_index,
@@ -488,6 +743,10 @@ fn take_prepared_scanout(session_id: u32, sequence: u32) -> Option<PreparedScano
         source_width: slot.source_width,
         source_height: slot.source_height,
         capture_us: slot.capture_us,
+        capture_begin_ns: slot.capture_begin_ns,
+        wd_complete_ns: slot.wd_complete_ns,
+        ready_ns: slot.ready_ns,
+        consume_begin_ns: slot.consume_begin_ns,
         convert_wall_us: slot.convert_wall_us,
         convert_gpu_us: slot.convert_gpu_us,
         slot3_scanout_pixels: slot.slot3_scanout_pixels,
@@ -513,6 +772,7 @@ fn release_prepared_scanout(prepared: &mut PreparedScanout) {
         slot.reset_metadata();
     }
     drop(pipeline);
+    PREPARE_DRAIN_WAKE.signal(());
     PREPARE_WAKE.signal(());
 }
 
@@ -837,27 +1097,62 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
     let mut stream_session_id = timestamp
         .map(|timestamp| timestamp as u32)
         .unwrap_or_else(|| (crate::time::uptime_seconds() as u32) ^ (vcs0_probe.serial as u32));
+    // This producer owns both the capture lifetime and the authenticated view
+    // lease. Keep them together across successful bounded transport windows.
+    let mut viewer: Option<(u64, film::RdpViewLease)> = None;
     loop {
+        if viewer.as_ref().is_some_and(|(owner, _)| !super::h264_encode_udp::subscriber_is(*owner)) {
+            if !release_retained_preparation_capture().await {
+                STATE.store(H264EncodeStreamState::Failed as u8, Ordering::Release);
+                crate::log_error!(target: "gfx";
+                    "intel/media-encode: retained capture cleanup failed reason=subscriber-changed action=park-with-view-lease\n");
+                park().await;
+            }
+            // Hardware retirement precedes releasing admission to film or a
+            // different authenticated viewer, including the rollover gap.
+            drop(viewer.take());
+        }
+        if viewer.is_none() {
+            if !release_retained_preparation_capture().await {
+                STATE.store(H264EncodeStreamState::Failed as u8, Ordering::Release);
+                park().await;
+            }
+            film::run_pending().await;
+            let Some(subscriber) = super::h264_encode_udp::current_subscriber() else {
+                super::h264_encode_udp::wait_producer_work().await;
+                continue;
+            };
+            let Some(lease) = film::claim_rdp_view() else {
+                super::h264_encode_udp::wait_producer_work().await;
+                continue;
+            };
+            if !super::h264_encode_udp::subscriber_is(subscriber) {
+                drop(lease);
+                continue;
+            }
+            viewer = Some((subscriber, lease));
+        }
+        let subscriber = viewer.as_ref().unwrap().0;
         STATE.store(H264EncodeStreamState::Streaming as u8, Ordering::Release);
         let mut stats = LiveEncodeStats::default();
+        let preparation_started = Cell::new(false);
         let access_unit_count = crate::allcaps::media_encode::VALIDATION_SESSION_ACCESS_UNITS;
         let udp_report = super::h264_encode_udp::stream_generated_annex_b(
             stream_session_id,
+            subscriber,
             access_unit_count,
             crate::allcaps::media_encode::REALTIME_HZ,
-            || begin_preparation_session(stream_session_id, access_unit_count),
+            || {
+                let started = super::h264_encode_udp::subscriber_is(subscriber)
+                    && begin_preparation_session(stream_session_id, access_unit_count);
+                preparation_started.set(started);
+                started
+            },
+            |sequence, deadline| schedule_next_capture(stream_session_id, sequence, deadline),
             |sequence| prepared_scanout_ready(stream_session_id, sequence),
             async |sequence| encode_prepared_scanout(stream_session_id, sequence, &mut stats).await,
         )
         .await;
-        if !end_preparation_session(stream_session_id).await {
-            STATE.store(H264EncodeStreamState::Failed as u8, Ordering::Release);
-            crate::log_error!(target: "intel/media-encode";
-                "intel/media-encode: capture retained session={} reason=hardware-retirement-unproven action=park-stream wd_target_reusable=0 ui4_wait=none\n",
-                stream_session_id,
-            );
-            park().await;
-        }
         let expected_units = crate::allcaps::media_encode::VALIDATION_SESSION_ACCESS_UNITS;
         let interval_millifps = if udp_report.sent_access_units > 1 && udp_report.elapsed_us != 0 {
             (udp_report.sent_access_units.saturating_sub(1) as u64).saturating_mul(1_000_000_000)
@@ -874,6 +1169,36 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             && udp_report.dropped_access_units == 0
             && udp_report.adapter_send_errors == 0
             && stats.frames == expected_units;
+        let retain_target = delivered && super::h264_encode_udp::subscriber_is(subscriber);
+        let retired = if preparation_started.get() {
+            finish_preparation_session(stream_session_id, retain_target).await
+        } else {
+            // Disconnect may cancel admission before the begin callback runs.
+            // A target retained from the preceding window still belongs to us.
+            release_retained_preparation_capture().await
+        };
+        if !retired {
+            STATE.store(H264EncodeStreamState::Failed as u8, Ordering::Release);
+            crate::log_error!(target: "gfx";
+                "intel/media-encode: capture retained session={} reason=hardware-retirement-unproven action=park-stream wd_target_reusable=0 view_lease=retained ui4_wait=none\n",
+                stream_session_id,
+            );
+            park().await;
+        }
+        if !retain_target {
+            drop(viewer.take());
+        }
+        crate::log_info!(target: "gfx";
+            "intel/media-encode: capture-lifecycle session={} subscriber={} frames={} target_retained={} prepare_slots={} prepared_samples={} prepared_age_avg_us={} prepared_age_max_us={} capture_to_consume_avg_us={} capture_to_consume_max_us={} wd_complete_to_ready_avg_us={} wd_complete_to_ready_max_us={} capture_wall_avg_us={} capture_wall_max_us={} first_capture_wall_us={} steady_capture_wall_avg_us={} steady_capture_wall_max_us={} encode_avg_us={} encode_max_us={} target_hz={} late_units={} max_late_us={} capture_schedule=encode-deadline-minus-recent8-peak-and-2ms timing_boundary=wd-trigger+wd-complete+prepared-ready+consume-before-media-admission clock_resolution_us=1000\n",
+            stream_session_id, subscriber, stats.frames, retain_target as u8, PREPARE_SLOT_COUNT,
+            stats.prepared_samples, average_u64(stats.prepared_age_us, stats.prepared_samples),
+            stats.prepared_age_max_us, average_u64(stats.capture_to_consume_us, stats.prepared_samples),
+            stats.capture_to_consume_max_us, average_u64(stats.wd_complete_to_ready_us, stats.prepared_samples),
+            stats.wd_complete_to_ready_max_us, average_u64(stats.capture_us, stats.frames), stats.capture_max_us,
+            stats.first_capture_us, average_u64(stats.capture_us.saturating_sub(stats.first_capture_us), stats.frames.saturating_sub(1)), stats.steady_capture_max_us,
+            average_u64(stats.encode_us, stats.frames), stats.encode_max_us,
+            crate::allcaps::media_encode::REALTIME_HZ, udp_report.late_access_units, udp_report.max_late_us,
+        );
         let cadence_target_met = udp_report.late_access_units == 0
             && interval_millifps >= target_millifps.saturating_sub(cadence_tolerance)
             && interval_millifps <= target_millifps.saturating_add(cadence_tolerance);
@@ -975,6 +1300,7 @@ async fn encode_prepared_scanout(
     stats: &mut LiveEncodeStats,
 ) -> Option<Vec<u8>> {
     let mut prepared = take_prepared_scanout(session_id, sequence)?;
+    stats.record_prepared_timing(&prepared);
     if !prepared.valid {
         release_prepared_scanout(&mut prepared);
         return None;
@@ -997,9 +1323,12 @@ async fn encode_prepared_scanout(
     if encode.state == crate::intel::media::avc_encode_probe::AvcEncodeProbeState::Quarantined {
         let mut pipeline = PREPARE_PIPELINE.lock();
         pipeline.active = false;
+        pipeline.quarantined = true;
         let slot = &mut pipeline.slots[prepared.slot_index];
         slot.xyuv8888 = prepared.xyuv8888.take();
         slot.state = PrepareSlotState::Quarantined;
+        drop(pipeline);
+        PREPARE_DRAIN_WAKE.signal(());
     } else {
         release_prepared_scanout(&mut prepared);
     }
@@ -1071,6 +1400,11 @@ async fn encode_prepared_scanout(
         return None;
     };
 
+    if stats.frames == 0 {
+        stats.first_capture_us = prepared.capture_us;
+    } else {
+        stats.steady_capture_max_us = stats.steady_capture_max_us.max(prepared.capture_us);
+    }
     stats.frames = stats.frames.saturating_add(1);
     if encode.idr_picture {
         stats.idr_frames = stats.idr_frames.saturating_add(1);

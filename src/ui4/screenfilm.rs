@@ -215,6 +215,7 @@ async fn run_recording(request: FilmRequest) {
     let mut stats = super::LiveEncodeStats::default();
     let mut reason = "duration complete";
     let mut started_capture = false;
+    let mut preparation_rejected = false;
     let mut started = crate::chronos::monotonic_nanos();
     let mut deadline = started + u64::from(request.minutes) * 60_000_000_000;
     let mut next_progress = started + PROGRESS_NS;
@@ -230,8 +231,10 @@ async fn run_recording(request: FilmRequest) {
         reason = "stopped before first frame";
     } else if !matches!(fs::dir_create_all_async(request.disk, DIRECTORY).await, Ok(true)) {
         reason = "cannot create screenfilms directory";
+    } else if !super::begin_preparation_session(request.session, usize::MAX) {
+        preparation_rejected = true;
+        reason = "capture preparation could not acquire a retired pipeline";
     } else {
-        super::begin_preparation_session(request.session, usize::MAX);
         started_capture = true;
         let mut ready = true;
         if let Some(capture) = &request.capture {
@@ -302,7 +305,11 @@ async fn run_recording(request: FilmRequest) {
     }
 
     if let Some(capture) = &request.capture {capture.stop();}
-    let retired = if started_capture {
+    let retired = if preparation_rejected {
+        // A rejected start may reflect a retained hardware consumer. Preserve
+        // its capture claim and quarantine admission rather than releasing it.
+        false
+    } else if started_capture {
         super::end_preparation_session(request.session).await
     } else {
         crate::intel::media::wd_xyuv8888::release_stream_capture();

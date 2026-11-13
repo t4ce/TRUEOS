@@ -23,15 +23,31 @@ pub(crate) fn rdp_media_subscribe(session: u64) -> bool {
         SSH_MEDIA_OWNER_SLOT.store(crate::percpu::current_slot() as u32, Ordering::Release);
     }
     drop(media);
-    if admitted { EGRESS_WAKE.signal(()); }
+    if admitted {
+        EGRESS_WAKE.signal(());
+        PRODUCER_WAKE.signal(());
+    }
     admitted
 }
 pub(crate) fn rdp_media_unsubscribe(session: u64) {
     SSH_MEDIA.lock().unsubscribe(session);
     EGRESS_WAKE.signal(());
+    PRODUCER_WAKE.signal(());
 }
 pub(crate) fn rdp_media_take_packet(session: u64) -> Option<Vec<u8>> {
     SSH_MEDIA.lock().pop(session)
+}
+
+pub(super) fn current_subscriber() -> Option<u64> {
+    SSH_MEDIA.lock().owner()
+}
+
+pub(super) fn subscriber_is(subscriber: u64) -> bool {
+    current_subscriber() == Some(subscriber)
+}
+
+pub(super) async fn wait_producer_work() {
+    PRODUCER_WAKE.wait().await;
 }
 
 const MAGIC: &[u8; 4] = b"TME1";
@@ -44,7 +60,6 @@ const FLAG_START: u8 = 1 << 0;
 const FLAG_END: u8 = 1 << 1;
 const FLAG_KEYFRAME: u8 = 1 << 2;
 const FLAG_SESSION_END: u8 = 1 << 3;
-const SSH_SUBSCRIBER_POLL_MS: u64 = 10;
 const ENCODED_ACCESS_UNIT_QUEUE_CAP: usize = 4;
 
 /// Preserve an exact average cadence when the timer frequency is not evenly
@@ -103,6 +118,7 @@ enum EgressSessionPhase {
 #[derive(Clone, Copy)]
 struct EgressSessionRequest {
     session_id: u32,
+    subscriber: u64,
     access_unit_count: usize,
     target_hz: usize,
 }
@@ -247,6 +263,31 @@ fn egress_session_ready(session_id: u32) -> bool {
     pipeline.session_id == session_id && pipeline.phase == EgressSessionPhase::Ready
 }
 
+/// The producer holds the view lease across bounded encoder sessions. This
+/// stream may only prepare or publish for that exact authenticated subscriber.
+fn producer_active(session_id: u32, subscriber: u64) -> bool {
+    if !subscriber_is(subscriber) {
+        abort_egress_session(session_id);
+        return false;
+    }
+    egress_session_ready(session_id)
+}
+
+async fn wait_prepared<R: FnMut(u32) -> bool>(
+    session_id: u32,
+    subscriber: u64,
+    sequence: u32,
+    prepared: &mut R,
+) -> bool {
+    loop {
+        if !producer_active(session_id, subscriber) { return false; }
+        if prepared(sequence) {
+            return producer_active(session_id, subscriber);
+        }
+        PRODUCER_WAKE.wait().await;
+    }
+}
+
 /// Ready can be cancelled before the producer observes the readiness wake.
 /// In that case no hardware work started, but egress still needs the producer
 /// acknowledgement before it can publish the final report and release view.
@@ -371,6 +412,7 @@ fn abort_egress_session(session_id: u32) {
     pipeline.phase = EgressSessionPhase::Aborted;
     drop(pipeline);
     EGRESS_WAKE.signal(());
+    PRODUCER_WAKE.signal(());
 }
 
 fn complete_egress_session(session_id: u32, mut report: MediaUdpStreamReport) {
@@ -410,16 +452,21 @@ fn take_egress_report(session_id: u32) -> Option<MediaUdpStreamReport> {
 /// Encode on absolute `target_hz` deadlines and publish complete Annex-B
 /// access units into the bounded queue owned by the independent UDP worker.
 /// The first prepared frame is excluded from cadence timing.
-pub(super) async fn stream_generated_annex_b<B, R, F>(
+/// Publish each following capture deadline before encoding can release the
+/// sole capture target. A refused schedule aborts the bounded session.
+pub(super) async fn stream_generated_annex_b<B, S, R, F>(
     session_id: u32,
+    subscriber: u64,
     access_unit_count: usize,
     target_hz: usize,
     begin_preparation: B,
+    mut schedule_next_capture: S,
     mut prepared: R,
     mut generate: F,
 ) -> MediaUdpStreamReport
 where
-    B: FnOnce(),
+    B: FnOnce() -> bool,
+    S: FnMut(u32, Instant) -> bool,
     R: FnMut(u32) -> bool,
     F: AsyncFnMut(u32) -> Option<Vec<u8>>,
 {
@@ -432,6 +479,7 @@ where
 
     let request = EgressSessionRequest {
         session_id,
+        subscriber,
         access_unit_count,
         target_hz,
     };
@@ -439,9 +487,6 @@ where
         PRODUCER_WAKE.wait().await;
     }
     loop {
-        // The producer alone owns the hardware encoder. A film request wakes
-        // this subscriber wait and runs here, using the very same WD pipeline.
-        super::h264_encode_stream::film::run_pending().await;
         if egress_session_ready(session_id) {
             break;
         }
@@ -452,71 +497,94 @@ where
         PRODUCER_WAKE.wait().await;
     }
 
-    let prefill_started_ns = crate::chronos::monotonic_nanos();
-    begin_preparation();
-    while !prepared(0) {
-        PRODUCER_WAKE.wait().await;
-    }
-    let prefill_us = crate::chronos::monotonic_nanos().saturating_sub(prefill_started_ns) / 1_000;
-    crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: udp-live preparation=prefilled session={} sequence=0 prefill_us={} buffering=single action=start-cadence\n",
-        session_id,
-        prefill_us,
-    );
-
-    let mut cadence = FractionalCadenceTicks::new(trueos_time::TICK_HZ, target_hz);
-    let started_ns = crate::chronos::monotonic_nanos();
-    mark_egress_cadence_started(session_id, started_ns);
-    let mut next_deadline = Instant::now();
+    let mut started_ns = None;
     let mut late_access_units = 0usize;
     let mut max_late_us = 0u64;
     let mut producer_dropped_access_units = 0usize;
     let mut producer_dropped_bytes = 0usize;
-    for index in 0..access_unit_count {
-        if index != 0 {
-            next_deadline += Duration::from_ticks(cadence.next());
-            let now = Instant::now();
-            if now < next_deadline {
-                Timer::at(next_deadline).await;
-            }
+    'production: {
+        if !producer_active(session_id, subscriber) { break 'production; }
+        let prefill_started_ns = crate::chronos::monotonic_nanos();
+        if !begin_preparation() {
+            abort_egress_session(session_id);
+            producer_dropped_access_units += 1;
+            break 'production;
         }
+        if !wait_prepared(session_id, subscriber, 0, &mut prepared).await { break 'production; }
+        let prefill_us = crate::chronos::monotonic_nanos().saturating_sub(prefill_started_ns) / 1_000;
+        crate::log_info!(target: "intel/media-encode";
+            "intel/media-encode: udp-live preparation=prefilled session={} sequence=0 prefill_us={} buffering=single action=start-cadence\n",
+            session_id, prefill_us,
+        );
 
-        let sequence = index as u32;
-        while !prepared(sequence) {
-            PRODUCER_WAKE.wait().await;
-        }
-        if index != 0 {
-            let now = Instant::now();
-            if now > next_deadline {
-                late_access_units = late_access_units.saturating_add(1);
-                let late_us = now.saturating_duration_since(next_deadline).as_micros();
-                max_late_us = max_late_us.max(late_us);
-                // Rebase instead of emitting a catch-up burst.
-                next_deadline = now;
+        let mut cadence = FractionalCadenceTicks::new(trueos_time::TICK_HZ, target_hz);
+        let cadence_started_ns = crate::chronos::monotonic_nanos();
+        started_ns = Some(cadence_started_ns);
+        mark_egress_cadence_started(session_id, cadence_started_ns);
+        let mut next_deadline = Instant::now();
+        for index in 0..access_unit_count {
+            if !producer_active(session_id, subscriber) { break; }
+            if index != 0 {
+                let now = Instant::now();
+                if now < next_deadline {
+                    Timer::at(next_deadline).await;
+                }
             }
-        }
 
-        let Some(bytes) = generate(sequence).await else {
-            producer_dropped_access_units = producer_dropped_access_units.saturating_add(1);
-            break;
-        };
-        if bytes.len() > crate::allcaps::media_encode::STREAM_MAX_ACCESS_UNIT_BYTES {
-            producer_dropped_access_units = producer_dropped_access_units.saturating_add(1);
-            producer_dropped_bytes = producer_dropped_bytes.saturating_add(bytes.len());
-            break;
-        }
-        let Some(keyframe) = annex_b_access_unit_keyframe(bytes.as_slice()) else {
-            producer_dropped_access_units = producer_dropped_access_units.saturating_add(1);
-            producer_dropped_bytes = producer_dropped_bytes.saturating_add(bytes.len());
-            break;
-        };
-        let access_unit = EncodedAccessUnit {
-            sequence,
-            keyframe,
-            bytes,
-        };
-        if !enqueue_access_unit(session_id, access_unit) {
-            break;
+            let sequence = index as u32;
+            if !wait_prepared(session_id, subscriber, sequence, &mut prepared).await { break; }
+            if index != 0 {
+                let now = Instant::now();
+                if now > next_deadline {
+                    late_access_units = late_access_units.saturating_add(1);
+                    let late_us = now.saturating_duration_since(next_deadline).as_micros();
+                    max_late_us = max_late_us.max(late_us);
+                    // Rebase instead of emitting a catch-up burst.
+                    next_deadline = now;
+                }
+            }
+
+            // Publish the next capture's deadline before this encode future
+            // can retire and release the sole WD target to its prepare worker.
+            // Advance the fractional cadence once, after any lateness rebase.
+            if index + 1 < access_unit_count {
+                next_deadline += Duration::from_ticks(cadence.next());
+                if !schedule_next_capture(sequence + 1, next_deadline) {
+                    abort_egress_session(session_id);
+                    break;
+                }
+                if !producer_active(session_id, subscriber) { break; }
+            }
+
+            let Some(bytes) = generate(sequence).await else {
+                producer_dropped_access_units = producer_dropped_access_units.saturating_add(1);
+                break;
+            };
+            // A submitted encoder future must retire normally even on disconnect.
+            // Once it returns, never publish its output for a replaced subscriber.
+            if !producer_active(session_id, subscriber) {
+                producer_dropped_access_units += 1;
+                producer_dropped_bytes = producer_dropped_bytes.saturating_add(bytes.len());
+                break;
+            }
+            if bytes.len() > crate::allcaps::media_encode::STREAM_MAX_ACCESS_UNIT_BYTES {
+                producer_dropped_access_units = producer_dropped_access_units.saturating_add(1);
+                producer_dropped_bytes = producer_dropped_bytes.saturating_add(bytes.len());
+                break;
+            }
+            let Some(keyframe) = annex_b_access_unit_keyframe(bytes.as_slice()) else {
+                producer_dropped_access_units = producer_dropped_access_units.saturating_add(1);
+                producer_dropped_bytes = producer_dropped_bytes.saturating_add(bytes.len());
+                break;
+            };
+            let access_unit = EncodedAccessUnit {
+                sequence,
+                keyframe,
+                bytes,
+            };
+            if !enqueue_access_unit(session_id, access_unit) {
+                break;
+            }
         }
     }
     finish_egress_producer(session_id, producer_dropped_access_units, producer_dropped_bytes);
@@ -527,7 +595,9 @@ where
         PRODUCER_WAKE.wait().await;
     };
     if report.elapsed_us == 0 {
-        report.elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
+        if let Some(started_ns) = started_ns {
+            report.elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
+        }
     }
     report.late_access_units = late_access_units;
     report.max_late_us = max_late_us;
@@ -563,28 +633,20 @@ pub(crate) async fn ui4_h264_encode_udp_egress_task() {
 
 async fn run_egress_session(request: EgressSessionRequest) -> MediaUdpStreamReport {
     let mut report = MediaUdpStreamReport { session_id: request.session_id, ..MediaUdpStreamReport::default() };
-    // A fixed public UDP marker is not an authenticated subscriber. The SSH
-    // session is the sole admission and owns every queued video packet.
-    let (subscriber, _view_lease) = loop {
-        let owner = SSH_MEDIA.lock().owner();
-        if let Some(owner) = owner {
-            if let Some(lease) = super::h264_encode_stream::film::claim_rdp_view() {
-                break (owner, lease);
-            }
-        }
-        report.subscriber_wait_polls += 1;
-        Timer::after(Duration::from_millis(SSH_SUBSCRIBER_POLL_MS)).await;
-    };
+    // The producer owns the view lease continuously across bounded encoder
+    // sessions. Egress only serves the exact subscriber bound to this request.
+    let subscriber = request.subscriber;
+    if !subscriber_is(subscriber) || !mark_egress_session_ready(request.session_id) {
+        abort_egress_session(request.session_id);
+        while !egress_producer_finished(request.session_id) { EGRESS_WAKE.wait().await; }
+        return report;
+    }
     crate::log_info!(target: "intel/media-encode";
         "intel/media-encode: ssh-live subscriber=accepted session={} ssh_session={} target_fps={} target_units={} protocol=tme1-in-ssh public_udp=disabled\n",
         request.session_id, subscriber, request.target_hz, request.access_unit_count);
-    if !mark_egress_session_ready(request.session_id) {
-        abort_egress_session(request.session_id);
-        return report;
-    }
     let mut datagram_sequence = 0u32;
     loop {
-        if SSH_MEDIA.lock().owner() != Some(subscriber) {
+        if !subscriber_is(subscriber) {
             abort_egress_session(request.session_id);
             break;
         }

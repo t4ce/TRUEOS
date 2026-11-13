@@ -53,7 +53,7 @@ static PRODUCER_WAKE:Wake=Wake;
 @DEFINITIONS@
 #[test] fn disconnect_before_producer_observes_ready_completes_without_hardware_work() {
     *EGRESS_PIPELINE.lock() = EgressPipeline::new();
-    let request = EgressSessionRequest {session_id:91,access_unit_count:60,target_hz:60};
+    let request = EgressSessionRequest {session_id:91,subscriber:7,access_unit_count:60,target_hz:60};
     assert!(request_egress_session(request));
     assert!(take_egress_session_request().is_some());
     assert!(mark_egress_session_ready(91));
@@ -78,7 +78,7 @@ static PRODUCER_WAKE:Wake=Wake;
 }
 #[test] fn active_abort_keeps_producer_completion_and_report_handshake() {
     *EGRESS_PIPELINE.lock() = EgressPipeline::new();
-    request_egress_session(EgressSessionRequest {session_id:93,access_unit_count:60,target_hz:60});
+    request_egress_session(EgressSessionRequest {session_id:93,subscriber:7,access_unit_count:60,target_hz:60});
     take_egress_session_request(); mark_egress_session_ready(93);
     assert!(egress_session_ready(93));
     abort_egress_session(93);

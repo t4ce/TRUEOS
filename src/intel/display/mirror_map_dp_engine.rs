@@ -700,15 +700,23 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
     if state.quarantined {
         return Err(WdCaptureError::Quarantined);
     }
-    if state.running {
-        return Ok(state.frame());
-    }
     let source = PIPES[SOURCE_PIPE_SLOT];
     let mirror = PIPES[MIRROR_PIPE_SLOT];
     if crate::intel::mmio_read(dev, PIPECONF_A + source.slot * PIPE_MMIO_STRIDE) & PIPECONF_STATE
         == 0
     {
         return Err(WdCaptureError::SourcePipeUnavailable);
+    }
+    let (width, height) = decode_pipe_src(crate::intel::mmio_read(dev, source.pipe_src_off))
+        .ok_or(WdCaptureError::DimensionsInvalid)?;
+    if state.running {
+        // A resident stream can outlive a source mode change. Reject the old
+        // layout so its owner drains and rebuilds instead of capturing with
+        // stale dimensions indefinitely.
+        if (state.width, state.height) != (width, height) {
+            return Err(WdCaptureError::DimensionsInvalid);
+        }
+        return Ok(state.frame());
     }
     if crate::intel::mmio_read(dev, PIPECONF_A + mirror.slot * PIPE_MMIO_STRIDE) & PIPECONF_STATE
         != 0
@@ -720,8 +728,6 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
     {
         return Err(WdCaptureError::MirrorPipeBusy);
     }
-    let (width, height) = decode_pipe_src(crate::intel::mmio_read(dev, source.pipe_src_off))
-        .ok_or(WdCaptureError::DimensionsInvalid)?;
     let (pitch_bytes, byte_len) =
         aligned_capture_layout(width, height).ok_or(WdCaptureError::DimensionsInvalid)?;
     let (phys, virt) = crate::intel::alloc_ggtt_backing(byte_len, CAPTURE_ALIGNMENT)

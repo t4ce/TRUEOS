@@ -44,7 +44,7 @@ pub(super) const CONTEXT_MENU_ROW_GAP_PX: u32 = 2;
 pub(super) const CONTEXT_MENU_ROW_HEIGHT_PX: u32 = (microfont::FHEIGHT as u32)
     .saturating_mul(2)
     .saturating_add(CONTEXT_MENU_ROW_GAP_PX);
-pub(super) const DESKTOP_CONTEXT_MENU_ENTRY_COUNT: u32 = 4;
+pub(super) const DESKTOP_CONTEXT_MENU_ENTRY_COUNT: u32 = 5;
 pub(super) const DESKTOP_CONTEXT_MENU_HORIZONTAL_INSET_PX: u32 = 12;
 pub(super) const DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX: u32 = 12;
 
@@ -82,6 +82,7 @@ static DESKTOP_SHELL_LAUNCH_SIGNAL: Signal<crate::wait::EmbassySpinRawMutex, ()>
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum DesktopContextMenuAction {
     ColorPicker,
+    Chromatic,
     Shell,
     Link,
     Codex,
@@ -1063,6 +1064,9 @@ impl InputBroker {
                     match action {
                         DesktopContextMenuAction::ColorPicker => {
                             super::color_picker::request_open(source, anchor);
+                        }
+                        DesktopContextMenuAction::Chromatic => {
+                            super::color_picker::request_chroma_open(source, anchor);
                         }
                         DesktopContextMenuAction::Shell => {
                             request_desktop_shell_launch(source, x, y)
@@ -3363,9 +3367,10 @@ fn desktop_context_menu_action_at(
         / CONTEXT_MENU_ROW_HEIGHT_PX
     {
         0 => Some(DesktopContextMenuAction::ColorPicker),
-        1 => Some(DesktopContextMenuAction::Shell),
-        2 => Some(DesktopContextMenuAction::Link),
-        3 => Some(DesktopContextMenuAction::Codex),
+        1 => Some(DesktopContextMenuAction::Chromatic),
+        2 => Some(DesktopContextMenuAction::Shell),
+        3 => Some(DesktopContextMenuAction::Link),
+        4 => Some(DesktopContextMenuAction::Codex),
         _ => None,
     }
 }
