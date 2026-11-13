@@ -84,6 +84,9 @@ class Store:
                     artifact_size INTEGER, provenance TEXT, receipt TEXT
                 );
             """)
+        with self.connect(transaction=True) as db:
+            if "phase" not in {row["name"] for row in db.execute("PRAGMA table_info(jobs)")}:
+                db.execute("ALTER TABLE jobs ADD COLUMN phase TEXT")
         self.database.chmod(0o600)
 
     @contextmanager
@@ -256,7 +259,7 @@ class Store:
 
 
 class Service:
-    def __init__(self, store, source_commit, origin, *, issuer_key=None, allow_anonymous=False):
+    def __init__(self, store, source_commit, origin, *, issuer_key=None, allow_anonymous=False, backend="local"):
         parsed = urlsplit(origin)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
             raise ValueError("origin must be a single http(s) origin with no credentials or path")
@@ -270,6 +273,9 @@ class Service:
         self.issuer_key = Path(issuer_key).resolve() if issuer_key else None
         if self.issuer_key and not self.issuer_key.is_file():
             raise ValueError("Issuer private key does not exist")
+        if backend not in {"local", "github-actions"}:
+            raise ValueError("Unsupported build backend")
+        self.backend = backend
         self.allow_anonymous = allow_anonymous
         self.finalize_lock = threading.Lock()
         self.rate_lock = threading.Lock()
@@ -292,7 +298,7 @@ class Service:
     def info(self):
         return {"catalog": catalog(), "source_commit": self.source_commit, "namespace": NAMESPACE,
                 "capabilities": {"anonymous": self.allow_anonymous, "licensed": bool(self.issuer_key),
-                                 "worker_mode": "separate-worker"}}
+                                 "worker_mode": self.backend, "artifacts_public": self.backend == "github-actions"}}
 
     @staticmethod
     def fields(body, required, optional=()):
@@ -332,7 +338,7 @@ class Service:
                     row = self.store.owned_job(identifier, token)
         result = {"job_id": row["id"], "status": "building" if row["status"] == "built" else row["status"],
                   "manifest": json.loads(row["manifest"]), "created_at": row["created_at"],
-                  "key_fingerprint": row["fingerprint"]}
+                  "key_fingerprint": row["fingerprint"], "phase": row["phase"]}
         if row["status"] == "succeeded":
             result["artifact"] = {"filename": "TrueOS.tar.lz4", "sha256": row["artifact_sha256"], "size": row["artifact_size"]}
             result["provenance"] = json.loads(row["provenance"])

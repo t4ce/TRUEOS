@@ -670,7 +670,13 @@
     for (const id of job.manifest?.features || []) {
       if (id !== "buildins") $("job-features").append(make("span", "feature-chip", labelFor(id)));
     }
-    $("job-detail").textContent = details[job.status] || `Server status: ${job.status}`;
+    const phases = {
+      dispatching: "Submitting your configuration to the builder.",
+      "waiting-for-runner": "Waiting for an available build machine.",
+      compiling: "Building your selected configuration.",
+      collecting: "Checking the completed build and preparing your download.",
+    };
+    $("job-detail").textContent = (job.status === "building" && phases[job.phase]) || details[job.status] || `Server status: ${job.status}`;
     $("job-panel").className = `job-card${job.status === "succeeded" ? " finished" : job.status === "failed" ? " failed" : ""}`;
     const progress = ["queued", "building", "succeeded"].indexOf(job.status);
     for (const step of $("job-progress").children) {
@@ -919,7 +925,8 @@
       if (/^[0-9a-f]{40}$/i.test(state.sourceCommit)) $("source-commit").href = `https://github.com/t4ce/TRUEOS/commit/${state.sourceCommit}`;
       $("connection-status").classList.add("connected");
       $("connection-label").textContent = "Service connected";
-      $("worker-state").textContent = data.capabilities?.worker_mode ? `Worker: ${data.capabilities.worker_mode}` : "Requests use the configured build worker";
+      $("worker-state").textContent = data.capabilities?.worker_mode === "github-actions" ? "Builds run on GitHub Actions" : "Build service connected";
+      $("artifact-visibility").hidden = data.capabilities?.artifacts_public !== true;
       renderCatalog();
       renderSelection();
       for (const input of document.querySelectorAll("input[name=profile]")) input.disabled = false;

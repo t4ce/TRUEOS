@@ -70,14 +70,14 @@ fn full_pack_upload_alignment_and_legacy_playback_contract() {
     assert!(lilly::prepare_resident_once());
     let bytes = include_bytes!("@TRUEOS_ROOT@/tools/Lilly.lpak");
     let decoded = trueos_lily_pack::decode(bytes).unwrap();
-    assert_eq!(decoded.frames.len(), 599);
-    assert_eq!(WRITES.load(Ordering::SeqCst), 599);
+    assert_eq!(decoded.frames.len(), 607);
+    assert_eq!(WRITES.load(Ordering::SeqCst), 607);
     assert_eq!(FLUSHES.load(Ordering::SeqCst), 1);
     assert_eq!(BUFFERS.lock().unwrap().len(), 1);
     assert_eq!(lilly::resident_frame_count(), 490);
     let buffers = BUFFERS.lock().unwrap();
     let data = buffers[0].lock().unwrap();
-    assert_eq!(data.len(), 599 * 256 * 256 * 4);
+    assert_eq!(data.len(), 607 * 256 * 256 * 4);
     for (i, info) in decoded.frames.iter().enumerate() {
         let surface = lilly::resident_frame(&info.path).unwrap();
         assert_eq!(
@@ -211,12 +211,16 @@ fn full_pack_upload_alignment_and_legacy_playback_contract() {
         count += 1;
     }
     assert_eq!(count, 70);
+    assert!(lilly::resident_frame("Static_up/codex.png").is_some());
+    for n in 2..=8 {
+        assert!(lilly::resident_frame(&format!("Static_up/wish-c/frame_{n:02}.png")).is_some());
+    }
     assert!(lilly::resident_frame("Headset_up/static.png").is_some());
     assert!(lilly::resident_frame("Freestyle_up/clippy/frame_05.png").is_some());
     assert!(lilly::resident_asset("freestyle.clippy").is_none()); // extras do not change scheduling
     let loader = include_str!("@TRUEOS_ROOT@/src/spirit/lilly.rs");
     assert!(!loader.contains("Lilly.tar.lz4"));
     println!(
-        "599 exact bottom-centered DMA uploads; all 70 legacy keys and 490 logical frame slots retain metadata/timing/repeats; no legacy archive dependency"
+        "607 exact bottom-centered DMA uploads; all 70 legacy keys and 490 logical frame slots retain metadata/timing/repeats; no legacy archive dependency"
     );
 }

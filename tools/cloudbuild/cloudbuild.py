@@ -28,6 +28,8 @@ def main():
                         help="private queue and artifact directory; use the same path for serve/worker/grant")
     commands = parser.add_subparsers(dest="operation", required=True)
     serve = commands.add_parser("serve", help="run the selector and control-plane HTTP service")
+    serve.add_argument("--actions-config", type=Path, help="use the Actions backend and its approved source revision")
+    serve.add_argument("--backend", choices=("local", "github-actions"), default="local", help="build delivery policy shown in the selector")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8787)
     serve.add_argument("--origin", help="browser-facing origin; public origins must use HTTPS")
@@ -109,8 +111,17 @@ def main():
             if args.host not in {"127.0.0.1", "localhost"} and not args.origin:
                 raise ValueError("Set an explicit HTTPS --origin when binding a non-loopback interface")
             origin = args.origin or f"http://{args.host}:{args.port}"
-            service = Service(store, args.source_commit or checkout_commit(), origin,
-                              issuer_key=args.issuer_key, allow_anonymous=args.allow_anonymous)
+            source_commit = args.source_commit
+            if args.actions_config:
+                from github_actions import read_config
+                config = read_config(args.actions_config)
+                if source_commit and source_commit != config["source_commit"]:
+                    raise ValueError("serve source must match the Actions configuration")
+                source_commit, args.backend = config["source_commit"], "github-actions"
+            elif args.backend == "github-actions":
+                raise ValueError("The Actions backend requires --actions-config with approved source pins")
+            service = Service(store, source_commit or checkout_commit(), origin,
+                              issuer_key=args.issuer_key, allow_anonymous=args.allow_anonymous, backend=args.backend)
             server = HTTPServer((args.host, args.port), service)
             stopped = threading.Event()
             finalizer = threading.Thread(target=service.finalize_loop, args=(stopped,), daemon=True)

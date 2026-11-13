@@ -186,10 +186,11 @@ fn launch_bytes_with_args(
     access_account: Option<trueos_crypto::AccountId>,
     remote_input_origin: Option<super::tui::RemoteInputOrigin>,
 ) -> Result<QueuedBlueprint, alloc::string::String> {
-    let observer = (archive == "os.bp").then(|| {
-        alloc::boxed::Box::new(ShellLaunch)
-            as alloc::boxed::Box<dyn crate::hv::launcher::LaunchObserver>
-    });
+    let observer: Option<alloc::boxed::Box<dyn crate::hv::launcher::LaunchObserver>> = match archive.as_str() {
+        "os.bp" => Some(alloc::boxed::Box::new(ShellLaunch)),
+        "apps.bp" => Some(alloc::boxed::Box::new(AppsLaunch)),
+        _ => None,
+    };
     let mut request = crate::hv::launcher::LaunchRequest::new(archive, bytes);
     request.script = script;
     request.args = args;
@@ -872,6 +873,25 @@ pub fn start_pool() -> Result<usize, SpawnError> {
 
 pub(super) fn working_vmx_slots() -> Vec<alloc::string::String> {
     crate::hv::matrix::working_slots()
+}
+
+// Keep pullbot information visible after its temporary Matrix slot retires.
+struct AppsLaunch;
+impl crate::hv::launcher::LaunchObserver for AppsLaunch {
+    fn finished(
+        &self,
+        target: &super::MatrixTarget,
+        _vm: Option<u8>,
+        error: Option<&str>,
+        reason: Option<&str>,
+    ) {
+        if error.is_none() {
+            if let Some(message) = reason.and_then(|reason| reason.strip_prefix("apps:info:")) {
+                super::MatrixSlots::echo(None, None, message.into());
+            }
+        }
+        crate::hv::matrix::discard(target);
+    }
 }
 
 // OS update completion is presentation policy, not Matrix/VM ownership.

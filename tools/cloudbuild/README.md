@@ -4,6 +4,12 @@ A subsystem and bundled-app selector, strict build manifest, private job queue, 
 challenge flow for operator-issued personal TRUEOS builds. It uses Python 3.11+
 and OpenSSH, with no Python packages or frontend build step.
 
+The public-selector-to-GitHub-Actions backend is implemented in
+`github_actions.py`. See [GitHub Actions deployment and recovery](GITHUB_ACTIONS.md)
+for PDJB hosting, source pins, the GitHub App, data visibility and launch checks.
+The workflow is now integrated locally; live App provisioning and public hosting
+remain deployment steps.
+
 See [Conversation and implementation handoff](CONVERSATION.md) for the
 maintainer's requests, the decisions implemented here, validation results,
 and the known integration work against newer upstream revisions.
@@ -319,9 +325,11 @@ jobs skip that checkout and record only their actual source dependencies. It
 validates the manifest against the workflow's checked-out commit before
 compilation and uploads workflow artifacts and provenance under the repository's
 access policy. These Actions artifacts are not per-person private downloads. It does
-not publish a GitHub release or issue licenses. The web service processes its
-own queue through `worker`; it does not automatically dispatch this alternate
-Actions workflow.
+not publish a GitHub release or issue licenses. The web service can use the local `worker` or the separate `actions-worker`
+backend. With `serve --actions-config`, the selector uses the approved Actions
+source and discloses public artifact visibility. The Actions adapter dispatches
+this workflow, tracks actual progress, and imports verified results into the
+existing private job/receipt flow. See [Actions integration](GITHUB_ACTIONS.md).
 
 ## Protocol and verification
 

@@ -273,6 +273,17 @@ fn empty_duplicate_and_escaping_batches_are_rejected() {
         assert!(app_db::get("sqlite.bp").unwrap().is_none());
     }
 }
+#[cfg(not(feature = "buildin-apps"))]
+#[test]
+fn kernel_only_keeps_metadata_and_accepts_downloads_without_controller_roles() {
+    assert_eq!(app_db::init_bsp().unwrap(), 0);
+    assert!(app_db::list().unwrap().is_empty());
+    assert_eq!(app_db::appbundle_json().unwrap(), include_bytes!(@JSON@));
+    let controller = b"TRBP\x01\x00\x03\x10controller".to_vec();
+    app_db::insert_downloads(&[("apps.bp".into(), controller.clone())]).unwrap();
+    assert!(!app_db::is_remote_input_controller("apps.bp", &controller));
+    assert!(app_db::get("apps.bp").unwrap().is_some());
+}
 '''
 
 
@@ -329,13 +340,17 @@ def main():
             let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
             let bytes = std::fs::read("seed.db").unwrap();
             std::fs::write(out.join("app.db.lz4"), &bytes).unwrap();
-            std::fs::write(out.join("appdb-seed.rs"), format!("const APP_DB_IMAGE_LEN: usize = {};\\nconst APP_DB_EXPECTED_APPS: usize = 1;", bytes.len())).unwrap();
+            let expected = if std::env::var_os("CARGO_FEATURE_BUILDIN_APPS").is_some() { 1 } else { 0 };
+            std::fs::write(out.join("appdb-seed.rs"), format!("const APP_DB_IMAGE_LEN: usize = {};\\nconst APP_DB_EXPECTED_APPS: usize = {};", bytes.len(), expected)).unwrap();
         }''')
         (path / 'Cargo.toml').write_text('''[package]
 name="trueos-appbundle-db-tests"
 version="0.0.0"
 edition="2024"
 [workspace]
+[features]
+default=["buildin-apps"]
+buildin-apps=[]
 [dependencies]
 redb={version="=4.4.0",default-features=false,features=["std","experimental-api-5"]}
 sha2={version="=0.10.9",default-features=false}
@@ -343,6 +358,8 @@ serde_json={version="1.0",default-features=false,features=["alloc"]}
 spin="0.10"
 trueos-appbundle={path=''' + json.dumps(str(BP / 'crates/trueos-appbundle')) + '}\n')
         subprocess.run(['cargo', '+nightly-2026-07-10', 'test', '--offline', '--', '--test-threads=1'], cwd=path, env=env, check=True)
+        subprocess.run(['cargo', '+nightly-2026-07-10', 'test', '--offline', '--no-default-features',
+                        'kernel_only_keeps_metadata', '--', '--test-threads=1'], cwd=path, env=env, check=True)
 
 
 if __name__ == '__main__':

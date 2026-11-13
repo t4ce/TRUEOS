@@ -187,6 +187,23 @@ class SelectedBuildinsTests(unittest.TestCase):
         for key in ("TRUEOS_TEST_FAIL_APP", "TRUEOS_TEST_STD_APP", "TRUEOS_TEST_IMPORTS"):
             self.environment.pop(key, None)
 
+    def test_selected_bundle_requires_explicit_companions_before_compilation(self):
+        manifest = self.directory / "TRUEOS-Blueprints/appbundle.json"
+        manifest.write_text('{"version":1,"bundles":{"commander.bp":{"requires":["apps.bp"]}}}')
+        result = self.run_adapter("commander")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires omitted companions: apps.bp", result.stderr)
+        self.assertNotIn("compile", self.calls.read_text() if self.calls.exists() else "")
+        self.successful_build("commander,apps")
+
+    def test_bundle_metadata_changes_invalidate_prepared_database(self):
+        self.successful_build("commander")
+        manifest = self.directory / "TRUEOS-Blueprints/appbundle.json"
+        manifest.write_text('{"version":1,"bundles":{"codex.bp":{"requires":["sqlite.bp"]}}}')
+        result = self.run_adapter("commander", check=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.successful_build("commander")
+
     def add_apps(self, names):
         for name in names:
             app = self.source / name

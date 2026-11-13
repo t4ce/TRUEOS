@@ -8,8 +8,8 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
-pub(crate) const WD_WIDTH: usize = super::avc_encode_probe::FRAME_WIDTH;
-pub(crate) const WD_HEIGHT: usize = super::avc_encode_probe::FRAME_HEIGHT;
+pub(crate) const WD_WIDTH: usize = 2560;
+pub(crate) const WD_HEIGHT: usize = 1440;
 pub(crate) const WD_XYUV8888_PITCH: usize = WD_WIDTH * 4;
 pub(crate) const WD_XYUV8888_BYTES: usize = WD_XYUV8888_PITCH * WD_HEIGHT;
 
@@ -54,6 +54,7 @@ impl WdXyuv8888DmaSurface {
         self.sequence
     }
 
+    #[cfg(feature = "trueos_h264_encode_stream")]
     pub(crate) fn encoder_surface(self) -> Option<super::avc_encode_probe::AvcXyuv8888DmaSurface> {
         super::avc_encode_probe::AvcXyuv8888DmaSurface::new(self.phys, WD_XYUV8888_BYTES)
     }

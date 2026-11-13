@@ -1,0 +1,23 @@
+[Unit]
+Description=TRUEOS Cloudbuild selector and API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=trueos-cloudbuild
+Group=trueos-cloudbuild
+WorkingDirectory=/srv/trueos-cloudbuild
+ExecStart=/usr/bin/python3 /srv/trueos-cloudbuild/tools/cloudbuild/cloudbuild.py --state-dir /var/lib/trueos-cloudbuild serve --actions-config /etc/trueos-cloudbuild/actions.json --origin https://build.trueos.eu --issuer-key /etc/trueos-cloudbuild/build-issuer
+Restart=on-failure
+RestartSec=10
+UMask=0077
+StateDirectory=trueos-cloudbuild
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/trueos-cloudbuild
+InaccessiblePaths=/etc/trueos-cloudbuild/github-app.pem
+
+[Install]
+WantedBy=multi-user.target

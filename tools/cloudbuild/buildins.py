@@ -281,7 +281,9 @@ def input_roots(builder, kernel: Path, names: list[str], output: Path) -> list[P
     roots += external_dependency_roots(builder, names)
     roots += list(builder.patches(kernel).values())
     roots += [Path(__file__).resolve(), CATALOG_PATH]
-    roots += [kernel / "src/unix_compat.rs"]
+    roots += [kernel / "src/unix_compat.rs",
+              kernel.parent / "TRUEOS-Blueprints/appbundle.json",
+              kernel.parent / "TRUEOS-Blueprints/crates/trueos-appbundle"]
     if "edit" in names:
         roots += reference_inputs(output, kernel)
     return sorted(set(roots))
@@ -455,8 +457,45 @@ def build_database(builder, output: Path, kernel: Path, cargo: Path, env: dict,
     return database
 
 
+def validate_companions(kernel: Path, names: list[str]) -> None:
+    """Reject missing companions; never silently enlarge the signed app set."""
+    document = read_json(kernel.parent / "TRUEOS-Blueprints/appbundle.json")
+    if (not isinstance(document, dict) or set(document) != {"version", "bundles"}
+            or type(document["version"]) is not int or document["version"] != 1
+            or not isinstance(document["bundles"], dict) or len(document["bundles"]) > 64):
+        raise ValueError("invalid appbundle.json schema")
+    bundles = document["bundles"]
+    selected = {name.lower() + ".bp" for name in names}
+    normalized = {}
+    archive = re.compile(r"[A-Za-z0-9_-]{1,128}\.bp\Z")
+    for root, bundle in bundles.items():
+        if (not archive.fullmatch(root) or root.lower() in normalized
+                or not isinstance(bundle, dict) or set(bundle) != {"requires"}
+                or not isinstance(bundle["requires"], list) or len(bundle["requires"]) > 64
+                or any(not isinstance(member, str) or not archive.fullmatch(member) for member in bundle["requires"])
+                or len({member.lower() for member in bundle["requires"]}) != len(bundle["requires"])):
+            raise ValueError("invalid appbundle.json requirements")
+        normalized[root.lower()] = [member.lower() for member in bundle["requires"]]
+    def visit(root, stack, seen):
+        if root in stack:
+            raise ValueError("app bundle dependency cycle")
+        if root in seen:
+            return
+        if len(stack) + len(seen) >= 64:
+            raise ValueError("app bundle exceeds 64 Blueprints")
+        for member in normalized.get(root, []):
+            visit(member, stack | {root}, seen)
+        seen.add(root)
+    for root in normalized:
+        members = set()
+        visit(root, set(), members)
+        if root in selected and members - selected:
+            raise ValueError("selected " + root + " requires omitted companions: " + ", ".join(sorted(members - selected)))
+
+
 def build_selected(builder, output: Path, kernel: Path, profile: str, names: list[str],
                    native_only: bool = False) -> None:
+    validate_companions(kernel, names)
     if native_only:
         validate_native_selection(builder, names)
     # Validation and std/sysroot selection visit only selected applications.

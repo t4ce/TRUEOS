@@ -1,0 +1,11 @@
+{
+  "repository": "t4ce/TRUEOS",
+  "workflow": "cloudbuild.yml",
+  "ref": "cloudbuild-approved-v1",
+  "source_commit": "REPLACE_WITH_APPROVED_TRUEOS_40_CHARACTER_SHA",
+  "pins": {
+    "buildins": "REPLACE_WITH_TRUEOS_BUILDINS_40_CHARACTER_SHA",
+    "blueprints": "REPLACE_WITH_TRUEOS_BLUEPRINTS_40_CHARACTER_SHA",
+    "toolchain": "REPLACE_WITH_ARCHIVED_TOOLCHAIN_REPOSITORY_40_CHARACTER_SHA"
+  }
+}

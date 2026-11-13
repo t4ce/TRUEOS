@@ -156,7 +156,12 @@ class ActionsWorker:
                        (row['id'], json.dumps(self.config, sort_keys=True), now))
             return dict(row)
 
+    def phase(self, identifier, value):
+        with self.store.connect(transaction=True) as db:
+            db.execute("UPDATE jobs SET phase=? WHERE id=? AND status='building'", (value, identifier))
+
     def dispatch(self, job):
+        self.phase(job['id'], 'dispatching')
         manifest = validate_manifest(json.loads(job['manifest']), self.config['source_commit'])
         self.authorize(job, manifest)
         ref = urllib.parse.quote(self.config['ref'], safe='')
@@ -219,11 +224,13 @@ class ActionsWorker:
                 self.github.json('POST', self.base + f'/actions/runs/{run_id}/cancel')
             raise ValueError('Cloud build exceeded its deadline')
         if run['status'] != 'completed':
+            self.phase(job['id'], 'compiling' if run['status'] == 'in_progress' else 'waiting-for-runner')
             return
         if run['conclusion'] != 'success':
             raise ValueError('GitHub Actions build ' + str(run['conclusion']))
         manifest = validate_manifest(json.loads(job['manifest']), self.config['source_commit'])
         self.authorize(job, manifest)
+        self.phase(job['id'], 'collecting')
         name = f"trueos-{manifest['config_hash']}-{run_id}"
         artifacts = self.github.json('GET', self.base + f'/actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
         matching = [a for a in artifacts if a['name'] == name and not a['expired']]
@@ -282,6 +289,13 @@ class ActionsWorker:
             raise ValueError('Build digest does not match provenance')
         return provenance
 
+    def record_error(self, job, error):
+        directory = self.store.directory / "jobs" / job["id"]
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = directory / "actions-error.txt"
+        path.write_text(f"{type(error).__name__}: {str(error)[:4000]}\n", encoding="utf-8")
+        path.chmod(0o600)
+
     def tick(self):
         with self.store.connect() as db:
             pending = [dict(row) for row in db.execute('''SELECT j.*, a.configuration, a.dispatched_at, a.run_id
@@ -289,20 +303,25 @@ class ActionsWorker:
         for job in pending:
             try:
                 self.poll(job)
-            except APIError:
+            except APIError as error:
+                self.record_error(job, error)
                 self.store.fail(job['id'], 'The build grant is no longer valid.')
-            except (ValueError, KeyError, zipfile.BadZipFile):
+            except (ValueError, KeyError, TypeError, zipfile.BadZipFile) as error:
+                self.record_error(job, error)
                 self.store.fail(job['id'], 'Actions result could not be verified. The operator must inspect the build.')
-            except (OSError, urllib.error.URLError):
+            except (OSError, urllib.error.URLError, subprocess.SubprocessError) as error:
+                self.record_error(job, error)
                 if self.store.clock() - job['dispatched_at'] > self.timeout:
                     self.store.fail(job['id'], 'Actions backend unavailable beyond the build deadline; operator inspection required.')
         job = self.claim()
         if job:
             try:
                 self.dispatch(job)
-            except (ValueError, KeyError, APIError):
+            except (ValueError, KeyError, TypeError, APIError) as error:
+                self.record_error(job, error)
                 self.store.fail(job['id'], 'Build admission failed. The operator must check source pins and authorization.')
-            except (OSError, urllib.error.URLError, subprocess.SubprocessError):
+            except (OSError, urllib.error.URLError, subprocess.SubprocessError) as error:
+                self.record_error(job, error)
                 # It may have reached GitHub. Discover on the next tick; never resend.
                 pass
 

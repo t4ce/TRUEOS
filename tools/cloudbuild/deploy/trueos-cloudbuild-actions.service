@@ -1,0 +1,24 @@
+[Unit]
+Description=TRUEOS Cloudbuild GitHub Actions adapter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=trueos-cloudbuild
+Group=trueos-cloudbuild
+WorkingDirectory=/srv/trueos-cloudbuild
+EnvironmentFile=/etc/trueos-cloudbuild/github-app.env
+ExecStart=/usr/bin/python3 /srv/trueos-cloudbuild/tools/cloudbuild/cloudbuild.py --state-dir /var/lib/trueos-cloudbuild actions-worker --config /etc/trueos-cloudbuild/actions.json --app-client-id ${GITHUB_APP_CLIENT_ID} --installation-id ${GITHUB_APP_INSTALLATION_ID} --app-key /etc/trueos-cloudbuild/github-app.pem
+Restart=on-failure
+RestartSec=10
+UMask=0077
+StateDirectory=trueos-cloudbuild
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/trueos-cloudbuild
+InaccessiblePaths=/etc/trueos-cloudbuild/build-issuer
+
+[Install]
+WantedBy=multi-user.target

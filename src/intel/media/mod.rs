@@ -6,7 +6,7 @@ pub(crate) mod h264_cmd;
 pub(crate) mod hw_pic;
 pub(crate) mod hw_vid;
 pub(crate) mod pic_backend;
-#[cfg(feature = "trueos_h264_encode_stream")]
+// Shared by screenshots and optional AVC streaming.
 pub(crate) mod wd_xyuv8888;
 
 pub(crate) use self::engine as xelp_media2_ngin;

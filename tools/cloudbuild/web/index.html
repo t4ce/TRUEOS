@@ -133,6 +133,7 @@
           <ul class="plan-warnings" id="plan-warnings" hidden></ul>
           <p class="field-error plan-error" id="plan-error" role="alert" hidden></p>
           <button type="button" class="button primary build-button" id="build-button" disabled><span id="build-button-label">Resolving configuration</span><span aria-hidden="true">↗</span></button>
+          <p class="field-hint" id="artifact-visibility" hidden>Build configurations, logs, and system images are public on GitHub. Your key identity, access ticket, and signed receipt stay with this service.</p>
           <p class="build-hint" id="build-hint">Every request is bound to its exact source, kernel features, and app selection.</p>
           <details class="manifest-details"><summary>Inspect the resolved manifest <span aria-hidden="true">+</span></summary><pre id="manifest-json">Waiting for configuration…</pre><button type="button" class="text-button" id="download-manifest" disabled>Download manifest ↓</button></details>
           <div class="resume-tools"><label class="file-button" for="resume-file">Resume a saved build <span aria-hidden="true">↗</span><input type="file" id="resume-file" accept=".json,application/json"></label><p class="field-hint">Open a private build access file from this server.</p><p class="field-error" id="resume-error" role="alert" hidden></p></div>
