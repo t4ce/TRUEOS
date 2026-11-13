@@ -38,7 +38,7 @@ Terminal activity selects **Spark lattice (12)** while Codex is working and
 acknowledgement report releases the ready effect on CLI interaction. Blocked
 input keeps Water ripples. These are transient overrides of the persistent panel.
 
-Spark lattice has fixed speed **3**, opacity **0.75**, and scale **1.4**.
+Spark lattice has fixed speed **3**, opacity **0.75**, and scale **1.54**.
 Intensity follows a smooth cosine cycle **1 → 4 → 1 over seven seconds** of
 wall time, independently of shader speed. Repeated status reports do not restart
 it. Resonance retains its preview speed **1** and intensity **2**, with the same
@@ -146,6 +146,6 @@ Idle mode selects `Magic time circle + Aura bloom` transiently. TRUEOS prefers
 NTP and falls back to the bootloader-provided timestamp; its system timezone is UTC.
 The sprite walker retains smooth 60 Hz animation time in dword 4, while only
 the clock background reads quantized wall time from dword 32.
-All live backgrounds share the single `SPIRIT_BACKGROUND_PRESENT_SCALE` value
-`1.171875`, mapping the authored `0.32` reference radius to 96 pixels and
-leaving a 32-pixel margin in the 256-pixel cursor surface.
+Standard backgrounds use `SPIRIT_BACKGROUND_PRESENT_SCALE = 1.5625`, mapping
+the authored `0.32` reference radius to 128 pixels across the full 256-pixel
+cursor surface. The Codex knot modes retain their independent scale and exit envelope.

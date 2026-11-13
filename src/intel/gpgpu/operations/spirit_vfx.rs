@@ -1,8 +1,9 @@
 const SPIRIT_VFX_INITIAL_TRACE_FRAMES: u32 = 30;
 const SPIRIT_VFX_PERIODIC_TRACE_FRAMES: u32 = 60;
 const SPIRIT_VFX_ENCODING_LOG_LIMIT: u32 = 2;
-/// Legacy background footprint. Knot modes may expand during their exit.
-pub(crate) const SPIRIT_VFX_BACKGROUND_PRESENT_SCALE: f32 = 1.171875;
+/// Fill the native 256px cursor: authored radius 0.32 reaches radius 128.
+/// Knot modes retain their independently animated presentation scale.
+pub(crate) const SPIRIT_VFX_BACKGROUND_PRESENT_SCALE: f32 = 1.5625;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct SpiritVfxControl {

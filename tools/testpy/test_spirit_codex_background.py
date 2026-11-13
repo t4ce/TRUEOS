@@ -106,8 +106,9 @@ fn knot_ids_and_scale_reach_the_gpu_without_changing_the_existing_abi() {
         fx_color_a: 0, fx_color_b: 0,
     };
     for (id, requested_scale, expected_scale) in [
-        (12, 1.4, 1.4), (13, 3.0, 3.0), (12, f32::NAN, 1.4),
-        (12, 50.0, 3.0), (9, 3.0, SPIRIT_VFX_BACKGROUND_PRESENT_SCALE),
+        (12, 1.4, 1.4), (12, 1.54, 1.54), (13, 1.54, 1.54), (13, 3.0, 3.0), (12, f32::NAN, 1.4),
+        (12, 50.0, 3.0), (3, 0.5, 1.5625), (11, 0.5, 1.5625),
+        (9, 3.0, SPIRIT_VFX_BACKGROUND_PRESENT_SCALE),
         (99, 3.0, SPIRIT_VFX_BACKGROUND_PRESENT_SCALE),
     ] {
         control.background_mode = id; control.background_scale = requested_scale;
@@ -115,6 +116,10 @@ fn knot_ids_and_scale_reach_the_gpu_without_changing_the_existing_abi() {
             GpgpuRgba8Surface { width: 256, height: 256, pitch_bytes: 1024 }, control, 60);
         assert_eq!(page[3], if id == 99 { 0 } else { id });
         assert_eq!(f32::from_bits(page[6]), expected_scale);
+        if (2..=11).contains(&id) {
+            assert_eq!(0.32 * 256.0 * f32::from_bits(page[6]), 128.0,
+                "reference background ring fills the full 256px cursor canvas");
+        }
         assert_eq!(f32::from_bits(page[13]), 1.0, "native sprite scale is independent of animated background scale");
         assert_eq!(f32::from_bits(page[14]), 0.0, "no legacy half-turn mirror correction");
         assert_eq!(f32::from_bits(page[31]), 0.0, "native bottom row is not feathered away");

@@ -1034,7 +1034,8 @@ static MOVE_PORTAL_STARTED_MS: AtomicU64 = AtomicU64::new(0);
 const GLOBAL_AURA_HALF_CYCLE_MS: u64 = 1_000;
 const POWER_MODE_VFX_TRANSITION_MS: u64 = 650;
 const TERMINAL_VFX_TRANSITION_MS: u64 = POWER_MODE_VFX_TRANSITION_MS;
-const CODEX_VFX_SCALE: f32 = 1.4;
+// Shared knot footprint: 10% larger, retaining the existing exit envelope.
+const CODEX_VFX_SCALE: f32 = 1.54;
 const CODEX_VFX_EXIT_SCALE: f32 = 3.0;
 const CODEX_VFX_OPACITY: f32 = 0.75;
 const CODEX_VFX_INTENSITY_CYCLE_MS: u64 = 7_000;
@@ -1057,12 +1058,10 @@ const REASONING_VFX_PHASE_PERIOD: f32 = 20.0 * core::f32::consts::PI;
 const GLOBAL_AURA_RADIUS_MIN: f32 = 9.0;
 const GLOBAL_AURA_RADIUS_MAX: f32 = 12.0;
 const GLOBAL_AURA_STRENGTH: f32 = 2.5;
-// Legacy backgrounds retain their fixed footprint. Codex knot backgrounds
-// use scale 1.4 and expand to 3 before fading; their shader feathers allocation
-// edges to transparent pixels even when the geometry grows beyond the surface.
-// The authored reference ring sits at normalized radius 0.32. A scale of
-// 1.171875 maps it to radius 96 in the 256px cursor surface, leaving one
-// invariant 32px margin on every side for the legacy background set.
+// Standard backgrounds fill the native 256px sprite canvas: the authored
+// reference radius 0.32 reaches radius 128, without the old 32px margin.
+// Codex knot backgrounds keep their independent scale-1.54 presentation and
+// expansion to 3 before fading; their shader feathers allocation edges.
 const SPIRIT_BACKGROUND_PRESENT_SCALE: f32 =
     crate::intel::gpgpu::SPIRIT_VFX_BACKGROUND_PRESENT_SCALE;
 
@@ -1846,7 +1845,7 @@ mod terminal_background_tests {
             close(background.speed, 3.0);
             close(background.intensity, intensity);
             close(background.opacity, 0.75);
-            close(scale, 1.4);
+            close(scale, 1.54);
         }
     }
 
@@ -1857,7 +1856,7 @@ mod terminal_background_tests {
             let (background, scale) = frame(&mut state, Some(ProgramStatus::Working), now);
             close(background.opacity, opacity);
             close(background.speed, 3.0);
-            close(scale, 1.4);
+            close(scale, 1.54);
         }
     }
 
@@ -1866,8 +1865,8 @@ mod terminal_background_tests {
         let mut state = working();
         let done = Some(ProgramStatus::Done);
         for (now, opacity, scale) in [
-            (700, 0.75, 1.4),
-            (1025, 0.75, 2.2),
+            (700, 0.75, 1.54),
+            (1025, 0.75, 2.27),
             (1350, 0.75, 3.0),
             (1675, 0.375, 3.0),
         ] {
@@ -1880,7 +1879,7 @@ mod terminal_background_tests {
         let (next, scale) = frame(&mut state, done, 2000);
         assert_eq!(next.effect, SpiritVfxBackgroundEffect::Resonance);
         close(next.opacity, 0.0);
-        close(scale, 1.4);
+        close(scale, 1.54);
         let (settled, _) = frame(&mut state, done, 2650);
         close(settled.opacity, 0.75);
         close(settled.speed, 1.0);
@@ -1892,7 +1891,7 @@ mod terminal_background_tests {
         let mut state = TerminalBackgroundVfxState::INACTIVE;
         frame(&mut state, Some(ProgramStatus::Done), 0);
         frame(&mut state, Some(ProgramStatus::Done), 650);
-        for (now, opacity, scale) in [(700, 0.75, 1.4), (1350, 0.75, 3.0), (1675, 0.375, 3.0)] {
+        for (now, opacity, scale) in [(700, 0.75, 1.54), (1350, 0.75, 3.0), (1675, 0.375, 3.0)] {
             let (background, actual_scale) = frame(&mut state, Some(ProgramStatus::Idle), now);
             assert_eq!(background.effect, SpiritVfxBackgroundEffect::Resonance);
             close(background.opacity, opacity);
@@ -1928,7 +1927,7 @@ mod terminal_background_tests {
         let (settled, scale) = frame(&mut state, working, 2325);
         close(settled.opacity, 0.75);
         close(settled.speed, 3.0);
-        close(scale, 1.4);
+        close(scale, 1.54);
         assert_eq!(state.entered_ms, 0);
     }
 

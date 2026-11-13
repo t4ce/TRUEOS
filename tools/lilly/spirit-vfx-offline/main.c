@@ -135,7 +135,7 @@ static const RuntimeControls DEFAULT_RUNTIME_CONTROLS = {
 };
 
 static const float MAGIC_TIME_STATIC_PREVIEW_SECONDS = 10.0f * 3600.0f + 9.0f * 60.0f + 42.0f;
-static const float SPIRIT_BACKGROUND_PRESENT_SCALE = 1.171875f;
+static const float SPIRIT_BACKGROUND_PRESENT_SCALE = 1.5625f;
 static const float SPIRIT_LILLY_PRESENT_SCALE = 1.0f;
 static const float AURA_RADIUS_MIN = 9.0f;
 static const float AURA_RADIUS_MAX = 12.0f;

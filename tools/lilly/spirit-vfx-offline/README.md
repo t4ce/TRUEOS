@@ -17,7 +17,7 @@ only their submission environments differ.
 
 The panel renders background IDs 2 through 11 in a five-column, two-row grid
 at 60 Hz. Every cell uses the live fixed 256x256 allocation, Lilly scale
-`1.0`, zero rotation, no edge feather, background presentation scale `1.171875`,
+`1.0`, zero rotation, no edge feather, background presentation scale `1.5625`,
 and the global animated AuraBloom sprite layer. Opacity remains `1.00` so every background can be
 reviewed. Left/Right adjusts the shared background Speed and Down/Up adjusts
 Intensity, both in `0.01` steps.

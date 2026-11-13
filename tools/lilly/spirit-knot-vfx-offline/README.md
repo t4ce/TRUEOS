@@ -38,7 +38,7 @@ does not approximate or alter the production AuraBloom sprite pass.
 
 The original four GLSL ES studies remain available here. Spark lattice and
 Resonance have been selected and ported to the production C++ for OpenCL shader
-as IDs 12 and 13. Working uses Spark lattice at speed 3, scale 1.4, opacity 0.75,
+as IDs 12 and 13. Working uses Spark lattice at speed 3, scale 1.54, opacity 0.75,
 and intensity 1 → 4 → 1 over seven seconds. Unread completion uses Resonance
 at its authored speed 1 and intensity 2, with the same scale and opacity.
 Both expand to scale 3 before fading out. Runtime mapping and transition details

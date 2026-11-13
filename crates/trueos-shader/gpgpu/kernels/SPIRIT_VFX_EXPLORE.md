@@ -54,14 +54,14 @@ grid Param 1 moves, following a two-second
 `[radius 9..12..9, strength 2.5, pulse 0, brighten 0]` and uses Aura bloom's
 authored palette.
 
-Legacy procedural backgrounds use a fixed live presentation scale of `1.171875`.
-The authored reference radius `0.32` therefore lands at 96 pixels in the
-256-pixel surface, leaving a uniform 32-pixel outer margin. This applies to the
+Standard procedural backgrounds use a fixed live presentation scale of `1.5625`.
+The authored reference radius `0.32` therefore lands at 128 pixels in the
+256-pixel surface, filling its full diameter without the former 32-pixel margin. This applies to the
 legacy set, including the transient move portal.
 The move transition continues to ramp speed and intensity, but no longer grows
 its spatial footprint.
 
-The selected Codex knot backgrounds use scale `1.4`, opacity `0.75`, and a
+The selected Codex knot backgrounds use scale `1.54`, opacity `0.75`, and a
 two-stage exit: grow to scale `3` over 650 ms, then fade to zero over 650 ms
 before changing modes. Spark lattice uses fixed speed `3` and a seven-second
 `1 → 4 → 1` intensity cycle while working. Resonance uses speed `1` and intensity
