@@ -77,6 +77,7 @@ define_started_flags!(
     UI4_H264_ENCODE_STREAM_STARTED,
     UI4_COMPOSITOR_STARTED,
     UI4_COLOR_PICKER_STARTED,
+    UI4_CHROMA_SERVICE_STARTED,
     UI4_EDIT_LIFE_STARTED,
     UI4_LINK_SERVICE_STARTED,
     UI4_CODEX_PROMPT_SERVICE_STARTED,
@@ -726,6 +727,20 @@ fn spawn_ui4_color_picker_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_color_picker_service_task())
 }
 
+/// CHROMATIC is a cooperative kernel service on a profile-selected E-core.
+/// Non-hybrid machines use a background AP, preserving the UI carrier.
+fn spawn_ui4_chroma_service_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_eff_worker(spawner, |worker_spawner| {
+        let slot = worker_spawner.cpu_slot();
+        let kind = crate::workers::core_kind_for_slot(slot);
+        crate::log_info!(target: "service";
+            "ui4-chroma-service: executor-profile=ecore-preferred cpu_slot={} core_kind={} background_ap_fallback={}\n",
+            slot, kind, (kind != crate::workers::CORE_KIND_EFF) as u8,
+        );
+        crate::ui4::ui4_chroma_service_task()
+    })
+}
+
 fn spawn_ui4_edit_life_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::ui4::ui4_edit_life_service_task())
 }
@@ -938,7 +953,7 @@ const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
 // Own the AtomicBool fields in a static array; an interior-mutable temporary
 // cannot be promoted behind a shared slice reference.
-const TASK_COUNT: usize = 64
+const TASK_COUNT: usize = 65
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + 2 * cfg!(feature = "trueos_ttstt") as usize
     + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize;
@@ -1246,6 +1261,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::UI4_COMPOSITOR_READY,
         &UI4_COLOR_PICKER_STARTED,
         spawn_ui4_color_picker_service_task,
+    ),
+    TaskSpec::enabled(
+        "ui4-chroma-service",
+        crate::r::readiness::UI4_COMPOSITOR_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        &UI4_CHROMA_SERVICE_STARTED,
+        spawn_ui4_chroma_service_task,
     ),
     TaskSpec::enabled(
         "ui4-edit-life",

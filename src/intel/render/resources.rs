@@ -1337,6 +1337,32 @@ pub(crate) fn update_resident_triangle_vertices(
     Ok(())
 }
 
+/// Replace only position/UV data while retaining a textured mesh's index plan.
+/// The caller must first prove retirement of the preceding draw, just as for
+/// `update_resident_triangle_vertices`.
+pub(crate) fn update_resident_textured_vertices(
+    mesh: &ResidentTriangleMesh,
+    vertices: &[[f32; 5]],
+) -> Result<(), &'static str> {
+    let vertex_bytes = vertices
+        .len()
+        .checked_mul(core::mem::size_of::<[f32; 5]>())
+        .ok_or("resident-textured-update-bytes")?;
+    if mesh.vertex_format != TriangleVertexFormat::PosUv
+        || vertices.len() != mesh.vertex_count as usize
+        || vertex_bytes != mesh.vertex_bytes as usize
+        || vertex_bytes > mesh.storage_bytes
+        || vertices.iter().flatten().any(|value| !value.is_finite())
+    {
+        return Err("resident-textured-update-shape");
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(vertices.as_ptr().cast::<u8>(), mesh.storage_virt, vertex_bytes);
+    }
+    crate::intel::dma_flush(mesh.storage_virt, vertex_bytes);
+    Ok(())
+}
+
 
 pub(crate) fn release_resident_triangle_mesh(mesh: &ResidentTriangleMesh) -> bool {
     if let Some(carrier) = mesh.carrier {

@@ -1,6 +1,6 @@
-//! One-way user input for an already running Codex conversation.
+//! User input and on-demand headless startup for the Codex conversation.
 //!
-//! This is a kernel UI4 frame, not an application launch or clipboard paste.
+//! This kernel UI4 frame launches through AppDB when no Codex VM exists.
 //! It retains the exact receiver selected at open, so changing or retiring a
 //! Codex conversation cannot silently redirect the user's message.
 
@@ -39,7 +39,7 @@ const CARET_BLINK_MS: u64 = 500;
 struct OpenRequest {
     source: Ui4CursorSource,
     anchor: (u32, u32),
-    target: codex::Target,
+    target: Option<codex::Target>,
     paths: Vec<String>,
     previews: Vec<(Arc<super::drag_drop::DragPreview>, (u32, u32))>,
 }
@@ -68,7 +68,7 @@ struct ActivePrompt {
     session: WindowSessionId,
     frame: FrameHandle,
     window: WindowId,
-    target: codex::Target,
+    target: Option<codex::Target>,
     width: u32,
     height: u32,
     editor: editor::Editor,
@@ -81,25 +81,44 @@ struct ActivePrompt {
     previews: Vec<AttachedPreview>,
     seed: Option<&'static str>,
     seed_tick: Instant,
+    launch_error: Arc<Mutex<Option<String>>>,
 }
 
-/// The context menu does nothing unless a live native Codex receiver exists.
-/// Capture its identity here, before asynchronous font/frame preparation.
+/// Capture an existing receiver before asynchronous frame preparation.
 pub(crate) fn request_open(source: Ui4CursorSource, anchor: (u32, u32)) {
-    if let Some(target) = codex::current_target() {
-        let mut pending = OPEN_REQUEST.lock();
-        if pending.is_some() {
-            return;
-        }
-        *pending = Some(OpenRequest {
-            source,
-            anchor,
-            target,
-            paths: Vec::new(),
-            previews: Vec::new(),
-        });
-        OPEN_SIGNAL.signal(());
+    let mut pending = OPEN_REQUEST.lock();
+    if pending.is_some() { return; }
+    *pending = Some(OpenRequest {
+        source, anchor, target: codex::current_target(),
+        paths: Vec::new(), previews: Vec::new(),
+    });
+    OPEN_SIGNAL.signal(());
+}
+
+// Admission still passes through the shared launcher and its single-root cap.
+struct LaunchStatus(Arc<Mutex<Option<String>>>);
+impl crate::hv::launcher::LaunchObserver for LaunchStatus {
+    fn finished(&self, _: &crate::shell3::MatrixTarget, _: Option<u8>, error: Option<&str>, _: Option<&str>) {
+        *self.0.lock() = Some(error.unwrap_or("Codex stopped. Open Codex CLI in Shell3 to continue.").into());
     }
+}
+
+fn launch_codex(status: Arc<Mutex<Option<String>>>) -> Result<(), String> {
+    for vm in 0..crate::allcaps::hv::VM_ID_LIMIT {
+        let vm = vm as u8;
+        let state = crate::hv::vm_state(vm);
+        if state.running || state.starting {
+            if let Some(run) = crate::hv::vm_run_generation(vm) {
+                if crate::hv::blueprint_current_run_archive(vm, run).as_deref() == Some("codex.bp") {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    let bytes = crate::app_db::get("codex.bp")?
+        .ok_or_else(|| String::from("Codex is not installed in AppDB."))?;
+    let request = crate::hv::launcher::LaunchRequest::new("codex.bp".into(), bytes);
+    crate::hv::launcher::enqueue(request, Some(alloc::boxed::Box::new(LaunchStatus(status)))).map(|_| ())
 }
 
 /// Queue only copied references. Called under the input broker's gesture lock;
@@ -131,7 +150,7 @@ pub(super) fn request_attachments(
         return false;
     }
     if let Some(request) = pending.as_mut() {
-        if request.target != target
+        if request.target != Some(target)
             || request.previews.len() >= attachments::LIMIT
             || !attachments::accumulate(&mut request.paths, &paths)
         {
@@ -142,7 +161,7 @@ pub(super) fn request_attachments(
         *pending = Some(OpenRequest {
             source,
             anchor,
-            target,
+            target: Some(target),
             paths,
             previews: alloc::vec![(preview, anchor)],
         });
@@ -163,7 +182,7 @@ pub(crate) async fn ui4_codex_prompt_service_task() {
         }
         let request = OPEN_REQUEST.lock().take();
         if let Some(request) = request {
-            if active.is_none() && codex::is_target_live(&request.target) {
+            if active.is_none() && request.target.as_ref().is_none_or(codex::is_target_live) {
                 let opened = match font::prepare().await {
                     Ok(()) => open_prompt(request).await,
                     Err(reason) => Err(reason),
@@ -186,8 +205,24 @@ pub(crate) async fn ui4_codex_prompt_service_task() {
         if let Some(prompt) = active.as_mut() {
             let mut close = prompt.submitted
                 || super::window_is_closed(OWNER, prompt.window)
-                || !codex::is_target_live(&prompt.target);
+                || prompt.target.as_ref().is_some_and(|target| !codex::is_target_live(target));
             if !close {
+                if prompt.target.is_none() {
+                    let launch_error = prompt.launch_error.lock().clone();
+                    if let Some(target) = codex::current_target() {
+                        prompt.target = Some(target);
+                        *ACTIVE_TARGET.lock() = Some(target);
+                        prompt.editor = editor::Editor::default();
+                        prompt.dirty = true;
+                        let _ = super::set_window_title(OWNER, prompt.window,
+                            "Codex · Enter sends · Shift+Enter new line · Esc closes");
+                    } else if let Some(error) = launch_error {
+                        // Clone outside the guard before updating the sheet.
+                        set_status(prompt, &error);
+                    } else if prompt.blink.elapsed().as_millis() >= 30_000 {
+                        set_status(prompt, "Still waiting.\nIf not signed in,\nopen Codex CLI\nin Shell3 to\nauthenticate your\nOpenAI account.");
+                    }
+                }
                 if prompt.seed_tick.elapsed().as_millis() >= 48 {
                     if let Some(seed) = prompt.seed {
                         if !super::spirit_access::is_granted(super::CursorFrameKey::new(OWNER, prompt.window)) {
@@ -222,7 +257,7 @@ pub(crate) async fn ui4_codex_prompt_service_task() {
                     active = None;
                 }
             } else {
-                if prompt.blink.elapsed().as_millis() >= CARET_BLINK_MS {
+                if prompt.target.is_some() && prompt.blink.elapsed().as_millis() >= CARET_BLINK_MS {
                     prompt.caret_visible = !prompt.caret_visible;
                     prompt.blink = Instant::now();
                     prompt.dirty = true;
@@ -239,7 +274,7 @@ pub(crate) async fn ui4_codex_prompt_service_task() {
 }
 
 async fn open_prompt(request: OpenRequest) -> Result<ActivePrompt, &'static str> {
-    if !codex::is_target_live(&request.target) {
+    if request.target.as_ref().is_some_and(|target| !codex::is_target_live(target)) {
         return Err("receiver-retired");
     }
     let output = OutputId::from_slot(0).ok_or("output-unavailable")?;
@@ -318,6 +353,7 @@ async fn open_prompt(request: OpenRequest) -> Result<ActivePrompt, &'static str>
         previews: Vec::new(),
         seed: None,
         seed_tick: Instant::now(),
+        launch_error: Arc::new(Mutex::new(None)),
     };
     append_attachments(&mut prompt, request.paths, request.previews).await;
     if render_prompt(&mut prompt).await.is_err() {
@@ -339,8 +375,24 @@ async fn open_prompt(request: OpenRequest) -> Result<ActivePrompt, &'static str>
         let _ = close_prompt(&prompt);
         return Err("selection");
     }
-    *ACTIVE_TARGET.lock() = Some(prompt.target);
+    *ACTIVE_TARGET.lock() = prompt.target;
+    if prompt.target.is_none() {
+        set_status(&mut prompt, "launching...");
+        let _ = render_prompt(&mut prompt).await;
+        if let Err(error) = launch_codex(prompt.launch_error.clone()) {
+            *prompt.launch_error.lock() = Some(error.clone());
+            set_status(&mut prompt, &error);
+        }
+    }
     Ok(prompt)
+}
+
+fn set_status(prompt: &mut ActivePrompt, text: &str) {
+    if prompt.editor.text() == text { return; }
+    prompt.editor = editor::Editor::default();
+    for ch in text.chars() { let _ = prompt.editor.insert(ch); }
+    prompt.dirty = true;
+    let _ = super::set_window_title(OWNER, prompt.window, "Codex · waiting for CLI · Esc closes");
 }
 
 async fn append_attachments(
@@ -475,6 +527,12 @@ async fn process_input(prompt: &mut ActivePrompt) -> bool {
         match event {
             Ui4InputEvent::Keyboard(keyboard) if keyboard.window == prompt.window => {
                 let event = keyboard.event;
+                if prompt.target.is_none() {
+                    if event.kind == KEYBOARD_OUTPUT_KIND_KEY
+                        && event.flags & KEYBOARD_OUTPUT_FLAG_PRESS != 0
+                        && event.key_code == KEYBOARD_KEY_ESCAPE { return true; }
+                    continue;
+                }
                 if !crate::spirit::attachment_intro_input(prompt.window, &event) {
                     continue;
                 }
@@ -505,7 +563,7 @@ async fn process_input(prompt: &mut ActivePrompt) -> bool {
                                     }
                                 }
                                 if let Some(text) = message(prompt).await
-                                    && codex::submit(&prompt.target, &text).is_ok()
+                                    && codex::submit(prompt.target.as_ref().expect("ready receiver"), &text).is_ok()
                                 {
                                     prompt.submitted = true;
                                     return true;
@@ -542,6 +600,7 @@ async fn process_input(prompt: &mut ActivePrompt) -> bool {
             }
             Ui4InputEvent::Pointer(pointer)
                 if pointer.window == prompt.window
+                    && prompt.target.is_some()
                     && pointer.buttons_pressed & 1 != 0
                     && pointer.local_x >= 0
                     && pointer.local_y >= 0 =>
@@ -647,7 +706,7 @@ async fn render_prompt(prompt: &mut ActivePrompt) -> Result<(), ()> {
             );
         }
     }
-    if prompt.caret_visible {
+    if prompt.caret_visible && prompt.target.is_some() {
         let (column, row) = prompt.editor.caret();
         let (x, y, width, height) = cell_bounds(column, row, prompt.width, prompt.height);
         fill_rect(

@@ -1,4 +1,4 @@
-//! Kernel-internal UI4 color picker and blank CHROMATIC panel.
+//! Kernel-internal UI4 picker for the primary display bottom color.
 //!
 //! The service owns no frame while closed. The ordinary default context menu
 //! queues an open request; Escape closes the session and transfers its frame
@@ -45,15 +45,8 @@ const PRECISION_PALETTE_ENTRIES: usize = 1024;
 static OPEN_REQUEST: Mutex<Option<ColorPickerOpenRequest>> = Mutex::new(None);
 static ESCAPE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum PickerMode {
-    Color,
-    Chroma,
-}
-
 #[derive(Copy, Clone)]
 struct ColorPickerOpenRequest {
-    mode: PickerMode,
     source: Ui4CursorSource,
     anchor: (u32, u32),
 }
@@ -115,7 +108,6 @@ static SELECTED_COLOR: Mutex<PickerColor> = Mutex::new(PickerColor::INITIAL);
 static SELECTED_GAMMA_X: Mutex<u8> = Mutex::new(127);
 
 struct ActiveColorPicker {
-    mode: PickerMode,
     session: WindowSessionId,
     picker_frame: FrameHandle,
     picker_window: super::WindowId,
@@ -128,15 +120,7 @@ struct ActiveColorPicker {
 }
 
 pub(super) fn request_open(source: Ui4CursorSource, anchor: (u32, u32)) {
-    request_open_mode(source, anchor, PickerMode::Color);
-}
-
-pub(super) fn request_chroma_open(source: Ui4CursorSource, anchor: (u32, u32)) {
-    request_open_mode(source, anchor, PickerMode::Chroma);
-}
-
-fn request_open_mode(source: Ui4CursorSource, anchor: (u32, u32), mode: PickerMode) {
-    *OPEN_REQUEST.lock() = Some(ColorPickerOpenRequest { source, anchor, mode });
+    *OPEN_REQUEST.lock() = Some(ColorPickerOpenRequest { source, anchor });
 }
 
 fn capture_escape(
@@ -252,7 +236,7 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
         }
     };
 
-    let escape_hook = match super::register_global_keyboard_hook(u8::MAX, capture_escape) {
+    let escape_hook = match super::register_global_keyboard_hook(u8::MAX - 1, capture_escape) {
         Ok(hook) => hook,
         Err(_) => {
             cleanup_failed_open(session, picker_frame);
@@ -261,23 +245,18 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
     };
 
     let mut picker = ActiveColorPicker {
-        mode: request.mode,
         session,
         picker_frame,
         picker_window,
         escape_hook,
         color: *SELECTED_COLOR.lock(),
         gamma_x: *SELECTED_GAMMA_X.lock(),
-        gamma_at_open: if request.mode == PickerMode::Color {
-            read_pipe_a_gamma()
-        } else {
-            None
-        },
+        gamma_at_open: read_pipe_a_gamma(),
         gestures: [None; MAX_ACTIVE_GESTURES],
         picker_dirty: true,
     };
     let initial = picker.color.rgb();
-    if picker.mode == PickerMode::Color && !set_bottom_color(initial) {
+    if !set_bottom_color(initial) {
         let _ = close_picker(&picker, "initial-bottom-color-program-failed");
         return Err("initial-bottom-color-program");
     }
@@ -303,8 +282,7 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
         );
     }
     crate::log_info!(target: "ui4/color-picker";
-        "ui4/color-picker: opened mode={:?} session={} picker_frame={} picker_window={} plane=slot4-software-cursor/fixed picker={}x{}@{},{} rgb={},{},{} target=pipe-a-bottom-color commit=release fallback_application_plane=0\n",
-        picker.mode,
+        "ui4/color-picker: opened session={} picker_frame={} picker_window={} plane=slot4-software-cursor/fixed picker={}x{}@{},{} rgb={},{},{} target=pipe-a-bottom-color commit=release fallback_application_plane=0\n",
         session.raw(),
         picker_frame.raw(),
         picker_window.raw(),
@@ -369,9 +347,6 @@ fn close_picker(picker: &ActiveColorPicker, reason: &'static str) -> bool {
 
 impl ActiveColorPicker {
     fn handle_pointer(&mut self, event: super::input_broker::Ui4PointerEvent) {
-        if self.mode == PickerMode::Chroma {
-            return;
-        }
         if event.buttons_pressed & PRIMARY_BUTTON_MASK != 0 {
             if let Some(panel) = panel_at(event.local_x, event.local_y) {
                 self.begin_gesture(event.source, panel);
@@ -488,16 +463,8 @@ fn render_picker(picker: &ActiveColorPicker) -> Result<(), ()> {
     render_and_publish(
         picker.picker_frame,
         picker.picker_window,
-        |pixels, width, height, pitch| {
+        |pixels, width, _height, pitch| {
             pixels.fill(0);
-            if picker.mode == PickerMode::Chroma {
-                for y in 0..height {
-                    for x in 0..width {
-                        write_opaque_pixel(pixels, pitch, x, y, [255; 3]);
-                    }
-                }
-                return;
-            }
             for y in 0..SV_HEIGHT {
                 let value = u8::MAX - panel_axis(y as i32, 0, SV_HEIGHT);
                 for x in 0..PICKER_WIDTH {

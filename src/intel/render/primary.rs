@@ -694,6 +694,28 @@ pub(crate) fn ui4_frame_extent_limit() -> (u32, u32) {
     }
 }
 
+#[path = "color_output_admission.rs"]
+mod color_output_admission;
+
+/// A trusted color-only producer may use the complete active physical output
+/// on the known Gen12 devices. This does not increase Blueprint limits or
+/// admit larger scratch, depth, MSAA, readback or retained-scene targets.
+pub(crate) fn active_output_color_extent_supported(width: u32, height: u32) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    // Read raw PCI identity: the TGL compatibility experiment aliases the
+    // ordinary Dev.device_id value to ADL-S.
+    let identity = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0);
+    color_output_admission::active_color_extent_admitted(
+        width,
+        height,
+        crate::intel::active_scanout_dimensions(),
+        (RESIDENT_SCENE_DIRECT_TARGET_WIDTH as u32, RESIDENT_SCENE_DIRECT_TARGET_HEIGHT as u32),
+        identity,
+    )
+}
+
 fn resident_scene_target_extent_supported(width: usize, height: usize, direct: bool) -> bool {
     let (max_width, max_height) = if direct {
         ui4_frame_extent_limit()
@@ -3845,7 +3867,20 @@ fn submit_resident_scene_capture_inner_for_carrier(
     let direct = matches!(frame_output,
         ResidentSceneFrameOutput::DirectGpuSurface(_)
             | ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(_));
-    if !resident_scene_target_extent_supported(target_width, target_height, direct) {
+    let active_color_only = matches!(frame_output, ResidentSceneFrameOutput::DirectGpuSurface(_))
+        && !opaque_depth_enabled
+        && !straight_alpha_output
+        && raster_quality == ResidentSceneRasterQuality::SingleSample
+        && native_churn.is_none()
+        && native_sampled_material.is_none()
+        && cube_companion.is_none()
+        && carrier.is_none()
+        && drawable_depth.is_none();
+    if !resident_scene_target_extent_supported(target_width, target_height, direct)
+        && !(active_color_only
+            && u32::try_from(target_width).ok().zip(u32::try_from(target_height).ok())
+                .is_some_and(|(width, height)| active_output_color_extent_supported(width, height)))
+    {
         return Err("resident-scene-capture-shape");
     }
     if let ResidentSceneFrameOutput::GpuSurface(destination)

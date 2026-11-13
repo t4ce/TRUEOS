@@ -1066,7 +1066,7 @@ impl InputBroker {
                             super::color_picker::request_open(source, anchor);
                         }
                         DesktopContextMenuAction::Chromatic => {
-                            super::color_picker::request_chroma_open(source, anchor);
+                            super::chromaservice::request_open(source, anchor);
                         }
                         DesktopContextMenuAction::Shell => {
                             request_desktop_shell_launch(source, x, y)

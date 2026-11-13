@@ -66,6 +66,7 @@ impl WindowOwner {
     pub(crate) const LINK_SERVICE: Self = Self::KernelApp(9);
     pub(crate) const CODEX_PROMPT_SERVICE: Self = Self::KernelApp(10);
     pub(crate) const SHELL3_SERVICE: Self = Self::KernelApp(11);
+    pub(crate) const CHROMA_SERVICE: Self = Self::KernelApp(12);
 
     /// Stable, allocation-free producer name for diagnostics. The enum still
     /// carries the application or VM instance where the name is shared.
@@ -79,6 +80,7 @@ impl WindowOwner {
             Self::LINK_SERVICE => "link-service",
             Self::CODEX_PROMPT_SERVICE => "codex-prompt-service",
             Self::SHELL3_SERVICE => "shell3-service",
+            Self::CHROMA_SERVICE => "chroma-service",
             Self::KernelApp(_) => "kernel-app",
             Self::Vm(_) => "blueprint-vm",
         }

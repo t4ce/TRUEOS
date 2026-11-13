@@ -7,6 +7,10 @@ pub(crate) mod blueprint_ui4;
 mod collapse;
 mod collapse_animation;
 mod color_picker;
+mod chroma_color;
+mod chroma_controls;
+mod chroma_render;
+mod chromaservice;
 mod codex_prompt;
 pub(crate) use collapse::{CollapseError, MAX_COLLAPSE_IMAGE_SIZE, enable_window_collapse};
 mod compositor_service;
@@ -84,6 +88,7 @@ impl InteractionCadence {
 }
 
 pub(crate) use color_picker::ui4_color_picker_service_task;
+pub(crate) use chromaservice::ui4_chroma_service_task;
 pub(crate) use edit_life::ui4_edit_life_service_task;
 pub(crate) use codex_prompt::{request_open as request_codex_prompt_open, ui4_codex_prompt_service_task};
 pub(crate) use compositor_service::ui4_compositor_service_task;
