@@ -1,0 +1,645 @@
+//! UI4 frame ownership and plain-text Shell3 presentation.
+
+#[path = "copy.rs"]
+mod copy;
+#[path = "cpu.rs"]
+mod cpu;
+mod pan;
+mod reveal;
+mod edit_life;
+
+use super::RgbaColor;
+use super::update::RenderedLine;
+use crate::ui4::{
+    DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId,
+    PremultipliedRgba8, ScanoutFormat, Ui4FrameEscapeKeyAction, Ui4InputEvent, WindowCreate,
+    WindowId, WindowInteraction, WindowOwner, WindowPlacement, WindowPlane,
+    WindowSessionCloseRequest, WindowSessionId, begin_additional_window_session,
+    commit_window_frame_replacement, create_frame, create_window, destroy_frame,
+    finish_window_session_with_request, publish_window_frame, retire_frame_when_released,
+    set_window_escape_key_action, window_resize_state,
+};
+
+const OWNER: WindowOwner = WindowOwner::SHELL3_SERVICE;
+const BACKGROUND: [u8; 4] = super::update::MATRIX_BACKGROUND;
+const FOREGROUND: RgbaColor = RgbaColor::White;
+
+/// The bitmap editor effect is confined to the laptop's CPU font fallback.
+/// Native font outputs keep their line/quad face even when a guest requests
+/// the Hex-based effect.
+fn bitmap_edit_settings(
+    settings: Option<&trueos_terminal::edit_life::EditLife>,
+) -> Option<&trueos_terminal::edit_life::EditLife> {
+    if !crate::r::services::shell3_font_service::cpu_bitmap_fallback_enabled() {
+        return None;
+    }
+    settings.filter(|settings| {
+        settings.enabled && settings.viewport.width != 0 && settings.viewport.height != 0
+    })
+}
+
+/// Within the bitmap fallback, the page font follows the Shader preference,
+/// including while paused. Overlay rectangles retain the terminal face.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HexRegion {
+    viewport: trueos_terminal::edit_life::CellRect,
+    exclusions: alloc::vec::Vec<trueos_terminal::edit_life::CellRect>,
+}
+
+impl HexRegion {
+    fn from_settings(settings: Option<&trueos_terminal::edit_life::EditLife>) -> Option<Self> {
+        let settings = bitmap_edit_settings(settings)?;
+        Some(Self { viewport: settings.viewport, exclusions: settings.exclusions.clone() })
+    }
+
+    fn contains(&self, column: u32, row: u32) -> bool {
+        self.viewport.contains(column, row)
+            && !self.exclusions.iter().any(|rect| rect.contains(column, row))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Backend {
+    #[default]
+    Cpu,
+    Copy,
+    Network,
+}
+
+struct Ui4Surface {
+    frame: FrameHandle,
+    session: WindowSessionId,
+    window: WindowId,
+    width: u32,
+    height: u32,
+    backend: Backend,
+    closing: bool,
+    broker_resized: bool,
+    frame_contents: [Option<alloc::vec::Vec<RenderedLine>>; 2],
+    scale: u32,
+    clear_buffers: [bool; 2],
+    hex_region: Option<HexRegion>,
+    edit_life: Option<trueos_terminal::edit_life::EditLife>,
+    edit_life_page: Option<alloc::sync::Arc<crate::ui4::edit_life::Page>>,
+}
+
+impl Ui4Surface {
+    fn set_hex_region(&mut self, settings: Option<&trueos_terminal::edit_life::EditLife>) {
+        let next = HexRegion::from_settings(settings);
+        if self.hex_region != next {
+            self.hex_region = next;
+            // A metadata-only toggle or overlay movement still changes font
+            // pixels in both frame buffers, even when every VT cell is equal.
+            self.frame_contents = [None, None];
+            self.clear_buffers = [true; 2];
+        }
+    }
+
+    fn font_face(&self, column: u32, row: u32) -> crate::r::services::shell3_font_service::FontFace {
+        if self.hex_region.as_ref().is_some_and(|region| region.contains(column, row)) {
+            crate::r::services::shell3_font_service::FontFace::Hex
+        } else {
+            crate::r::services::shell3_font_service::FontFace::Raster
+        }
+    }
+}
+
+/// Per-show backend selection and UI4 publication state.
+pub struct Show {
+    backend: Backend,
+    surface: Option<Ui4Surface>,
+    poisoned: bool,
+    initial_geometry: Option<super::service::WindowGeometry>,
+    font_scale: u32,
+    pan: Option<pan::PanBuffer>,
+    strips: [Option<reveal::StripCache>; 2],
+    pan_budget: Option<crate::ui4::text_area::RasterBudget>,
+}
+
+impl Default for Show {
+    fn default() -> Self {
+        Self::new(Backend::Copy)
+    }
+}
+
+impl Show {
+    pub const fn new(backend: Backend) -> Self {
+        Self {
+            backend,
+            surface: None,
+            poisoned: false,
+            initial_geometry: None,
+            font_scale: super::service::DEFAULT_MICROFONT_SCALE,
+            pan: None,
+            strips: [None, None],
+            pan_budget: None,
+        }
+    }
+
+    pub(crate) fn configure_window(&mut self, geometry: super::service::WindowGeometry) {
+        self.initial_geometry = Some(geometry);
+        self.font_scale = super::service::microfont_scale();
+    }
+
+    /// Resolve the first frame and grid from the same physical character cell.
+    pub(crate) fn initial_grid(&mut self, columns: usize, rows: usize) -> Result<(usize, usize), &'static str> {
+        let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(self.font_scale)
+            .ok_or("shell3-font-physical-size-unavailable")?;
+        let requested = show_extent(columns, rows, self.font_scale)?;
+        let extent = if let Some(mut geometry) = self.initial_geometry {
+            let (screen_width, screen_height) = crate::ui4::output_dimensions()
+                .ok_or("shell3-show-scanout-unavailable")?;
+            geometry.width = geometry.width.max(super::MIN_COLUMNS as u32 * cell_width).min(screen_width);
+            geometry.height = geometry.height.max(super::MIN_ROWS as u32 * cell_height).min(screen_height);
+            self.initial_geometry = Some(geometry);
+            (geometry.width, geometry.height)
+        } else { requested };
+        Ok(((extent.0 / cell_width) as usize, (extent.1 / cell_height) as usize))
+    }
+
+    pub(crate) const fn font_scale(&self) -> u32 {
+        self.font_scale
+    }
+
+    pub(crate) fn set_font_scale(
+        &mut self,
+        scale: u32,
+        columns: usize,
+        rows: usize,
+    ) -> Result<(u32, u32), &'static str> {
+        let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)
+            .ok_or("shell3-font-physical-size-unavailable")?;
+        let (width, height) = self
+            .surface
+            .as_ref()
+            .map(|s| (s.width, s.height))
+            .map(Ok)
+            .unwrap_or_else(|| show_extent(columns, rows, self.font_scale))?;
+        let extent = (
+            width.max((super::MIN_COLUMNS as u32).saturating_mul(cell_width)),
+            height.max((super::MIN_ROWS as u32).saturating_mul(cell_height)),
+        );
+        if let Some(surface) = self.surface.as_mut() {
+            if extent != (width, height) {
+                let (mut placement, _) = window_resize_state(OWNER, surface.window)
+                    .map_err(|_| "shell3-show-scale-state")?;
+                placement.width = extent.0;
+                placement.height = extent.1;
+                if let Some((output_width, output_height)) = crate::ui4::output_dimensions() {
+                    placement.x = placement.x.clamp(0, output_width.saturating_sub(extent.0) as i32);
+                    placement.y = placement.y.clamp(0, output_height.saturating_sub(extent.1) as i32);
+                }
+                crate::ui4::set_window_placement(OWNER, surface.window, placement)
+                    .map_err(|_| "shell3-show-scale-minimum")?;
+            }
+            surface.scale = scale;
+            surface.broker_resized = true;
+            surface.frame_contents = [None, None];
+            surface.clear_buffers = [true; 2];
+        }
+        self.font_scale = scale;
+        Ok(extent)
+    }
+
+    pub fn set_backend(&mut self, backend: Backend) {
+        self.backend = backend;
+    }
+
+    pub(crate) fn is_closed(&self) -> bool {
+        self.surface
+            .as_ref()
+            .is_none_or(|surface| crate::ui4::window_is_closed(OWNER, surface.window))
+    }
+
+    pub(crate) fn is_closing(&self) -> bool {
+        self.surface.as_ref().is_some_and(|surface| surface.closing)
+    }
+
+    pub(crate) fn handles_window(&self, window: WindowId) -> bool {
+        self.surface
+            .as_ref()
+            .is_some_and(|surface| surface.window == window)
+    }
+
+    pub(crate) fn window(&self) -> Option<WindowId> {
+        self.surface.as_ref().map(|surface| surface.window)
+    }
+
+    pub(crate) fn resize_needed(&self) -> bool {
+        let Some(surface) = self.surface.as_ref() else {
+            return false;
+        };
+        window_resize_state(OWNER, surface.window).is_ok_and(|(placement, _)| {
+            (placement.width, placement.height) != (surface.width, surface.height)
+        })
+    }
+
+    pub(crate) fn resize_target_extent(&self) -> Option<(u32, u32)> {
+        let surface = self.surface.as_ref()?;
+        let (placement, _) = window_resize_state(OWNER, surface.window).ok()?;
+        Some((placement.width, placement.height))
+    }
+
+    pub(crate) async fn resize_to_current(
+        &mut self,
+        lines: &[&[(char, Option<RgbaColor>)]],
+        area: Option<&super::update::MatrixAreaSnapshot>,
+        edit_life: Option<&trueos_terminal::edit_life::EditLife>,
+    ) -> Result<(), &'static str> {
+        if self.poisoned {
+            return Err("shell3-show-bcs0-allocation-pinned");
+        }
+        crate::r::services::shell3_font_service::prepare().await?;
+        let current = self.surface.as_ref().ok_or("shell3-show-surface-missing")?;
+        let (placement, epoch) =
+            window_resize_state(OWNER, current.window).map_err(|_| "shell3-show-resize-state")?;
+        if (placement.width, placement.height) == (current.width, current.height) {
+            return Ok(());
+        }
+        let replacement = create_surface_frames(placement.width, placement.height, self.backend)?;
+        let mut staged = Ui4Surface {
+            frame: replacement,
+            session: current.session,
+            window: current.window,
+            width: placement.width,
+            height: placement.height,
+            backend: self.backend,
+            closing: false,
+            broker_resized: true,
+            frame_contents: [None, None],
+            scale: self.font_scale,
+            clear_buffers: [false; 2],
+            hex_region: HexRegion::from_settings(edit_life),
+            edit_life: None,
+            edit_life_page: None,
+        };
+        let render_result = match self.backend {
+            Backend::Cpu => cpu::present(&mut staged, lines, &[]),
+            Backend::Copy => {
+                copy::present(
+                    &mut staged,
+                    lines,
+                    &[],
+                    &mut self.poisoned,
+                    &mut self.pan,
+                    self.pan_budget.get_or_insert_with(|| {
+                        crate::ui4::text_area::RasterBudget::new(
+                            crate::allcaps::shell3::SH3_PANBUFFER_CAP_BYTES,
+                        )
+                    }),
+                    area,
+                    &mut self.strips,
+                    &[],
+                )
+                .await
+            }
+            _ => Err("shell3-show-backend-not-implemented"),
+        };
+        if let Err(error) = render_result {
+            if !self.poisoned {
+                retire_frame_when_released(staged.frame);
+            }
+            return Err(error);
+        }
+        crate::ui4::edit_life::remove(staged.window);
+        let commit = commit_window_frame_replacement(
+            OWNER,
+            staged.window,
+            staged.frame,
+            placement,
+            epoch,
+            DamageRect::FULL,
+        );
+        if commit.is_err() {
+            retire_frame_when_released(staged.frame);
+            return Err("shell3-show-resize-commit");
+        }
+        let old = self
+            .surface
+            .replace(staged)
+            .ok_or("shell3-show-surface-missing")?;
+        retire_frame_when_released(old.frame);
+        edit_life::present(
+            self.surface.as_mut().ok_or("shell3-show-surface-missing")?,
+            lines,
+            edit_life,
+            true,
+        );
+        Ok(())
+    }
+
+    pub(crate) fn handle_escape(&mut self, event: &Ui4InputEvent) {
+        let Ui4InputEvent::Keyboard(event) = event else {
+            return;
+        };
+        let Some(surface) = self.surface.as_ref() else {
+            return;
+        };
+        if event.window != surface.window
+            || event.event.kind != crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+            || event.event.key_code != crate::r::keyboard::KEYBOARD_KEY_ESCAPE
+        {
+            return;
+        }
+        let session = surface.session;
+        let window = surface.window;
+        if finish_window_session_with_request(
+            OWNER,
+            session,
+            WindowSessionCloseRequest::default().animate_and_retire_frames(),
+        )
+        .is_ok()
+        {
+            if let Some(surface) = self.surface.as_mut() {
+                surface.closing = true;
+            }
+            crate::log_info!(target: "service";
+                "sh3srv: Escape requested graceful UI4 close window={}\n",
+                window.raw(),
+            );
+        }
+    }
+
+    /// Present the Shell3's three text strips in a UI4 window.
+    /// MetaFmt foreground colors are preserved; bold has no raster effect yet.
+    pub(super) async fn present(
+        &mut self,
+        lines: &[&[(char, Option<RgbaColor>)]],
+        columns: usize,
+        rows: usize,
+        batch: &super::UpdateBatch,
+        reveals: &[super::update::StripReveal],
+        area: Option<&super::update::MatrixAreaSnapshot>,
+        edit_life: Option<&trueos_terminal::edit_life::EditLife>,
+    ) -> Result<(), &'static str> {
+        if !matches!(self.backend, Backend::Copy | Backend::Cpu) {
+            return Err("shell3-show-backend-not-implemented");
+        }
+        if self.poisoned {
+            return Err("shell3-show-bcs0-allocation-pinned");
+        }
+
+        crate::r::services::shell3_font_service::prepare().await?;
+        let requested_extent = show_extent(columns, rows, self.font_scale)?;
+        let extent = self
+            .surface
+            .as_ref()
+            .filter(|surface| surface.broker_resized)
+            .map(|surface| (surface.width, surface.height))
+            .or_else(|| {
+                self.initial_geometry
+                    .map(|geometry| (geometry.width, geometry.height))
+            })
+            .unwrap_or(requested_extent);
+        let (width, height) = extent;
+        let recreate_surface = self.surface.as_ref().is_none_or(|surface| {
+            surface.width != width || surface.height != height || surface.backend != self.backend
+        });
+        if recreate_surface {
+            self.release_surface();
+            self.surface =
+                Some(create_surface(width, height, self.backend, self.initial_geometry)?);
+            self.surface.as_mut().unwrap().scale = self.font_scale;
+        }
+        self.surface.as_mut().ok_or("shell3-show-surface-missing")?.set_hex_region(edit_life);
+        if !recreate_surface
+            && batch.segments.is_empty()
+            && self
+                .surface
+                .as_ref()
+                .is_some_and(|surface| !surface.clear_buffers.iter().any(|clear| *clear))
+        {
+            let surface = self.surface.as_mut().ok_or("shell3-show-surface-missing")?;
+            edit_life::present(surface, lines, edit_life, false);
+            return Ok(());
+        }
+        let surface = self.surface.as_mut().ok_or("shell3-show-surface-missing")?;
+        let damage = match self.backend {
+            Backend::Cpu => cpu::present(surface, lines, &batch.segments)?,
+            Backend::Copy => {
+                copy::present(
+                    surface,
+                    lines,
+                    &batch.segments,
+                    &mut self.poisoned,
+                    &mut self.pan,
+                    self.pan_budget.get_or_insert_with(|| {
+                        crate::ui4::text_area::RasterBudget::new(
+                            crate::allcaps::shell3::SH3_PANBUFFER_CAP_BYTES,
+                        )
+                    }),
+                    area,
+                    &mut self.strips,
+                    reveals,
+                )
+                .await?
+            }
+            _ => return Err("shell3-show-backend-not-implemented"),
+        };
+        let damage = if recreate_surface {
+            Some(DamageRect::FULL)
+        } else {
+            damage
+        };
+        if let Some(damage) = damage {
+            publish_window_frame(OWNER, surface.window, damage)
+                .map_err(|_| "shell3-show-window-publish")?;
+        }
+        edit_life::present(surface, lines, edit_life, damage.is_some());
+        Ok(())
+    }
+
+    fn release_surface(&mut self) {
+        if self.poisoned {
+            return;
+        }
+        let Some(surface) = self.surface.take() else {
+            return;
+        };
+        crate::ui4::edit_life::remove(surface.window);
+        retire_frame_when_released(surface.frame);
+        if !surface.closing {
+            let _ = finish_window_session_with_request(
+                OWNER,
+                surface.session,
+                WindowSessionCloseRequest::default().animate_and_retire_frames(),
+            );
+        }
+    }
+}
+
+impl Drop for Show {
+    fn drop(&mut self) {
+        self.release_surface();
+    }
+}
+
+fn show_extent(columns: usize, rows: usize, scale: u32) -> Result<(u32, u32), &'static str> {
+    let (screen_width, screen_height) =
+        crate::ui4::output_dimensions().ok_or("shell3-show-scanout-unavailable")?;
+    let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)
+        .ok_or("shell3-font-physical-size-unavailable")?;
+    let available_columns = screen_width / cell_width;
+    let available_rows = screen_height / cell_height;
+    if available_columns < super::MIN_COLUMNS as u32 || available_rows < super::MIN_ROWS as u32 {
+        return Err("shell3-show-invalid-extent");
+    }
+    let columns = u32::try_from(columns).unwrap_or(u32::MAX)
+        .max(super::MIN_COLUMNS as u32).min(available_columns);
+    let rows = u32::try_from(rows).unwrap_or(u32::MAX)
+        .max(super::MIN_ROWS as u32).min(available_rows);
+    Ok((columns * cell_width, rows * cell_height))
+}
+
+fn create_surface(
+    width: u32,
+    height: u32,
+    backend: Backend,
+    geometry: Option<super::service::WindowGeometry>,
+) -> Result<Ui4Surface, &'static str> {
+    let output = OutputId::from_slot(0).ok_or("shell3-show-output-unavailable")?;
+    let (screen_width, screen_height) =
+        crate::ui4::output_dimensions().ok_or("shell3-show-scanout-unavailable")?;
+    let frame = create_surface_frames(width, height, backend)?;
+    let session = match begin_additional_window_session(OWNER) {
+        Ok(session) => session,
+        Err(_) => {
+            let _ = destroy_frame(frame);
+            return Err("shell3-show-session-create");
+        }
+    };
+    let window = match create_window(WindowCreate {
+        owner: OWNER,
+        session,
+        frame,
+        output,
+        plane: WindowPlane::Universal(crate::ui4::ALPHA_OVERLAY_PLANE_SLOT as u8),
+        placement: WindowPlacement {
+            x: geometry
+                .map(|g| g.x)
+                .unwrap_or(screen_width.saturating_sub(width) as i32 / 2),
+            y: geometry
+                .map(|g| g.y)
+                .unwrap_or(screen_height.saturating_sub(height) as i32 / 2),
+            width,
+            height,
+            z: 90,
+            opacity: u8::MAX,
+            visible: true,
+        },
+        interaction: WindowInteraction::APPLICATION,
+    }) {
+        Ok(window) => window,
+        Err(_) => {
+            let _ = finish_window_session_with_request(
+                OWNER,
+                session,
+                WindowSessionCloseRequest::default().animate_and_retire_frames(),
+            );
+            let _ = destroy_frame(frame);
+            return Err("shell3-show-window-create");
+        }
+    };
+    if set_window_escape_key_action(OWNER, window, Ui4FrameEscapeKeyAction::DeliverToApplication)
+        .is_err()
+    {
+        let _ = finish_window_session_with_request(
+            OWNER,
+            session,
+            WindowSessionCloseRequest::default().animate_and_retire_frames(),
+        );
+        return Err("shell3-show-escape-policy");
+    }
+    Ok(Ui4Surface {
+        frame,
+        session,
+        window,
+        width,
+        height,
+        backend,
+        closing: false,
+        broker_resized: geometry.is_some(),
+        frame_contents: [None, None],
+        scale: 1,
+        clear_buffers: [false; 2],
+        hex_region: None,
+        edit_life: None,
+        edit_life_page: None,
+    })
+}
+
+pub(super) fn rendered_lines(
+    lines: &[&[(char, Option<RgbaColor>)]],
+) -> alloc::vec::Vec<RenderedLine> {
+    lines.iter().map(|line| line.to_vec()).collect()
+}
+
+fn damage_for_segments(
+    segments: &[super::SegmentUpdate],
+    width: u32,
+    height: u32,
+    scale: u32,
+) -> Option<DamageRect> {
+    let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)?;
+    segments
+        .iter()
+        .filter_map(|segment| {
+            let row = match segment.row {
+                super::SpecialRows::TitleRow => 0,
+                super::SpecialRows::StatusRow => 1,
+                super::SpecialRows::PromtRow => 2,
+                super::SpecialRows::MatrixRow(index) => index + 3,
+            };
+            let x = u32::try_from(segment.offset)
+                .ok()?
+                .saturating_mul(cell_width);
+            let y = (row as u32).saturating_mul(cell_height);
+            let columns = segment.remove.max(segment.text.chars().count());
+            let patch_width = u32::try_from(columns)
+                .ok()?
+                .saturating_mul(cell_width);
+            if patch_width == 0 || x >= width || y >= height {
+                return None;
+            }
+            Some(DamageRect::new(
+                x,
+                y,
+                patch_width.min(width - x),
+                (cell_height).min(height - y),
+            ))
+        })
+        .reduce(DamageRect::union)
+}
+
+fn create_surface_frames(
+    width: u32,
+    height: u32,
+    backend: Backend,
+) -> Result<FrameHandle, &'static str> {
+    let output = OutputId::from_slot(0).ok_or("shell3-show-output-unavailable")?;
+    let frame = match create_frame(FrameSpec {
+        output,
+        content: if backend == Backend::Copy {
+            FrameContent::CopyEngine
+        } else {
+            FrameContent::Image
+        },
+        cadence: FrameCadence::Dirty,
+        buffering: FrameBuffering::Double,
+        format: ScanoutFormat::Rgba8888Premultiplied,
+        width,
+        height,
+        base_color: Some(PremultipliedRgba8::from_straight_rgba(
+            BACKGROUND[0],
+            BACKGROUND[1],
+            BACKGROUND[2],
+            BACKGROUND[3],
+        )),
+    }) {
+        Ok(frame) => frame,
+        Err(_) => {
+            return Err("shell3-show-frame-create");
+        }
+    };
+    Ok(frame)
+}

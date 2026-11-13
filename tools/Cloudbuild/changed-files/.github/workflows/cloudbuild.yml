@@ -1,0 +1,135 @@
+name: Custom cloud build
+
+# An operator-dispatched reference build. The browser/queue service is separate;
+# this workflow neither issues licenses nor publishes an official release.
+on:
+  workflow_dispatch:
+    inputs:
+      manifest:
+        description: Normalized manifest JSON for the selected workflow commit
+        type: string
+        required: true
+      buildins_commit:
+        description: Immutable full SHA in t4ce/TRUEOS-Buildins; required when at least one app is selected
+        type: string
+        required: false
+      blueprints_commit:
+        description: Immutable full SHA in t4ce/TRUEOS-Blueprints
+        type: string
+        required: true
+      toolchain_commit:
+        description: Immutable full SHA in the archived TRUEOS Rust toolchain repository
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+        working-directory: TRUEOS
+    env:
+      TRUEOS_CLOUDBUILD_SPEC: ${{ github.workspace }}/TRUEOS/tgt/cloudbuild/build-manifest.json
+
+    steps:
+      - name: Check out the selected TRUEOS source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          path: TRUEOS
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Validate manifest and immutable dependency inputs
+        id: inputs
+        env:
+          CLOUDBUILD_MANIFEST: ${{ inputs.manifest }}
+          CLOUDBUILD_BUILDINS_COMMIT: ${{ inputs.buildins_commit }}
+          CLOUDBUILD_BLUEPRINTS_COMMIT: ${{ inputs.blueprints_commit }}
+          CLOUDBUILD_TOOLCHAIN_COMMIT: ${{ inputs.toolchain_commit }}
+        # Inputs are read from the environment as JSON/data, never expanded
+        # into this script. All later refs come from validated hex-only outputs.
+        run: python3 tools/cloudbuild/ci.py validate-inputs
+
+      - name: Test selector and build admission contracts
+        run: |
+          python3 -m unittest discover -s tools/cloudbuild -p test_build_plan.py -v
+          python3 -m unittest discover -s tools/cloudbuild -p test_per_app_plan.py -v
+          python3 -m unittest discover -s tools/cloudbuild -p test_kernel_only_ci.py -v
+          python3 -m unittest discover -s tools/cloudbuild -p test_per_app_ci.py -v
+          python3 -m unittest discover -s tools/cloudbuild -p test_kernel_only_packaging.py -v
+          python3 -m unittest discover -s tools/cloudbuild -p test_selected_buildins.py -v
+          python3 -m unittest discover -s tools/cloudbuild -p test_selected_startup.py -v
+
+      - name: Check out pinned builtins
+        if: steps.inputs.outputs.buildins_enabled == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: t4ce/TRUEOS-Buildins
+          ref: ${{ steps.inputs.outputs.buildins_commit }}
+          path: TRUEOS-Buildins
+          persist-credentials: false
+
+      - name: Check out pinned Blueprint dependencies
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: t4ce/TRUEOS-Blueprints
+          ref: ${{ steps.inputs.outputs.blueprints_commit }}
+          path: TRUEOS-Blueprints
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential binutils patch python3 liblz4-1 lz4 git-lfs
+
+      - name: Check out the pinned TRUEOS Rust toolchain
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: t4ce/TRUEOS-Rust-Toolchain-nightly-2026-07-10
+          ref: ${{ steps.inputs.outputs.toolchain_commit }}
+          path: TRUEOS-Rust-Toolchain-nightly-2026-07-10
+          lfs: true
+          persist-credentials: false
+
+      - name: Verify source pins and register the archived compiler
+        run: |
+          python3 tools/cloudbuild/ci.py verify-sources
+          toolchains="$(rustup show home)/toolchains"
+          mkdir -p "$toolchains"
+          ln -s "$GITHUB_WORKSPACE/TRUEOS-Rust-Toolchain-nightly-2026-07-10" \
+            "$toolchains/nightly-2026-07-10-x86_64-unknown-linux-gnu"
+          python3 - <<'PY'
+          import subprocess
+          import sys
+          sys.path.insert(0, "tools/cloudbuild")
+          from ci import EXPECTED_RUSTC_COMMIT
+          version = subprocess.check_output(["rustc", "-vV"], text=True)
+          print(version, end="")
+          if f"commit-hash: {EXPECTED_RUSTC_COMMIT}" not in version.splitlines():
+              raise SystemExit("The compiler does not match the archived TRUEOS toolchain.")
+          PY
+
+      - name: Build selected kernel, selected apps, and archive
+        env:
+          CLOUDBUILD_PROFILE: ${{ steps.inputs.outputs.profile }}
+        run: bash tools/trueos-boot/prepare.sh "--$CLOUDBUILD_PROFILE"
+
+      - name: Stage the archive, manifest, lockfile, and actual provenance
+        run: python3 tools/cloudbuild/ci.py collect-artifact
+
+      - name: Upload the custom build artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: trueos-${{ steps.inputs.outputs.config_hash }}-${{ github.run_id }}
+          path: TRUEOS/tgt/cloudbuild/artifact/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          include-hidden-files: false

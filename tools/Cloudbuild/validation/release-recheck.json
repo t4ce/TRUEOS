@@ -1,0 +1,17 @@
+{
+  "run_date": "2026-11-12",
+  "passed": true,
+  "reference_release_sha256": "ddb2191bb6d6ef6aee0f03fdc21d874d57f4c0cc48a4ddfcc19bc4059a496c04",
+  "decoded_appdb_bytes": 9441280,
+  "app_count": 12,
+  "release_report_matches_reference": true,
+  "all_raw_app_inspection_fields_match_reference": true,
+  "historical_enrichment_fields_not_regenerated": [
+    "decimal_kb_rounded",
+    "native_namespace_imports",
+    "other_imports",
+    "unix_posix_import_names",
+    "unix_posix_imports"
+  ],
+  "scope": "Read-only binary inspection; extracted ELF modules were never executed; no new Unix/POSIX classification."
+}

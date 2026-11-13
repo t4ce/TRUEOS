@@ -1,0 +1,1060 @@
+//! Executor-local Shell3 instance pool: UI input, presentation, and network terminals.
+
+use alloc::{collections::VecDeque, vec::Vec};
+use trueos_executor::{SpawnError, SpawnToken};
+use trueos_time::{Duration, Timer};
+
+#[path = "first_presentation.rs"]
+mod first_presentation;
+
+pub(crate) use crate::hv::matrix::AppReceipt as QueuedBlueprint;
+
+const TOPOLOGY_TASK_POOL_CAPACITY: usize = crate::percpu::CPU_SLOT_LIMIT;
+static SHELL_WORK_AVAILABLE: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+static SHELL3_KEYBOARD_EVENTS: spin::Mutex<VecDeque<crate::ui4::Ui4KeyboardEvent>> =
+    spin::Mutex::new(VecDeque::new());
+static SHELL3_POINTER_EVENTS: spin::Mutex<VecDeque<crate::ui4::Ui4PointerEvent>> =
+    spin::Mutex::new(VecDeque::new());
+static SHELL3_RESIZE_EVENTS: spin::Mutex<heapless::Deque<crate::ui4::Ui4ResizeEvent, 256>> =
+    spin::Mutex::new(heapless::Deque::new());
+
+pub(super) const DEFAULT_MICROFONT_SCALE: u32 =
+    crate::r::services::shell3_font_service::DEFAULT_UI4_FONT_SCALE;
+
+pub(super) fn microfont_scale() -> u32 {
+    DEFAULT_MICROFONT_SCALE
+}
+
+pub(crate) fn ui4_cell_extent() -> Option<(i32, i32)> {
+    let (width, height) = crate::r::services::shell3_font_service::cell_extent(microfont_scale())?;
+    Some((i32::try_from(width).ok()?, i32::try_from(height).ok()?))
+}
+
+struct ShellOwnership {
+    worker_slots: Vec<u32>,
+    shells_by_slot: [usize; crate::percpu::CPU_SLOT_LIMIT],
+    pending_by_slot: [usize; crate::percpu::CPU_SLOT_LIMIT],
+    startup_requests: VecDeque<(u32, Option<crate::shell3::startup::Startup>, Option<WindowSpawn>)>,
+    live_shells: usize,
+    next_round_robin: usize,
+    initial_assignments: usize,
+}
+
+struct AppDbNames {
+    generation: u64,
+    names: Vec<alloc::string::String>,
+}
+
+impl AppDbNames {
+    const fn new() -> Self {
+        Self {
+            generation: 0,
+            names: Vec::new(),
+        }
+    }
+}
+
+impl ShellOwnership {
+    const fn new() -> Self {
+        Self {
+            worker_slots: Vec::new(),
+            shells_by_slot: [0; crate::percpu::CPU_SLOT_LIMIT],
+            pending_by_slot: [0; crate::percpu::CPU_SLOT_LIMIT],
+            startup_requests: VecDeque::new(),
+            live_shells: 0,
+            next_round_robin: 0,
+            initial_assignments: 0,
+        }
+    }
+
+    fn preferred_slot(&self) -> Option<u32> {
+        if self.worker_slots.is_empty() {
+            return None;
+        }
+
+        // Initial admission sequence: AP0 x3, AP1 x3, ... . Closing a
+        // shell later never rewinds this sequence or triggers rebalancing.
+        if self.initial_assignments < self.worker_slots.len() * 3 {
+            return Some(self.worker_slots[self.initial_assignments / 3]);
+        }
+
+        // Strict modulo after the initial three-per-AP fill. Advance at
+        // admission, so executor polling order cannot change placement.
+        Some(self.worker_slots[self.next_round_robin % self.worker_slots.len()])
+    }
+}
+
+static SHELL_OWNERSHIP: spin::Mutex<ShellOwnership> = spin::Mutex::new(ShellOwnership::new());
+static APPDB_NAMES: spin::Mutex<AppDbNames> = spin::Mutex::new(AppDbNames::new());
+
+/// Hand AppDB launches to the existing Matrix/VMX queue.
+pub(super) fn launch_appdb(
+    name: &str,
+    frontend: super::tui::Frontend,
+) -> Result<QueuedBlueprint, alloc::string::String> {
+    launch_archive(alloc::format!("{name}.bp"), frontend)
+}
+
+pub(super) fn launch_alias(
+    name: &str,
+    frontend: super::tui::Frontend,
+) -> Result<QueuedBlueprint, alloc::string::String> {
+    let mut archive = crate::r::restart::startup_alias_blueprint(name)
+        .ok_or_else(|| alloc::string::String::from("apps: alias not configured"))?;
+    if !archive.ends_with(".bp") {
+        archive.push_str(".bp");
+    }
+    if let Some(bytes) = crate::app_db::get(&archive)? {
+        return launch_bytes(archive, bytes, frontend);
+    }
+    let selector = archive.strip_suffix(".bp").unwrap_or(&archive);
+    launch_appstore(selector, frontend)
+}
+
+pub(super) fn launch_appstore(
+    selector: &str,
+    frontend: super::tui::Frontend,
+) -> Result<QueuedBlueprint, alloc::string::String> {
+    if selector.is_empty()
+        || selector
+            .chars()
+            .any(|ch| ch == '§' || ch.is_whitespace() || ch.is_control())
+    {
+        return Err("apps: invalid appstore selector".into());
+    }
+    let store = crate::app_db::get("apps.bp")?
+        .ok_or_else(|| alloc::string::String::from("apps: apps.bp is missing from AppDB"))?;
+    launch_bytes_with_script(
+        "apps.bp".into(),
+        store,
+        frontend,
+        Some(alloc::format!("pull {selector}\n")),
+    )
+}
+
+fn launch_archive(
+    archive: alloc::string::String,
+    frontend: super::tui::Frontend,
+) -> Result<QueuedBlueprint, alloc::string::String> {
+    let bytes = crate::app_db::get(&archive)?
+        .ok_or_else(|| alloc::format!("apps: archive not found in AppDB: {archive}"))?;
+    launch_bytes(archive, bytes, frontend)
+}
+
+pub(super) fn launch_bytes(
+    archive: alloc::string::String,
+    bytes: Vec<u8>,
+    frontend: super::tui::Frontend,
+) -> Result<QueuedBlueprint, alloc::string::String> {
+    launch_bytes_with_script(archive, bytes, frontend, None)
+}
+pub(crate) fn launch_bytes_with_script(
+    archive: alloc::string::String,
+    bytes: Vec<u8>,
+    frontend: super::tui::Frontend,
+    script: Option<alloc::string::String>,
+) -> Result<QueuedBlueprint, alloc::string::String> {
+    let account = super::tui::frontend_access_account(frontend);
+    launch_bytes_with_script_for_account(archive, bytes, frontend, script, account)
+}
+
+/// Guest-originated requests carry their bound principal, including `None`.
+/// Never replace it with the currently signed-in frontend account.
+pub(crate) fn launch_bytes_with_script_for_account(
+    archive: alloc::string::String,
+    bytes: Vec<u8>,
+    frontend: super::tui::Frontend,
+    script: Option<alloc::string::String>,
+    access_account: Option<trueos_crypto::AccountId>,
+) -> Result<QueuedBlueprint, alloc::string::String> {
+    let args = if archive == "os.bp" {
+        super::os::arguments()
+    } else {
+        Vec::new()
+    };
+    launch_bytes_with_args(archive, bytes, frontend, script, args, access_account)
+}
+fn launch_bytes_with_args(
+    archive: alloc::string::String,
+    bytes: Vec<u8>,
+    frontend: super::tui::Frontend,
+    script: Option<alloc::string::String>,
+    args: Vec<alloc::string::String>,
+    access_account: Option<trueos_crypto::AccountId>,
+) -> Result<QueuedBlueprint, alloc::string::String> {
+    let observer = (archive == "os.bp").then(|| {
+        alloc::boxed::Box::new(ShellLaunch)
+            as alloc::boxed::Box<dyn crate::hv::launcher::LaunchObserver>
+    });
+    let mut request = crate::hv::launcher::LaunchRequest::new(archive, bytes);
+    request.script = script;
+    request.args = args;
+    request.access_account = access_account;
+    request.frontend = Some(frontend);
+    request.console_surface = crate::hv::BlueprintConsoleSurface::Terminal;
+    crate::hv::launcher::enqueue(request, observer)
+}
+
+/// Read app names through the current app.db API, using the archive basename
+/// convention shared by the Shell2 titlebar.
+pub fn read_appdb_names() -> Vec<alloc::string::String> {
+    crate::app_db::list()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| {
+            entry
+                .archive
+                .strip_suffix(".bp")
+                .unwrap_or(entry.archive.as_str())
+                .into()
+        })
+        .collect()
+}
+
+/// Refresh the shared app-name list. Active AP executors apply a changed
+/// snapshot to every Shell3 they own on their next service pass.
+pub fn refresh_appdb_names() {
+    let names = read_appdb_names();
+    let mut current = APPDB_NAMES.lock();
+    if current.names != names {
+        current.names = names;
+        current.generation = current.generation.wrapping_add(1);
+        drop(current);
+        SHELL_WORK_AVAILABLE.notify_all();
+    }
+}
+
+pub(super) fn appdb_names_snapshot() -> (u64, Vec<alloc::string::String>) {
+    let current = APPDB_NAMES.lock();
+    (current.generation, current.names.clone())
+}
+
+/// Use half the AP topology normally, retaining one terminal owner on small
+/// topologies where services must share AP1 or the BSP.
+pub fn worker_limit() -> usize {
+    let ap_cores = crate::workers::topology_core_slot_count().saturating_sub(1);
+    (ap_cores / 2).max(1)
+}
+
+/// Queue a fresh Shell3 on the executor selected by the shell distribution policy.
+pub fn request_shell3() -> Result<u32, super::Shell3Error> {
+    request_shell3_with_startup(None)
+}
+
+pub(crate) fn request_shell3_with_startup(
+    startup: Option<crate::shell3::startup::Startup>,
+) -> Result<u32, super::Shell3Error> {
+    request_shell3_configured(startup, None)
+}
+
+fn request_shell3_configured(
+    startup: Option<crate::shell3::startup::Startup>,
+    window: Option<WindowSpawn>,
+) -> Result<u32, super::Shell3Error> {
+    // GUI font preparation needs a native blocking lane. Without one it
+    // would wait forever inside the same pool task that pumps SSH terminals.
+    // Terminal models use text cells directly and remain available on AP1/BSP.
+    if !crate::workers::has_background_worker_slot() {
+        return Err(super::Shell3Error::NoExecutor);
+    }
+    refresh_appdb_names();
+    let mut ownership = SHELL_OWNERSHIP.lock();
+    if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
+        >= super::MAX_SHELL3_INSTANCES
+    {
+        warn_instance_limit();
+        return Err(super::Shell3Error::InstanceLimit);
+    }
+    let Some(slot) = ownership.preferred_slot() else {
+        return Err(super::Shell3Error::NoExecutor);
+    };
+    ownership.pending_by_slot[slot as usize] += 1;
+    ownership
+        .startup_requests
+        .push_back((slot, startup, window));
+    advance_round_robin(&mut ownership, slot);
+    drop(ownership);
+    SHELL_WORK_AVAILABLE.notify_all();
+    Ok(slot)
+}
+
+fn take_pending_for_executor(slot: u32) -> bool {
+    let mut ownership = SHELL_OWNERSHIP.lock();
+    let Some(pending) = ownership.pending_by_slot.get_mut(slot as usize) else {
+        return false;
+    };
+    if *pending == 0 {
+        return false;
+    }
+    *pending -= 1;
+    ownership.shells_by_slot[slot as usize] += 1;
+    ownership.live_shells += 1;
+    true
+}
+
+fn has_pending_for_executor(slot: u32) -> bool {
+    SHELL_OWNERSHIP
+        .lock()
+        .pending_by_slot
+        .get(slot as usize)
+        .is_some_and(|pending| *pending != 0)
+}
+
+fn warn_instance_limit() {
+    crate::log_warn!(target: "service";
+        "shell3: instance pool full cap={}\n", super::MAX_SHELL3_INSTANCES,
+    );
+}
+
+fn advance_round_robin(ownership: &mut ShellOwnership, slot: u32) {
+    ownership.initial_assignments =
+        (ownership.initial_assignments + 1).min(ownership.worker_slots.len() * 3);
+    if let Some(index) = ownership.worker_slots.iter().position(|s| *s == slot) {
+        ownership.next_round_robin = (index + 1) % ownership.worker_slots.len();
+    }
+}
+
+/// Reserve a terminal on the same pool and admission policy as UI instances.
+/// The model is constructed later by the selected AP, never by the listener.
+pub(super) fn reserve_terminal_slot() -> Result<u32, super::Shell3Error> {
+    let mut ownership = SHELL_OWNERSHIP.lock();
+    if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
+        >= super::MAX_SHELL3_INSTANCES
+    {
+        warn_instance_limit();
+        return Err(super::Shell3Error::InstanceLimit);
+    }
+    let slot = ownership
+        .preferred_slot()
+        .ok_or(super::Shell3Error::NoExecutor)?;
+    ownership.shells_by_slot[slot as usize] += 1;
+    ownership.live_shells += 1;
+    advance_round_robin(&mut ownership, slot);
+    Ok(slot)
+}
+
+pub(super) fn release_shell_on_executor(slot: u32) {
+    let mut ownership = SHELL_OWNERSHIP.lock();
+    if let Some(shell_count) = ownership.shells_by_slot.get_mut(slot as usize) {
+        *shell_count = shell_count.saturating_sub(1);
+        ownership.live_shells = ownership.live_shells.saturating_sub(1);
+    }
+}
+
+/// Start one caller-provided worker task on each selected executor.
+///
+/// Uses the kernel's P-core-first worker policy, filling from E/unknown cores.
+/// A small completed topology with no background AP shares its UI service
+/// executor, retaining incoming terminals without changing compute placement.
+/// The task factory receives each stable CPU slot for affinity checking.
+pub fn start<S: Send>(
+    mut task: impl FnMut(usize, u32) -> Result<SpawnToken<S>, SpawnError>,
+) -> Result<usize, SpawnError> {
+    let target = worker_limit();
+    let mut spawners = crate::workers::pick_background_spawners_with_slots(target);
+    if spawners.is_empty() && crate::workers::all_topology_spawners_registered() {
+        if let Some(spawner) = crate::workers::ui_service_spawner() {
+            let slot = spawner.cpu_slot();
+            spawners.push((slot, crate::workers::core_kind_for_slot(slot), spawner));
+        }
+    }
+
+    // Publish only successfully spawned owners. On a retry after a token
+    // capacity error, retain existing owners and skip their stable slots.
+    for (worker_id, (slot, _core_kind, spawner)) in spawners.into_iter().enumerate() {
+        {
+            let ownership = SHELL_OWNERSHIP.lock();
+            if ownership.worker_slots.len() >= target {
+                break;
+            }
+            if ownership.worker_slots.contains(&slot) {
+                continue;
+            }
+        }
+        let token = task(worker_id, slot)?;
+        spawner.spawn(token);
+        SHELL_OWNERSHIP.lock().worker_slots.push(slot);
+    }
+    let started = SHELL_OWNERSHIP.lock().worker_slots.len();
+    Ok(started)
+}
+
+/// Notify resident pool tasks that instance work may be available.
+pub fn notify_work() {
+    SHELL_WORK_AVAILABLE.notify_all();
+}
+
+/// Executor-local collection. Shells created through this owner remain in
+/// its task's list and are dropped there when removed or when the owner exits.
+pub struct Shell3Executor {
+    slot: u32,
+    shells: Vec<super::Shell3>,
+}
+
+impl Shell3Executor {
+    pub fn new(expected_slot: u32) -> Result<Self, super::Shell3Error> {
+        let actual_slot = crate::percpu::current_slot() as u32;
+        if actual_slot != expected_slot {
+            return Err(super::Shell3Error::WrongExecutor {
+                expected: expected_slot,
+                actual: actual_slot,
+            });
+        }
+        Ok(Self {
+            slot: expected_slot,
+            shells: Vec::new(),
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.shells.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.shells.is_empty()
+    }
+
+    fn create_shell_reserved(
+        &mut self,
+        time: &str,
+        aka_names: Vec<alloc::string::String>,
+        appdb_names: Vec<alloc::string::String>,
+        update_callbacks: Vec<super::UpdateCallback>,
+        columns: usize,
+        rows: usize,
+    ) -> Result<usize, super::Shell3Error> {
+        self.ensure_current_executor()?;
+        let shell = super::Shell3::new_reserved(
+            time,
+            aka_names,
+            appdb_names,
+            update_callbacks,
+            columns,
+            rows,
+            self.slot,
+        )?;
+        let index = self.shells.len();
+        self.shells.push(shell);
+        Ok(index)
+    }
+
+    pub fn get(&self, index: usize) -> Option<&super::Shell3> {
+        self.ensure_current_executor().ok()?;
+        self.shells.get(index)
+    }
+
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut super::Shell3> {
+        self.ensure_current_executor().ok()?;
+        self.shells.get_mut(index)
+    }
+
+    pub fn drop_shell(&mut self, index: usize) -> bool {
+        if self.ensure_current_executor().is_err() || index >= self.shells.len() {
+            return false;
+        }
+        drop(self.shells.remove(index));
+        true
+    }
+
+    fn ensure_current_executor(&self) -> Result<(), super::Shell3Error> {
+        let actual_slot = crate::percpu::current_slot() as u32;
+        if actual_slot == self.slot {
+            Ok(())
+        } else {
+            Err(super::Shell3Error::WrongExecutor {
+                expected: self.slot,
+                actual: actual_slot,
+            })
+        }
+    }
+}
+
+#[trueos_executor::task(pool_size = TOPOLOGY_TASK_POOL_CAPACITY)]
+async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
+    let actual_slot = u32::try_from(crate::percpu::current_slot()).unwrap_or(u32::MAX);
+    if actual_slot != expected_slot {
+        crate::log_warn!(target: "service";
+            "sh3srv: worker placement mismatch worker={} expected_slot={} actual_slot={} action=retire-worker\n",
+            worker_id,
+            expected_slot,
+            actual_slot,
+        );
+        return;
+    }
+
+    let mut owned_shells = match Shell3Executor::new(expected_slot) {
+        Ok(owner) => owner,
+        Err(error) => {
+            crate::log_warn!(target: "service";
+                "sh3srv: owner initialization failed worker={} slot={} error={:?}\n",
+                worker_id,
+                expected_slot,
+                error,
+            );
+            return;
+        }
+    };
+    let mut appdb_generation = appdb_names_snapshot().0;
+    let mut terminals = super::net::WorkerTerminals::new(expected_slot);
+    let mut command_sessions = super::sessions::Worker::new(expected_slot);
+
+    static PASS: crate::r::input_timing::Site =
+        crate::r::input_timing::Site::new("shell3-service-pass");
+    static OVERRUN: crate::r::input_timing::Site =
+        crate::r::input_timing::Site::new("shell3-service-sleep-overrun");
+
+    loop {
+        let pass_started = crate::r::input_timing::now_ms();
+        terminals.poll();
+        command_sessions.poll();
+        for shell in &mut owned_shells.shells {
+            shell.reconcile_matrix_selection();
+        }
+        while has_pending_for_executor(expected_slot) && take_pending_for_executor(expected_slot) {
+            let (startup, window) = {
+                let mut ownership = SHELL_OWNERSHIP.lock();
+                ownership
+                    .startup_requests
+                    .iter()
+                    .position(|(slot, _, _)| *slot == expected_slot)
+                    .and_then(|index| ownership.startup_requests.remove(index))
+                    .map(|(_, startup, window)| (startup, window))
+                    .unwrap_or((None, None))
+            };
+            let aka_names = crate::r::restart::startup_alias_names();
+            let appdb_names = appdb_names_snapshot().1;
+            let startup_time = super::TitleTime::current();
+            match owned_shells.create_shell_reserved(
+                &startup_time,
+                aka_names,
+                appdb_names,
+                Vec::new(),
+                super::DEFAULT_COLUMNS,
+                super::DEFAULT_ROWS,
+            ) {
+                Ok(index) => {
+                    if let Some(shell) = owned_shells.get_mut(index) {
+                        // A failed first paint must retain the admitted launch
+                        // through the normal presentation retries.
+                        shell.pending_startup = startup;
+                        if let Some(window) = window.as_ref() {
+                            shell.configure_window(window.placement);
+                        }
+                        let presentation = shell.present().await;
+                        if let Some(window) = window {
+                            let result = if presentation.is_ok() {
+                                if let Some(id) = shell.show.window() {
+                                    let presented = first_presentation::wait(
+                                        || {
+                                            crate::ui4::take_window_first_presentation(
+                                                crate::ui4::WindowOwner::SHELL3_SERVICE,
+                                                id,
+                                            )
+                                        },
+                                        || command_sessions.poll(),
+                                        || Timer::after(Duration::from_millis(1)),
+                                    )
+                                    .await;
+                                    if presented { id.raw() as i64 } else { -3 }
+                                } else {
+                                    -3
+                                }
+                            } else {
+                                -3
+                            };
+                            window
+                                .ready
+                                .store(result, core::sync::atomic::Ordering::Release);
+                        }
+                        if let Err(error) = presentation {
+                            crate::log_warn!(target: "service";
+                                "sh3srv: initial presentation failed slot={} shell={} error={}\n",
+                                expected_slot, index, error,
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    if let Some(window) = window {
+                        window
+                            .ready
+                            .store(-3, core::sync::atomic::Ordering::Release);
+                    }
+                    crate::log_warn!(target: "service";
+                        "sh3srv: queued shell creation failed slot={} error={:?}\n", expected_slot, error,
+                    );
+                }
+            }
+        }
+
+        let (current_appdb_generation, appdb_names) = appdb_names_snapshot();
+        if current_appdb_generation != appdb_generation {
+            for index in 0..owned_shells.len() {
+                if let Some(shell) = owned_shells.get_mut(index) {
+                    shell.set_appdb_names(&appdb_names);
+                    if let Err(error) = shell.present().await {
+                        crate::log_warn!(target: "service";
+                            "sh3srv: appdb title refresh failed slot={} shell={} error={}\n",
+                            expected_slot, index, error,
+                        );
+                    }
+                }
+            }
+            appdb_generation = current_appdb_generation;
+        }
+
+        // Serialize drain plus enqueue across APs, preserving keyboard order
+        // even when two workers drain successive UI4 batches concurrently.
+        {
+            let mut keyboard_events = SHELL3_KEYBOARD_EVENTS.lock();
+            for event in
+                crate::ui4::take_owner_input_events(crate::ui4::WindowOwner::SHELL3_SERVICE)
+            {
+                match event {
+                    crate::ui4::Ui4InputEvent::Keyboard(event) => {
+                        if keyboard_events.len() < 256 {
+                            keyboard_events.push_back(event);
+                        }
+                    }
+                    crate::ui4::Ui4InputEvent::Pointer(event) => {
+                        let mut events = SHELL3_POINTER_EVENTS.lock();
+                        if events.len() < 256 {
+                            events.push_back(event);
+                        }
+                    }
+                    crate::ui4::Ui4InputEvent::Resize(event) => {
+                        let mut events = SHELL3_RESIZE_EVENTS.lock();
+                        if let Some(index) = events
+                            .iter()
+                            .position(|queued| queued.window == event.window)
+                        {
+                            let _ = events.swap_remove_front(index);
+                        }
+                        let _ = events.push_back(event);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        loop {
+            let event = {
+                let mut events = SHELL3_KEYBOARD_EVENTS.lock();
+                let index = events.iter().position(|event| {
+                    (0..owned_shells.len()).any(|index| {
+                        owned_shells
+                            .get(index)
+                            .is_some_and(|shell| shell.show_handles_window(event.window))
+                    })
+                });
+                index.and_then(|index| events.remove(index))
+            };
+            let Some(event) = event else { break };
+            let input = crate::ui4::Ui4InputEvent::Keyboard(event);
+            for index in 0..owned_shells.len() {
+                if let Some(shell) = owned_shells.get_mut(index) {
+                    if shell.show_handles_window(event.window) {
+                        if !super::tui::active(
+                            shell.tui_frontend,
+                            shell.active_matrix_slot_name().as_deref(),
+                        ) {
+                            shell.show.handle_escape(&input);
+                        }
+                        if shell.handle_keyboard(&event.event) {
+                            if let Err(error) = shell.present().await {
+                                crate::log_warn!(target: "service";
+                                    "shell3: input presentation failed slot={} error={}\n",
+                                    expected_slot, error,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        loop {
+            let event = {
+                let mut events = SHELL3_POINTER_EVENTS.lock();
+                let index = events.iter().position(|event| {
+                    owned_shells
+                        .shells
+                        .iter()
+                        .any(|shell| shell.show_handles_window(event.window))
+                });
+                index.and_then(|index| events.remove(index))
+            };
+            let Some(event) = event else { break };
+            for shell in &mut owned_shells.shells {
+                if shell.show_handles_window(event.window) {
+                    let scale = super::tui::font_scale_for_window(event.window)
+                        .unwrap_or_else(|| shell.show.font_scale());
+                    if super::tui::active(
+                        shell.tui_frontend,
+                        shell.active_matrix_slot_name().as_deref(),
+                    ) {
+                        shell.matrix_drag = None;
+                        super::tui::pointer(
+                            shell.tui_frontend,
+                            shell.active_matrix_slot_name().as_deref(),
+                            &event,
+                            scale,
+                        );
+                    } else {
+                        let Some((cell_width, cell_height)) = crate::r::services::shell3_font_service::cell_extent(scale) else { continue; };
+                        let position = (event.local_x >= 0 && event.local_y >= 0).then_some((
+                            event.local_y.max(0) as usize / (cell_height as usize),
+                            event.local_x.max(0) as usize / (cell_width as usize),
+                        ));
+                        let matrix_area = event.local_x >= 0
+                            && event.local_y >= 0
+                            && event.local_x as usize / (cell_width as usize) < shell.columns
+                            && (3..shell.rows_count)
+                                .contains(&(event.local_y as usize / (cell_height as usize)));
+                        let scrolled = matrix_area
+                            && event.wheel != 0
+                            && shell.scroll_matrix(-(event.wheel as i32));
+                        let dragged = shell.drag_matrix(
+                            (event.local_x, event.local_y),
+                            event.buttons_pressed & 4 != 0,
+                            event.buttons_down & 4 != 0,
+                            matrix_area,
+                            (
+                                (cell_width as usize) as i32,
+                                (cell_height as usize) as i32,
+                            ),
+                        );
+                        if shell.handle_controls_pointer(position, event.buttons_pressed & 1 != 0)
+                            || scrolled
+                            || dragged
+                        {
+                            if let Err(error) = shell.present().await {
+                                crate::log_warn!(target: "service"; "shell3 pointer present failed on executor_slot={}: {}", expected_slot, error);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        loop {
+            let event = {
+                let mut events = SHELL3_RESIZE_EVENTS.lock();
+                let index = events.iter().position(|event| {
+                    (0..owned_shells.len()).any(|index| {
+                        owned_shells
+                            .get(index)
+                            .is_some_and(|shell| shell.show_handles_window(event.window))
+                    })
+                });
+                index.and_then(|index| events.swap_remove_front(index))
+            };
+            let Some(event) = event else { break };
+            for index in 0..owned_shells.len() {
+                if let Some(shell) = owned_shells.get_mut(index)
+                    && shell.show_handles_window(event.window)
+                    && let Err(error) = shell.resize_ui4_to_current().await
+                {
+                    crate::log_warn!(target: "service";
+                        "sh3srv: resize failed slot={} window={} epoch={} extent={}x{} error={}\n",
+                        expected_slot, event.window.raw(), event.resize_epoch,
+                        event.width, event.height, error,
+                    );
+                }
+            }
+        }
+
+        for index in 0..owned_shells.len() {
+            if let Some(shell) = owned_shells.get_mut(index)
+                && (shell.refresh_clock()
+                    || shell.presentation_pending()
+                    || shell.font_scale_needed()
+                    || shell.matrix_output_needed())
+                && let Err(error) = shell.present().await
+            {
+                crate::log_warn!(target: "service";
+                    "sh3srv: pending presentation retry failed slot={} shell={} error={}\n",
+                    expected_slot, index, error,
+                );
+            }
+        }
+
+        // Reconcile from the broker too, so superseded resize events cannot
+        // leave a shell at an obsolete extent.
+        for index in 0..owned_shells.len() {
+            if let Some(shell) = owned_shells.get_mut(index)
+                && shell.ui4_resize_needed()
+                && let Err(error) = shell.resize_ui4_to_current().await
+            {
+                crate::log_warn!(target: "service";
+                    "sh3srv: resize reconciliation failed slot={} shell={} error={}\n",
+                    expected_slot, index, error,
+                );
+            }
+        }
+
+        // Keep each owner alive through UI4's close animation, then drop the
+        // Shell3 and its leased frame on the same AP.
+        for index in (0..owned_shells.len()).rev() {
+            let closed = owned_shells
+                .get(index)
+                .is_some_and(super::Shell3::show_is_closed);
+            if closed {
+                owned_shells.drop_shell(index);
+            }
+        }
+
+        PASS.record(crate::r::input_timing::now_ms().saturating_sub(pass_started));
+        if owned_shells.is_empty() && terminals.is_empty() && command_sessions.is_empty() {
+            let observed = SHELL_WORK_AVAILABLE.observe();
+            if !has_pending_for_executor(expected_slot)
+                && !terminals.has_events()
+                && !command_sessions.pending()
+            {
+                SHELL_WORK_AVAILABLE.wait_after(observed).await;
+            }
+        } else {
+            let sleeping = crate::r::input_timing::now_ms();
+            Timer::after(Duration::from_millis(10)).await;
+            OVERRUN.record(
+                crate::r::input_timing::now_ms()
+                    .saturating_sub(sleeping)
+                    .saturating_sub(10),
+            );
+        }
+    }
+}
+
+/// Called once by the kernel boot registry after the complete topology registers.
+pub fn start_pool() -> Result<usize, SpawnError> {
+    crate::r::startup_config::start();
+    refresh_appdb_names();
+    let started = start(|worker_id, slot| shell_worker_task(worker_id, slot))?;
+    crate::log_info!(target: "service";
+        "shell3: online workers={} ap_total={} policy=half-ap-topology-or-shared-service\n",
+        started, crate::workers::topology_core_slot_count().saturating_sub(1),
+    );
+    Ok(started)
+}
+
+pub(super) fn working_vmx_slots() -> Vec<alloc::string::String> {
+    crate::hv::matrix::working_slots()
+}
+
+// OS update completion is presentation policy, not Matrix/VM ownership.
+struct ShellLaunch;
+impl crate::hv::launcher::LaunchObserver for ShellLaunch {
+    fn finished(
+        &self,
+        target: &super::MatrixTarget,
+        _vm: Option<u8>,
+        error: Option<&str>,
+        reason: Option<&str>,
+    ) {
+        if error.is_none() {
+            if let Some(reason) =
+                reason.filter(|reason| !matches!(*reason, "os:quit" | "os:cancel"))
+            {
+                super::os::complete(target.clone(), reason.into());
+                return;
+            }
+        }
+        crate::hv::matrix::discard(target);
+    }
+}
+
+/// Snapshot the selected slot's guest environment, or the host launch defaults.
+pub(super) fn environment_lines(
+    slot: Option<&str>,
+    lifetime: Option<u64>,
+) -> Vec<alloc::string::String> {
+    let vm = match (slot, lifetime) {
+        (Some(slot), Some(lifetime)) => crate::hv::matrix::vm_for_slot(slot, lifetime),
+        _ => None,
+    };
+    if let Some(vm) = vm {
+        return crate::hv::blueprint_process_env_text(vm)
+            .map(|text| text.lines().map(alloc::string::String::from).collect())
+            .unwrap_or_else(|| alloc::vec![alloc::string::String::from("env: unavailable")]);
+    }
+    crate::hv::blueprint::build_host_env()
+        .into_iter()
+        .map(|(key, value)| alloc::format!("{key}={value}"))
+        .collect()
+}
+
+pub(super) fn hv_status_lines() -> Vec<alloc::string::String> {
+    let s = crate::hv::status();
+    let mut lines = alloc::vec![
+        alloc::format!(
+            "VMs: running={} paused={} starting={} limit={}",
+            s.running_count,
+            s.paused_count,
+            s.starting_count,
+            s.vm_id_limit
+        ),
+        alloc::format!(
+            "VMX: intel={} supported={} locked={} outside_smx={}",
+            s.vendor_intel,
+            s.has_vmx,
+            s.feature_control_locked,
+            s.feature_control_vmx_outside_smx
+        ),
+        alloc::format!(
+            "Shared memory: total={} free={} stacks={} vmx={}",
+            s.vm_shared_heap_total_bytes,
+            s.vm_shared_heap_free_bytes,
+            s.vm_shared_stack_bytes,
+            s.vm_shared_vmx_bytes
+        ),
+        "vmid blueprint state".into()
+    ];
+    for id in 0..s.vm_id_limit {
+        let id = id as u8;
+        let state = crate::hv::vm_state(id);
+        let label = crate::hv::app_vm_display_label(id);
+        if label.is_none()
+            && !state.running
+            && !state.starting
+            && !state.paused
+            && !state.pause_requested
+        {
+            continue;
+        }
+        let phase = hv_vm_phase(&state);
+        lines.push(alloc::format!("{} {} {}", id, label.as_deref().unwrap_or("-"), phase));
+        if state.stop_requested {
+            lines.extend(crate::hv::shutdown_diagnostic_lines(id));
+        }
+    }
+    lines
+}
+
+pub(super) fn hv_vm_phase(state: &crate::hv::HvVmState) -> &'static str {
+    if state.stop_requested {
+        "stopping"
+    } else if state.paused {
+        "paused"
+    } else if state.pause_requested {
+        "pausing"
+    } else if state.starting {
+        "starting"
+    } else if state.running {
+        "running"
+    } else {
+        "stopped"
+    }
+}
+
+pub(super) fn peer_lines() -> Vec<alloc::string::String> {
+    let peers = crate::r::net::trueos_peer::peer_snapshots();
+    let mut lines = alloc::vec![
+        alloc::format!("Peers: {}", peers.len()),
+        "id address port caps".into()
+    ];
+    for peer in peers {
+        lines.push(alloc::format!(
+            "{} {} {} 0x{:08x}",
+            peer.id,
+            crate::r::net::trueos_peer::peer_addr_text(&peer),
+            peer.port,
+            peer.caps
+        ));
+    }
+    lines
+}
+
+pub(super) fn probe_lines() -> Vec<alloc::string::String> {
+    let status = crate::hv::status();
+    alloc::vec![alloc::format!(
+        "VMX probe: intel={} msr={} vmx={} locked={} outside_smx={} guest_module={}",
+        status.vendor_intel,
+        status.has_msr,
+        status.has_vmx,
+        status.feature_control_locked,
+        status.feature_control_vmx_outside_smx,
+        status.guest_module_present
+    )]
+}
+
+pub(crate) fn report_launch_error(error: alloc::string::String) {
+    super::MatrixSlots::echo(None, None, error);
+}
+
+#[trueos_executor::task(pool_size = 4)]
+async fn edit_aka_task(frontend: super::tui::Frontend, access_account: Option<trueos_crypto::AccountId>) {
+    let result = async {
+        let path = crate::r::startup_config::edit_path().await?;
+        let bytes = crate::app_db::get("edit.bp")?.ok_or("Aka: edit builtin unavailable")?;
+        launch_bytes_with_args("edit.bp".into(), bytes, frontend, None, alloc::vec![path], access_account)
+    }
+    .await;
+    match result {
+        Ok(app) => super::tui::queue_launch(frontend.id, app),
+        Err(error) => report_launch_error(error),
+    }
+}
+pub(super) fn edit_aka(frontend: super::tui::Frontend) -> Result<(), alloc::string::String> {
+    let worker = crate::workers::pick_background_spawner().ok_or("Aka: no background worker")?;
+    let access_account = super::tui::frontend_access_account(frontend);
+    let task = edit_aka_task(frontend, access_account)
+        .map_err(|_| alloc::string::String::from("Aka: editor request busy"))?;
+    worker.spawn(task);
+    Ok(())
+}
+
+/// Initial pixel geometry, applied before the first Shell3 snapshot and paint.
+#[derive(Clone, Copy)]
+pub(crate) struct WindowGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+struct WindowSpawn {
+    placement: WindowGeometry,
+    ready: alloc::sync::Arc<core::sync::atomic::AtomicI64>,
+}
+static WINDOW_SPAWNS: spin::Mutex<Vec<(u8, alloc::sync::Arc<core::sync::atomic::AtomicI64>)>> =
+    spin::Mutex::new(Vec::new());
+
+pub(crate) fn clear_window_spawn(vm_id: u8) {
+    WINDOW_SPAWNS.lock().retain(|(owner, _)| *owner != vm_id);
+}
+
+// One outstanding request per Blueprint; zero polls its first-paint completion.
+pub(crate) fn blueprint_window_spawn(vm_id: u8, geometry: Option<WindowGeometry>) -> i64 {
+    use core::sync::atomic::{AtomicI64, Ordering};
+    let mut requests = WINDOW_SPAWNS.lock();
+    if let Some(geometry) = geometry {
+        if geometry.width == 0 || geometry.height == 0 {
+            return -1;
+        }
+        if requests.iter().any(|(owner, _)| *owner == vm_id) {
+            return -16;
+        }
+        let ready = alloc::sync::Arc::new(AtomicI64::new(0));
+        if request_shell3_configured(
+            None,
+            Some(WindowSpawn {
+                placement: geometry,
+                ready: ready.clone(),
+            }),
+        )
+        .is_err()
+        {
+            return -3;
+        }
+        requests.push((vm_id, ready));
+        0
+    } else {
+        let Some(index) = requests.iter().position(|(owner, _)| *owner == vm_id) else {
+            return -1;
+        };
+        let result = requests[index].1.load(Ordering::Acquire);
+        if result != 0 {
+            requests.remove(index);
+        }
+        result
+    }
+}

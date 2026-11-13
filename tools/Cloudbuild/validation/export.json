@@ -1,0 +1,21 @@
+{
+  "patch_applies_to_exact_base": true,
+  "expected_tree": "909fa26f359f037c53f23c2bf25b330640ad665f",
+  "recreated_tree": "909fa26f359f037c53f23c2bf25b330640ad665f",
+  "bundle_verified": true,
+  "bundle_heads": [
+    "11cacfdd1b90b284f11a958f48e0c28742867e01 refs/heads/feat/subsystem-cloudbuild"
+  ],
+  "source_file_snapshots_from_git_blobs": true,
+  "original_reference_release_hash_verified": true,
+  "changed_paths": 41,
+  "no_remote_publication": true,
+  "scope": "Export integrity; not a new OS compilation or boot test.",
+  "portable_ui_check": {
+    "run_date": "2026-11-12",
+    "passed": true,
+    "grouped_checks": 10,
+    "report": "portable-ui-check.json",
+    "scope": "jsdom DOM and real local Python HTTP integration; no visual browser assertion or OS boot test"
+  }
+}

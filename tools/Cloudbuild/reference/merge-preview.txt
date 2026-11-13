@@ -1,0 +1,16 @@
+5253ab06f36e9b23e3ece27f28d1d24efd74d235
+src/usb3/mod.rs
+tools/testpy/test_rig_commands.py
+tools/trueos-boot/prepare.sh
+
+Auto-merging Cargo.toml
+Auto-merging src/app_db.rs
+Auto-merging src/intel/mod.rs
+Auto-merging src/usb3/mod.rs
+CONFLICT (content): Merge conflict in src/usb3/mod.rs
+Auto-merging src/virtio_gpu_logo.rs
+Auto-merging tools/testpy/test_rig_commands.py
+CONFLICT (content): Merge conflict in tools/testpy/test_rig_commands.py
+Auto-merging tools/trueos-boot/README.md
+Auto-merging tools/trueos-boot/prepare.sh
+CONFLICT (content): Merge conflict in tools/trueos-boot/prepare.sh

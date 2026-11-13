@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "kind": "jsdom DOM and real Python HTTP integration; no visual browser assertion",
+  "reference": "TRUEOS 0.0.235",
+  "exact_bytes": {
+    "all_apps": 6115201,
+    "kernel_baseline": 20388475,
+    "all_estimated": 26503676,
+    "edit_and_termdir": 811802
+  },
+  "checks": [
+    "All 12 badges use current packed BP bytes, decimal kB, and accessible descriptions; SSH is 648 kB.",
+    "Exact byte accumulation rounds once (6,115 kB vs 6,116 summed badges), with distinct derived baseline, estimated total, measured ELF, and download.",
+    "None updates immediately to zero app bytes, all app payload omitted, derived baseline only, and valid no-app manifest.",
+    "Edit + Termdir gives 811,802 exact bytes; USB/iGPU/Virgl switches preserve the app estimate and deduct no unmeasured savings.",
+    "Development explicitly displays a release comparison, never a measured development total.",
+    "Queued and resumed build estimates stay bound to their own saved app selection while the editable selector changes.",
+    "Missing optional metadata leaves selection and authoritative hash intact; zero selected is zero, missing measurements are unknown.",
+    "Invalid individual byte counts propagate unknown only to affected totals, without breaking valid selections.",
+    "Reference labels come from metadata; a known different source is identified without changing the manifest hash.",
+    "All plan/build requests preserve the original request shape; no size metadata enters persisted manifests, and JavaScript raises no errors."
+  ],
+  "javascriptErrors": []
+}

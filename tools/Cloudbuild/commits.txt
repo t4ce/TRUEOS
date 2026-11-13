@@ -1,0 +1,62 @@
+commit ab90b617109d7f69ec59e37b781bd5a3313c8294
+Author:     Codex <codex@openai.com>
+AuthorDate: Sat Nov 7 15:54:55 2026 +0100
+Commit:     Codex <codex@openai.com>
+CommitDate: Sat Nov 7 15:54:55 2026 +0100
+
+    Add subsystem selector and key-bound cloud build service
+
+commit c8055da647920073f1984bc23d485356c95761ac
+Author:     Codex <codex@openai.com>
+AuthorDate: Sat Nov 7 16:24:20 2026 +0100
+Commit:     Codex <codex@openai.com>
+CommitDate: Sat Nov 7 16:24:20 2026 +0100
+
+    Add regular kernel-only builds without bundled apps
+
+commit 3a520be1e10960456d75658d77c87859210633b3
+Author:     Codex <codex@openai.com>
+AuthorDate: Sat Nov 7 19:02:04 2026 +0100
+Commit:     Codex <codex@openai.com>
+CommitDate: Sat Nov 7 19:02:04 2026 +0100
+
+    Make each bundled app independently selectable
+
+commit c0ce54420546779673fcc0192d0ac1770be040f9
+Merge: 3a520be 75e9b1d
+Author:     Codex <codex@openai.com>
+AuthorDate: Sat Nov 7 23:00:43 2026 +0100
+Commit:     Codex <codex@openai.com>
+CommitDate: Sat Nov 7 23:00:43 2026 +0100
+
+    Merge upstream v0.0.235 while preserving selectable buildins
+    
+    Keep exact app selection and kernel-only packaging through the native-only preparation path. Audit native imports explicitly and fingerprint shared kernel vendor dependencies used by SSH.
+
+commit 9c4f4522abfd54bba1396a942288b36876594ac4
+Author:     Codex <codex@openai.com>
+AuthorDate: Sat Nov 7 23:01:22 2026 +0100
+Commit:     Codex <codex@openai.com>
+CommitDate: Sat Nov 7 23:01:22 2026 +0100
+
+    Show measured buildin and kernel size estimates
+    
+    Use the supplied 0.0.235 release for per-app packed byte counts, live selection totals and omitted payload. Label the kernel baseline as derived, keep subsystem savings unmeasured, and preserve request and signature identity. Record measurement evidence and current Buildins catalog revision.
+
+commit 1a194497b1849baa325376973c189190b50cfb3c
+Author:     Codex <codex@openai.com>
+AuthorDate: Sat Nov 7 23:42:26 2026 +0100
+Commit:     Codex <codex@openai.com>
+CommitDate: Sat Nov 7 23:42:26 2026 +0100
+
+    Document GPU-free Server configuration and remaining boundaries
+    
+    Record existing no-framebuffer boot and remote sh3 paths, distinguish them from actual UI4 and GPU compilation exclusion, and specify the shell, API, service, firmware and validation work for a regular Server preset.
+
+commit 11cacfdd1b90b284f11a958f48e0c28742867e01
+Author:     Codex <codex@openai.com>
+AuthorDate: Thu Nov 12 04:25:56 2026 +0100
+Commit:     Codex <codex@openai.com>
+CommitDate: Thu Nov 12 04:25:56 2026 +0100
+
+    Record conversation and source handoff for local integration

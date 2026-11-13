@@ -1,0 +1,212 @@
+{
+  "attachment": {
+    "filename": "TrueOS-0.0.235(1).lz4",
+    "bytes": 19447079,
+    "sha256": "ddb2191bb6d6ef6aee0f03fdc21d874d57f4c0cc48a4ddfcc19bc4059a496c04"
+  },
+  "tar_bytes": 26613760,
+  "members": [
+    {
+      "name": "TRUEOS.elf",
+      "bytes": 26213712,
+      "regular_file": true,
+      "sha256": "8fb5569f61b06da7078a4c82b1393f763fa15fc0083d382f0c4087b9740d9363"
+    },
+    {
+      "name": "EFI/BOOT/BOOTX64.EFI",
+      "bytes": 61440,
+      "regular_file": true,
+      "sha256": "e91b2dd4375d6b138133f76b06cd75875706f8a39e6a6158ea8411f85e2d41f3"
+    },
+    {
+      "name": "EFI/BOOT/tgl_guc_70.bin",
+      "bytes": 335360,
+      "regular_file": true,
+      "sha256": "2f1f57a1b23d186f2592318d1e07a1365968932841ccb3e7177c516ba006e2f6"
+    }
+  ],
+  "kernel_sections": [
+    {
+      "index": 0,
+      "name": "",
+      "type": 0,
+      "flags": 0,
+      "address": 0,
+      "offset": 0,
+      "bytes": 0,
+      "link": 0,
+      "info": 0,
+      "alignment": 0,
+      "entry_bytes": 0
+    },
+    {
+      "index": 1,
+      "name": ".text",
+      "type": 1,
+      "flags": 6,
+      "address": 18446744071563116544,
+      "offset": 4096,
+      "bytes": 11104256,
+      "link": 0,
+      "info": 0,
+      "alignment": 16,
+      "entry_bytes": 0
+    },
+    {
+      "index": 2,
+      "name": ".rodata",
+      "type": 1,
+      "flags": 2097202,
+      "address": 18446744071574220800,
+      "offset": 11108352,
+      "bytes": 14168064,
+      "link": 0,
+      "info": 0,
+      "alignment": 4096,
+      "entry_bytes": 0
+    },
+    {
+      "index": 3,
+      "name": ".eh_frame_hdr",
+      "type": 1,
+      "flags": 2,
+      "address": 18446744071588388864,
+      "offset": 25276416,
+      "bytes": 12,
+      "link": 0,
+      "info": 0,
+      "alignment": 4,
+      "entry_bytes": 0
+    },
+    {
+      "index": 4,
+      "name": ".text_padding",
+      "type": 1,
+      "flags": 2,
+      "address": 18446744071588388876,
+      "offset": 25276428,
+      "bytes": 4088,
+      "link": 0,
+      "info": 0,
+      "alignment": 1,
+      "entry_bytes": 0
+    },
+    {
+      "index": 5,
+      "name": ".data",
+      "type": 1,
+      "flags": 3,
+      "address": 18446744071588397056,
+      "offset": 25284608,
+      "bytes": 925696,
+      "link": 0,
+      "info": 0,
+      "alignment": 4096,
+      "entry_bytes": 0
+    },
+    {
+      "index": 6,
+      "name": ".limine_requests",
+      "type": 1,
+      "flags": 2097155,
+      "address": 18446744071589322752,
+      "offset": 26210304,
+      "bytes": 776,
+      "link": 0,
+      "info": 0,
+      "alignment": 8,
+      "entry_bytes": 0
+    },
+    {
+      "index": 7,
+      "name": ".got",
+      "type": 1,
+      "flags": 3,
+      "address": 18446744071589323528,
+      "offset": 26211080,
+      "bytes": 0,
+      "link": 0,
+      "info": 0,
+      "alignment": 8,
+      "entry_bytes": 0
+    },
+    {
+      "index": 8,
+      "name": ".got.plt",
+      "type": 1,
+      "flags": 3,
+      "address": 18446744071589323528,
+      "offset": 26211080,
+      "bytes": 0,
+      "link": 0,
+      "info": 0,
+      "alignment": 8,
+      "entry_bytes": 0
+    },
+    {
+      "index": 9,
+      "name": ".live_update_handoff",
+      "type": 1,
+      "flags": 2097155,
+      "address": 18446744071589323584,
+      "offset": 26211136,
+      "bytes": 1216,
+      "link": 0,
+      "info": 0,
+      "alignment": 64,
+      "entry_bytes": 0
+    },
+    {
+      "index": 10,
+      "name": ".live_update_slot",
+      "type": 1,
+      "flags": 3,
+      "address": 18446744071589324800,
+      "offset": 26212352,
+      "bytes": 48,
+      "link": 0,
+      "info": 0,
+      "alignment": 1,
+      "entry_bytes": 0
+    },
+    {
+      "index": 11,
+      "name": ".live_update_trampoline",
+      "type": 1,
+      "flags": 6,
+      "address": 18446744071589324848,
+      "offset": 26212400,
+      "bytes": 258,
+      "link": 0,
+      "info": 0,
+      "alignment": 4,
+      "entry_bytes": 0
+    },
+    {
+      "index": 12,
+      "name": ".bss",
+      "type": 8,
+      "flags": 3,
+      "address": 18446744071589326848,
+      "offset": 26212658,
+      "bytes": 37376000,
+      "link": 0,
+      "info": 0,
+      "alignment": 4096,
+      "entry_bytes": 0
+    },
+    {
+      "index": 13,
+      "name": ".shstrtab",
+      "type": 3,
+      "flags": 0,
+      "address": 0,
+      "offset": 26212658,
+      "bytes": 158,
+      "link": 0,
+      "info": 0,
+      "alignment": 1,
+      "entry_bytes": 0
+    }
+  ]
+}

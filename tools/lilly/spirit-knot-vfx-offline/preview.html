@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spirit · Knot studies</title>
+<style>
+  :root { color-scheme: dark; font: 14px system-ui, sans-serif; background: #101218; color: #e9ecf3; }
+  * { box-sizing: border-box; }
+  body { margin: 0 auto; max-width: 1120px; padding: 32px; }
+  header { display: flex; justify-content: space-between; align-items: center; gap: 24px; }
+  h1 { font-size: 24px; font-weight: 600; margin: 0 0 8px; letter-spacing: -.6px; }
+  p { color: #aeb6ca; line-height: 1.6; margin: 0; }
+  button, select { font: inherit; color: inherit; background: #252a36; border: 1px solid #454d61; border-radius: 7px; padding: 8px 12px; cursor: pointer; }
+  button:hover { border-color: #a9a0ff; }
+  .layout { display: grid; grid-template-columns: 1fr 280px; gap: 28px; margin-top: 28px; align-items: start; }
+  .studies { display: grid; grid-template-columns: repeat(2, minmax(256px, 1fr)); gap: 18px; }
+  article { background: #181c26; border: 1px solid #343b4b; border-radius: 12px; overflow: hidden; }
+  .stage { height: 256px; position: relative; display: grid; place-items: center; background: var(--stage, #090c13); }
+  canvas { width: 256px; height: 256px; display: block; }
+  .sprite { position: absolute; width: 166.4px; height: 166.4px; object-fit: fill; image-rendering: pixelated; pointer-events: none; }
+  .caption { padding: 14px 16px 16px; }
+  h2 { font-size: 14px; margin: 0 0 6px; font-weight: 600; }
+  .caption p { font-size: 12px; }
+  aside { background: #181c26; border: 1px solid #343b4b; border-radius: 12px; padding: 20px; }
+  aside h2 { margin-bottom: 18px; }
+  .control { display: block; margin-bottom: 18px; }
+  .control span { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+  output { font-variant-numeric: tabular-nums; color: #bbb4ff; }
+  input[type=range] { width: 100%; accent-color: #a89aff; }
+  .colors, .actions { display: flex; gap: 10px; margin: 16px 0; }
+  .colors label { flex: 1; }
+  input[type=color] { width: 100%; height: 32px; margin-top: 8px; border: 0; background: none; cursor: pointer; }
+  .toggle { display: block; margin: 16px 0; }
+  select { width: 100%; margin-top: 8px; }
+  footer { margin-top: 24px; font-size: 12px; color: #939db4; line-height: 1.7; }
+  #error { color: #ffd0cd; white-space: pre-wrap; }
+  @media (max-width: 950px) { .layout { grid-template-columns: 1fr; } aside { max-width: 650px; } }
+  @media (max-width: 630px) { body { padding: 18px; } .studies { grid-template-columns: 1fr; } header { align-items: start; } }
+</style>
+<header>
+  <div><h1>Spirit / Knot studies</h1><p>Four working-state backgrounds. One procedural weave.</p></div>
+  <button id="pause" type="button">Pause</button>
+</header>
+<p id="error" role="alert"></p>
+<main class="layout">
+  <section class="studies" aria-label="Four animated background variations">
+    <article><div class="stage"><canvas width="256" height="256" aria-label="Quiet current background"></canvas><img class="sprite" alt="Lilly"></div><div class="caption"><h2>01 · Quiet current</h2><p>A readable knot, gentle breathing, slow light across the ribbons.</p></div></article>
+    <article><div class="stage"><canvas width="256" height="256" aria-label="Signal runner background"></canvas><img class="sprite" alt="Lilly"></div><div class="caption"><h2>02 · Signal runner</h2><p>Offset packets of light travel through the six strands.</p></div></article>
+    <article><div class="stage"><canvas width="256" height="256" aria-label="Resonance background"></canvas><img class="sprite" alt="Lilly"></div><div class="caption"><h2>03 · Resonance</h2><p>Fine echoes expand from the weave with a small rocking motion.</p></div></article>
+    <article><div class="stage"><canvas width="256" height="256" aria-label="Spark lattice background"></canvas><img class="sprite" alt="Lilly"></div><div class="caption"><h2>04 · Spark lattice</h2><p>Shimmering motes assemble and drift away from the knot.</p></div></article>
+  </section>
+  <aside aria-label="Shared comparison controls">
+    <h2>Shared settings</h2>
+    <label class="control"><span>Speed <output id="speed-value"></output></span><input id="speed" type="range" min="0" max="4" step="0.01" value="1"></label>
+    <label class="control"><span>Intensity <output id="intensity-value"></output></span><input id="intensity" type="range" min="0.1" max="4" step="0.01" value="2"></label>
+    <label class="control"><span>Background scale <output id="scale-value"></output></span><input id="scale" type="range" min="0.25" max="3" step="0.00390625" value="1.171875"></label>
+    <label class="control"><span>Opacity <output id="opacity-value"></output></span><input id="opacity" type="range" min="0" max="1" step="0.01" value="1"></label>
+    <div class="colors"><label>Color A<input id="color-a" type="color" value="#8d68ff"></label><label>Color B<input id="color-b" type="color" value="#6cf2ff"></label></div>
+    <label class="toggle"><input id="show-sprite" type="checkbox" checked> Show Spirit sprite</label>
+    <label class="toggle"><input id="animate-sprite" type="checkbox" checked> Animate Lilly</label>
+    <label>Desktop backdrop<select id="backdrop"><option value="#090c13">Midnight</option><option value="#586477">Slate</option><option value="#e8eaf0">Light</option><option value="checker">Transparency grid</option></select></label>
+    <div class="actions"><button id="reset" type="button">Reset</button><button id="export" type="button">Save PNG</button></div>
+    <p style="font-size:12px">All four share the same time and settings. Hide Lilly to inspect the entire knot. Space pauses; arrows tune speed and intensity.</p>
+  </aside>
+</main>
+<footer>Native 256 × 256 backgrounds · Lilly scale 0.65 · seven frames / 110 ms<br>
+Backgrounds use only pixel coordinates, time, and math. Lilly is a separate image layer with no sprite VFX applied.<br>
+This is a shader study; the production Spirit kernel and working-state selection are unchanged.</footer>
+<script id="shader" type="x-shader/x-fragment">__KNOT_SHADER__</script>
+<script id="frames" type="application/json">__LILLY_FRAMES__</script>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const settings = ['speed', 'intensity', 'scale', 'opacity'];
+const sprites = [...document.querySelectorAll('.sprite')];
+const frames = JSON.parse($('frames').textContent).map(src => { const image = new Image(); image.src = src; return image; });
+const vertexSource = `#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+const fragmentSource = $('shader').textContent;
+const titles = ['01 · Quiet current', '02 · Signal runner', '03 · Resonance', '04 · Spark lattice'];
+const views = [];
+let paused = false, time = 0, previousTime = performance.now(), sourceFrame = -1;
+
+function shader(gl, type, source) {
+  const result = gl.createShader(type);
+  gl.shaderSource(result, source); gl.compileShader(result);
+  if (!gl.getShaderParameter(result, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(result));
+  return result;
+}
+function createView(canvas, variant) {
+  const gl = canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: true });
+  if (!gl) throw new Error('WebGL 2 is required to run these procedural backgrounds.');
+  const program = gl.createProgram();
+  const shaders = [shader(gl, gl.VERTEX_SHADER, vertexSource), shader(gl, gl.FRAGMENT_SHADER, fragmentSource)];
+  shaders.forEach(s => gl.attachShader(program, s)); gl.linkProgram(program);
+  shaders.forEach(s => gl.deleteShader(s));
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+  gl.useProgram(program); gl.bindVertexArray(gl.createVertexArray());
+  const uniforms = Object.fromEntries(['Resolution', 'Time', 'Speed', 'Intensity', 'Scale', 'Opacity', 'ColorA', 'ColorB', 'Variant'].map(name => [name, gl.getUniformLocation(program, 'u' + name)]));
+  gl.uniform2f(uniforms.Resolution, 256, 256); gl.uniform1i(uniforms.Variant, variant);
+  canvas.addEventListener('webglcontextlost', event => { event.preventDefault(); $('error').textContent = 'The graphics context was lost. Reload this preview to resume.'; });
+  return { canvas, gl, uniforms };
+}
+function rgb(id) { return $(id).value.match(/[a-f\d]{2}/gi).map(v => parseInt(v, 16) / 255); }
+function refreshLabels() {
+  settings.forEach(name => $(name + '-value').value = Number($(name).value).toFixed(name === 'scale' ? 3 : 2));
+}
+function draw() {
+  const a = rgb('color-a'), b = rgb('color-b');
+  for (const {gl, uniforms: u} of views) {
+    gl.uniform1f(u.Time, time);
+    settings.forEach(name => gl.uniform1f(u[name[0].toUpperCase() + name.slice(1)], Number($(name).value)));
+    gl.uniform3fv(u.ColorA, a); gl.uniform3fv(u.ColorB, b);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  const frame = $('animate-sprite').checked ? Math.floor(time * 1000 / 110) % frames.length : 0;
+  if (frame !== sourceFrame) { sprites.forEach(s => s.src = frames[frame].src); sourceFrame = frame; }
+  sprites.forEach(s => s.hidden = !$('show-sprite').checked);
+}
+function tick(now) {
+  if (!paused && !document.hidden) time += Math.min((now - previousTime) / 1000, 0.1);
+  previousTime = now; draw(); requestAnimationFrame(tick);
+}
+function togglePause() { paused = !paused; $('pause').textContent = paused ? 'Resume' : 'Pause'; }
+function setBackdrop() {
+  const choice = $('backdrop').value;
+  document.querySelectorAll('.stage').forEach(stage => stage.style.background = choice === 'checker'
+    ? 'repeating-conic-gradient(#333947 0% 25%, #242a36 0% 50%) 0 0 / 20px 20px' : choice);
+}
+function savePNG() {
+  draw();
+  const sheet = document.createElement('canvas'); sheet.width = 512; sheet.height = 576;
+  const ctx = sheet.getContext('2d');
+  views.forEach(({canvas}, i) => {
+    const x = (i % 2) * 256, y = Math.floor(i / 2) * 288;
+    // Preserve transparency in the exported background; add only the label strip.
+    ctx.drawImage(canvas, x, y);
+    if ($('show-sprite').checked && frames[sourceFrame].complete) {
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(frames[sourceFrame], x + 44.8, y + 44.8, 166.4, 166.4);
+    }
+    ctx.fillStyle = '#181c26'; ctx.fillRect(x, y + 256, 256, 32);
+    ctx.fillStyle = '#e9ecf3'; ctx.font = '13px system-ui'; ctx.fillText(titles[i], x + 12, y + 277);
+  });
+  const link = document.createElement('a'); link.download = 'spirit-knot-studies.png'; link.href = sheet.toDataURL('image/png'); link.click();
+}
+$('pause').onclick = togglePause;
+$('export').onclick = savePNG;
+$('backdrop').onchange = setBackdrop;
+settings.forEach(name => $(name).oninput = refreshLabels);
+$('reset').onclick = () => {
+  settings.forEach(name => $(name).value = $(name).defaultValue);
+  $('color-a').value = '#8d68ff'; $('color-b').value = '#6cf2ff';
+  $('show-sprite').checked = true; $('animate-sprite').checked = true;
+  $('backdrop').value = '#090c13'; time = 0; refreshLabels(); setBackdrop();
+};
+document.addEventListener('keydown', event => {
+  if (/INPUT|SELECT|BUTTON/.test(document.activeElement.tagName)) return;
+  if (event.code === 'Space') { event.preventDefault(); togglePause(); }
+  const mapping = { ArrowLeft: ['speed', -.01], ArrowRight: ['speed', .01], ArrowDown: ['intensity', -.01], ArrowUp: ['intensity', .01] };
+  if (mapping[event.key]) {
+    event.preventDefault(); const [name, delta] = mapping[event.key], input = $(name);
+    input.value = Math.max(Number(input.min), Math.min(Number(input.max), Number(input.value) + delta)); refreshLabels();
+  }
+});
+try {
+  document.querySelectorAll('canvas').forEach((canvas, i) => views.push(createView(canvas, i)));
+  refreshLabels(); draw(); requestAnimationFrame(tick);
+} catch (error) { $('error').textContent = error.message; console.error(error); }
+</script>
+</html>

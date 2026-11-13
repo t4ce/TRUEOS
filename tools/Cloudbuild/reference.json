@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "prepared_on": "2026-11-12",
+  "repository": "https://github.com/t4ce/TRUEOS",
+  "default_branch": "true",
+  "source_branch": "feat/subsystem-cloudbuild",
+  "head_commit": "11cacfdd1b90b284f11a958f48e0c28742867e01",
+  "head_tree": "909fa26f359f037c53f23c2bf25b330640ad665f",
+  "patch_base_commit": "75e9b1dc08189d3bba546213b4d5f3b4f3ee9757",
+  "patch_base_tag": "v0.0.235",
+  "observed_upstream_commit": "94af018df093b18eceb2b00b3072ed6c358021c6",
+  "comparison": "git diff --binary --full-index PATCH_BASE HEAD",
+  "git_bundle": "Incremental bundle for an existing TRUEOS checkout containing the base history.",
+  "changed_path_count": 41,
+  "merge_preview_exit_code": 1,
+  "known_text_conflicts": [
+    "src/usb3/mod.rs",
+    "tools/trueos-boot/prepare.sh",
+    "tools/testpy/test_rig_commands.py"
+  ],
+  "additional_semantic_integration": [
+    "Empty AppDB must create valid metadata/appbundle.json before the newer unconditional validation.",
+    "The newer appdb-seed tool needs APPBUNDLE_JSON as its fifth positional argument.",
+    "Required bundle companions must be reconciled with exact signed app selection; do not silently add apps.",
+    "Resolve new manifests/challenges for the eventual merged commit."
+  ],
+  "reference_release": {
+    "path": "evidence/upload/TrueOS-0.0.235(1).lz4",
+    "bytes": 19447079,
+    "sha256": "ddb2191bb6d6ef6aee0f03fdc21d874d57f4c0cc48a4ddfcc19bc4059a496c04"
+  },
+  "bundle_prerequisites": [
+    "15e57a4c1898be8b4b3770eaa93705d08729d4a7",
+    "75e9b1dc08189d3bba546213b4d5f3b4f3ee9757"
+  ]
+}

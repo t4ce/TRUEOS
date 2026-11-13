@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Choose TRUEOS subsystems, verify your public key, and request a personal build.">
+  <title>TRUEOS — Cloud Build</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#configurator">Skip to build configuration</a>
+  <header class="site-header shell">
+    <a class="brand" href="/" aria-label="TRUEOS Cloud Build home">
+      <span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span>TRUEOS<span class="brand-divider">/</span><span class="brand-product">CLOUD BUILD</span></span>
+    </a>
+    <div class="header-links">
+      <span class="connection-status" id="connection-status"><span class="status-dot"></span><span id="connection-label">Connecting</span></span>
+      <a class="source-link" href="https://github.com/t4ce/TRUEOS" target="_blank" rel="noopener noreferrer">Source <span aria-hidden="true">↗</span></a>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span></span> A SYSTEM, ON YOUR TERMS</p>
+        <h1 id="page-title">Your machine.<br><span>Your build.</span></h1>
+        <p class="hero-description">Start with a preset. Choose your subsystems and bundled apps. Bind your build to a key that only you control.</p>
+      </div>
+      <div class="hero-system" aria-label="Build configuration overview">
+        <div class="system-heading"><span class="system-glyph" aria-hidden="true">◈</span><span>TRUEOS / x86-64</span><span class="system-led" aria-hidden="true"></span></div>
+        <div class="system-diagram" aria-hidden="true">
+          <span class="system-core">TRUE<span>OS</span></span>
+          <span class="system-module module-usb" id="diagram-usb">USB</span>
+          <span class="system-module module-igpu" id="diagram-igpu">iGPU</span>
+          <span class="system-module module-virgl" id="diagram-virgl">Virgl</span>
+          <span class="system-line line-usb"></span><span class="system-line line-igpu"></span><span class="system-line line-virgl"></span>
+        </div>
+        <div class="system-footer"><span>CONFIGURATION</span><span id="diagram-count">Loading catalog…</span></div>
+      </div>
+    </section>
+
+    <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
+    <noscript><div class="notice error">This selector requires JavaScript. You can also use the cloudbuild command-line tools in the repository.</div></noscript>
+
+    <div class="builder-layout" id="configurator">
+      <div class="builder-sections">
+        <section class="section-block" aria-labelledby="preset-heading">
+          <div class="section-heading"><span class="step-number">01</span><div><h2 id="preset-heading">Choose a starting point</h2><p>Start with bundled apps or choose Kernel only. Every switch is yours.</p></div><span class="section-tag" id="preset-tag">PRESETS</span></div>
+          <fieldset class="preset-grid" id="presets"><legend class="sr-only">Build presets; selecting a preset replaces the current selection</legend><p class="loading-copy">Loading presets…</p></fieldset>
+        </section>
+
+        <section class="section-block" aria-labelledby="features-heading">
+          <div class="section-heading"><span class="step-number">02</span><div><h2 id="features-heading">Choose your subsystems</h2><p>Set the kernel capabilities for this machine.</p></div><span class="section-tag" id="feature-count">— SELECTED</span></div>
+          <fieldset class="feature-grid" id="features"><legend class="sr-only">Kernel subsystem switches</legend><p class="loading-copy">Loading subsystems…</p></fieldset>
+          <p class="scope-note"><span aria-hidden="true">ⓘ</span> Subsystem switches control device and service initialization. They do not yet remove every driver byte from the image.</p>
+          <div class="profile-row">
+            <div><h3>Build profile</h3><p id="profile-description">Optimized for everyday use.</p></div>
+            <fieldset class="segmented" id="profile-controls"><legend class="sr-only">Build profile</legend><label><input type="radio" name="profile" value="release" checked><span>Release</span></label><label><input type="radio" name="profile" value="dev"><span>Development</span></label></fieldset>
+          </div>
+        </section>
+
+        <section class="section-block" aria-labelledby="buildins-heading">
+          <div class="section-heading"><span class="step-number">03</span><div><h2 id="buildins-heading">Bundled at first boot</h2><p>Every buildin is a choice. Bring the tools you want.</p></div><span class="section-tag" id="buildin-count" aria-live="polite">— SELECTED</span></div>
+          <div class="buildin-toolbar"><p>App choices leave your kernel features unchanged.<span class="buildin-size-basis" id="buildin-size-basis">Package size measurements are loading.</span></p><div class="buildin-shortcuts" role="group" aria-label="Bundled app shortcuts"><button type="button" class="button secondary compact" id="buildins-all" aria-label="Select all bundled apps" aria-controls="buildins" disabled>All</button><button type="button" class="button secondary compact" id="buildins-none" aria-label="Clear all bundled apps" aria-controls="buildins" disabled>None</button></div></div>
+          <fieldset class="buildin-grid" id="buildins"><legend class="sr-only">Individual bundled apps</legend><p class="loading-copy">Loading bundled apps…</p></fieldset>
+          <p class="scope-note"><span aria-hidden="true">ⓘ</span> None is Kernel only: no bundled file explorer, app store, or text editor. You can also keep any subset.</p>
+        </section>
+
+        <section class="section-block identity-section" aria-labelledby="identity-heading">
+          <div class="section-heading"><span class="step-number">04</span><div><h2 id="identity-heading">Your key. Your build.</h2><p>Prove control of a key with a local signature.</p></div><span class="section-tag">ED25519</span></div>
+          <label class="field-label" for="public-key">Public SSH key <span>optional where enabled</span></label>
+          <textarea id="public-key" class="code-input public-key-input" rows="3" maxlength="4096" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI… you@machine" aria-describedby="key-hint key-error"></textarea>
+          <p class="field-error" id="key-error" role="alert" hidden></p>
+          <p class="field-hint" id="key-hint"><span class="lock-icon" aria-hidden="true">↳</span> Only your public key goes here. Your private key stays on your machine.</p>
+          <div class="identity-explainer"><span class="identity-mark" aria-hidden="true">⌘</span><p>You sign a challenge. TRUEOS verifies the signature and checks your key’s build entitlement. A successful licensed build receives an issuer-signed receipt.</p></div>
+
+          <section class="challenge-panel" id="challenge-panel" aria-labelledby="challenge-heading" hidden>
+            <div class="panel-heading"><div><p class="eyebrow">PROOF OF KEY CONTROL</p><h3 id="challenge-heading" tabindex="-1">One signature. Then we build.</h3></div><span class="pill" id="challenge-state">READY TO SIGN</span></div>
+            <dl class="challenge-meta"><div><dt>Key fingerprint</dt><dd id="key-fingerprint"></dd></div><div><dt>Challenge expires</dt><dd id="challenge-expiry"></dd></div></dl>
+            <ol class="signing-steps">
+              <li><span>Download the exact challenge for this configuration.</span><button type="button" class="button secondary compact" id="download-challenge">Download challenge <span aria-hidden="true">↓</span></button></li>
+              <li><span>Sign it locally with the matching private key.</span><div class="command-box"><pre><code id="sign-command"></code></pre><button type="button" class="text-button" id="copy-command" aria-label="Copy signing command">Copy</button></div><p class="field-hint">Run this in the download folder. Change the key path if yours is different.</p></li>
+              <li><label for="signature">Return the detached signature.</label><textarea id="signature" class="code-input signature-input" rows="4" maxlength="16384" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="-----BEGIN SSH SIGNATURE-----&#10;…&#10;-----END SSH SIGNATURE-----" aria-describedby="signature-hint signature-error"></textarea><div class="signature-file-row"><label class="file-button" for="signature-file">Choose .sig file<input type="file" id="signature-file" accept=".sig,text/plain,application/octet-stream"></label><span class="field-hint" id="signature-file-name">Or paste the signature above.</span></div><p class="field-hint" id="signature-hint">Upload the <code>.sig</code> file, never your private key.</p><p class="field-error" id="signature-error" role="alert" hidden></p></li>
+            </ol>
+            <button type="button" class="button primary verify-button" id="verify-button" disabled>Verify key &amp; queue build <span aria-hidden="true">↗</span></button>
+          </section>
+        </section>
+      </div>
+
+      <aside class="build-sidebar" aria-labelledby="summary-heading">
+        <div class="summary-card">
+          <div class="summary-heading"><span class="eyebrow">BUILD MANIFEST</span><span class="pill neutral" id="plan-state">RESOLVING</span></div>
+          <h2 id="summary-heading">Your configuration</h2>
+          <p class="summary-intro" id="summary-preset">Waiting for the feature catalog.</p>
+          <div class="selected-features" id="selected-features" aria-label="Selected kernel features"></div>
+          <dl class="summary-facts">
+            <div><dt>Target</dt><dd>x86-64 · UEFI</dd></div>
+            <div><dt>Profile</dt><dd id="summary-profile">Release</dd></div>
+            <div><dt>Bundled apps</dt><dd id="summary-buildins">Loading…</dd></div>
+            <div><dt>Source</dt><dd><a id="source-commit" target="_blank" rel="noopener noreferrer">Loading…</a></dd></div>
+            <div><dt>Config hash</dt><dd><span id="config-hash">—</span></dd></div>
+            <div><dt>Identity</dt><dd id="summary-identity">No key supplied</dd></div>
+          </dl>
+          <p class="selected-buildins" id="selected-buildins" aria-label="Selected bundled apps"></p>
+          <p class="payload-note" id="buildins-note" hidden>Kernel only includes no bundled file explorer, app store, or text editor. Your selected kernel capabilities remain available.</p>
+          <section class="size-panel" aria-labelledby="size-heading">
+            <div class="size-heading"><h3 id="size-heading">Image size estimate</h3><span>1 kB = 1,000 bytes</span></div>
+            <p class="size-reference" id="size-reference">Waiting for reference measurements.</p>
+            <dl class="size-facts">
+              <div><dt id="size-kernel-label">Kernel baseline (estimated)</dt><dd id="size-kernel">Unmeasured</dd></div>
+              <div><dt>Selected app packages</dt><dd id="size-apps">Unmeasured</dd></div>
+              <div class="size-total"><dt id="size-total-label">Estimated kernel + apps</dt><dd id="size-total">Unmeasured</dd></div>
+              <div class="size-saving"><dt>App payload omitted</dt><dd id="size-saved">Unmeasured</dd></div>
+              <div><dt>Subsystem savings</dt><dd id="size-subsystems">Not measured</dd></div>
+            </dl>
+            <div class="size-meter" id="size-meter" role="meter" aria-label="Share of reference app payload selected" aria-valuemin="0" aria-valuemax="100" hidden><span id="size-meter-selected"></span></div>
+            <p class="size-meter-caption" id="size-meter-caption" hidden></p>
+            <p class="size-context" id="size-context" hidden></p>
+            <p class="size-note">App package totals estimate the image payload. The final download is compressed separately.</p>
+            <details class="size-method"><summary>Reference and measurement details</summary>
+              <p id="size-method-note">Reference measurements are unavailable.</p>
+              <dl class="size-reference-facts">
+                <div><dt>Measured reference kernel</dt><dd id="size-reference-kernel">Unmeasured</dd></div>
+                <div><dt>Measured reference download</dt><dd id="size-reference-download">Unmeasured</dd></div>
+              </dl>
+              <p>Totals add the original bytes before rounding to kB. AppDB compression, layout, and rebuilds can change the finished image size.</p>
+              <p id="size-subsystems-note">Subsystem reductions have not been measured.</p>
+            </details>
+          </section>
+          <ul class="plan-warnings" id="plan-warnings" hidden></ul>
+          <p class="field-error plan-error" id="plan-error" role="alert" hidden></p>
+          <button type="button" class="button primary build-button" id="build-button" disabled><span id="build-button-label">Resolving configuration</span><span aria-hidden="true">↗</span></button>
+          <p class="build-hint" id="build-hint">Every request is bound to its exact source, kernel features, and app selection.</p>
+          <details class="manifest-details"><summary>Inspect the resolved manifest <span aria-hidden="true">+</span></summary><pre id="manifest-json">Waiting for configuration…</pre><button type="button" class="text-button" id="download-manifest" disabled>Download manifest ↓</button></details>
+          <div class="resume-tools"><label class="file-button" for="resume-file">Resume a saved build <span aria-hidden="true">↗</span><input type="file" id="resume-file" accept=".json,application/json"></label><p class="field-hint">Open a private build access file from this server.</p><p class="field-error" id="resume-error" role="alert" hidden></p></div>
+          <div class="service-footer"><span class="status-dot"></span><span id="worker-state">Checking build service</span></div>
+        </div>
+
+        <section class="job-card" id="job-panel" aria-labelledby="job-heading" hidden>
+          <div class="panel-heading"><div><p class="eyebrow">BUILD REQUEST</p><h2 id="job-heading" tabindex="-1">Build queued</h2></div><span class="job-activity" id="job-activity" aria-hidden="true"></span></div>
+          <p class="job-id" id="job-id"></p>
+          <p class="job-configuration" id="job-configuration"></p>
+          <p class="job-buildins" id="job-buildins"></p>
+          <p class="job-size-estimate" id="job-size-estimate" hidden></p>
+          <div class="job-features" id="job-features" aria-label="Kernel features in this build request"></div>
+          <ol class="job-progress" id="job-progress"><li data-stage="queued"><span></span>Queued</li><li data-stage="building"><span></span>Building</li><li data-stage="succeeded"><span></span>Ready</li></ol>
+          <p class="job-detail" id="job-detail" aria-live="polite">The worker will pick up this request.</p>
+          <p class="field-error" id="job-error" role="alert" hidden></p>
+          <dl class="artifact-meta" id="artifact-meta" hidden><div><dt>Artifact</dt><dd id="artifact-name"></dd></div><div><dt>SHA-256</dt><dd id="artifact-sha"></dd></div><div><dt>Download size</dt><dd id="artifact-size"></dd></div></dl>
+          <div class="job-actions"><button type="button" class="button primary" id="download-artifact" hidden>Download build <span aria-hidden="true">↓</span></button><button type="button" class="button secondary" id="download-receipt" hidden>Download signed receipt <span aria-hidden="true">↓</span></button><button type="button" class="button secondary" id="save-access">Save private access file <span aria-hidden="true">↓</span></button><button type="button" class="button secondary" id="retry-job" hidden>Retry this configuration <span aria-hidden="true">↗</span></button><button type="button" class="text-button" id="refresh-job" hidden>Refresh build status ↻</button></div>
+          <p class="job-session-note">Keep the access file private; it grants access to this build. Save it to resume after closing this page or starting another request. Editing the selector does not change this build.</p>
+        </section>
+
+        <div class="sidebar-note"><span aria-hidden="true">◇</span><p>One configuration, one verifiable artifact.<br>Key ownership and build entitlement are checked separately.</p></div>
+      </aside>
+    </div>
+
+    <footer class="site-footer"><span>TRUEOS <span class="footer-separator">/</span> Built from the system up.</span><span>SELECT <span aria-hidden="true">→</span> SIGN <span aria-hidden="true">→</span> BUILD</span></footer>
+  </main>
+</body>
+</html>

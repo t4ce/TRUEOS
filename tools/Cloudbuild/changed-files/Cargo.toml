@@ -1,0 +1,271 @@
+[package]
+name = "TRUEOS"
+version = "0.0.2"
+edition = "2024"
+license-file = "LICENSE"
+
+# One lockfile and one dependency resolution for all repository-owned crates.
+# Vendored upstream projects and standalone tools intentionally remain outside this
+# workspace: several of them define their own workspaces or are independently
+# runnable applications.
+[workspace]
+resolver = "3"
+members = [
+    "crates/trueos-crypto",
+    "crates/trueos-credential-store",
+    "crates/trueos-executor",
+    "crates/trueos-executor/embassy-time",
+    "crates/trueos-executor/trueos-executor-macros",
+    "crates/trueos-fs",
+    "crates/trueos-helio-artifact",
+    "crates/trueos-helio-runtime",
+    "crates/trueos-io",
+    "crates/trueos-path",
+    "crates/trueos-runtime",
+    "crates/trueos-kokoro/aot",
+    "crates/trueos-kokoro/audio",
+    "crates/trueos-kokoro/conv",
+    "crates/trueos-kokoro/dispatch",
+    "crates/trueos-kokoro/duration",
+    "crates/trueos-kokoro/exec",
+    "crates/trueos-kokoro/f32",
+    "crates/trueos-kokoro/g2p",
+    "crates/trueos-kokoro/gemm",
+    "crates/trueos-kokoro/layout",
+    "crates/trueos-kokoro/lexicon",
+    "crates/trueos-kokoro/lstm",
+    "crates/trueos-kokoro/memory",
+    "crates/trueos-kokoro/resize",
+    "crates/trueos-kokoro/scalar",
+    "crates/trueos-kokoro/stft",
+    "crates/trueos-kokoro/voice",
+    "crates/trueos-lfm25-cpu",
+    "crates/trueos-lfm25-model",
+    "crates/trueos-locale",
+    "crates/trueos-math",
+    "crates/trueos-terminal",
+    "crates/trueos-ttstt-cpu",
+    "crates/trueos-v",
+    "crates/trueos-vm",
+]
+# These are patched or directly used upstream projects.  Keeping them out of the
+# TRUEOS workspace preserves their own workspace metadata and lockfile policy.
+exclude = [
+    # Standalone host tools own their manifests, lockfiles, and patch policy.
+    "tools/helio-sprite-atlas-bake",
+    "tools/kokoro-native-oracle",
+    "tools/remoteai",
+    "tools/wgpu-video-mesh",
+    "tools/trueos-boot",
+    "vendor/*",
+    "vendor/image-webp-0.2.4-trueos",
+    "vendor/getrandom-0.4.3",
+    "vendor/rand_core-0.6.4",
+    "vendor/log-os",
+    # Cargo matches workspace exclusions against package directories, so this
+    # nested package needs its own entry.
+    "vendor/CrabUSB/usb-host",
+    "vendor/tinyaudio",
+]
+
+# Keep the common no_std dependency policy in one place.  Features stay at
+# individual use sites because Cargo unifies them across workspace consumers.
+[workspace.dependencies]
+core3 = { version = "0.1.2", default-features = false }
+half = { version = "2.7.1", default-features = false }
+libm = { version = "0.2", default-features = false }
+serde = { version = "1.0", default-features = false }
+serde_json = { version = "1.0", default-features = false }
+sha2 = { version = "=0.10.9", default-features = false }
+
+[[bin]]
+name = "TRUEOS"
+path = "src/main.rs"
+test = false
+bench = false
+
+[features]
+default = ["buildin-apps", "subsystem-usb", "subsystem-igpu", "subsystem-virgl", "trueos_h264_encode_stream", "trueos_task_profile", "odin-native-gpgpu"]
+# Bundle the configured Blueprint apps. Without this feature the same kernel
+# starts with an empty writable app catalog; its runtime APIs remain available.
+buildin-apps = []
+# Cloud build selections control device admission. Shared ABI/types remain
+# compiled; these flags do not promise complete driver-code removal.
+subsystem-usb = []
+subsystem-igpu = []
+subsystem-virgl = []
+trueos_h264_encode_stream = ["subsystem-igpu"]
+trueos_h264_encode_probe = ["trueos_h264_encode_stream"]
+trueos_task_profile = ["trueos-executor/trueos-task-profile"]
+# Enable runtime-generated native compute for odin.son development.
+odin-native-gpgpu = ["subsystem-igpu"]
+# Compatibility experiments are excluded from the normal VMX lifecycle.
+# RAM pause/resume does not require checkpoint storage or replication.
+legacy_vm_checkpoint = []
+trueos_ttstt = [
+    "dep:trueos-ttstt-cpu",
+    "dep:trueos-kokoro-aot",
+    "dep:trueos-kokoro-audio",
+    "dep:trueos-kokoro-conv",
+    "dep:trueos-kokoro-dispatch",
+    "dep:trueos-kokoro-duration",
+    "dep:trueos-kokoro-exec",
+    "dep:trueos-kokoro-f32",
+    "dep:trueos-kokoro-g2p",
+    "dep:trueos-kokoro-gemm",
+    "dep:trueos-kokoro-lexicon",
+    "dep:trueos-kokoro-layout",
+    "dep:trueos-kokoro-lstm",
+    "dep:trueos-kokoro-memory",
+    "dep:trueos-kokoro-resize",
+    "dep:trueos-kokoro-scalar",
+    "dep:trueos-kokoro-stft",
+    "dep:trueos-kokoro-voice",
+]
+
+[dependencies]
+trueos-terminal = { path = "crates/trueos-terminal" }
+# Experimental upstream paging API; see tools/docs/x86_64-next.md.
+# Keep the effective features explicit; do not follow changing upstream defaults.
+x86_64 = { version = "=0.15.5", default-features = false, features = ["instructions", "nightly", "memory_encryption"] }
+core3 = { workspace = true, features = ["alloc", "utils"] }
+spin = "0.10"
+atomic-waker = { version = "1.1.2", default-features = false }
+trueos-executor = { path = "crates/trueos-executor", default-features = false, features = ["executor-thread", "platform-spin"] }
+embassy-sync = { version = "0.8.0", default-features = false }
+trueos-time = { path = "crates/trueos-executor/embassy-time", default-features = false, features = ["tick-hz-1_000"] }
+embassy-time-driver = { version = "0.2.2", default-features = false }
+embedded-io-async = { version = "0.7.0", default-features = false }
+trueos-crypto = { path = "crates/trueos-crypto" }
+sunset = { path = "vendor/sunset", default-features = false, features = ["alloc"] }
+trueos-credential-store = { path = "crates/trueos-credential-store" }
+ed25519-dalek = { version = "2.2", default-features = false, features = ["zeroize"] }
+qrcodegen = { package = "qrcodegen-no-heap", version = "1.8.1", default-features = false }
+heapless = { version = "0.9", default-features = false }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+bytes = { version = "1.11.1", default-features = false }
+limine = { version = "0.6", default-features = false }
+acpi = { version = "6.1.1", default-features = false, features = ["alloc", "aml"] }
+aml = { version = "0.16", default-features = false }
+getrandom = { version = "=0.4.3", default-features = false }
+raw-cpuid = { version = "11", default-features = false }
+rand_core = { version = "0.6", default-features = false }
+rand_chacha = { version = "0.3", default-features = false }
+hmac = { version = "0.12.1", default-features = false }
+sha1 = { version = "=0.10.6", default-features = false }
+aes = { version = "0.8.4", default-features = false }
+cipher = { version = "0.4.4", default-features = false }
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
+libm = { workspace = true }
+half = { workspace = true }
+hashbrown = { version = "0.17.0", default-features = false }
+memchr = { version = "2.8.0", default-features = false }
+microfont = { path = "vendor/microfont", default-features = false, features = ["raster"] }
+object = { version = "0.39.1", default-features = false, features = ["read_core", "elf"] }
+unicode-segmentation = { version = "1", default-features = false }
+unicode-width = { version = "0.2.2", default-features = false }
+log_os_core = { package = "log-os", path = "vendor/log-os", default-features = false }
+tinyaudio = { path = "vendor/tinyaudio", default-features = false }
+alsa = { version = "0.11.0", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["custom-provider", "tls12"] }
+rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12", "zeroize"] }
+chacha20poly1305 = { version = "0.10.1", default-features = false }
+webpki-roots = { version = "1.0.7", default-features = false }
+miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
+lz4_flex = { version = "0.11.6", default-features = false, features = ["safe-encode", "safe-decode", "checked-decode"] }
+twox-hash = { version = "2.1.2", default-features = false, features = ["xxhash32"] }
+png = { version = "0.18.1", default-features = false }
+image-webp = { path = "vendor/image-webp-0.2.4-trueos", default-features = false }
+zune-core = { version = "0.5.1", default-features = false }
+zune-jpeg = { version = "0.5.15", default-features = false, features = ["x86", "portable_simd"] }
+crc32fast = { version = "1.5.0", default-features = false }
+sha2 = { workspace = true }
+embedded-websocket = { version = "0.9.4", default-features = false }
+symphonia-core = { version = "0.5.5", default-features = false }
+symphonia-codec-aac = { version = "0.5.5", default-features = false }
+smoltcp = { version = "0.13", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "multicast", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
+dma-api = { version = "=0.7.3", default-features = false }
+crab-usb = { path = "vendor/CrabUSB/usb-host", default-features = false }
+trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
+trueos-ttstt-cpu = { path = "crates/trueos-ttstt-cpu", optional = true }
+trueos-kokoro-aot = { path = "crates/trueos-kokoro/aot", optional = true }
+trueos-kokoro-audio = { path = "crates/trueos-kokoro/audio", optional = true }
+trueos-kokoro-conv = { path = "crates/trueos-kokoro/conv", optional = true }
+trueos-kokoro-exec = { path = "crates/trueos-kokoro/exec", optional = true }
+trueos-kokoro-f32 = { path = "crates/trueos-kokoro/f32", optional = true }
+trueos-kokoro-g2p = { path = "crates/trueos-kokoro/g2p", optional = true }
+trueos-kokoro-gemm = { path = "crates/trueos-kokoro/gemm", optional = true }
+trueos-kokoro-lexicon = { path = "crates/trueos-kokoro/lexicon", optional = true }
+trueos-kokoro-duration = { path = "crates/trueos-kokoro/duration", optional = true }
+trueos-kokoro-dispatch = { path = "crates/trueos-kokoro/dispatch", optional = true }
+trueos-kokoro-layout = { path = "crates/trueos-kokoro/layout", optional = true }
+trueos-kokoro-lstm = { path = "crates/trueos-kokoro/lstm", optional = true }
+trueos-kokoro-memory = { path = "crates/trueos-kokoro/memory", optional = true }
+trueos-kokoro-resize = { path = "crates/trueos-kokoro/resize", optional = true }
+trueos-kokoro-scalar = { path = "crates/trueos-kokoro/scalar", optional = true }
+trueos-kokoro-stft = { path = "crates/trueos-kokoro/stft", optional = true }
+trueos-kokoro-voice = { path = "crates/trueos-kokoro/voice", optional = true }
+trueos-fs = { path = "crates/trueos-fs" }
+infer = { path = "vendor/infer", default-features = false }
+v = { path = "crates/trueos-v" }
+trueos-vm = { path = "crates/trueos-vm" }
+trueos-locale = { path = "crates/trueos-locale", default-features = false }
+trueos-helio-artifact = { path = "crates/trueos-helio-artifact" }
+trueos-helio-runtime = { path = "crates/trueos-helio-runtime" }
+serde = { workspace = true, features = ["alloc", "derive"] }
+serde_json = { workspace = true, features = ["alloc"] }
+mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
+hyper = { version = "1.10.0", default-features = false, features = ["client", "http1", "server"] }
+httpdate = { version = "1.0.3", default-features = false }
+rdrand = { version = "0.8", default-features = false }
+redb = { version = "=4.4.0", default-features = false, features = ["experimental-api-5"] }
+trueos-ide = { path = "../TRUEOS-Blueprints/crates/trueos-ide", default-features = false, features = ["store-core"] }
+trueos-redb = { path = "../TRUEOS-Blueprints/crates/trueos-redb", default-features = false }
+
+[profile.dev]
+panic = "abort"
+opt-level = 1
+# Rig diagnostics use runtime logs and raw frame-pointer backtraces.
+debug = false
+strip = "symbols"
+
+[profile.release]
+panic = "abort"
+lto = "fat"
+codegen-units = 1
+strip = true
+debug = false
+opt-level = 2
+
+[patch.crates-io]
+getrandom = { path = "vendor/getrandom-0.4.3" }
+rand_core = { path = "vendor/rand_core-0.6.4" }
+ring = { path = "vendor/ring-0.17.14" }
+# Unreleased next still calls itself 0.15.5. Pin the implementation, not the branch.
+x86_64 = { git = "https://github.com/rust-osdev/x86_64", rev = "78b81025d65a3e899f48a6fded8b27889a09d70b" }
+cordyceps = { path = "vendor/cordyceps-0.3.5" }
+acpi = { path = "vendor/acpi-6.1.1" }
+aml = { path = "vendor/aml-0.16.4" }
+png = { path = "vendor/png-0.18.1" }
+fdeflate = { path = "vendor/fdeflate-0.3.7" }
+simd-adler32 = { path = "vendor/simd-adler32-0.3.8" }
+hyper = { path = "vendor/hyper-1.10.0" }
+http = { path = "vendor/http-1.4.0" }
+http-body = { path = "vendor/http-body-1.0.1" }
+httpdate = { path = "vendor/httpdate-1.0.3" }
+want = { path = "vendor/want-0.3.1" }
+crc32fast = { path = "vendor/crc32fast-1.5.0" }
+embedded-websocket = { path = "vendor/embedded-websocket-0.9.4" }
+lazy_static = { path = "vendor/lazy_static-1.5.0" }
+rustls-rustcrypto = { path = "vendor/rustls-rustcrypto-0.0.2-alpha" }
+mio = { path = "vendor/mio-1.2.0" }
+smoltcp = { path = "vendor/smoltcp-0.13.1" }
+zune-core = { path = "vendor/zune-core-0.5.1" }
+zune-jpeg = { path = "vendor/zune-jpeg-0.5.15" }
+dma-api = { path = "vendor/dma-api-0.7.3" }
+alsa = { path = "vendor/alsa-0.11.0" }
+symphonia-core = { path = "vendor/symphonia-core-0.5.5-trueos" }
+symphonia-codec-aac = { path = "vendor/symphonia-codec-aac-0.5.5-trueos" }
+
+[build-dependencies]
+sha2 = { workspace = true, features = ["std"] }

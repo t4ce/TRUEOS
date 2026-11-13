@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "browser": "jsdom DOM execution, real Python HTTP service and OpenSSH; no visual layout assertion",
+  "checks": [
+    "preset feature population",
+    "automatic dependency disabling and enabling",
+    "development profile",
+    "manifest download",
+    "private-key rejection before network",
+    "challenge despite skewed client clock",
+    "exact challenge download and real local SSH signature",
+    "entitled key queues job",
+    "anonymous queues job",
+    "immutable job survives selector and key edits",
+    "private access file download",
+    "new page authenticated resume",
+    "foreign-origin ticket rejected before credential request",
+    "bfcache resumes polling",
+    "failed keyed job retry requires fresh challenge",
+    "no JavaScript exceptions"
+  ]
+}

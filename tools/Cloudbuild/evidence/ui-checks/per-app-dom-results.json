@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "kind": "jsdom DOM and real Python HTTP/OpenSSH integration; no visual browser assertion",
+  "checks": [
+    "12 real buildin checkboxes, separate from kernel switches",
+    "default selects all and summary lists every app",
+    "one app deselection changes hash while preserving kernel flags",
+    "None yields Kernel only with no app Cargo feature",
+    "each of the 12 apps is independently selectable alone",
+    "All and None preserve USB deselection",
+    "QEMU and Kernel only presets populate app and kernel choices",
+    "individual app edit invalidates an existing signing challenge",
+    "new challenge binds updated app-selection hash",
+    "real SSH signature queues exactly the selected subset",
+    "queued app names stay frozen after selector edits",
+    "persisted job records exact app IDs",
+    "saved access resumes subset independently of current selector",
+    "failed keyed retry restores exact apps and needs new proof",
+    "manifest export preserves exact app IDs",
+    "requests send app arrays without conflicting master override",
+    "no JavaScript exceptions"
+  ],
+  "javascriptErrors": []
+}

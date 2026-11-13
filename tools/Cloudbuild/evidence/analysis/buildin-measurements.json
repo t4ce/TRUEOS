@@ -1,0 +1,3096 @@
+[
+  {
+    "id": "apps",
+    "packed_bp_bytes": 125526,
+    "elf_bytes": 234024,
+    "bp_sha256": "63c071d2cca14c9692e329f5e5b3b4afcfd880e7e48755cd774ea9a2e0fa0c3b",
+    "elf_sha256": "3ffcb90228f1058daaca0cf75f4d40f014cc7e5d71ce5fbf5bc7358afb325659",
+    "db_leaf_offset": 4096,
+    "db_value_offset": 4115,
+    "header_flags": 2563,
+    "imports": [
+      {
+        "name": "trueos_platform_monotonic_nanos",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_dealloc",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_alloc_aligned",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_one",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_observe",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_after",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_log",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_surface_snapshot_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_current_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_wait_after_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_observe_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_read_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_var",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_all",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_poll_once",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_status",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_read_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_len",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_get",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_set",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_rand",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_shutdown",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_fetch_bytes_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_fetch_bytes_start_with_options_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_fetch_bytes_result_len",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_fetch_bytes_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_create_dir_all_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_checked_write_begin_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_chunk",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_commit",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_begin",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_detach",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_join",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_return_to_cli",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_release_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_current_id",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_register_cleanup",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_launch_script_v1",
+        "binding": 1,
+        "type": 0
+      }
+    ],
+    "all_imports": 42,
+    "table_packed_bp_bytes": 125516,
+    "packed_change_bytes": 10,
+    "table_elf_bytes": 234024,
+    "elf_change_bytes": 0,
+    "decimal_kb_rounded": 126,
+    "native_namespace_imports": 42,
+    "other_imports": [],
+    "unix_posix_import_names": [],
+    "unix_posix_imports": 0
+  },
+  {
+    "id": "commander",
+    "packed_bp_bytes": 56626,
+    "elf_bytes": 111240,
+    "bp_sha256": "874edcba81dc8120c6aeb84ee359e5fccdbd5a4589df3183e302c5ff3d542f23",
+    "elf_sha256": "b47889d4fb95903f49a4b841e019b431d68f7c9d4f1bded4ac27e12737e37606",
+    "db_leaf_offset": 200704,
+    "db_value_offset": 200728,
+    "header_flags": 3,
+    "imports": [
+      {
+        "name": "trueos_cabi_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_shutdown",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_current_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_return_to_cli",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_release_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_log",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_dealloc",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_exit_reason",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_one",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_observe",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_after",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_surface_snapshot_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_output_dimensions",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_keyboard_control_request",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_mouse_motion_cursor_request",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_input_combo_request",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_input_combo_bind_keyboard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_input_combo_remove",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_mouse_motion_cursor_release",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_keyboard_control_release",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_input_combo_bind_mouse",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_mouse_motion_submit",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_keyboard_control_submit",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_alloc_aligned",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_monotonic_nanos",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_wait_after_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_observe_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_read_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_var",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_all",
+        "binding": 1,
+        "type": 0
+      }
+    ],
+    "all_imports": 31,
+    "table_packed_bp_bytes": 56633,
+    "packed_change_bytes": -7,
+    "table_elf_bytes": 111240,
+    "elf_change_bytes": 0,
+    "decimal_kb_rounded": 57,
+    "native_namespace_imports": 31,
+    "other_imports": [],
+    "unix_posix_import_names": [],
+    "unix_posix_imports": 0
+  },
+  {
+    "id": "hull",
+    "packed_bp_bytes": 3019130,
+    "elf_bytes": 6876568,
+    "bp_sha256": "be88be24b73e6fac9daeb5a9620f233a60d021fd63f9490ade8e38c1d41e6aa1",
+    "elf_sha256": "e3a1875d71085ad7cda920f7bdaebd8fba2bd66d7d4ef0c75c736896a1440804",
+    "db_leaf_offset": 4198400,
+    "db_value_offset": 4198419,
+    "header_flags": 3,
+    "imports": [
+      {
+        "name": "sys_dealloc",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_alloc_aligned",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_service_lane_submit_job",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_read_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_len",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_poll_once",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_display_open_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_monotonic_nanos",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_one",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_release_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_output_dimensions",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_frame_open_streaming",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_display_validate_window_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_solara_frame_close",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_frame_set_escape_key_action",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_window_title_set_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_frame_get_position",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_resize_event_take",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_frame_resize",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_window_state_get_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_observe",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_after",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_keyboard_event_take_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_pointer_event_take",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_pan_event_take",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_input_read_cursor_events_since",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_input_read_keyboard_output_since",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_window_state_set_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_fetch_bytes_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_buffer_destroy",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_render_pipeline_destroy",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_shader_module_destroy",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_close",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_button_regions_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_hover_regions_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vmedia_video_command_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_poll_reentry_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_fetch_bytes_result_len",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_fetch_bytes_final_url",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_fetch_bytes_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_fetch_bytes_start_happy_eyeballs",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_sleep_ms",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_all",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_hull_image_reset_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_hull_image_request_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_hull_image_status_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_var",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_create_dir_all_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_checked_write_begin_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_chunk",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_commit",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_fetch_bytes_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_begin",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_open",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_queue_create",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_shader_module_create",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_render_pipeline_create",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_buffer_create",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_buffer_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_ui4_surface_acquire",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_ui4_indexed_batch_submit_v2",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_wait",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_ui4_surface_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_rand",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_get",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_set",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_service_lane_cancellation_requested",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_fetch_bytes_start_with_referrer",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_surface_snapshot_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_log",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_current_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_observe_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_read_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_wait_after_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_time_timezone_offset_seconds",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_time_unix_nanos",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_detach",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_join",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_current_id",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_shutdown",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_sprite_frame_begin",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_sprite_quads",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_hull_text_runs_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_solara_frame_begin",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_solara_frame_publish",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_return_to_cli",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_hull_image_release_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_register_cleanup",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_launch_script_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_status",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_display_close_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_frame_set_position",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_window_title_get_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "__assert_fail",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "modf",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "lrint",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "atanh",
+        "binding": 1,
+        "type": 0
+      }
+    ],
+    "all_imports": 101,
+    "table_packed_bp_bytes": 3022846,
+    "packed_change_bytes": -3716,
+    "table_elf_bytes": 6882488,
+    "elf_change_bytes": -5920,
+    "decimal_kb_rounded": 3019,
+    "native_namespace_imports": 97,
+    "other_imports": [
+      "__assert_fail",
+      "modf",
+      "lrint",
+      "atanh"
+    ],
+    "unix_posix_import_names": [],
+    "unix_posix_imports": 0
+  },
+  {
+    "id": "trauma",
+    "packed_bp_bytes": 378732,
+    "elf_bytes": 682016,
+    "bp_sha256": "1235e1e44188c4667699a59325f91394cc3ffe08ebd449e5c7ee3e0d8080a12d",
+    "elf_sha256": "7a3907d8edddefafd42fbbd2df1c819d43cbb1480d010a1a483c84e38bb24731",
+    "db_leaf_offset": 528384,
+    "db_value_offset": 528405,
+    "header_flags": 3,
+    "imports": [
+      {
+        "name": "sys_alloc_aligned",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_dealloc",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_rand",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_monotonic_nanos",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_one",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_observe",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_after",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_poll_once",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_current_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_get",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_set",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_release_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_sleep_ms",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_poll_reentry_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_status",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_read_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_len",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_current_dir",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_http_request_discard_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_http_request_read_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_checked_write_begin_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_chunk",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_typed_stat_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_commit",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_http_request_start_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_net_http_request_head_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_create_dir_all_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_remove_leaf_start_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_metadata_start_v2",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_begin",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_detach",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_swap_child_role_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_spawn",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_set_name",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_join",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_var",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_all",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_swap_activity_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_child_read_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_child_status_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_observe_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_read_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_wait_after_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_shutdown",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_return_to_cli",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_current_id",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_register_cleanup",
+        "binding": 1,
+        "type": 0
+      }
+    ],
+    "all_imports": 50,
+    "table_packed_bp_bytes": 378514,
+    "packed_change_bytes": 218,
+    "table_elf_bytes": 682008,
+    "elf_change_bytes": 8,
+    "decimal_kb_rounded": 379,
+    "native_namespace_imports": 50,
+    "other_imports": [],
+    "unix_posix_import_names": [],
+    "unix_posix_imports": 0
+  },
+  {
+    "id": "ssh",
+    "packed_bp_bytes": 647986,
+    "elf_bytes": 1150840,
+    "bp_sha256": "3843b6ed75029ddc31f63f692f443ca87d594cace323e5301e340e8cc82765b6",
+    "elf_sha256": "3d3007d33533f1f18551414beb8bf165a51faaee58c53f17a593ea2dc9aa2659",
+    "db_leaf_offset": 8392704,
+    "db_value_offset": 8392722,
+    "header_flags": 3,
+    "imports": [
+      {
+        "name": "trueos_cabi_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_dealloc",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_alloc_aligned",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_rand",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_var",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_monotonic_nanos",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_one",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_observe",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_after",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_current_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_konsole_size",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_konsole_begin_frame",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_get",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_set",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_release_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_shutdown",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_args_count",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_arg",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_tcp_stream_connect",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_socket_poll_ready",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_all",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_socket_close",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_socket_take_error",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_socket_shutdown",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_tcp_stream_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_tcp_stream_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_read_byte",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_read_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_status",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_len",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_create_dir_all_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_checked_write_begin_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_chunk",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_commit",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_metadata_start_v2",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_detach",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_swap_child_role_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_spawn",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_set_name",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_join",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_swap_activity_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_dns_resolve_ipv4",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_return_to_cli",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_current_id",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_register_cleanup",
+        "binding": 1,
+        "type": 0
+      }
+    ],
+    "all_imports": 48,
+    "table_packed_bp_bytes": 1384524,
+    "packed_change_bytes": -736538,
+    "table_elf_bytes": 2920648,
+    "elf_change_bytes": -1769808,
+    "decimal_kb_rounded": 648,
+    "native_namespace_imports": 48,
+    "other_imports": [],
+    "unix_posix_import_names": [],
+    "unix_posix_imports": 0
+  },
+  {
+    "id": "img",
+    "packed_bp_bytes": 128797,
+    "elf_bytes": 217968,
+    "bp_sha256": "363759d0d5de77854073f21c5896dd6eacf6a762ece26592bda5497f8579ffd1",
+    "elf_sha256": "4be300fcf7eb6f940393f35a826f0fae9bde28348bf0504145b5ab494df42e47",
+    "db_leaf_offset": 1183744,
+    "db_value_offset": 1183762,
+    "header_flags": 259,
+    "imports": [
+      {
+        "name": "trueos_cabi_env_args_count",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_alloc_aligned",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_dealloc",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_arg",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_lifecycle_poll",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_solara_frame_close",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_lifecycle_ready",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_lifecycle_identity",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_sleep_ms",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_keyboard_event_take",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_time_monotonic_nanos",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_pan_event_take",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_pointer_event_take",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_resize_event_take",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_frame_resize",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_read_byte",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_typed_write_begin",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_chunk",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_commit",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_status",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_poll_once",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_shutdown",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_read_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_len",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_stat_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_output_dimensions",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_frame_open_immutable",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_frame_set_hit_testable",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_typed_list_dir_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_image_source_info",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_image_source_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_solara_frame_begin",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_frame_write_opaque_rgba8",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_solara_frame_publish",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vmedia_image_decode_status",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vmedia_image_decode_begin",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vmedia_image_decode_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vmedia_image_decode_commit",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vmedia_image_decode_info",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vmedia_image_decode_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vmedia_image_decode_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_input_routes",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_current_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_return_to_cli",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_release_v1",
+        "binding": 1,
+        "type": 0
+      }
+    ],
+    "all_imports": 49,
+    "table_packed_bp_bytes": 128800,
+    "packed_change_bytes": -3,
+    "table_elf_bytes": 217968,
+    "elf_change_bytes": 0,
+    "decimal_kb_rounded": 129,
+    "native_namespace_imports": 49,
+    "other_imports": [],
+    "unix_posix_import_names": [],
+    "unix_posix_imports": 0
+  },
+  {
+    "id": "os",
+    "packed_bp_bytes": 92018,
+    "elf_bytes": 174752,
+    "bp_sha256": "45c35d006ea224876e90e56bd39832cd9ec86924edc037eab984375fce531c21",
+    "elf_sha256": "2ea0c789b4d6934b95e06a19a7e9652d48b209fa19fdb3424e0caa9925826bc0",
+    "db_leaf_offset": 266240,
+    "db_value_offset": 266257,
+    "header_flags": 1027,
+    "imports": [
+      {
+        "name": "sys_dealloc",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_shutdown",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_current_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_return_to_cli",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_release_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_args_count",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_alloc_aligned",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_arg",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_rand",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_var",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_monotonic_nanos",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_one",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_observe",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_after",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_get",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_set",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_exit_reason",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_all",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_read_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_status",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_len",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_log",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_poll_once",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_surface_snapshot_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_wait_after_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_observe_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_read_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_detach",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_join",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_current_id",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_register_cleanup",
+        "binding": 1,
+        "type": 0
+      }
+    ],
+    "all_imports": 35,
+    "table_packed_bp_bytes": 92135,
+    "packed_change_bytes": -117,
+    "table_elf_bytes": 174752,
+    "elf_change_bytes": 0,
+    "decimal_kb_rounded": 92,
+    "native_namespace_imports": 35,
+    "other_imports": [],
+    "unix_posix_import_names": [],
+    "unix_posix_imports": 0
+  },
+  {
+    "id": "backup",
+    "packed_bp_bytes": 94810,
+    "elf_bytes": 173784,
+    "bp_sha256": "617665c2201941e77bab393404aca93e3781be9b5a7f4bdca2c2038038792c7f",
+    "elf_sha256": "aa45323caea8804813066970cde967f01d7f3532ded9ebacedd08c73719e22f6",
+    "db_leaf_offset": 397312,
+    "db_value_offset": 397333,
+    "header_flags": 1027,
+    "imports": [
+      {
+        "name": "sys_dealloc",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_shutdown",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_current_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_return_to_cli",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_release_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_args_count",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_alloc_aligned",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_arg",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_rand",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_var",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_monotonic_nanos",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_one",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_observe",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_after",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_get",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_set",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_exit_reason",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_all",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_log",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_poll_once",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_surface_snapshot_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_wait_after_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_observe_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_read_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_detach",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_join",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_current_id",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_register_cleanup",
+        "binding": 1,
+        "type": 0
+      }
+    ],
+    "all_imports": 30,
+    "table_packed_bp_bytes": 94810,
+    "packed_change_bytes": 0,
+    "table_elf_bytes": 173784,
+    "elf_change_bytes": 0,
+    "decimal_kb_rounded": 95,
+    "native_namespace_imports": 30,
+    "other_imports": [],
+    "unix_posix_import_names": [],
+    "unix_posix_imports": 0
+  },
+  {
+    "id": "termdir",
+    "packed_bp_bytes": 336520,
+    "elf_bytes": 609032,
+    "bp_sha256": "630d4136ec5ba5671789322fc1459374b6a95704d8d19596a80155290c822f94",
+    "elf_sha256": "72a5747ec1909ae7a2d1e0ff85adda6b90f6a9aca79c7acd26e6f9454a01294c",
+    "db_leaf_offset": 1576960,
+    "db_value_offset": 1576982,
+    "header_flags": 2051,
+    "imports": [
+      {
+        "name": "sys_alloc_aligned",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_dealloc",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_args_count",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_arg",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_current_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_current_dir",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_exit_reason",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_release_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_drag_cancel_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_monotonic_nanos",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_var",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_status",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_read_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_poll_once",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_len",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_log",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_surface_snapshot_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_drag_begin_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vid_open_v2",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_img_open_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_checked_write_begin_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_chunk",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_commit",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_begin",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_rename_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_create_dir_all_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_archive_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_archive_status",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_archive_report",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_archive_pack_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_archive_unpack_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_stat_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_list_mounts_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_typed_stat_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_archive_pack_many_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_typed_list_dir_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_wait_after_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_observe_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_read_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_one",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_observe",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_after",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_all",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_shutdown",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_return_to_cli",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_poll_reentry_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_sleep_ms",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_drag_take_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_launch_script_v1",
+        "binding": 1,
+        "type": 0
+      }
+    ],
+    "all_imports": 53,
+    "table_packed_bp_bytes": 336525,
+    "packed_change_bytes": -5,
+    "table_elf_bytes": 609032,
+    "elf_change_bytes": 0,
+    "decimal_kb_rounded": 337,
+    "native_namespace_imports": 53,
+    "other_imports": [],
+    "unix_posix_import_names": [],
+    "unix_posix_imports": 0
+  },
+  {
+    "id": "edit",
+    "packed_bp_bytes": 475282,
+    "elf_bytes": 1053448,
+    "bp_sha256": "a593973e3f4aa67c2e4e565f0380d893b8af86aba876bc973bc8b3a26db36c2d",
+    "elf_sha256": "a589a359a6937ea4d83316ad904d1d53590ad593787af1007d91c48679bc395d",
+    "db_leaf_offset": 2101248,
+    "db_value_offset": 2101267,
+    "header_flags": 515,
+    "imports": [
+      {
+        "name": "sys_dealloc",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_alloc_aligned",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_log",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_var",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_current_dir",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_args_count",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_arg",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_enable_collapse_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_time_unix_nanos",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_monotonic_nanos",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_collapse_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_begin",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_chunk",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_commit",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_poll_once",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_create_dir_all_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_child_terminate_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_child_spawn_program_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_typed_stat_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_len",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_child_read_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_child_status_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_observe_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_surface_snapshot_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_read_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_shell_attached_wait_after_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_current_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_read_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_metadata_start_v2",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_checked_write_begin_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_shutdown",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_return_to_cli",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_release_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_launch_script_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_status",
+        "binding": 1,
+        "type": 0
+      }
+    ],
+    "all_imports": 39,
+    "table_packed_bp_bytes": 475287,
+    "packed_change_bytes": -5,
+    "table_elf_bytes": 1053448,
+    "elf_change_bytes": 0,
+    "decimal_kb_rounded": 475,
+    "native_namespace_imports": 39,
+    "other_imports": [],
+    "unix_posix_import_names": [],
+    "unix_posix_imports": 0
+  },
+  {
+    "id": "share",
+    "packed_bp_bytes": 735292,
+    "elf_bytes": 1364960,
+    "bp_sha256": "a5a52ffda19c4840bf3b16a4962550bb091e4ccb749f91ff2c7b24085ba73b33",
+    "elf_sha256": "dcaad085ab193b5008c42625fe0b7770bab2594b553858d1d415dc433bf0afe2",
+    "db_leaf_offset": 3149824,
+    "db_value_offset": 3149844,
+    "header_flags": 3,
+    "imports": [
+      {
+        "name": "sys_dealloc",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_alloc_aligned",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_status",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_metadata_start_v2",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_len",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_remove_leaf_start_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_checked_write_begin_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_chunk",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_write_commit",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_typed_stat_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_read_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_create_dir_start_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_rename_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_typed_list_dir_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_rand",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_var",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_monotonic_nanos",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_one",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_observe",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wait_after",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_get",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_set",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_args_count",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_create_dir_all_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_env_arg",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_tcp_listener_bind",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_socket_close",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_socket_local_addr",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_tcp_listener_accept",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_unix_seconds",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_tcp_stream_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_tokio_platform_wake_all",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_socket_poll_ready",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_detach",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_join",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_tcp_stream_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_mio_socket_shutdown",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_shutdown",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_current_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_return_to_cli",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_release_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_thread_current_id",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_platform_thread_local_register_cleanup",
+        "binding": 1,
+        "type": 0
+      }
+    ],
+    "all_imports": 46,
+    "table_packed_bp_bytes": 734913,
+    "packed_change_bytes": 379,
+    "table_elf_bytes": 1364960,
+    "elf_change_bytes": 0,
+    "decimal_kb_rounded": 735,
+    "native_namespace_imports": 46,
+    "other_imports": [],
+    "unix_posix_import_names": [],
+    "unix_posix_imports": 0
+  },
+  {
+    "id": "paper",
+    "packed_bp_bytes": 24482,
+    "elf_bytes": 40624,
+    "bp_sha256": "f8a77f6144971790098221f75db46eabe2560e418021eade7a50ddf7375a7db2",
+    "elf_sha256": "ea76c0fc7feb266de726d40e08d91a4f53dc9f2585bd045832265a8e9c14fe6c",
+    "db_leaf_offset": 167936,
+    "db_value_offset": 167956,
+    "header_flags": 3,
+    "imports": [
+      {
+        "name": "sys_alloc_aligned",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "sys_dealloc",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_physical_extent_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_output_dimensions",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_frame_open_immutable",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_window_title_set_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_open",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_close",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_solara_frame_close",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_status",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_read_start",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_poll_once",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_len",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_discard",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_async_fs_result_read",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_queue_create",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_shader_module_create",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_render_pipeline_create",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_time_monotonic_nanos",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_resize_event_take",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_frame_resize",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_keyboard_event_take",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_pointer_event_take",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_sprite_upload_rgba8",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_buffer_create",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_buffer_write",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_sleep_ms",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_wait",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_buffer_destroy",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_log",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_shutdown",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_sprite_quads",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_scene_sprite_frame_begin",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_ui4_solara_frame_publish",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_current_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_return_to_cli",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_blueprint_terminal_lease_release_v1",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_ui4_surface_acquire",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_ui4_indexed_batch_submit_v2",
+        "binding": 1,
+        "type": 0
+      },
+      {
+        "name": "trueos_cabi_vgpu_ui4_surface_discard",
+        "binding": 1,
+        "type": 0
+      }
+    ],
+    "all_imports": 41,
+    "table_packed_bp_bytes": 24426,
+    "packed_change_bytes": 56,
+    "table_elf_bytes": 40624,
+    "elf_change_bytes": 0,
+    "decimal_kb_rounded": 24,
+    "native_namespace_imports": 41,
+    "other_imports": [],
+    "unix_posix_import_names": [],
+    "unix_posix_imports": 0
+  }
+]

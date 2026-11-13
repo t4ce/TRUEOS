@@ -1,0 +1,513 @@
+use sha2::{Digest, Sha256};
+use std::{
+    collections::BTreeMap,
+    env,
+    fmt::Write as _,
+    fs,
+    path::{Path, PathBuf},
+};
+
+const PORTAL_CABI_LOCK_PATH: &str = "abi/portal-cabi-v2.sha256";
+
+#[path = "tools/build/wifi_credentials.rs"]
+mod wifi_credentials;
+
+fn main() {
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS");
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    wifi_credentials::generate(&out_dir).expect("prepare optional local Wi-Fi credentials");
+
+    if target_os == "trueos" {
+        generate_empty_system_libraries().expect("prepare freestanding system libraries");
+    }
+
+    generate_portal_imports(Path::new(&manifest_dir)).expect("generate portal imports");
+    generate_app_buildins();
+    generate_development_ssh_identity(Path::new(&manifest_dir))
+        .expect("prepare stable development SSH identity");
+}
+
+/// The kernel supplies these ABIs itself; satisfy upstream native-library
+/// declarations without linking the host's libc or unwinder.
+fn generate_empty_system_libraries() -> std::io::Result<()> {
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    for name in ["c", "gcc_s"] {
+        // An archive containing only the global header is a valid empty ar file.
+        fs::write(out_dir.join(format!("lib{name}.a")), b"!<arch>\n")?;
+    }
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    Ok(())
+}
+
+/// Keep the development host identity outside build output so rebuilds and
+/// `make clean` do not rotate it. The kernel embeds it and never waits for a disk.
+fn generate_development_ssh_identity(manifest_dir: &Path) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let directory = manifest_dir.join(".local");
+    fs::create_dir_all(&directory)?;
+    let path = directory.join("ssh-host-seed.bin");
+    if !path.exists() {
+        let mut seed = [0u8; 32];
+        fs::File::open("/dev/urandom")?.read_exact(&mut seed)?;
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(&seed)?;
+                file.sync_all()?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let seed = fs::read(&path)?;
+    if seed.len() != 32 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "local SSH host seed must contain exactly 32 bytes; refusing to rotate it",
+        ));
+    }
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    println!("cargo:rerun-if-changed={}", path.display());
+    let generated =
+        PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("ssh-dev-host-seed.bin");
+    fs::write(&generated, seed)?;
+    fs::set_permissions(generated, fs::Permissions::from_mode(0o600))
+}
+
+fn generate_portal_imports(manifest_dir: &Path) -> Result<(), String> {
+    let bp_abi_path = manifest_dir.join("crates/trueos-v/src/bp_abi.rs");
+    println!("cargo:rerun-if-changed={}", bp_abi_path.display());
+    let lock_path = manifest_dir.join(PORTAL_CABI_LOCK_PATH);
+    println!("cargo:rerun-if-changed={}", lock_path.display());
+
+    let contracts = parse_declared_cabi_contracts(&bp_abi_path)?;
+    verify_portal_cabi_lock(&lock_path, &contracts)?;
+    let defined_exports = collect_defined_cabi_exports(manifest_dir)?;
+
+    let out_dir = env::var("OUT_DIR").expect("OUT_DIR");
+    let generated_path = Path::new(&out_dir).join("generated_portal_imports.rs");
+    let include_gridpaper = env::var_os("CARGO_FEATURE_GRIDPAPER").is_some();
+    let (generated, unresolved) = render_portal_import_resolver(
+        &contracts.keys().cloned().collect::<Vec<_>>(),
+        &defined_exports,
+        include_gridpaper,
+    );
+    for name in unresolved {
+        println!(
+            "cargo:warning=declared CABI symbol {name} has no kernel export and will stay unresolved"
+        );
+    }
+
+    fs::write(&generated_path, generated)
+        .map_err(|err| format!("failed to write {}: {err}", generated_path.display()))
+}
+
+fn render_portal_import_resolver(
+    import_names: &[String],
+    defined_exports: &BTreeMap<String, String>,
+    include_gridpaper: bool,
+) -> (String, Vec<String>) {
+    let mut generated =
+        String::from("fn resolve_cabi_import(name: &str) -> Option<usize> {\n    match name {\n");
+    let mut unresolved = Vec::new();
+    for name in import_names {
+        // Disabled Gridpaper has no kernel implementation to bind.
+        if name.starts_with("trueos_cabi_gridpaper_") && !include_gridpaper {
+            continue;
+        }
+        let Some(symbol_path) = defined_exports.get(name) else {
+            unresolved.push(name.clone());
+            continue;
+        };
+        generated.push_str("        \"");
+        generated.push_str(&name);
+        generated.push_str("\" => Some(");
+        generated.push_str(symbol_path);
+        generated.push_str(" as *const () as usize),\n");
+    }
+    generated.push_str("        _ => None,\n    }\n}\n");
+    (generated, unresolved)
+}
+
+fn parse_declared_cabi_contracts(bp_abi_path: &Path) -> Result<BTreeMap<String, String>, String> {
+    let source = fs::read_to_string(bp_abi_path)
+        .map_err(|err| format!("failed to read {}: {err}", bp_abi_path.display()))?;
+    parse_cabi_contracts(&source).map_err(|err| format!("{}: {err}", bp_abi_path.display()))
+}
+
+fn verify_portal_cabi_lock(
+    lock_path: &Path,
+    contracts: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let actual = aggregate_cabi_contract_digest(contracts);
+    let lock = fs::read_to_string(lock_path).map_err(|err| {
+        format!("failed to read CABI contract lock {}: {err}", lock_path.display())
+    })?;
+    let expected = lock
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && !line.starts_with('#'))
+        .ok_or_else(|| format!("CABI contract lock {} is empty", lock_path.display()))?;
+    if expected.len() != 64 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!(
+            "CABI contract lock {} must contain one SHA-256 value; found `{expected}`",
+            lock_path.display(),
+        ));
+    }
+    if !expected.eq_ignore_ascii_case(&actual) {
+        return Err(format!(
+            "kernel CABI contract changed: locked_sha256={expected} actual_sha256={actual}; existing symbols are immutable. Restore the old signature and add a versioned symbol, or update {} only after a strictly additive-contract review",
+            lock_path.display(),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_cabi_contracts(source: &str) -> Result<BTreeMap<String, String>, String> {
+    const PREFIXES: &[&str] = &[
+        "pub fn trueos_cabi_",
+        "pub safe fn trueos_cabi_",
+        "pub unsafe fn trueos_cabi_",
+    ];
+    let mut contracts = BTreeMap::new();
+    let mut cursor = 0usize;
+    while cursor < source.len() {
+        let Some((start, prefix)) = PREFIXES
+            .iter()
+            .filter_map(|prefix| {
+                source[cursor..]
+                    .find(prefix)
+                    .map(|offset| (cursor + offset, *prefix))
+            })
+            .min_by_key(|(start, _)| *start)
+        else {
+            break;
+        };
+        let name_start = start + prefix.len() - "trueos_cabi_".len();
+        let open = source[name_start..]
+            .find('(')
+            .map(|offset| name_start + offset)
+            .ok_or("CABI declaration is missing an argument list")?;
+        let name = source[name_start..open].trim();
+        if !name
+            .bytes()
+            .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+        {
+            return Err(format!("invalid CABI symbol name `{name}`"));
+        }
+        let close = matching_paren(source, open)
+            .ok_or_else(|| format!("unclosed argument list for {name}"))?;
+        let semicolon = source[close + 1..]
+            .find(';')
+            .map(|offset| close + 1 + offset)
+            .ok_or_else(|| format!("missing semicolon after {name}"))?;
+
+        let mut argument_types = Vec::new();
+        for argument in split_top_level(&source[open + 1..close], ',') {
+            let argument = argument.trim();
+            if argument.is_empty() {
+                continue;
+            }
+            let argument_type = top_level_colon(argument)
+                .map(|colon| &argument[colon + 1..])
+                .unwrap_or(argument);
+            argument_types.push(normalize_tokens(argument_type));
+        }
+        let return_source = source[close + 1..semicolon].trim();
+        let return_type = return_source
+            .strip_prefix("->")
+            .map(normalize_tokens)
+            .unwrap_or_else(|| "()".to_string());
+        let canonical = format!("fn {name}({})->{return_type}", argument_types.join(","));
+        if contracts.insert(name.to_string(), canonical).is_some() {
+            return Err(format!("duplicate CABI declaration for {name}"));
+        }
+        cursor = semicolon + 1;
+    }
+    Ok(contracts)
+}
+
+fn matching_paren(source: &str, open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (offset, character) in source[open..].char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(open + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn split_top_level(source: &str, separator: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    for (index, character) in source.char_indices() {
+        match character {
+            '(' | '[' | '{' | '<' => depth += 1,
+            ')' | ']' | '}' | '>' => depth = depth.saturating_sub(1),
+            _ if character == separator && depth == 0 => {
+                parts.push(&source[start..index]);
+                start = index + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(&source[start..]);
+    parts
+}
+
+fn top_level_colon(source: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, character) in source.char_indices() {
+        match character {
+            '(' | '[' | '{' | '<' => depth += 1,
+            ')' | ']' | '}' | '>' => depth = depth.saturating_sub(1),
+            ':' if depth == 0 => return Some(index),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn normalize_tokens(source: &str) -> String {
+    source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
+}
+
+fn aggregate_cabi_contract_digest(contracts: &BTreeMap<String, String>) -> String {
+    let mut hasher = Sha256::new();
+    for (symbol, contract) in contracts {
+        hasher.update((symbol.len() as u64).to_le_bytes());
+        hasher.update(symbol.as_bytes());
+        hasher.update((contract.len() as u64).to_le_bytes());
+        hasher.update(contract.as_bytes());
+    }
+    let digest = hasher.finalize();
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(output, "{byte:02x}").expect("writing SHA-256 to String cannot fail");
+    }
+    output
+}
+
+fn collect_defined_cabi_exports(manifest_dir: &Path) -> Result<BTreeMap<String, String>, String> {
+    let src_dir = manifest_dir.join("src");
+    let mut exports = BTreeMap::new();
+    collect_defined_cabi_exports_in_dir(manifest_dir, &src_dir, &mut exports)?;
+    Ok(exports)
+}
+
+fn collect_defined_cabi_exports_in_dir(
+    manifest_dir: &Path,
+    dir: &Path,
+    exports: &mut BTreeMap<String, String>,
+) -> Result<(), String> {
+    for entry in
+        fs::read_dir(dir).map_err(|err| format!("failed to read {}: {err}", dir.display()))?
+    {
+        let entry = entry.map_err(|err| format!("failed to walk {}: {err}", dir.display()))?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_defined_cabi_exports_in_dir(manifest_dir, &path, exports)?;
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+        println!("cargo:rerun-if-changed={}", path.display());
+        collect_defined_cabi_exports_in_file(manifest_dir, &path, exports)?;
+    }
+    Ok(())
+}
+
+fn collect_defined_cabi_exports_in_file(
+    manifest_dir: &Path,
+    path: &Path,
+    exports: &mut BTreeMap<String, String>,
+) -> Result<(), String> {
+    let source = fs::read_to_string(path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    let module_path = module_path_for_source(manifest_dir, path)?;
+
+    for line in source.lines() {
+        if !line.contains("fn trueos_cabi_") {
+            continue;
+        }
+        let Some(rest) = line.split("fn ").nth(1) else {
+            continue;
+        };
+        let Some(name_end) = rest.find('(') else {
+            continue;
+        };
+        let name = &rest[..name_end];
+        if !name.starts_with("trueos_cabi_") {
+            continue;
+        }
+        let symbol_path = format!("{}::{}", module_path, name);
+        exports.insert(name.to_string(), symbol_path);
+    }
+
+    Ok(())
+}
+
+fn module_path_for_source(manifest_dir: &Path, path: &Path) -> Result<String, String> {
+    let rel = path
+        .strip_prefix(manifest_dir.join("src"))
+        .map_err(|_| format!("{} is not under src/", path.display()))?;
+
+    if rel == Path::new("r/io.rs") || rel == Path::new("r/io_cursor.rs") {
+        return Ok(String::from("crate::r::io::cabi"));
+    }
+
+    let mut parts = rel
+        .iter()
+        .map(|part| {
+            part.to_str()
+                .ok_or_else(|| format!("non-utf8 source path: {}", path.display()))
+                .map(String::from)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let Some(last) = parts.pop() else {
+        return Err(format!("bad source path: {}", path.display()));
+    };
+    if last != "mod.rs" {
+        let stem = last
+            .strip_suffix(".rs")
+            .ok_or_else(|| format!("bad rust source path: {}", path.display()))?;
+        parts.push(stem.to_string());
+    }
+
+    let mut module_path = String::from("crate");
+    for part in parts {
+        module_path.push_str("::");
+        module_path.push_str(&part);
+    }
+    Ok(module_path)
+}
+
+fn manifest_names(text: &str) -> Result<Vec<String>, String> {
+    let mut quoted = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('"') {
+        rest = &rest[start + 1..];
+        let end = rest
+            .find('"')
+            .ok_or_else(|| String::from("unterminated string in buildins.json"))?;
+        quoted.push(rest[..end].to_string());
+        rest = &rest[end + 1..];
+    }
+    if quoted.first().map(String::as_str) != Some("buildins") {
+        return Err(String::from(
+            "buildins.json must contain one top-level `buildins` string array",
+        ));
+    }
+    let names = quoted.into_iter().skip(1).collect::<Vec<_>>();
+    if names.is_empty() {
+        return Err(String::from("buildins.json contains no apps"));
+    }
+    for name in &names {
+        if !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(format!("invalid build-in app name `{name}`"));
+        }
+    }
+    Ok(names)
+}
+
+fn generate_app_buildins() {
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_BUILDIN_APPS");
+    println!("cargo:rerun-if-env-changed=TRUEOS_BUILDINS_DIR");
+    println!("cargo:rerun-if-env-changed=TRUEOS_BUILDINS_SOURCE");
+    println!("cargo:rerun-if-env-changed=TRUEOS_BUILDINS_SELECTION");
+    println!("cargo:rerun-if-env-changed=TRUEOS_BUILDINS_NATIVE_ONLY");
+    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    if env::var_os("CARGO_FEATURE_BUILDIN_APPS").is_none() {
+        // No app payload and no sibling Buildins check in a kernel-only build.
+        // Explicitly replace generated files so even a reused OUT_DIR cannot
+        // retain a previous build's apps. The runtime creates empty RAM tables.
+        fs::write(out.join("app.db.lz4"), []).expect("clear omitted app.db payload");
+        fs::write(
+            out.join("appdb-seed.rs"),
+            "const APP_DB_EXPECTED_APPS: usize = 0;\n",
+        )
+        .expect("generate empty app.db metadata");
+        println!("cargo:warning=kernel-only build: no buildin apps embedded");
+        return;
+    }
+    let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let profile = if env::var("PROFILE").as_deref() == Ok("release") {
+        "release"
+    } else {
+        "dev"
+    };
+    let directory = env::var_os("TRUEOS_BUILDINS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest_dir.join("tgt/buildins").join(profile));
+    let source = env::var_os("TRUEOS_BUILDINS_SOURCE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| manifest_dir.join("../TRUEOS-Buildins"));
+    let selection = env::var("TRUEOS_BUILDINS_SELECTION").unwrap_or_else(|_| String::from("all"));
+    let adapter = manifest_dir.join("tools/cloudbuild/buildins.py");
+    println!("cargo:rerun-if-changed={}", adapter.display());
+    let mut command = std::process::Command::new("python3");
+    command.arg(adapter);
+    if env::var("TRUEOS_BUILDINS_NATIVE_ONLY").as_deref() == Ok("1") {
+        command.arg("--native-only");
+    }
+    let checked = command
+        .arg("--check")
+        .arg("--source")
+        .arg(&source)
+        .arg("--selection")
+        .arg(&selection)
+        .arg("--kernel")
+        .arg(&manifest_dir)
+        .arg("--profile")
+        .arg(profile)
+        .arg("--output")
+        .arg(&directory)
+        .output()
+        .expect("verify the prepared builtins");
+    assert!(
+        checked.status.success(),
+        "builtins must be prepared with the kernel: {}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    print!("{}", String::from_utf8_lossy(&checked.stdout));
+    let manifest = directory.join("buildins.json");
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    let text = fs::read_to_string(&manifest).unwrap_or_else(|err| {
+        panic!("required buildins are not prepared at {}: {err}; run tools/trueos-boot/prepare.sh --{}", manifest.display(), if profile == "dev" { "dev" } else { "release" })
+    });
+    let names = manifest_names(&text).unwrap_or_else(|err| panic!("{}: {err}", manifest.display()));
+    let image = directory.join("app.db.lz4");
+    println!("cargo:rerun-if-changed={}", image.display());
+    let bytes = fs::read(&image)
+        .unwrap_or_else(|err| panic!("required app.db image {}: {err}", image.display()));
+    let raw_size = fs::metadata(directory.join("app.db")).expect("prepared redb image").len();
+    assert!(raw_size > 0, "prepared app.db must not be empty");
+    fs::write(out.join("app.db.lz4"), bytes).expect("embed compressed app.db");
+    fs::write(out.join("appdb-seed.rs"), format!(
+        "const APP_DB_IMAGE_LEN: usize = {raw_size};\nconst APP_DB_EXPECTED_APPS: usize = {};\n", names.len()
+    )).expect("generate app.db image metadata");
+    println!("cargo:warning=embedding app.db image with {} buildin app(s)", names.len());
+}

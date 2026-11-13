@@ -1,0 +1,204 @@
+{
+  "schema": 1,
+  "reference": {
+    "label": "TRUEOS 0.0.235",
+    "origin": "user-attached release archive",
+    "archive_filename": "TrueOS-0.0.235(1).lz4",
+    "archive_sha256": "ddb2191bb6d6ef6aee0f03fdc21d874d57f4c0cc48a4ddfcc19bc4059a496c04",
+    "profile": "release (user-labeled; no build sidecar in archive)",
+    "source_commit_verified_from_archive": null,
+    "version": "0.0.235",
+    "kernel_elf_sha256": "8fb5569f61b06da7078a4c82b1393f763fa15fc0083d382f0c4087b9740d9363",
+    "tag_commit": "75e9b1dc08189d3bba546213b4d5f3b4f3ee9757"
+  },
+  "sizes": {
+    "release_archive_bytes": 19447079,
+    "tar_bytes": 26613760,
+    "kernel_elf_bytes": 26213712,
+    "loader_bytes": 61440,
+    "firmware_bytes": 335360,
+    "embedded_appdb_packed_bytes": 5825237,
+    "embedded_appdb_raw_bytes": 9441280,
+    "non_appdb_kernel_file_bytes": 20388475,
+    "measured_kernel_only_build_bytes": null,
+    "all_packed_bp_bytes": 6115201,
+    "all_app_elf_bytes": 12689256
+  },
+  "embedded_appdb": {
+    "kernel_file_offset": 14615049,
+    "packed_sha256": "a2b4b2b7b44da252c2e44a2b397ec1d3919afae4e2c3970a6c8ed23dcb0691f6",
+    "raw_sha256": "b47a3c6c30b8efe82d493a83d792b110c216cad6bdfdcac9ba4189937c053765"
+  },
+  "buildins": [
+    {
+      "id": "apps",
+      "packed_bp_bytes": 125526,
+      "elf_bytes": 234024,
+      "bp_sha256": "63c071d2cca14c9692e329f5e5b3b4afcfd880e7e48755cd774ea9a2e0fa0c3b",
+      "elf_sha256": "3ffcb90228f1058daaca0cf75f4d40f014cc7e5d71ce5fbf5bc7358afb325659",
+      "all_imports": 42,
+      "unix_posix_imports": 0,
+      "decimal_kb_rounded": 126,
+      "packed_change_bytes": 10,
+      "elf_change_bytes": 0
+    },
+    {
+      "id": "commander",
+      "packed_bp_bytes": 56626,
+      "elf_bytes": 111240,
+      "bp_sha256": "874edcba81dc8120c6aeb84ee359e5fccdbd5a4589df3183e302c5ff3d542f23",
+      "elf_sha256": "b47889d4fb95903f49a4b841e019b431d68f7c9d4f1bded4ac27e12737e37606",
+      "all_imports": 31,
+      "unix_posix_imports": 0,
+      "decimal_kb_rounded": 57,
+      "packed_change_bytes": -7,
+      "elf_change_bytes": 0
+    },
+    {
+      "id": "hull",
+      "packed_bp_bytes": 3019130,
+      "elf_bytes": 6876568,
+      "bp_sha256": "be88be24b73e6fac9daeb5a9620f233a60d021fd63f9490ade8e38c1d41e6aa1",
+      "elf_sha256": "e3a1875d71085ad7cda920f7bdaebd8fba2bd66d7d4ef0c75c736896a1440804",
+      "all_imports": 101,
+      "unix_posix_imports": 0,
+      "decimal_kb_rounded": 3019,
+      "packed_change_bytes": -3716,
+      "elf_change_bytes": -5920
+    },
+    {
+      "id": "trauma",
+      "packed_bp_bytes": 378732,
+      "elf_bytes": 682016,
+      "bp_sha256": "1235e1e44188c4667699a59325f91394cc3ffe08ebd449e5c7ee3e0d8080a12d",
+      "elf_sha256": "7a3907d8edddefafd42fbbd2df1c819d43cbb1480d010a1a483c84e38bb24731",
+      "all_imports": 50,
+      "unix_posix_imports": 0,
+      "decimal_kb_rounded": 379,
+      "packed_change_bytes": 218,
+      "elf_change_bytes": 8
+    },
+    {
+      "id": "ssh",
+      "packed_bp_bytes": 647986,
+      "elf_bytes": 1150840,
+      "bp_sha256": "3843b6ed75029ddc31f63f692f443ca87d594cace323e5301e340e8cc82765b6",
+      "elf_sha256": "3d3007d33533f1f18551414beb8bf165a51faaee58c53f17a593ea2dc9aa2659",
+      "all_imports": 48,
+      "unix_posix_imports": 0,
+      "decimal_kb_rounded": 648,
+      "packed_change_bytes": -736538,
+      "elf_change_bytes": -1769808
+    },
+    {
+      "id": "img",
+      "packed_bp_bytes": 128797,
+      "elf_bytes": 217968,
+      "bp_sha256": "363759d0d5de77854073f21c5896dd6eacf6a762ece26592bda5497f8579ffd1",
+      "elf_sha256": "4be300fcf7eb6f940393f35a826f0fae9bde28348bf0504145b5ab494df42e47",
+      "all_imports": 49,
+      "unix_posix_imports": 0,
+      "decimal_kb_rounded": 129,
+      "packed_change_bytes": -3,
+      "elf_change_bytes": 0
+    },
+    {
+      "id": "os",
+      "packed_bp_bytes": 92018,
+      "elf_bytes": 174752,
+      "bp_sha256": "45c35d006ea224876e90e56bd39832cd9ec86924edc037eab984375fce531c21",
+      "elf_sha256": "2ea0c789b4d6934b95e06a19a7e9652d48b209fa19fdb3424e0caa9925826bc0",
+      "all_imports": 35,
+      "unix_posix_imports": 0,
+      "decimal_kb_rounded": 92,
+      "packed_change_bytes": -117,
+      "elf_change_bytes": 0
+    },
+    {
+      "id": "backup",
+      "packed_bp_bytes": 94810,
+      "elf_bytes": 173784,
+      "bp_sha256": "617665c2201941e77bab393404aca93e3781be9b5a7f4bdca2c2038038792c7f",
+      "elf_sha256": "aa45323caea8804813066970cde967f01d7f3532ded9ebacedd08c73719e22f6",
+      "all_imports": 30,
+      "unix_posix_imports": 0,
+      "decimal_kb_rounded": 95,
+      "packed_change_bytes": 0,
+      "elf_change_bytes": 0
+    },
+    {
+      "id": "termdir",
+      "packed_bp_bytes": 336520,
+      "elf_bytes": 609032,
+      "bp_sha256": "630d4136ec5ba5671789322fc1459374b6a95704d8d19596a80155290c822f94",
+      "elf_sha256": "72a5747ec1909ae7a2d1e0ff85adda6b90f6a9aca79c7acd26e6f9454a01294c",
+      "all_imports": 53,
+      "unix_posix_imports": 0,
+      "decimal_kb_rounded": 337,
+      "packed_change_bytes": -5,
+      "elf_change_bytes": 0
+    },
+    {
+      "id": "edit",
+      "packed_bp_bytes": 475282,
+      "elf_bytes": 1053448,
+      "bp_sha256": "a593973e3f4aa67c2e4e565f0380d893b8af86aba876bc973bc8b3a26db36c2d",
+      "elf_sha256": "a589a359a6937ea4d83316ad904d1d53590ad593787af1007d91c48679bc395d",
+      "all_imports": 39,
+      "unix_posix_imports": 0,
+      "decimal_kb_rounded": 475,
+      "packed_change_bytes": -5,
+      "elf_change_bytes": 0
+    },
+    {
+      "id": "share",
+      "packed_bp_bytes": 735292,
+      "elf_bytes": 1364960,
+      "bp_sha256": "a5a52ffda19c4840bf3b16a4962550bb091e4ccb749f91ff2c7b24085ba73b33",
+      "elf_sha256": "dcaad085ab193b5008c42625fe0b7770bab2594b553858d1d415dc433bf0afe2",
+      "all_imports": 46,
+      "unix_posix_imports": 0,
+      "decimal_kb_rounded": 735,
+      "packed_change_bytes": 379,
+      "elf_change_bytes": 0
+    },
+    {
+      "id": "paper",
+      "packed_bp_bytes": 24482,
+      "elf_bytes": 40624,
+      "bp_sha256": "f8a77f6144971790098221f75db46eabe2560e418021eade7a50ddf7375a7db2",
+      "elf_sha256": "ea76c0fc7feb266de726d40e08d91a4f53dc9f2585bd045832265a8e9c14fe6c",
+      "all_imports": 41,
+      "unix_posix_imports": 0,
+      "decimal_kb_rounded": 24,
+      "packed_change_bytes": 56,
+      "elf_change_bytes": 0
+    }
+  ],
+  "import_classification": {
+    "source_commit": "75e9b1dc08189d3bba546213b4d5f3b4f3ee9757",
+    "source_path": "src/unix_compat.rs",
+    "source_sha256": "dcf3fe330b9534bf148f31efde3162466a2d26e66093b9731f92c7769a679124",
+    "method": "Intersect unique undefined ELF symbol names with string literals in is_unix_import, matching upstream native-only audit. Hull's __assert_fail, modf, lrint and atanh helpers are outside that classifier."
+  },
+  "estimation": {
+    "unit": "decimal kB = 1000 bytes; sum exact bytes before rounding",
+    "kernel_baseline": "kernel_elf_bytes - embedded_appdb_packed_bytes: exact remaining bytes in uploaded ELF, not a separately compiled kernel-only image. Includes other embedded assets, ELF headers and alignment.",
+    "app_sum": "Sum selected packed_bp_bytes; unselected app saving is all_packed_bp_bytes minus selected sum. These are measured package weights, not exact archive deltas.",
+    "total": "Derived non-AppDB kernel file bytes + selected packed BP sum. Estimate ignores changed AppDB overhead, second compression, link layout, compiler/profile/subsystem changes.",
+    "all_apps_additive_estimate_bytes": 26503676,
+    "all_apps_estimate_minus_observed_kernel_bytes": 289964,
+    "subsystem_savings": "Unmeasured; one release binary cannot establish per-feature deltas. Do not invent zeros or additive costs.",
+    "download_estimate": "No measured subset download sizes; outer archive compression prevents direct additive package-to-download mapping."
+  },
+  "validation": [
+    "LZ4 frame decoded with liblz4 and bounded 512MiB output; consumed exact attachment bytes.",
+    "Extracted only allowlisted regular tar members; did not execute any binary.",
+    "Located valid LZ4 frame in .rodata which decodes to redb file magic.",
+    "For each expected app, validated aligned single-key redb leaf header/key/value boundaries and TRBP length fields.",
+    "Each exact BP digest occurs once in the redb image.",
+    "Every BP LZ4 payload consumed exactly; tar has one module.elf; decoded size matches BP header; ELF is x86-64 relocatable.",
+    "Read undefined symbols from ELF symbol table directly; no loaded modules or executable code."
+  ],
+  "comparison_source": "App change fields compare this attachment against the older byte counts pasted by the user; the older release itself was not remeasured."
+}

@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "checks": [
+    "regular fourth Kernel only preset",
+    "default bundled app inclusion",
+    "Kernel only preserves Universal subsystem selection",
+    "no-buildins manifest omits buildin-apps",
+    "visible no explorer/app store/editor expectation",
+    "independent USB and bundled-app toggles",
+    "QEMU composition without bundled apps",
+    "manifest download preserves app selection",
+    "real backend anonymous kernel-only queue",
+    "queued app status immutable after selector edits",
+    "persisted job manifest has no bundled apps",
+    "resumed job status independent of current selection"
+  ],
+  "javascriptErrors": []
+}

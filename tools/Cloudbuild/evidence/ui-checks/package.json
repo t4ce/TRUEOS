@@ -1,0 +1,8 @@
+{
+  "name": "trueos-cloudbuild-handoff-checks",
+  "private": true,
+  "description": "Optional historical DOM/API checks from the conversation",
+  "devDependencies": {
+    "jsdom": "26.1.0"
+  }
+}
