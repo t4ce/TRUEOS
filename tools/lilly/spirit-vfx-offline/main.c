@@ -136,7 +136,7 @@ static const RuntimeControls DEFAULT_RUNTIME_CONTROLS = {
 
 static const float MAGIC_TIME_STATIC_PREVIEW_SECONDS = 10.0f * 3600.0f + 9.0f * 60.0f + 42.0f;
 static const float SPIRIT_BACKGROUND_PRESENT_SCALE = 1.171875f;
-static const float SPIRIT_LILLY_PRESENT_SCALE = 0.65f;
+static const float SPIRIT_LILLY_PRESENT_SCALE = 1.0f;
 static const float AURA_RADIUS_MIN = 9.0f;
 static const float AURA_RADIUS_MAX = 12.0f;
 static const float AURA_HALF_CYCLE_SECONDS = 1.0f;
@@ -408,7 +408,7 @@ static void fill_control(uint32_t control[CONTROL_DWORDS], uint32_t source_width
     control[11] = float_bits(0.0f);
     control[12] = float_bits(0.0f);
     control[13] = float_bits(SPIRIT_LILLY_PRESENT_SCALE);
-    control[14] = float_bits(3.14159265359f);
+    control[14] = float_bits(0.0f);
     control[15] = float_bits(0.02f);
     control[16] = 0; /* nearest / pixel crisp */
     /* Live Spirit owns one unconditional AuraBloom sprite layer. */
@@ -425,7 +425,7 @@ static void fill_control(uint32_t control[CONTROL_DWORDS], uint32_t source_width
     control[27] = SPIRIT_SIZE * 4;
     control[28] = 1;
     control[30] = 60;
-    control[31] = float_bits(12.0f);
+    control[31] = float_bits(0.0f);
     control[32] = float_bits(fminf(fmaxf(clock_time_seconds, 0.0f), 86399.0f));
 }
 

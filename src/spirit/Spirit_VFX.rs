@@ -599,10 +599,9 @@ impl Default for SpiritVfxTransform {
         Self {
             position_x: 0.0,
             position_y: 0.0,
-            // Lilly's resident PNG convention is opposite to the cursor
-            // surface's presentation orientation. Keep the correction in the
-            // ordinary rotation transform so callers retain the full API.
-            rotation_degrees: 180.0,
+            // The sprite walker handles top-down cursor rows explicitly.
+            // Zero rotation presents LilyDS upright without mirroring.
+            rotation_degrees: 0.0,
         }
     }
 }
@@ -735,9 +734,9 @@ impl SpiritVfxControlPanel {
         self.transform.position_x = bounded(self.transform.position_x, -0.35, 0.35, 0.0);
         self.transform.position_y = bounded(self.transform.position_y, -0.35, 0.35, 0.0);
         self.transform.rotation_degrees =
-            bounded(self.transform.rotation_degrees, -360.0, 360.0, 180.0);
+            bounded(self.transform.rotation_degrees, -360.0, 360.0, 0.0);
         self.alpha_cutoff = bounded(self.alpha_cutoff, 0.0, 0.3, 0.02);
-        self.edge_fade_pixels = bounded(self.edge_fade_pixels, 0.0, 16.0, 12.0);
+        self.edge_fade_pixels = bounded(self.edge_fade_pixels, 0.0, 16.0, 0.0);
 
         for (value, spec) in self
             .sprite_shader
@@ -772,7 +771,7 @@ impl Default for SpiritVfxControlPanel {
             transform: SpiritVfxTransform::default(),
             sampling: SpiritVfxSampling::Nearest,
             alpha_cutoff: 0.02,
-            edge_fade_pixels: 12.0,
+            edge_fade_pixels: 0.0,
             sprite_shader: SpiritVfxSpriteShader::default(),
             alpha_background: SpiritVfxAlphaBackground::default(),
             particle_pass: SpiritVfxParticlePass::default(),
@@ -954,7 +953,7 @@ impl SpiritVfxUiConfig {
             },
             sampling,
             alpha_cutoff: self.transform.alpha_cutoff,
-            edge_fade_pixels: 12.0,
+            edge_fade_pixels: 0.0,
             sprite_shader: SpiritVfxSpriteShader {
                 effect,
                 parameters: self.shader.params,

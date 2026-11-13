@@ -727,16 +727,23 @@ fn submit_gpu_logger_frame(
 // 0 = idle, 1 = requested, 2 = running. Repeated requests coalesce while busy.
 static SCANRUNMON_STATE: AtomicU8 = AtomicU8::new(0);
 static SCANRUNMON_WAKE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
+static SCANRUNMON_DESTINATION: Mutex<SpiritPosition> = Mutex::new(SpiritPosition {
+    x_normalized: 1.0,
+    y_normalized: 0.0,
+});
 const SCANRUNMON_DURATION_MS: u64 = 250;
 
 /// Signal one monitor scan. Spirit owns the path, timing and return position;
 /// callers neither submit intermediate positions nor drive a motion ring.
-pub(crate) fn scanrunmon() -> Result<(), SpiritSubmitError> {
+pub(crate) fn scanrunmon(destination: Option<(f64, f64)>) -> Result<(), SpiritSubmitError> {
     active_spirit_fence().ok_or(SpiritSubmitError::InactiveFence)?;
+    let mut target = SCANRUNMON_DESTINATION.lock();
     if SCANRUNMON_STATE
         .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
+        let (x_normalized, y_normalized) = destination.unwrap_or((1.0, 0.0));
+        *target = SpiritPosition { x_normalized, y_normalized };
         SCANRUNMON_WAKE.signal(());
     }
     Ok(())
@@ -1032,7 +1039,10 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
             .is_ok()
         {
             SCANRUNMON_WAKE.try_take();
-            run_scanrunmon(id, applied_position).await;
+            let destination = *SCANRUNMON_DESTINATION.lock();
+            run_scanrunmon(id, destination).await;
+            request.position = destination;
+            request.portal_transition = false;
         }
 
         // Sequence zero is the boot-time centered state, not a caller-issued

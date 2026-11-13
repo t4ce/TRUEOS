@@ -193,10 +193,12 @@ static inline float4 vfx_sample_sprite(
     uint width = control[VFX_CTRL_SRC_WIDTH];
     uint height = control[VFX_CTRL_SRC_HEIGHT];
     uint pitch_pixels = control[VFX_CTRL_SRC_PITCH] >> 2;
-    // Match preview.html's local sprite convention.
+    // Local UV is bottom-up, while the resident RGBA8 rows are top-down.
+    // Map texel centers exactly so unit-scale nearest and linear sampling
+    // both preserve every pixel of the native 256x256 LilyDS canvas.
     float2 pixel = (float2)(
-        local_uv.x * (float)(width - 1u),
-        (1.0f - local_uv.y) * (float)(height - 1u));
+        local_uv.x * (float)width - 0.5f,
+        (1.0f - local_uv.y) * (float)height - 0.5f);
     float4 sampled;
     if (control[VFX_CTRL_SAMPLING] == 0u) {
         sampled = vfx_load_rgba(
@@ -512,20 +514,25 @@ __kernel void spirit_vfx_sprite_rgba8(
     }
 
     float2 uv = ((float2)((float)x + 0.5f, (float)y + 0.5f)) * (1.0f / 256.0f);
+    // Cursor rows grow downward; effects and local sprite UV grow upward.
+    // Convert only Y here, leaving X unchanged instead of rotating both axes.
+    uv.y = 1.0f - uv.y;
     float2 point = uv - 0.5f - (float2)(
         clamp(vfx_finite_or(as_float(control[11]), 0.0f), -0.35f, 0.35f),
-        clamp(vfx_finite_or(as_float(control[12]), 0.0f), -0.35f, 0.35f));
+        -clamp(vfx_finite_or(as_float(control[12]), 0.0f), -0.35f, 0.35f));
     float rotation = clamp(
-        vfx_finite_or(as_float(control[VFX_CTRL_ROTATION_F32]), 3.14159265359f),
+        vfx_finite_or(as_float(control[VFX_CTRL_ROTATION_F32]), 0.0f),
         -6.28318530718f,
         6.28318530718f);
-    float cosine = native_cos(-rotation);
-    float sine = native_sin(-rotation);
+    // Public Y translation is downward and positive rotation is clockwise.
+    // Account for the upward local-UV axis without changing those controls.
+    float cosine = native_cos(rotation);
+    float sine = native_sin(rotation);
     point = (float2)(
         cosine * point.x - sine * point.y,
         sine * point.x + cosine * point.y);
     float scale = clamp(
-        vfx_finite_or(as_float(control[VFX_CTRL_SCALE_F32]), 0.5f),
+        vfx_finite_or(as_float(control[VFX_CTRL_SCALE_F32]), 1.0f),
         0.35f,
         1.55f);
     float2 local_uv = point / max(0.001f, scale) + 0.5f;
@@ -982,7 +989,7 @@ __kernel void spirit_vfx_sprite_rgba8(
     // exact transparency at every outermost pixel without a separate blur
     // allocation or a hard 256x256 boundary.
     float fade_pixels = clamp(
-        vfx_finite_or(as_float(control[VFX_CTRL_EDGE_FADE_F32]), 12.0f),
+        vfx_finite_or(as_float(control[VFX_CTRL_EDGE_FADE_F32]), 0.0f),
         0.0f,
         16.0f);
     if (fade_pixels > 0.0f) {

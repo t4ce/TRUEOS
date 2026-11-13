@@ -595,8 +595,8 @@ static void fill_control(
     control[2] = frame;
     control[3] = 0;
     control[4] = float_bits((float)frame * (1.0f / 60.0f));
-    control[13] = float_bits(getenv("LILLY_SPRITE_PNG") ? 1.0f : 0.65f);
-    control[14] = float_bits(3.14159265359f);
+    control[13] = float_bits(1.0f);
+    control[14] = float_bits(0.0f);
     control[15] = float_bits(0.02f);
     control[16] = 0;
     control[17] = effect;
@@ -614,7 +614,7 @@ static void fill_control(
     control[27] = SPIRIT_SIZE * 4;
     control[28] = 1;
     control[30] = 60;
-    control[31] = float_bits(12.0f);
+    control[31] = float_bits(0.0f);
 }
 
 static uint8_t unpremultiply(uint8_t value, uint8_t alpha)

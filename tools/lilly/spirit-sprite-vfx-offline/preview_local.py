@@ -21,8 +21,6 @@ source=re.sub(r'    static_assert\([^;]+;\n','',source)
 source=source.replace('if constexpr','if')
 source=re.sub(r'vfx_cpp_sprite_layer<(\d+u)>\(',r'vfx_cpp_sprite_layer(\1, ',source)
 source=source.replace('__attribute__((intel_reqd_sub_group_size(16)))','')
-# SDL rows run top-down; sample in that convention without mirroring the sprite.
-source=source.replace('(1.0f - local_uv.y) *', 'local_uv.y *')
 context=cl.Context(devices=[d for p in cl.get_platforms() for d in p.get_devices(device_type=cl.device_type.GPU)][:1])
 queue=cl.CommandQueue(context)
 program=cl.Program(context,source).build(options=['-cl-std=CL1.2'])
@@ -44,7 +42,7 @@ control=np.zeros(32,dtype=np.uint32)
 floats=control.view(np.float32)
 control[0]=0x53564658;control[1]=1
 floats[13]=1.;floats[14]=0.;floats[15]=.02
-control[27]=1024;control[28]=1;control[30]=60;floats[31]=12
+control[27]=1024;control[28]=1;control[30]=60;floats[31]=0
 cb=cl.Buffer(context,cl.mem_flags.READ_ONLY,control.nbytes)
 out=np.empty((256,256,4),dtype=np.uint8)
 ob=cl.Buffer(context,cl.mem_flags.WRITE_ONLY,out.nbytes)

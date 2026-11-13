@@ -488,16 +488,16 @@ fn spirit_vfx_write_control(
             dwords.add(12),
             spirit_vfx_bounded(control.position_y, -0.35, 0.35, 0.0).to_bits(),
         );
-        // Spirit's Lilly presentation scale is architectural, not a mutable
-        // VFX parameter. Keep dword 13 for the kernel ABI, but lock its value.
-        core::ptr::write_volatile(dwords.add(13), 0.65f32.to_bits());
+        // LilyDS is already a bottom-centered 256x256 canvas. Preserve one
+        // source pixel per cursor pixel; dword 13 remains part of the ABI.
+        core::ptr::write_volatile(dwords.add(13), 1.0f32.to_bits());
         core::ptr::write_volatile(
             dwords.add(14),
             spirit_vfx_bounded(
                 control.rotation_radians,
                 -core::f32::consts::TAU,
                 core::f32::consts::TAU,
-                core::f32::consts::PI,
+                0.0,
             )
             .to_bits(),
         );
@@ -528,7 +528,7 @@ fn spirit_vfx_write_control(
         core::ptr::write_volatile(dwords.add(30), present_fps.min(1_000));
         core::ptr::write_volatile(
             dwords.add(31),
-            spirit_vfx_bounded(control.edge_fade_pixels, 0.0, 16.0, 12.0).to_bits(),
+            spirit_vfx_bounded(control.edge_fade_pixels, 0.0, 16.0, 0.0).to_bits(),
         );
         core::ptr::write_volatile(
             dwords.add(32),

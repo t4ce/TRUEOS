@@ -43,4 +43,4 @@ path = "../log-os"
 package = "log-os"
 
 [dependencies.spinning_top]
-version = "0.2.4"
+version = "0.3.0"

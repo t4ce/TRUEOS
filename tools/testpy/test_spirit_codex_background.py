@@ -101,7 +101,7 @@ fn knot_ids_and_scale_reach_the_gpu_without_changing_the_existing_abi() {
         background_opacity: 0.75, background_speed: 3.0, background_intensity: 4.0,
         background_color_a: 0xff688d, background_color_b: 0xfff26c,
         position_x: 0.0, position_y: 0.0, rotation_radians: 0.0,
-        alpha_cutoff: 0.02, edge_fade_pixels: 12.0, sampling: 0,
+        alpha_cutoff: 0.02, edge_fade_pixels: 0.0, sampling: 0,
         shader_mode: 1, shader_parameters: [12.0, 2.5, 0.0, 0.0],
         fx_color_a: 0, fx_color_b: 0,
     };
@@ -115,11 +115,19 @@ fn knot_ids_and_scale_reach_the_gpu_without_changing_the_existing_abi() {
             GpgpuRgba8Surface { width: 256, height: 256, pitch_bytes: 1024 }, control, 60);
         assert_eq!(page[3], if id == 99 { 0 } else { id });
         assert_eq!(f32::from_bits(page[6]), expected_scale);
+        assert_eq!(f32::from_bits(page[13]), 1.0, "native sprite scale is independent of animated background scale");
+        assert_eq!(f32::from_bits(page[14]), 0.0, "no legacy half-turn mirror correction");
+        assert_eq!(f32::from_bits(page[31]), 0.0, "native bottom row is not feathered away");
         assert_eq!(f32::from_bits(page[5]), 0.75);
         assert_eq!(f32::from_bits(page[7]), 3.0);
         assert_eq!(f32::from_bits(page[8]), 4.0);
         assert_eq!((page[17], page[24], page[25], page[26], page[27]), (1, 256, 256, 1024, 1024));
     }
+    control.rotation_radians = f32::NAN;
+    control.edge_fade_pixels = f32::NAN;
+    spirit_vfx_write_control(buffer, 60, 1024,
+        GpgpuRgba8Surface { width: 256, height: 256, pitch_bytes: 1024 }, control, 60);
+    assert_eq!((f32::from_bits(page[13]), f32::from_bits(page[14]), f32::from_bits(page[31])), (1.0, 0.0, 0.0));
 }
 }
 '''

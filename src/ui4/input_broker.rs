@@ -1750,6 +1750,33 @@ impl InputBroker {
             let _ = self.consumed_keys.push(event);
             return;
         }
+        if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+            && event.key_code == crate::r::keyboard::KEYBOARD_KEY_F10
+            && event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_PRESS != 0
+        {
+            let (combo_id, _) = keyboard_hut_metadata(&event);
+            let destination = self.cursors.iter()
+                .filter(|route| !route.visual_only)
+                .filter(|route| {
+                    if combo_id != 0 {
+                        cursor_hut_metadata(route.source).0 == combo_id
+                    } else {
+                        route.source.controller_id == event.controller_id
+                            && route.source.slot_id == event.slot_id
+                    }
+                })
+                .max_by_key(|route| route.selection_serial)
+                .and_then(|route| {
+                    let (width, height) = super::output_dimensions()?;
+                    Some((
+                        f64::from(route.x) / f64::from(width.saturating_sub(1).max(1)),
+                        f64::from(route.y) / f64::from(height.saturating_sub(1).max(1)),
+                    ))
+                });
+            if let Err(error) = crate::spirit::scanrunmon(destination) {
+                crate::log_warn!(target: "ui4"; "ui4/input: F10 scanrunmon rejected error={:?}\n", error);
+            }
+        }
         if !super::cursor_frame_inout::global_keyboard_passes(&event) {
             let _ = self.consumed_keys.push(event);
             return;
@@ -2356,11 +2383,7 @@ fn capture_spirit_scanrunmon_hotkey(
     {
         return super::GlobalKeyboardDisposition::PassThrough;
     }
-    if event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_PRESS != 0 {
-        if let Err(error) = crate::spirit::scanrunmon() {
-            crate::log_warn!(target: "ui4"; "ui4/input: F10 scanrunmon rejected error={:?}\n", error);
-        }
-    }
+    // The broker supplies the linked cursor destination before running hooks.
     super::GlobalKeyboardDisposition::Consume
 }
 
