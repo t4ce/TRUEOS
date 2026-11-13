@@ -34,6 +34,27 @@ The crate also contains the narrow RFC 6238 SHA-1 TOTP compatibility primitive
 needed by common authenticator applications. TOTP enrollment state, secret
 storage, retry policy, and account authorization remain runtime responsibilities.
 
+## SHA-2 dependency policy
+
+Repository-owned SHA-2 dependencies in TRUEOS, Buildins, and Blueprints stay
+pinned to `=0.10.9`. Upgrading only our hashing calls to SHA-2 0.11 leaves the
+existing crypto consumers on 0.10 and adds another digest dependency family;
+that isolated upgrade does not meet our dependency-consolidation goal.
+
+Before lifting the pin, coordinate the migration of Sunset and
+rustls-rustcrypto, including their ed25519-dalek, P-256/P-384, and RSA consumers,
+onto the newer digest ecosystem. SHA-1, HMAC, and HKDF users must use compatible
+digest traits too. Removing the remaining lower-level duplicates also requires
+movement in AES/AEAD/cipher consumers of crypto-common/cpufeatures and the
+DER/SPKI/PKCS consumers of const-oid. Check the kernel's actual target dependency
+graph rather than treating a direct SHA-2 version bump as consolidation.
+
+There is an existing exception: `trueos-lily-pack` uses `lzma-rust2 0.21` with
+its `xz` feature, which requires SHA-2 0.11 for XZ checksum validation. The direct
+rollback does not remove that newer stack. Eliminating it requires a compatible
+dependency port of the XZ implementation; do not disable XZ or its checksum
+validation to hide the dependency.
+
 ## Current non-goals
 
 - no CLI commands or shell registration;
