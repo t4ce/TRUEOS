@@ -213,6 +213,12 @@ impl Motion {
                     core::array::from_fn(|axis| from[axis] + (to[axis] - from[axis]) * life_blend)
                 }
             };
+            // Increase the field reach without changing either mode's speed.
+            let delta = if matches!(mode, MotionMode::Orbs | MotionMode::Vortex) {
+                delta.map(|value| value * 1.25)
+            } else {
+                delta
+            };
             let channels = unpack(anchor);
             let result = core::array::from_fn(|axis| {
                 // Smooth fields pin channel endpoints instead of crushing all

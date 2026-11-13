@@ -18,9 +18,13 @@ impl<T> Mutex<T> {
     pub fn lock(&self) -> std::sync::MutexGuard<'_, T> {
         self.0.lock().unwrap()
     }
+    pub fn is_locked(&self) -> bool {
+        matches!(self.0.try_lock(), Err(std::sync::TryLockError::WouldBlock))
+    }
 }
 mod pci {
     pub fn config_read_u32(_: u8, _: u8, _: u8, _: u16) -> u32 {
+        assert!(crate::intel::DISPLAY_COLOR_ROUTE_LOCK.is_locked());
         crate::STATE.with(|cell| {
             let mut state = cell.borrow_mut();
             state.pci_reads += 1;
@@ -29,6 +33,7 @@ mod pci {
     }
 }
 mod intel {
+    pub static DISPLAY_COLOR_ROUTE_LOCK: crate::Mutex<()> = crate::Mutex::new(());
     #[derive(Clone, Copy)]
     pub struct Dev {
         pub bus: u8,
@@ -41,10 +46,11 @@ mod intel {
             bus: 0,
             slot: 0,
             function: 0,
-            mmio_len: 0x100000,
+            mmio_len: crate::STATE.with(|cell| cell.borrow().mmio_len),
         })
     }
     pub fn mmio_read(_: Dev, off: usize) -> u32 {
+        assert!(DISPLAY_COLOR_ROUTE_LOCK.is_locked());
         crate::STATE.with(|cell| {
             let mut state = cell.borrow_mut();
             state.reads.push(off);
@@ -52,6 +58,8 @@ mod intel {
                 0x70008 => return if state.pipes[0].enabled { 1 << 31 } else { 0 },
                 0x71008 => return if state.pipes[1].enabled { 1 << 31 } else { 0 },
                 0x420b0 => return 0,
+                0x6e400 => return state.wd_function,
+                0x7e008 => return state.wd_transcoder,
                 0x490a4 | 0x490a8 | 0x490ac => (0, off),
                 0x491a4 | 0x491a8 | 0x491ac => (1, off - 0x100),
                 _ => panic!("unexpected MMIO read {off:x}"),
@@ -73,8 +81,20 @@ mod intel {
         })
     }
     pub fn mmio_write(_: Dev, off: usize, value: u32) {
+        assert!(DISPLAY_COLOR_ROUTE_LOCK.is_locked());
         crate::STATE.with(|cell| {
             let mut state = cell.borrow_mut();
+            if matches!(off, 0x490ac | 0x491ac) {
+                if let Some(flag) = &state.teardown_flag {
+                    assert!(
+                        !flag.load(std::sync::atomic::Ordering::Acquire),
+                        "teardown acquired route while a LUT upload still wrote data"
+                    );
+                }
+                if let Some(hook) = state.first_data_hook.take() {
+                    hook();
+                }
+            }
             state.writes.push((off, value));
             let (slot, reg) = match off {
                 0x420b0 => return,
@@ -116,6 +136,11 @@ impl Default for Pipe {
 }
 struct State {
     physical: u32,
+    mmio_len: usize,
+    wd_function: u32,
+    wd_transcoder: u32,
+    teardown_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    first_data_hook: Option<Box<dyn FnOnce()>>,
     pipes: [Pipe; 2],
     pci_reads: usize,
     reads: Vec<usize>,
@@ -125,6 +150,11 @@ impl Default for State {
     fn default() -> Self {
         Self {
             physical: 0xa7808086,
+            mmio_len: 0x100000,
+            wd_function: 0,
+            wd_transcoder: 0,
+            teardown_flag: None,
+            first_data_hook: None,
             pipes: core::array::from_fn(|_| Pipe::default()),
             pci_reads: 0,
             reads: Vec::new(),
@@ -301,7 +331,7 @@ fn inactive_b_never_arms_or_uploads_but_does_not_block_a() {
     assert_eq!(color::pipe_status(1), Err("chroma-pipe-unavailable"));
     STATE.with(|cell| {
         let s = cell.borrow();
-        assert!(s.reads.iter().all(|off| *off == 0x71008));
+        assert!(s.reads.iter().all(|off| matches!(off, 0x71008 | 0x6e400)));
         assert!(s.writes.is_empty());
     });
     assert_eq!(color::program_pipe(0, &[0; 4913]), Ok(()));
@@ -346,4 +376,152 @@ fn b_reset_recovery_and_rollback_never_touch_a() {
                 .all(|(off, _)| matches!(off, 0x491a4 | 0x491a8 | 0x491ac))
         );
     });
+}
+
+#[test]
+fn wd_driven_b_can_upload_with_ordinary_transcoder_b_disabled() {
+    STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        state.pipes[1].enabled = false;
+        state.wd_function = (1 << 31) | (5 << 12);
+        state.wd_transcoder = (1 << 31) | (1 << 30);
+    });
+    assert_eq!(color::pipe_status(1), Ok(color::PipeLutStatus::Disabled));
+    assert_eq!(color::program_pipe(1, &[0x123456; 4913]), Ok(()));
+    STATE.with(|cell| {
+        let state = cell.borrow();
+        assert!(state.pipes[1].table.iter().all(|entry| *entry == 0x123456));
+        assert!(state.pipes[0].table.iter().all(|entry| *entry == 0));
+        assert!(state.reads.contains(&0x71008));
+        assert!(state.reads.contains(&0x6e400));
+        assert!(state.reads.contains(&0x7e008));
+        assert!(
+            state
+                .writes
+                .iter()
+                .all(|(off, _)| matches!(off, 0x491a4 | 0x491a8 | 0x491ac))
+        );
+    });
+}
+
+#[test]
+fn wd_route_matches_only_its_selected_pipe() {
+    STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        for pipe in &mut state.pipes {
+            pipe.enabled = false;
+        }
+        state.wd_function = (1 << 31) | (5 << 12);
+        state.wd_transcoder = (1 << 31) | (1 << 30);
+    });
+    assert_eq!(color::pipe_status(0), Err("chroma-pipe-unavailable"));
+    assert_eq!(color::pipe_status(1), Ok(color::PipeLutStatus::Disabled));
+    STATE.with(|cell| cell.borrow_mut().wd_function = 1 << 31);
+    assert_eq!(color::pipe_status(0), Ok(color::PipeLutStatus::Disabled));
+    assert_eq!(color::pipe_status(1), Err("chroma-pipe-unavailable"));
+    assert!(STATE.with(|cell| cell.borrow().writes.is_empty()));
+}
+
+#[test]
+fn disabled_starting_stopping_and_other_wd_routes_cannot_access_b_lut() {
+    let live = (1 << 31) | (1 << 30);
+    let b = (1 << 31) | (5 << 12);
+    for (function, transcoder) in [
+        (5 << 12, live),
+        ((1 << 31) | (6 << 12), live),
+        ((1 << 31) | (7 << 12), live),
+        (b, 0),
+        (b, 1 << 31),
+        (b, 1 << 30),
+        (u32::MAX, live),
+        (b, u32::MAX),
+    ] {
+        STATE.with(|cell| {
+            let mut state = cell.borrow_mut();
+            *state = State::default();
+            state.pipes[1].enabled = false;
+            state.wd_function = function;
+            state.wd_transcoder = transcoder;
+        });
+        assert_eq!(
+            color::program_pipe(1, &[0; 4913]),
+            Err("chroma-pipe-unavailable")
+        );
+        STATE.with(|cell| {
+            let state = cell.borrow();
+            assert!(state.writes.is_empty());
+            assert!(
+                state
+                    .reads
+                    .iter()
+                    .all(|off| matches!(off, 0x71008 | 0x6e400 | 0x7e008))
+            );
+        });
+    }
+}
+
+#[test]
+fn unavailable_wd_register_window_is_not_read() {
+    STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        state.pipes[1].enabled = false;
+        state.mmio_len = 0x7100c;
+    });
+    assert_eq!(color::pipe_status(1), Err("chroma-pipe-unavailable"));
+    STATE.with(|cell| {
+        let state = cell.borrow();
+        assert_eq!(state.reads, [0x71008]);
+        assert!(state.writes.is_empty());
+    });
+}
+
+#[test]
+fn upload_holds_the_route_until_all_data_and_arming_have_finished() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+    let teardown = Arc::new(AtomicBool::new(false));
+    let finished = Arc::clone(&teardown);
+    let (started, wait_for_start) = mpsc::channel();
+    let (resume, wait_for_resume) = mpsc::channel();
+    STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        state.pipes[1].enabled = false;
+        state.wd_function = (1 << 31) | (5 << 12);
+        state.wd_transcoder = (1 << 31) | (1 << 30);
+        state.teardown_flag = Some(Arc::clone(&teardown));
+        state.first_data_hook = Some(Box::new(move || {
+            started.send(()).unwrap();
+            wait_for_resume
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }));
+    });
+    let stopper = std::thread::spawn(move || {
+        wait_for_start
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(intel::DISPLAY_COLOR_ROUTE_LOCK.is_locked());
+        resume.send(()).unwrap();
+        let _route = intel::DISPLAY_COLOR_ROUTE_LOCK.lock();
+        finished.store(true, Ordering::Release);
+    });
+    color::program_pipe(1, &[37; 4913]).unwrap();
+    STATE.with(|cell| assert_eq!(cell.borrow().pipes[1].control, 0xe0000000));
+    stopper.join().unwrap();
+    assert!(teardown.load(Ordering::Acquire));
+    // Once teardown has disabled WD, later checks cannot touch the LUT.
+    STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        state.wd_transcoder = 0;
+        state.wd_function = 0;
+        state.writes.clear();
+    });
+    assert_eq!(
+        color::program_pipe(1, &[38; 4913]),
+        Err("chroma-pipe-unavailable")
+    );
+    assert!(STATE.with(|cell| cell.borrow().writes.is_empty()));
 }

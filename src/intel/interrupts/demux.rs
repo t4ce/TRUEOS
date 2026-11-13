@@ -8,6 +8,8 @@ pub(super) const MISC_IDENTITY: usize = 0x44468;
 pub(super) const MISC_ENABLE: usize = 0x4446c;
 pub(super) const WD_MASK: usize = 0x6e560;
 pub(super) const WD_IDENTITY: usize = 0x6e564;
+// The headless WD route reserves B; its conventional transcoder stays off.
+const WD_PIPE_SLOT: usize = 1;
 pub(super) const MASTER_ENABLE: u32 = 1 << 31;
 pub(super) const MASTER_DISPLAY: u32 = 1 << 16;
 pub(super) const MASTER_GT1: u32 = 1 << 1;
@@ -88,10 +90,10 @@ pub(super) fn unowned_enable(
             return Some((register, enabled));
         }
     }
-    // Pipe C is explicitly powered by WD admission. Other pipes' per-pipe
+    // Pipe B is explicitly powered by WD admission. Other pipes' per-pipe
     // registers are read only while active, preserving power-domain rules.
     for pipe in 0..4 {
-        if (pipe == 2 && wd_powered) || registers.read(0x70008 + pipe * 0x1000) & (1 << 30) != 0 {
+        if (pipe == WD_PIPE_SLOT && wd_powered) || registers.read(0x70008 + pipe * 0x1000) & (1 << 30) != 0 {
             let register = 0x4440c + pipe * 0x10;
             let enabled = registers.read(register);
             if enabled != 0 {
@@ -430,9 +432,23 @@ mod tests {
             None
         );
         assert!(registers.reads.contains(&0x4440c));
-        assert!(registers.reads.contains(&0x4442c));
-        assert!(!registers.reads.contains(&0x4441c));
+        assert!(registers.reads.contains(&0x4441c));
+        assert!(!registers.reads.contains(&0x4442c));
         assert!(!registers.reads.contains(&0x4443c));
+    }
+
+    #[test]
+    fn wd_admission_checks_headless_b_interrupt_ownership_without_reading_c() {
+        let mut registers = Mock::wd(0);
+        registers.values.insert(0x4441c, 1 << 3);
+        registers.values.insert(0x4442c, u32::MAX);
+        assert_eq!(unowned_enable(&mut registers, Routes::default(), true),
+            Some((0x4441c, 1 << 3)));
+        assert!(!registers.reads.contains(&0x4442c));
+        registers.reads.clear();
+        assert_eq!(unowned_enable(&mut registers, Routes::default(), false), None);
+        assert!(!registers.reads.contains(&0x4441c));
+        assert!(!registers.reads.contains(&0x4442c));
     }
 
     fn vcs0(identity: u32) -> Mock {

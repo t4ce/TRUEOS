@@ -8,6 +8,7 @@ pub(crate) mod bcs_plan;
 #[path = "copy/blt.rs"]
 mod blt;
 mod display;
+pub(crate) use self::display::{DISPLAY_COLOR_ROUTE_LOCK, uses_ab_dbuf_layout};
 pub(crate) mod format;
 #[path = "gpgpu/gpgpu.rs"]
 pub(crate) mod gpgpu;

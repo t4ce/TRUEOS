@@ -76,6 +76,12 @@ const DBUF_POWER_STATE: u32 = 1 << 30;
 const SPIRIT_CURSOR_DDB_BLOCKS: u16 = 8;
 const SPIRIT_CURSOR_DDB: [(u16, u16); SPIRIT_CHANNEL_COUNT] =
     [(1008, 1016), (1016, 1024), (2040, 2048), (2032, 2040)];
+// Display version 12 routes an A+B configuration through A=S2 and B=S1.
+// Keep the desktop reservations disjoint from both five-plane allocations.
+// C/D retain unique reserved blocks, but stay dormant in this A+B layout:
+// activating more pipes requires a separate DBUF routing/partition contract.
+const SPIRIT_CURSOR_DDB_AB: [(u16, u16); SPIRIT_CHANNEL_COUNT] =
+    [(2032, 2040), (1016, 1024), (1008, 1016), (2040, 2048)];
 const _: () = assert!(SPIRIT_CURSOR_DBUF_S1_START == SPIRIT_CURSOR_DDB[0].0);
 const _: () = assert!(SPIRIT_CURSOR_DDB[0].1 == SPIRIT_CURSOR_DDB[1].0);
 const _: () = assert!(SPIRIT_CURSOR_DDB[2].1 == 2048);
@@ -400,6 +406,7 @@ pub(super) fn spirit_cursor_arm(
     let channel_index = channel_index(access.channel)?;
     let dev = crate::intel::claimed_device().ok_or(SpiritCursorError::HardwareNotReady)?;
     let _ = pipe_dimensions(channel_index)?;
+    let buf_cfg = cursor_ddb_cfg(dev, channel_index)?;
     if !ensure_dbuf_power(dev, channel_index) {
         return Err(SpiritCursorError::DbufNotReady);
     }
@@ -421,7 +428,6 @@ pub(super) fn spirit_cursor_arm(
     }
 
     let ctl = cursor_ctl(dev.device_id);
-    let buf_cfg = cursor_ddb_cfg(channel_index);
     let base = u32::try_from(surface.gpu).map_err(|_| SpiritCursorError::MappingFailed)?;
 
     // Frame production selects CUR_BASE but never CUR_POS; movement may only
@@ -461,8 +467,10 @@ pub(super) fn spirit_cursor_poll(
     let channel_index = channel_index(flip.channel)?;
     let dev = crate::intel::claimed_device().ok_or(SpiritCursorError::HardwareNotReady)?;
     let regs = cursor_regs(channel_index);
-    let pipe_inactive =
-        matches!(pipe_dimensions(channel_index), Err(SpiritCursorError::PipeInactive));
+    let pipe_inactive = matches!(
+        pipe_dimensions(channel_index),
+        Err(SpiritCursorError::PipeInactive)
+    );
     let base = crate::intel::mmio_read(dev, regs.base);
     let live = crate::intel::mmio_read(dev, regs.surf_live);
     let ctl = crate::intel::mmio_read(dev, regs.ctl);
@@ -499,6 +507,7 @@ pub(super) fn spirit_cursor_retry_arm(flip: SpiritCursorFlip) -> Result<(), Spir
     let channel_index = channel_index(flip.channel)?;
     let dev = crate::intel::claimed_device().ok_or(SpiritCursorError::HardwareNotReady)?;
     let _ = pipe_dimensions(channel_index)?;
+    let buf_cfg = cursor_ddb_cfg(dev, channel_index)?;
     if !ensure_dbuf_power(dev, channel_index) {
         return Err(SpiritCursorError::DbufNotReady);
     }
@@ -518,7 +527,7 @@ pub(super) fn spirit_cursor_retry_arm(flip: SpiritCursorFlip) -> Result<(), Spir
         return Err(SpiritCursorError::InvalidFrame);
     }
 
-    write_if_changed(dev, regs.buf_cfg, cursor_ddb_cfg(channel_index));
+    write_if_changed(dev, regs.buf_cfg, buf_cfg);
     program_cursor_watermark_contract(dev, regs);
     write_if_changed(dev, regs.sel_fetch_ctl, 0);
     write_if_changed(dev, regs.fbc_ctl, 0);
@@ -563,14 +572,15 @@ pub(super) fn spirit_cursor_rearm_needed(channel: u8) -> Result<bool, SpiritCurs
     };
 
     let regs = cursor_regs(channel_index);
-    let contract_lost =
-        crate::intel::mmio_read(dev, dbuf_control(channel_index)) & DBUF_POWER_STATE == 0
-            || crate::intel::mmio_read(dev, regs.ctl) != cursor_ctl(dev.device_id)
-            || crate::intel::mmio_read(dev, regs.surf_live) != expected_gpu
-            || crate::intel::mmio_read(dev, regs.buf_cfg) != cursor_ddb_cfg(channel_index)
-            || !cursor_watermark_contract_matches(dev, regs)
-            || crate::intel::mmio_read(dev, regs.fbc_ctl) != 0
-            || crate::intel::mmio_read(dev, regs.sel_fetch_ctl) != 0;
+    let dbuf_ctl = dbuf_control(dev, channel_index)?;
+    let buf_cfg = cursor_ddb_cfg(dev, channel_index)?;
+    let contract_lost = crate::intel::mmio_read(dev, dbuf_ctl) & DBUF_POWER_STATE == 0
+        || crate::intel::mmio_read(dev, regs.ctl) != cursor_ctl(dev.device_id)
+        || crate::intel::mmio_read(dev, regs.surf_live) != expected_gpu
+        || crate::intel::mmio_read(dev, regs.buf_cfg) != buf_cfg
+        || !cursor_watermark_contract_matches(dev, regs)
+        || crate::intel::mmio_read(dev, regs.fbc_ctl) != 0
+        || crate::intel::mmio_read(dev, regs.sel_fetch_ctl) != 0;
     if contract_lost {
         SPIRIT_CURSOR_STATE.lock().channels[channel_index].visible = false;
     }
@@ -636,7 +646,13 @@ fn allocate_surface(
         .checked_add(surface_slot as u64 * SPIRIT_CURSOR_GPU_STRIDE)
         .ok_or(SpiritCursorError::MappingFailed)?;
 
-    fill_surface_color(virt, pitch_bytes as usize, SPIRIT_CURSOR_DIM, SPIRIT_CURSOR_DIM, 0);
+    fill_surface_color(
+        virt,
+        pitch_bytes as usize,
+        SPIRIT_CURSOR_DIM,
+        SPIRIT_CURSOR_DIM,
+        0,
+    );
     crate::intel::dma_flush(virt, byte_len);
     if !crate::intel::map_display_scanout_ggtt(dev, phys, byte_len, gpu) {
         return Err(SpiritCursorError::MappingFailed);
@@ -659,7 +675,9 @@ fn pipe_dimensions(channel: usize) -> Result<(u32, u32), SpiritCursorError> {
 }
 
 fn ensure_dbuf_power(dev: crate::intel::Dev, channel: usize) -> bool {
-    let ctl = dbuf_control(channel);
+    let Ok(ctl) = dbuf_control(dev, channel) else {
+        return false;
+    };
     let before = crate::intel::mmio_read(dev, ctl);
     if before & DBUF_POWER_STATE != 0 {
         return true;
@@ -668,12 +686,14 @@ fn ensure_dbuf_power(dev: crate::intel::Dev, channel: usize) -> bool {
     crate::intel::mmio_read(dev, ctl) & DBUF_POWER_STATE != 0
 }
 
-fn dbuf_control(channel: usize) -> usize {
-    if channel < 2 {
+fn dbuf_control(dev: crate::intel::Dev, channel: usize) -> Result<usize, SpiritCursorError> {
+    let (start, _) = cursor_ddb_allocation(crate::intel::uses_ab_dbuf_layout(dev), channel)
+        .ok_or(SpiritCursorError::PipeInactive)?;
+    Ok(if start < 1024 {
         DBUF_CTL_S1
     } else {
         DBUF_CTL_S2
-    }
+    })
 }
 
 fn cursor_regs(channel: usize) -> CursorRegs {
@@ -768,9 +788,76 @@ fn cursor_needs_one_arb_slot(device_id: u16) -> bool {
     )
 }
 
-fn cursor_ddb_cfg(channel: usize) -> u32 {
-    let (start, end) = SPIRIT_CURSOR_DDB[channel];
-    (u32::from(end - 1) << 16) | u32::from(start)
+// The pinned compiler misoptimizes consecutive inlined tuple-return calls at
+// opt-level 2/3, reusing A's end block for B. Keep this tiny MMIO setup helper
+// out of line; the optimized allocation tests cover constant and dynamic inputs.
+#[inline(never)]
+fn cursor_ddb_allocation(ab_layout: bool, channel: usize) -> Option<(u16, u16)> {
+    if ab_layout {
+        (channel < 2).then(|| SPIRIT_CURSOR_DDB_AB[channel])
+    } else {
+        SPIRIT_CURSOR_DDB.get(channel).copied()
+    }
+}
+
+fn cursor_ddb_cfg(dev: crate::intel::Dev, channel: usize) -> Result<u32, SpiritCursorError> {
+    let (start, end) = cursor_ddb_allocation(crate::intel::uses_ab_dbuf_layout(dev), channel)
+        .ok_or(SpiritCursorError::PipeInactive)?;
+    Ok((u32::from(end - 1) << 16) | u32::from(start))
+}
+
+#[cfg(test)]
+mod dbuf_layout_tests {
+    use super::{
+        SPIRIT_CURSOR_DDB, SPIRIT_CURSOR_DDB_AB, SPIRIT_CURSOR_DDB_BLOCKS, cursor_ddb_allocation,
+    };
+
+    #[test]
+    fn desktop_ab_cursors_follow_the_two_pipe_slice_routing() {
+        assert_eq!(cursor_ddb_allocation(true, 0), Some((2032, 2040)));
+        assert_eq!(cursor_ddb_allocation(true, 1), Some((1016, 1024)));
+        assert_eq!(cursor_ddb_allocation(true, 2), None);
+        assert_eq!(cursor_ddb_allocation(true, 3), None);
+        assert_eq!(cursor_ddb_allocation(true, usize::MAX), None);
+    }
+
+    #[test]
+    fn runtime_ab_channels_match_the_constant_allocation_contract() {
+        for (channel, expected) in [Some((2032, 2040)), Some((1016, 1024)), None, None]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(
+                cursor_ddb_allocation(core::hint::black_box(true), core::hint::black_box(channel)),
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn native_and_other_devices_keep_the_existing_four_cursor_contract() {
+        for (channel, allocation) in [(1008, 1016), (1016, 1024), (2040, 2048), (2032, 2040)]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(cursor_ddb_allocation(false, channel), Some(allocation));
+        }
+        assert_eq!(cursor_ddb_allocation(false, 4), None);
+    }
+
+    #[test]
+    fn every_reservation_fits_one_slice_without_aliasing_another_cursor() {
+        for allocations in [SPIRIT_CURSOR_DDB, SPIRIT_CURSOR_DDB_AB] {
+            for (index, (start, end)) in allocations.iter().copied().enumerate() {
+                assert_eq!(end - start, SPIRIT_CURSOR_DDB_BLOCKS);
+                assert_eq!(start / 1024, (end - 1) / 1024);
+                assert!(end <= 2048);
+                for (other_start, other_end) in allocations.iter().copied().skip(index + 1) {
+                    assert!(end <= other_start || other_end <= start);
+                }
+            }
+        }
+    }
 }
 
 const fn normalized_cursor_to_px(normalized: f64, extent: u32) -> i32 {

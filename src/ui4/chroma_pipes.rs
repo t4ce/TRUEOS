@@ -4,6 +4,20 @@ use super::chroma_color::Settings;
 
 pub(super) const PIPE_COUNT: usize = 2;
 
+/// A headless route may power-cycle independently of the editor. Restore an
+/// owned grade when its pipe returns, retaining edits queued while it was off.
+pub(super) fn update_route_masks(
+    changed: u8,
+    active: u8,
+    owned: u8,
+    dirty: &mut u8,
+    inactive: &mut u8,
+) {
+    let changed = changed & ((1 << PIPE_COUNT) - 1);
+    *inactive = (*inactive & !changed) | (changed & !active);
+    *dirty |= changed & active & owned;
+}
+
 pub(super) struct PipeBuckets {
     settings: [Settings; PIPE_COUNT],
     selected: usize,
@@ -103,6 +117,22 @@ impl PipeBuckets {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn route_restart_restores_only_the_returning_owned_pipe() {
+        let (mut dirty, mut inactive) = (0, 2);
+        update_route_masks(2, 2, 3, &mut dirty, &mut inactive);
+        assert_eq!((dirty, inactive), (2, 0));
+        update_route_masks(2, 0, 3, &mut dirty, &mut inactive);
+        assert_eq!((dirty, inactive), (2, 2));
+        update_route_masks(2, 2, 0, &mut dirty, &mut inactive);
+        assert_eq!((dirty, inactive), (2, 0));
+        dirty = 0;
+        update_route_masks(2, 2, 0, &mut dirty, &mut inactive);
+        assert_eq!((dirty, inactive), (0, 0));
+        update_route_masks(12, 12, 15, &mut dirty, &mut inactive);
+        assert_eq!((dirty, inactive), (0, 0));
+    }
 
     #[test]
     fn selecting_a_pipe_changes_only_the_view_and_never_copies_settings() {

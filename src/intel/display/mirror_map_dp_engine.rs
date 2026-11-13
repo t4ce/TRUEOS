@@ -1,7 +1,7 @@
-//! MirrorMapDPEngine: Pipe A plane-map reflection into headless Pipe C -> WD0.
+//! MirrorMapDPEngine: Pipe A plane-map reflection into headless Pipe B -> WD0.
 //!
-//! Pipe A remains the wired monitor. Pipe C re-fetches the same GGTT plane and
-//! cursor surfaces through DBUF S2; WD0 is its only transcoder/sink and writes
+//! Pipe A remains the wired monitor. Pipe B re-fetches the same GGTT plane and
+//! cursor surfaces through DBUF S1; WD0 is its only transcoder/sink and writes
 //! the fixed capture allocation. No CPU or GPU compositor participates here.
 
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -10,7 +10,7 @@ use spin::Mutex;
 use super::*;
 
 const SOURCE_PIPE_SLOT: usize = 0;
-const MIRROR_PIPE_SLOT: usize = 2;
+const MIRROR_PIPE_SLOT: usize = 1;
 const CAPTURE_GPU: u64 = 0xE000_0000;
 // WD color mode 2 is DRM XYUV8888: X:Y:Cb:Cr in a little-endian u32.  Gen12
 // VDEnc's packed YUV444 source has the identical byte/component positions
@@ -18,7 +18,7 @@ const CAPTURE_GPU: u64 = 0xE000_0000;
 const CAPTURE_BYTES_PER_PIXEL: u32 = 4;
 const CAPTURE_ALIGNMENT: usize = 4096;
 
-const DBUF_CTL_S2: usize = 0x44FE8;
+const DBUF_CTL_S1: usize = 0x45008;
 const DBUF_POWER_REQUEST: u32 = 1 << 31;
 const DBUF_POWER_STATE: u32 = 1 << 30;
 
@@ -39,13 +39,13 @@ const WD_START_TRIGGER_FRAME: u32 = 1 << 29;
 const WD_STOP_TRIGGER_FRAME: u32 = 1 << 28;
 const WD_COLOR_MODE_XYUV8888: u32 = 2 << 20;
 const WD_DISABLE_POINTERS: u32 = 3 << 18;
-const WD_INPUT_PIPE_C: u32 = 6 << 12;
+const WD_INPUT_PIPE_B: u32 = 5 << 12;
 const WD_FRAME_NUMBER_MASK: u32 = 0xF;
 const WD_FRAME_COMPLETE: u32 = 1 << 31;
 
-// Pipe C's blender produces RGB. WD color mode 2 only defines how those
+// Pipe B's blender produces RGB. WD color mode 2 only defines how those
 // components are stored; it does not itself perform RGB -> YCbCr conversion.
-// Use the ICL+ pipe output CSC immediately after blending so WD receives real
+// The output CSC follows B's independent 3D LUT, so WD receives graded,
 // opaque, limited-range BT.709 XYUV8888 (memory bytes V, U, Y, X).
 const PIPE_MISC_A: usize = 0x70030;
 const PIPE_MISC_OUTPUT_COLORSPACE_YUV: u32 = 1 << 11;
@@ -58,6 +58,10 @@ const PIPE_OUTPUT_CSC_ENABLE: u32 = 1 << 30;
 const PIPE_OUTPUT_CSC_COEFF_A: usize = 0x49050;
 const PIPE_OUTPUT_CSC_PREOFF_A: usize = 0x49068;
 const PIPE_OUTPUT_CSC_POSTOFF_A: usize = 0x49074;
+const PIPE_B_GAMMA_MODE: usize = 0x4AC80;
+const PIPE_GAMMA_ENABLE_MASK: u32 = (1 << 31) | (1 << 30);
+const PLANE_PIPE_COLOR_ENABLE_MASK: u32 = (1 << 30) | (1 << 23);
+const CURSOR_PIPE_COLOR_ENABLE_MASK: u32 = (1 << 26) | (1 << 24) | (1 << 18);
 
 // Intel's fixed-point BT.709 full-range RGB -> limited-range YCbCr matrix.
 // Output CSC channel order is Cr/Y/Cb, matching WD XYUV's V/Y/U bits.
@@ -84,7 +88,7 @@ const CURSOR_WM_ENABLE: u32 = 1 << 31;
 const CURSOR_WM_ORDINARY_LEVELS: usize = 6;
 
 const POWER_WELL_FIRST_INDEX: usize = 0;
-const POWER_WELL_LAST_INDEX: usize = 3;
+const POWER_WELL_LAST_INDEX: usize = 2;
 const POWER_WAIT_ITERS: usize = 1_000_000;
 const PIPE_WAIT_ITERS: usize = 1_000_000;
 
@@ -152,7 +156,7 @@ impl MirrorMapMode {
         }
     }
 
-    /// Return the Pipe A source slot feeding one Pipe C destination slot.
+    /// Return the Pipe A source slot feeding one Pipe B destination slot.
     const fn source_for_destination(self, destination: usize) -> usize {
         match (self, destination) {
             (Self::Swap1And3, 1) => 3,
@@ -185,7 +189,7 @@ struct WdCaptureState {
     generation: u64,
     sequence: u64,
     saved_power_well_ctl2: u32,
-    saved_dbuf_ctl_s2: u32,
+    saved_dbuf_ctl_s1: u32,
     saved_output_color: PipeOutputColorState,
 }
 
@@ -193,6 +197,7 @@ struct WdCaptureState {
 struct PipeOutputColorState {
     pipe_misc: u32,
     csc_mode: u32,
+    gamma_mode: u32,
     coeff: [u32; 6],
     preoff: [u32; 3],
     postoff: [u32; 3],
@@ -203,6 +208,7 @@ impl PipeOutputColorState {
         Self {
             pipe_misc: 0,
             csc_mode: 0,
+            gamma_mode: 0,
             coeff: [0; 6],
             preoff: [0; 3],
             postoff: [0; 3],
@@ -229,7 +235,7 @@ impl WdCaptureState {
             generation: 0,
             sequence: 0,
             saved_power_well_ctl2: 0,
-            saved_dbuf_ctl_s2: 0,
+            saved_dbuf_ctl_s1: 0,
             saved_output_color: PipeOutputColorState::new(),
         }
     }
@@ -295,7 +301,7 @@ pub(crate) fn pin_ui4_wd_frame_for_copy(
     Ok(WdCopyLease { submitted: false })
 }
 
-fn pipe_c_output_color_registers() -> (usize, usize, usize, usize, usize) {
+fn pipe_b_output_color_registers() -> (usize, usize, usize, usize, usize) {
     let csc_offset = MIRROR_PIPE_SLOT * PIPE_CSC_REGISTER_STRIDE;
     (
         PIPE_MISC_A + MIRROR_PIPE_SLOT * PIPE_MMIO_STRIDE,
@@ -306,12 +312,13 @@ fn pipe_c_output_color_registers() -> (usize, usize, usize, usize, usize) {
     )
 }
 
-fn program_pipe_c_output_bt709_ycbcr(dev: crate::intel::Dev) -> PipeOutputColorState {
+fn program_pipe_b_output_bt709_ycbcr(dev: crate::intel::Dev) -> PipeOutputColorState {
     let (pipe_misc, csc_mode, coeff_base, preoff_base, postoff_base) =
-        pipe_c_output_color_registers();
+        pipe_b_output_color_registers();
     let mut saved = PipeOutputColorState::new();
     saved.pipe_misc = crate::intel::mmio_read(dev, pipe_misc);
     saved.csc_mode = crate::intel::mmio_read(dev, csc_mode);
+    saved.gamma_mode = crate::intel::mmio_read(dev, PIPE_B_GAMMA_MODE);
     for (index, value) in saved.coeff.iter_mut().enumerate() {
         *value = crate::intel::mmio_read(dev, coeff_base + index * 4);
     }
@@ -322,6 +329,13 @@ fn program_pipe_c_output_bt709_ycbcr(dev: crate::intel::Dev) -> PipeOutputColorS
         *value = crate::intel::mmio_read(dev, postoff_base + index * 4);
     }
 
+    // B's only pipe color transform is the independently owned CHROMA 3D
+    // LUT followed by output CSC. Stale pre/post gamma must not contribute.
+    crate::intel::mmio_write(
+        dev,
+        PIPE_B_GAMMA_MODE,
+        saved.gamma_mode & !PIPE_GAMMA_ENABLE_MASK,
+    );
     let coeff = RGB_TO_LIMITED_BT709_COEFF;
     let packed = [
         (u32::from(coeff[0]) << 16) | u32::from(coeff[1]),
@@ -357,9 +371,9 @@ fn program_pipe_c_output_bt709_ycbcr(dev: crate::intel::Dev) -> PipeOutputColorS
     saved
 }
 
-fn restore_pipe_c_output_color(dev: crate::intel::Dev, saved: PipeOutputColorState) {
+fn restore_pipe_b_output_color(dev: crate::intel::Dev, saved: PipeOutputColorState) {
     let (pipe_misc, csc_mode, coeff_base, preoff_base, postoff_base) =
-        pipe_c_output_color_registers();
+        pipe_b_output_color_registers();
     for (index, value) in saved.coeff.into_iter().enumerate() {
         crate::intel::mmio_write(dev, coeff_base + index * 4, value);
     }
@@ -370,6 +384,7 @@ fn restore_pipe_c_output_color(dev: crate::intel::Dev, saved: PipeOutputColorSta
         crate::intel::mmio_write(dev, postoff_base + index * 4, value);
     }
     crate::intel::mmio_write(dev, pipe_misc, saved.pipe_misc);
+    crate::intel::mmio_write(dev, PIPE_B_GAMMA_MODE, saved.gamma_mode);
     crate::intel::mmio_write(dev, csc_mode, saved.csc_mode);
 }
 
@@ -406,7 +421,7 @@ fn wait_for_mask(
     false
 }
 
-fn request_pipe_c_power(dev: crate::intel::Dev) -> Result<u32, WdCaptureError> {
+fn request_pipe_b_power(dev: crate::intel::Dev) -> Result<u32, WdCaptureError> {
     let saved = crate::intel::mmio_read(dev, HSW_PWR_WELL_CTL2);
     let mut requested = saved;
     for index in POWER_WELL_FIRST_INDEX..=POWER_WELL_LAST_INDEX {
@@ -426,11 +441,11 @@ fn request_pipe_c_power(dev: crate::intel::Dev) -> Result<u32, WdCaptureError> {
     Ok(saved)
 }
 
-fn enable_dbuf_s2(dev: crate::intel::Dev) -> Result<u32, WdCaptureError> {
-    let saved = crate::intel::mmio_read(dev, DBUF_CTL_S2);
-    crate::intel::mmio_write(dev, DBUF_CTL_S2, saved | DBUF_POWER_REQUEST);
-    if !wait_for_mask(dev, DBUF_CTL_S2, DBUF_POWER_STATE, true, POWER_WAIT_ITERS) {
-        crate::intel::mmio_write(dev, DBUF_CTL_S2, saved);
+fn enable_dbuf_s1(dev: crate::intel::Dev) -> Result<u32, WdCaptureError> {
+    let saved = crate::intel::mmio_read(dev, DBUF_CTL_S1);
+    crate::intel::mmio_write(dev, DBUF_CTL_S1, saved | DBUF_POWER_REQUEST);
+    if !wait_for_mask(dev, DBUF_CTL_S1, DBUF_POWER_STATE, true, POWER_WAIT_ITERS) {
+        crate::intel::mmio_write(dev, DBUF_CTL_S1, saved);
         return Err(WdCaptureError::DbufTimeout);
     }
     Ok(saved)
@@ -439,14 +454,14 @@ fn enable_dbuf_s2(dev: crate::intel::Dev) -> Result<u32, WdCaptureError> {
 const MIRROR_PLANE_COUNT: usize = 5;
 const MIRROR_SCALER_COUNT: usize = 2;
 const MIRROR_DBUF_RANGES: [(u16, u16); MIRROR_PLANE_COUNT] = [
-    (PLANE_DBUF_S2_SLOT_0_START, PLANE_DBUF_S2_SLOT_0_END),
-    (PLANE_DBUF_S2_SLOT_1_START, PLANE_DBUF_S2_SLOT_1_END),
-    (PLANE_DBUF_S2_SLOT_2_START, PLANE_DBUF_S2_SLOT_2_END),
-    (PLANE_DBUF_S2_SLOT_3_START, PLANE_DBUF_S2_SLOT_3_END),
-    (PLANE_DBUF_S2_SLOT_4_START, PLANE_DBUF_S2_SLOT_4_END),
+    (PLANE_DBUF_SLOT_0_START, PLANE_DBUF_SLOT_0_END),
+    (PLANE_DBUF_SLOT_1_START, PLANE_DBUF_SLOT_1_END),
+    (PLANE_DBUF_SLOT_2_START, PLANE_DBUF_SLOT_2_END),
+    (PLANE_DBUF_SLOT_3_START, PLANE_DBUF_SLOT_3_END),
+    (PLANE_DBUF_SLOT_4_START, PLANE_DBUF_SLOT_4_END),
 ];
 // Plane opacity lives in KEYMSK/KEYMAX. Input CSC coefficients belong to the
-// plane's pixel contract; Pipe C's output CSC remains WD's RGB -> YCbCr stage.
+// plane's pixel contract; Pipe B's output CSC remains WD's RGB -> YCbCr stage.
 const MIRROR_PLANE_REGISTERS: [usize; 23] = [
     UNI_PLANE_STRIDE_OFF,
     UNI_PLANE_POS_OFF,
@@ -570,7 +585,10 @@ fn program_mirror_scaler(dev: crate::intel::Dev, scaler_id: usize, state: Mirror
 fn mirror_cursor(dev: crate::intel::Dev) {
     let src = CURSOR_A_BASE + SOURCE_PIPE_SLOT * CURSOR_PIPE_STRIDE;
     let dst = CURSOR_A_BASE + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE;
-    let ctl = crate::intel::mmio_read(dev, src + CURSOR_CTL_OFF);
+    // Deprecated per-cursor pipe color selectors would invoke stale B
+    // palettes/CSC rather than A's state; retain the cursor's own controls.
+    let ctl = crate::intel::mmio_read(dev, src + CURSOR_CTL_OFF)
+        & !CURSOR_PIPE_COLOR_ENABLE_MASK;
     crate::intel::mmio_write(dev, dst + CURSOR_CTL_OFF, 0);
     crate::intel::mmio_write(
         dev,
@@ -604,11 +622,11 @@ fn mirror_cursor(dev: crate::intel::Dev) {
         CURSOR_WM_A0 + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE,
         source_wm0,
     );
-    // Pipe C owns blocks 2040..2047; do not clone Pipe A's S1 allocation.
+    // Pipe B owns S1 blocks 1016..1023; Pipe A's cursor lives in S2.
     crate::intel::mmio_write(
         dev,
         CURSOR_BUF_CFG_A + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE,
-        ((2047u32) << 16) | 2040,
+        ((1023u32) << 16) | 1016,
     );
     crate::intel::mmio_write(
         dev,
@@ -652,6 +670,13 @@ fn mirror_live_scene(dev: crate::intel::Dev) {
             plane.control & !PLANE_CTL_ENABLE,
         );
         for (offset, value) in MIRROR_PLANE_REGISTERS.iter().zip(plane.registers) {
+            // Keep the plane's internal color processing, but never opt it
+            // into stale B pipe gamma or the deprecated pipe CSC path.
+            let value = if *offset == UNI_PLANE_COLOR_CTL_OFF {
+                value & !PLANE_PIPE_COLOR_ENABLE_MASK
+            } else {
+                value
+            };
             crate::intel::mmio_write(dev, dst + offset, value);
         }
         crate::intel::mmio_write(dev, dst + UNI_PLANE_CTL_OFF, plane.control);
@@ -660,7 +685,7 @@ fn mirror_live_scene(dev: crate::intel::Dev) {
         program_mirror_scaler(dev, id, scaler);
     }
     // Stage the complete geometry/scaler contract before arming any plane.
-    // WD's next frame trigger observes the prepared Pipe C scene as a whole.
+    // WD's next frame trigger observes the prepared Pipe B scene as a whole.
     for (slot, plane) in scene.planes.iter().enumerate() {
         crate::intel::mmio_write(dev, mirror.plane(slot).surf(), plane.surface);
     }
@@ -686,9 +711,43 @@ fn aligned_capture_layout(width: u32, height: u32) -> Option<(u32, usize)> {
     Some((pitch, byte_len))
 }
 
+/// A+B's two-slice layout puts A in S2 and B in S1. Never enable B over a
+/// still-live legacy A allocation in S1, even if its ordinary transcoder is off.
+fn source_uses_dbuf_s2(dev: crate::intel::Dev) -> bool {
+    let source = PIPES[SOURCE_PIPE_SLOT];
+    let in_s2 = |value: u32| {
+        let start = value & 0x1FFF;
+        let end = (value >> 16) & 0x1FFF;
+        start >= 1024 && end >= start && end <= 2047
+    };
+    for slot in 0..MIRROR_PLANE_COUNT {
+        let plane = source.plane(slot);
+        if crate::intel::mmio_read(dev, plane.ctl()) & PLANE_CTL_ENABLE != 0
+            && !in_s2(crate::intel::mmio_read(dev, plane.buf_cfg()))
+        {
+            return false;
+        }
+    }
+    // CURSOR_MODE_SELECT is the low six bits; disabled cursors can retain
+    // other control fields without owning any DBUF blocks.
+    let cursor = CURSOR_A_BASE + SOURCE_PIPE_SLOT * CURSOR_PIPE_STRIDE;
+    if crate::intel::mmio_read(dev, cursor + CURSOR_CTL_OFF) & 0x3F != 0
+        && !in_s2(crate::intel::mmio_read(
+            dev,
+            CURSOR_BUF_CFG_A + SOURCE_PIPE_SLOT * CURSOR_PIPE_STRIDE,
+        ))
+    {
+        return false;
+    }
+    true
+}
+
 pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptureError> {
     let dev = crate::intel::claimed_device().ok_or(WdCaptureError::DeviceUnavailable)?;
-    // Native TGL's seven-plane Pipe A owns both DBUF slices. Enabling C
+    // Route ownership precedes STATE and CHROMATIC's LUT lock. Keep B powered
+    // through each complete LUT upload, including capture start/stop races.
+    let route = DISPLAY_COLOR_ROUTE_LOCK.lock();
+    // Native TGL's seven-plane Pipe A owns both DBUF slices. Enabling B
     // would change slice routing under live scanout; it needs a new allocation.
     if native_ui4_for_pipe(PIPES[SOURCE_PIPE_SLOT]) {
         return Err(WdCaptureError::UnsupportedDevice);
@@ -709,6 +768,9 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
     }
     let (width, height) = decode_pipe_src(crate::intel::mmio_read(dev, source.pipe_src_off))
         .ok_or(WdCaptureError::DimensionsInvalid)?;
+    if !source_uses_dbuf_s2(dev) {
+        return Err(WdCaptureError::MirrorPipeBusy);
+    }
     if state.running {
         // A resident stream can outlive a source mode change. Reject the old
         // layout so its owner drains and rebuilds instead of capturing with
@@ -740,7 +802,7 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
     }
     crate::intel::ggtt_invalidate(dev);
 
-    let saved_power_well_ctl2 = match request_pipe_c_power(dev) {
+    let saved_power_well_ctl2 = match request_pipe_b_power(dev) {
         Ok(saved) => saved,
         Err(error) => {
             let _ = crate::intel::unmap_display_scanout_ggtt(dev, byte_len, CAPTURE_GPU);
@@ -748,7 +810,7 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
             return Err(error);
         }
     };
-    let saved_dbuf_ctl_s2 = match enable_dbuf_s2(dev) {
+    let saved_dbuf_ctl_s1 = match enable_dbuf_s1(dev) {
         Ok(saved) => saved,
         Err(error) => {
             crate::intel::mmio_write(dev, HSW_PWR_WELL_CTL2, saved_power_well_ctl2);
@@ -780,7 +842,7 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
         PIPE_CHICKEN_A + mirror.slot * PIPE_MMIO_STRIDE,
         chicken,
     );
-    let saved_output_color = program_pipe_c_output_bt709_ycbcr(dev);
+    let saved_output_color = program_pipe_b_output_bt709_ycbcr(dev);
     initialize_mirror_planes(dev);
     mirror_live_scene(dev);
 
@@ -799,7 +861,7 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
             | WD_TRIGGERED_CAPTURE_ENABLE
             | WD_COLOR_MODE_XYUV8888
             | WD_DISABLE_POINTERS
-            | WD_INPUT_PIPE_C,
+            | WD_INPUT_PIPE_B,
     );
 
     *state = WdCaptureState {
@@ -817,36 +879,40 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
         generation: CAPTURE_GENERATION.fetch_add(1, Ordering::AcqRel).wrapping_add(1),
         sequence: 0,
         saved_power_well_ctl2,
-        saved_dbuf_ctl_s2,
+        saved_dbuf_ctl_s1,
         saved_output_color,
     };
 
-    // Do not enable conventional Transcoder C (PIPECONF_C). WD0 is Pipe C's
+    // Do not enable conventional Transcoder B (PIPECONF_B). WD0 is Pipe B's
     // sole transcoder/sink; enabling both would violate the one-transcoder-per-
     // pipe topology and turn this headless route into an invalid dual output.
     crate::intel::mmio_write(dev, WD0_TRANS_CONF, WD_TRANS_ENABLE);
     let _ = crate::intel::mmio_read(dev, WD0_TRANS_CONF);
     if !wait_for_mask(dev, WD0_TRANS_CONF, WD_TRANS_STATE, true, PIPE_WAIT_ITERS) {
         drop(state);
+        drop(route);
         let _ = stop_ui4_wd_xyuv8888_capture();
         return Err(WdCaptureError::WdEnableTimeout);
     }
     if !crate::intel::interrupts::enable_wd(dev) {
         drop(state);
+        drop(route);
         let _ = stop_ui4_wd_xyuv8888_capture();
         return Err(WdCaptureError::InterruptUnavailable);
     }
 
-    let (pipe_misc, csc_mode, _, _, _) = pipe_c_output_color_registers();
+    let (pipe_misc, csc_mode, _, _, _) = pipe_b_output_color_registers();
     crate::log_info!(target: "intel/display";
-        "intel/display: wd0 online=1 source=pipe-c mirror_of=pipe-a map={:?} slots=0-4+cursor5 postblend=opaque-rgb output_csc=bt709-limited-ycbcr pipe_misc=0x{:08X} pipe_csc_mode=0x{:08X} sink=ggtt-xyuv8888 size={}x{} pitch={} bytes=0x{:X} gpu=0x{:X} dbuf=s2:1024-2031 cursor=pipe-c:2040-2047 transcoder-c=disabled ddi=none cpu_compositor=0 gpu_compositor=0\n",
+        "intel/display: wd0 online=1 source=pipe-b mirror_of=pipe-a map={:?} slots=0-4+cursor5 postblend=opaque-rgb output_csc=bt709-limited-ycbcr pipe_misc=0x{:08X} pipe_csc_mode=0x{:08X} sink=ggtt-xyuv8888 size={}x{} pitch={} bytes=0x{:X} gpu=0x{:X} dbuf=s1:0-1007 cursor=pipe-b:1016-1023 transcoder-b=disabled ddi=none cpu_compositor=0 gpu_compositor=0\n",
         mirror_map_mode(), crate::intel::mmio_read(dev, pipe_misc), crate::intel::mmio_read(dev, csc_mode), width, height, pitch_bytes, byte_len, CAPTURE_GPU,
     );
+    crate::ui4::notify_chroma_pipe_route_changed(MIRROR_PIPE_SLOT);
     Ok(state.frame())
 }
 
 pub(crate) fn begin_ui4_wd_xyuv8888_capture() -> Result<u64, WdCaptureError> {
     let dev = crate::intel::claimed_device().ok_or(WdCaptureError::DeviceUnavailable)?;
+    let _route = DISPLAY_COLOR_ROUTE_LOCK.lock();
     let mut state = STATE.lock();
     if !state.running {
         return Err(WdCaptureError::NotRunning);
@@ -859,6 +925,9 @@ pub(crate) fn begin_ui4_wd_xyuv8888_capture() -> Result<u64, WdCaptureError> {
     }
     if state.pending {
         return Err(WdCaptureError::AlreadyCapturing);
+    }
+    if !source_uses_dbuf_s2(dev) {
+        return Err(WdCaptureError::MirrorPipeBusy);
     }
     mirror_live_scene(dev);
     crate::intel::mmio_write(dev, WD0_SURF, CAPTURE_GPU as u32);
@@ -960,6 +1029,7 @@ fn disable_mirror_planes(dev: crate::intel::Dev) {
 
 pub(crate) fn stop_ui4_wd_xyuv8888_capture() -> Result<(), WdCaptureError> {
     let dev = crate::intel::claimed_device().ok_or(WdCaptureError::DeviceUnavailable)?;
+    let _route = DISPLAY_COLOR_ROUTE_LOCK.lock();
     let mut state = STATE.lock();
     if state.copy_pinned {
         return Err(WdCaptureError::ConsumerBusy);
@@ -989,7 +1059,7 @@ pub(crate) fn stop_ui4_wd_xyuv8888_capture() -> Result<(), WdCaptureError> {
     // Quiesce the shared ISR while WD registers are still powered. An AP
     // screenshot worker may stop capture while MSI targets the BSP.
     crate::intel::interrupts::disable_wd(dev);
-    // Disable only Pipe C's mirrored fetchers before the WD transcoder.
+    // Disable only Pipe B's mirrored fetchers before the WD transcoder.
     // Pipe A remains independently owned by UI4 throughout teardown.
     disable_mirror_planes(dev);
     crate::intel::mmio_write(dev, WD0_TRANS_CONF, 0);
@@ -1001,14 +1071,15 @@ pub(crate) fn stop_ui4_wd_xyuv8888_capture() -> Result<(), WdCaptureError> {
         return Err(WdCaptureError::WdDisableTimeout);
     }
     crate::intel::mmio_write(dev, WD0_FUNC_CTL, 0);
-    restore_pipe_c_output_color(dev, state.saved_output_color);
-    crate::intel::mmio_write(dev, DBUF_CTL_S2, state.saved_dbuf_ctl_s2);
+    restore_pipe_b_output_color(dev, state.saved_output_color);
+    crate::intel::mmio_write(dev, DBUF_CTL_S1, state.saved_dbuf_ctl_s1);
     crate::intel::mmio_write(dev, HSW_PWR_WELL_CTL2, state.saved_power_well_ctl2);
     let _ = crate::intel::unmap_display_scanout_ggtt(dev, state.byte_len, CAPTURE_GPU);
     crate::dma::dealloc(state.virt, state.byte_len);
     *state = WdCaptureState::new();
+    crate::ui4::notify_chroma_pipe_route_changed(MIRROR_PIPE_SLOT);
     crate::log_info!(target: "intel/display";
-        "intel/display: wd0 online=0 pipe-c-fetch=idle transcoder-c=untouched capture_mapping=released\n"
+        "intel/display: wd0 online=0 pipe-b-fetch=idle transcoder-b=untouched capture_mapping=released\n"
     );
     Ok(())
 }

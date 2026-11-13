@@ -239,7 +239,7 @@ fn report_shot_result(target: Option<&crate::shell3::MatrixTarget>, result: Resu
     crate::log!("screenshot: {:?}\n", result);
 }
 
-/// Drive Pipe C -> WD for exactly one frame when no RDP session owns it.
+/// Drive Pipe B -> WD for exactly one frame when no RDP session owns it.
 /// A live stream instead notices the armed snapshot slot in its ordinary next
 /// capture, so this path never submits work to VDBOX.
 async fn drive_manual_wd_capture_if_needed() {
@@ -1112,7 +1112,7 @@ pub(crate) fn writable_capture_root_handle() -> Option<crate::disc::block::Devic
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_screenshot_service_task() {
     crate::log_info!(target: "ui4/screenshot";
-        "ui4/screenshot: service online full-display-trigger=shell2-shot-or-print-selection full-display-source=pipe-c-wd-postblend live-route=borrow-next-rdp-frame idle-route=temporary-wd-one-frame encode=none format=png-rgba destination=trueosfs:/screenshots worker=background\n"
+        "ui4/screenshot: service online full-display-trigger=shell2-shot-or-print-selection full-display-source=pipe-b-wd-postblend live-route=borrow-next-rdp-frame idle-route=temporary-wd-one-frame encode=none format=png-rgba destination=trueosfs:/screenshots worker=background\n"
     );
     let mut root_wait_logged = false;
     loop {

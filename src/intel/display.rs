@@ -15,6 +15,11 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
+/// Serialize display color MMIO with headless WD routing and power changes.
+/// Acquire before any producer's private LUT or capture-state lock; never hold
+/// it across an await or reacquire it through capture failure cleanup.
+pub(crate) static DISPLAY_COLOR_ROUTE_LOCK: Mutex<()> = Mutex::new(());
+
 mod regs;
 pub(super) use self::regs::*;
 mod native_ui4;
@@ -32,6 +37,12 @@ pub(super) fn capture_firmware_handoff_evidence(dev: crate::intel::Dev) {
 
 fn native_ui4_for_pipe(pipe: PipeInfo) -> bool {
     pipe.slot == 0 && crate::intel::tgl_native_panel::ui4_handoff_active()
+}
+
+/// ADL-S has two DBUF slices. Its A+B routing assigns A to S2 and B to S1.
+/// Establish that allocation at desktop bootstrap, before WD can reserve B.
+pub(crate) fn uses_ab_dbuf_layout(dev: crate::intel::Dev) -> bool {
+    dev.device_id == 0x4680 && !native_ui4_for_pipe(PIPES[0])
 }
 
 pub(super) fn laptop_expanded_planes_enabled() -> bool {
@@ -70,15 +81,26 @@ fn plane_dbuf_range(pipe: PipeInfo, slot: usize) -> Option<(u16, u16)> {
     if native_ui4_for_pipe(pipe) {
         return tgl_ui4_layout::dbuf_range(slot);
     }
-    [
-        (PLANE_DBUF_SLOT_0_START, PLANE_DBUF_SLOT_0_END),
-        (PLANE_DBUF_SLOT_1_START, PLANE_DBUF_SLOT_1_END),
-        (PLANE_DBUF_SLOT_2_START, PLANE_DBUF_SLOT_2_END),
-        (PLANE_DBUF_SLOT_3_START, PLANE_DBUF_SLOT_3_END),
-        (PLANE_DBUF_SLOT_4_START, PLANE_DBUF_SLOT_4_END),
-    ]
-    .get(slot)
-    .copied()
+    let ranges = if pipe.slot == 0
+        && crate::intel::claimed_device().is_some_and(uses_ab_dbuf_layout)
+    {
+        [
+            (PLANE_DBUF_S2_SLOT_0_START, PLANE_DBUF_S2_SLOT_0_END),
+            (PLANE_DBUF_S2_SLOT_1_START, PLANE_DBUF_S2_SLOT_1_END),
+            (PLANE_DBUF_S2_SLOT_2_START, PLANE_DBUF_S2_SLOT_2_END),
+            (PLANE_DBUF_S2_SLOT_3_START, PLANE_DBUF_S2_SLOT_3_END),
+            (PLANE_DBUF_S2_SLOT_4_START, PLANE_DBUF_S2_SLOT_4_END),
+        ]
+    } else {
+        [
+            (PLANE_DBUF_SLOT_0_START, PLANE_DBUF_SLOT_0_END),
+            (PLANE_DBUF_SLOT_1_START, PLANE_DBUF_SLOT_1_END),
+            (PLANE_DBUF_SLOT_2_START, PLANE_DBUF_SLOT_2_END),
+            (PLANE_DBUF_SLOT_3_START, PLANE_DBUF_SLOT_3_END),
+            (PLANE_DBUF_SLOT_4_START, PLANE_DBUF_SLOT_4_END),
+        ]
+    };
+    ranges.get(slot).copied()
 }
 
 fn plane_watermark(pipe: PipeInfo, slot: usize) -> Option<u32> {
@@ -3515,15 +3537,15 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     bringup_diag::checkpoint("transparent-front-allocation", usize::MAX);
     let count = plane_slot_count(pipe);
     let full_mask = ui4_plane_mask(pipe);
-    if native_ui4_for_pipe(pipe) {
-        // The native 4K allocation borrows both TGL DBUF slices. Another
-        // active pipe changes the allowed slice routing and needs reallocation.
+    if native_ui4_for_pipe(pipe) || (pipe.slot == 0 && uses_ab_dbuf_layout(dev)) {
+        // Native 4K borrows both slices; desktop A starts in S2 so B can later
+        // use S1. Establish either layout before any other pipe starts fetching.
         if PIPES.iter().skip(1).any(|other| {
             crate::intel::mmio_read(dev, PIPECONF_A + other.slot * PIPE_MMIO_STRIDE)
                 & PIPECONF_STATE
                 != 0
         }) {
-            return fail("native-4k-stack-requires-single-active-pipe");
+            return fail("dbuf-layout-requires-single-active-pipe");
         }
         let ctl = crate::intel::mmio_read(dev, tgl_ui4_layout::DBUF_CTL_S2);
         crate::intel::mmio_write(
@@ -3543,7 +3565,7 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
             core::hint::spin_loop();
         }
         if !ready {
-            return fail("native-dbuf-s2-power-timeout");
+            return fail("dbuf-s2-power-timeout");
         }
     }
     let mut overlay_surfaces = [None; MAX_UNIVERSAL_PLANE_SLOTS - 1];

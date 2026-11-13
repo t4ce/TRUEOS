@@ -17,6 +17,7 @@ struct Registers {
     index: usize,
     data: usize,
     config: usize,
+    wd_input: u32,
 }
 
 /// Only A and B have this block. Do not extrapolate register addresses for
@@ -32,12 +33,14 @@ fn registers(pipe: usize) -> Result<Registers, &'static str> {
             index: 0x490A8,
             data: 0x490AC,
             config: 0x70008,
+            wd_input: 0,
         }),
         1 => Ok(Registers {
             control: 0x491A4,
             index: 0x491A8,
             data: 0x491AC,
             config: 0x71008,
+            wd_input: 5 << 12,
         }),
         _ => Err("chroma-3dlut-pipe-unsupported"),
     }
@@ -49,6 +52,12 @@ const INDEX_AUTO_INCREMENT: u32 = 1 << 13;
 const CHICKEN_MISC: usize = 0x420B0;
 const LUT_FIRST_FRAME_ENABLE: u32 = 1 << 10;
 const PIPE_ENABLE: u32 = 1 << 31;
+const WD0_FUNC_CTL: usize = 0x6E400;
+const WD0_TRANS_CONF: usize = 0x7E008;
+const WD_FUNCTION_ENABLE: u32 = 1 << 31;
+const WD_INPUT_MASK: u32 = 7 << 12;
+const WD_TRANSCODER_ENABLE: u32 = 1 << 31;
+const WD_TRANSCODER_STATE: u32 = 1 << 30;
 
 static PIPE_LUT: Mutex<()> = Mutex::new(());
 
@@ -77,9 +86,31 @@ fn device(regs: Registers) -> Result<crate::intel::Dev, &'static str> {
     ) {
         return Err("chroma-3dlut-device-unsupported");
     }
-    if dev.mmio_len < regs.config + 4
-        || crate::intel::mmio_read(dev, regs.config) & PIPE_ENABLE == 0
+    if dev.mmio_len < regs.config + 4 {
+        return Err("chroma-pipe-unavailable");
+    }
+    let config = crate::intel::mmio_read(dev, regs.config);
+    if config != u32::MAX && config & PIPE_ENABLE != 0 {
+        return Ok(dev);
+    }
+    // A headless pipe feeding WD keeps its ordinary transcoder disabled.
+    // TRANS_WD_FUNC_CTL's exact input selection identifies the live pipe;
+    // both enable and active state must agree before its LUT can be touched.
+    // The caller holds DISPLAY_COLOR_ROUTE_LOCK through this check and all
+    // LUT accesses, so capture teardown cannot remove power during an upload.
+    if dev.mmio_len < WD0_TRANS_CONF + 4 {
+        return Err("chroma-pipe-unavailable");
+    }
+    let wd_function = crate::intel::mmio_read(dev, WD0_FUNC_CTL);
+    if wd_function == u32::MAX
+        || wd_function & WD_FUNCTION_ENABLE == 0
+        || wd_function & WD_INPUT_MASK != regs.wd_input
     {
+        return Err("chroma-pipe-unavailable");
+    }
+    let wd_transcoder = crate::intel::mmio_read(dev, WD0_TRANS_CONF);
+    let live = WD_TRANSCODER_ENABLE | WD_TRANSCODER_STATE;
+    if wd_transcoder == u32::MAX || wd_transcoder & live != live {
         return Err("chroma-pipe-unavailable");
     }
     Ok(dev)
@@ -100,6 +131,7 @@ fn ready(dev: crate::intel::Dev, regs: Registers) -> Result<u32, &'static str> {
 /// including when the editor is reopened immediately after an earlier edit.
 pub(super) fn pipe_status(pipe: usize) -> Result<PipeLutStatus, &'static str> {
     let regs = registers(pipe)?;
+    let _route = crate::intel::DISPLAY_COLOR_ROUTE_LOCK.lock();
     let _guard = PIPE_LUT.lock();
     let dev = device(regs)?;
     let control = crate::intel::mmio_read(dev, regs.control);
@@ -127,6 +159,7 @@ pub(super) fn rearm_pipe_if_lost(
     entries: &[u32; LUT_ENTRIES],
 ) -> Result<bool, &'static str> {
     let regs = registers(pipe)?;
+    let _route = crate::intel::DISPLAY_COLOR_ROUTE_LOCK.lock();
     let _guard = PIPE_LUT.lock();
     let dev = device(regs)?;
     let control = ready(dev, regs)?;
@@ -159,6 +192,7 @@ pub(super) fn rearm_pipe_if_lost(
 pub(super) fn snapshot_pipe(pipe: usize) -> Result<PipeLutSnapshot, &'static str> {
     let regs = registers(pipe)?;
     let mut entries = vec![0; LUT_ENTRIES].into_boxed_slice();
+    let _route = crate::intel::DISPLAY_COLOR_ROUTE_LOCK.lock();
     let _guard = PIPE_LUT.lock();
     let dev = device(regs)?;
     let control = ready(dev, regs)?;
@@ -180,6 +214,7 @@ pub(super) fn snapshot_pipe(pipe: usize) -> Result<PipeLutSnapshot, &'static str
 /// waiting for a display event. Hardware alone clears New LUT Ready.
 pub(super) fn program_pipe(pipe: usize, entries: &[u32; LUT_ENTRIES]) -> Result<(), &'static str> {
     let regs = registers(pipe)?;
+    let _route = crate::intel::DISPLAY_COLOR_ROUTE_LOCK.lock();
     let _guard = PIPE_LUT.lock();
     let dev = device(regs)?;
     let control = ready(dev, regs)?;
@@ -220,6 +255,7 @@ fn upload(
 
 pub(super) fn restore_pipe(snapshot: &PipeLutSnapshot) -> Result<(), &'static str> {
     let regs = registers(snapshot.pipe)?;
+    let _route = crate::intel::DISPLAY_COLOR_ROUTE_LOCK.lock();
     let _guard = PIPE_LUT.lock();
     let dev = device(regs)?;
     ready(dev, regs)?;

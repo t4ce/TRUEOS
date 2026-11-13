@@ -91,7 +91,7 @@ impl InteractionCadence {
 }
 
 pub(crate) use color_picker::ui4_color_picker_service_task;
-pub(crate) use chromaservice::ui4_chroma_service_task;
+pub(crate) use chromaservice::{notify_chroma_pipe_route_changed, ui4_chroma_service_task};
 pub(crate) use edit_life::ui4_edit_life_service_task;
 pub(crate) use codex_prompt::{request_open as request_codex_prompt_open, ui4_codex_prompt_service_task};
 pub(crate) use compositor_service::ui4_compositor_service_task;

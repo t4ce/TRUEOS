@@ -143,11 +143,10 @@ const PLANE_WM_LINES_MASK: u32 = 0x1F;
 const PLANE_WM_BLOCKS_MASK: u32 = 0x7FF;
 pub(in crate::intel) const PLANE_WM_LEVEL0_BOOT_SAFE: u32 =
     PLANE_WM_ENABLE | (PLANE_WM_LEVEL0_LINES << PLANE_WM_LINES_SHIFT) | PLANE_WM_LEVEL0_BLOCKS;
-// Pipe-local DBUF policy for the five universal planes exposed by display
-// version 13: primary plus four sprites. UI4 converts decoded video into its
-// normal RGBA frame contract, so every slot is independently usable as a
-// linear RGB8 plane. Spirit permanently owns the final 16 blocks of DBUF_S1
-// for the pipe A/B cursor channels, so universal planes stop at block 1007.
+// Pipe-local DBUF policy for UI4's primary plus four sprite planes. UI4 converts
+// decoded video into its normal RGBA frame contract, so every slot is usable as a
+// linear RGB8 plane. Spirit reserves the final 16 blocks of each slice for
+// cursors, so universal planes stop at slice-relative block 1007.
 // The first four retain 205 blocks and the top interaction plane receives 188.
 pub(in crate::intel) const PLANE_DBUF_TOTAL_BLOCKS: u16 = 1008;
 pub(in crate::intel) const PLANE_DBUF_BALANCED_BLOCKS: u16 = 205;
@@ -163,10 +162,10 @@ pub(in crate::intel) const PLANE_DBUF_SLOT_3_END: u16 = 819;
 pub(in crate::intel) const PLANE_DBUF_SLOT_4_START: u16 = 820;
 pub(in crate::intel) const PLANE_DBUF_SLOT_4_END: u16 =
     crate::intel::SPIRIT_CURSOR_DBUF_S1_START - 1;
-// DBUF S2 is the independent 1024-block fetch domain used by pipes C/D.
-// Spirit owns its final 16 blocks (2032..2047), exactly as it owns the final
-// 16 blocks of S1 for pipes A/B.  A headless Pipe C mirror therefore applies
-// the same five-plane partition with a 1024-block base offset.
+// Slice assignment depends on the active-pipe combination. On ADL-S, A+B
+// requires A in S2 and B in S1. Desktop A establishes this same partition with
+// a 1024-block base offset at bootstrap, leaving B available for WD capture.
+// Spirit owns S2's final 16 blocks (2032..2047).
 pub(in crate::intel) const PLANE_DBUF_S2_BASE: u16 = 1024;
 pub(in crate::intel) const PLANE_DBUF_S2_SLOT_0_START: u16 =
     PLANE_DBUF_S2_BASE + PLANE_DBUF_SLOT_0_START;

@@ -5,7 +5,10 @@
 //! The grade belongs to the service, not the editor window: Escape retires the
 //! UI while leaving each accepted pipe look in place, like the color picker.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::{
+    future::Future,
+    sync::atomic::{AtomicBool, AtomicU8, Ordering},
+};
 use embassy_sync::signal::Signal;
 use spin::Mutex;
 use trueos_time::{Duration, Instant, Timer};
@@ -19,7 +22,7 @@ use super::{
     chroma_color::{self, LUT_ENTRIES, Settings},
     chroma_controls::Controls,
     chroma_motion::MotionMode,
-    chroma_pipes::{PIPE_COUNT, PipeBuckets},
+    chroma_pipes::{PIPE_COUNT, PipeBuckets, update_route_masks},
     chroma_render::ChromaPoints,
 };
 
@@ -30,6 +33,29 @@ const PRIMARY: u32 = 1;
 static OPEN: Mutex<Option<(Ui4CursorSource, (u32, u32))>> = Mutex::new(None);
 static WAKE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 static ESCAPE: AtomicBool = AtomicBool::new(false);
+static ROUTE_CHANGED: AtomicU8 = AtomicU8::new(0);
+
+/// Safe under the display routing lock: queue work only. MMIO and any grade
+/// restoration run later on the CHROMATIC executor after routing has settled.
+pub(crate) fn notify_chroma_pipe_route_changed(pipe: usize) {
+    if pipe < PIPE_COUNT {
+        ROUTE_CHANGED.fetch_or(1 << pipe, Ordering::Release);
+        WAKE.signal(());
+    }
+}
+
+async fn wait_for_work_or_tick(milliseconds: u64) {
+    let mut wake = core::pin::pin!(WAKE.wait());
+    let mut tick = core::pin::pin!(Timer::after(Duration::from_millis(milliseconds)));
+    core::future::poll_fn(|cx| {
+        if wake.as_mut().poll(cx).is_ready() || tick.as_mut().poll(cx).is_ready() {
+            core::task::Poll::Ready(())
+        } else {
+            core::task::Poll::Pending
+        }
+    })
+    .await;
+}
 
 pub(super) fn request_open(source: Ui4CursorSource, anchor: (u32, u32)) {
     *OPEN.lock() = Some((source, anchor));
@@ -89,6 +115,22 @@ pub(crate) async fn ui4_chroma_service_task() {
     loop {
         if editor.is_none() && hardware_dirty == 0 && grade_dirty == 0 && !animations.any_active() {
             WAKE.wait().await;
+        }
+        let routes_changed = ROUTE_CHANGED.swap(0, Ordering::AcqRel);
+        if routes_changed != 0 {
+            let mut active_routes = 0;
+            for pipe in 0..PIPE_COUNT {
+                if routes_changed & (1 << pipe) != 0 && chroma_color::pipe_status(pipe).is_ok() {
+                    active_routes |= 1 << pipe;
+                }
+            }
+            update_route_masks(
+                routes_changed,
+                active_routes,
+                grade_owned,
+                &mut hardware_dirty,
+                &mut inactive,
+            );
         }
         let request = OPEN.lock().take();
         if let Some((source, anchor)) = request {
@@ -295,7 +337,7 @@ pub(crate) async fn ui4_chroma_service_task() {
             } else {
                 POLL_MS
             };
-            Timer::after(Duration::from_millis(poll_ms)).await;
+            wait_for_work_or_tick(poll_ms).await;
         }
     }
 }
