@@ -49,11 +49,12 @@ movement in AES/AEAD/cipher consumers of crypto-common/cpufeatures and the
 DER/SPKI/PKCS consumers of const-oid. Check the kernel's actual target dependency
 graph rather than treating a direct SHA-2 version bump as consolidation.
 
-There is an existing exception: `trueos-lily-pack` uses `lzma-rust2 0.21` with
-its `xz` feature, which requires SHA-2 0.11 for XZ checksum validation. The direct
-rollback does not remove that newer stack. Eliminating it requires a compatible
-dependency port of the XZ implementation; do not disable XZ or its checksum
-validation to hide the dependency.
+`trueos-lily-pack` uses a vendored `lzma-rust2 0.21` whose SHA-2 requirement is
+ported to `=0.10.9`. Its XZ decoder and checksum validation are unchanged. This
+keeps Lily compression on the existing crypto stack instead of reintroducing
+SHA-2 0.11 through upstream's `xz` feature. Preserve that alignment when updating
+the compression dependency; do not disable checksum validation to hide a new
+dependency branch.
 
 ## Current non-goals
 

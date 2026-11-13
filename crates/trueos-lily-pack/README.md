@@ -57,6 +57,11 @@ PNGs actually present in the source tree; stale alignment entries are ignored.
 `pack` creates one file; `bench` retains the earlier experimental comparisons.
 The tool's host encoders and their C dependencies are not kernel dependencies.
 
+The decoder uses the vendored `lzma-rust2 0.21` dependency with its SHA-2
+requirement pinned to `0.10.9`, sharing the kernel's existing digest stack.
+The upstream XZ implementation and checksum validation are unchanged; this
+avoids seven extra crypto build units from SHA-2 0.11 and its dependencies.
+
 ## Verify integration
 
 From the TRUEOS root:

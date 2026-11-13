@@ -7,4 +7,5 @@ publish = false
 [dependencies]
 miniz_oxide = { workspace = true }
 ruzstd = { version = "0.8.3", default-features = false }
-lzma-rust2 = { version = "0.21", default-features = false, features = ["xz"] }
+# Share the kernel's SHA-2 0.10 dependency while preserving XZ checksum checks.
+lzma-rust2 = { version = "=0.21.0", path = "../../vendor/lzma-rust2-0.21.0-trueos", default-features = false, features = ["xz"] }
