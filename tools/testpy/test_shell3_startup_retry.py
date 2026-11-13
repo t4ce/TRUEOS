@@ -55,6 +55,7 @@ def main() -> None:
         "pub(super) fn presentation_pending(&self)",
         "pub(super) fn show_is_closed(&self)",
         "pub(super) fn inherit_guest_account(",
+        "fn launch_named_app(&mut self, text: &str, is_alias: bool)",
     ))
     source = (Path(__file__).with_name("shell3_sessions") / "startup_retry.rs").read_text()
     source = source.replace("@PRESENTATION_METHODS@", methods)

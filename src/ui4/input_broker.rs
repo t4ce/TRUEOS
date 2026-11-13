@@ -44,7 +44,7 @@ pub(super) const CONTEXT_MENU_ROW_GAP_PX: u32 = 2;
 pub(super) const CONTEXT_MENU_ROW_HEIGHT_PX: u32 = (microfont::FHEIGHT as u32)
     .saturating_mul(2)
     .saturating_add(CONTEXT_MENU_ROW_GAP_PX);
-pub(super) const DESKTOP_CONTEXT_MENU_ENTRY_COUNT: u32 = 5;
+pub(super) const DESKTOP_CONTEXT_MENU_ENTRY_COUNT: u32 = 6;
 pub(super) const DESKTOP_CONTEXT_MENU_HORIZONTAL_INSET_PX: u32 = 12;
 pub(super) const DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX: u32 = 12;
 
@@ -58,6 +58,7 @@ struct DesktopShellLaunchRequest {
     source: Ui4CursorSource,
     x: u32,
     y: u32,
+    appdb: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -86,6 +87,7 @@ enum DesktopContextMenuAction {
     Shell,
     Link,
     Codex,
+    AppDb,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1069,10 +1071,11 @@ impl InputBroker {
                             super::chromaservice::request_open(source, anchor);
                         }
                         DesktopContextMenuAction::Shell => {
-                            request_desktop_shell_launch(source, x, y)
+                            request_desktop_shell_launch(source, x, y, false)
                         }
                         DesktopContextMenuAction::Link => super::request_link_open(source, anchor),
                         DesktopContextMenuAction::Codex => super::request_codex_prompt_open(source, anchor),
+                        DesktopContextMenuAction::AppDb => request_desktop_shell_launch(source, anchor.0, anchor.1, true),
                     }
                 }
             }
@@ -2495,20 +2498,21 @@ pub(crate) async fn ui4_input_service_task(ap1_spawner: crate::workers::WorkerSp
     }
 }
 
-pub(super) fn request_desktop_shell_launch(source: Ui4CursorSource, x: u32, y: u32) {
+fn request_desktop_shell_launch(source: Ui4CursorSource, x: u32, y: u32, appdb: bool) {
     let queued = DESKTOP_SHELL_LAUNCH_REQUESTS
         .lock()
-        .push(DesktopShellLaunchRequest { source, x, y })
+        .push(DesktopShellLaunchRequest { source, x, y, appdb })
         .is_ok();
     if queued {
         DESKTOP_SHELL_LAUNCH_SIGNAL.signal(());
         crate::log_info!(target: "ui4";
-            "ui4/input: desktop shell launch requested cursor={}:{}:{} position={},{} source=app.db archive=shell.bp policy=local-builtin-best-effort\n",
+            "ui4/input: desktop shell launch requested cursor={}:{}:{} position={},{} startup={}\n",
             source.controller_id,
             source.slot_id,
             source.ep_target,
             x,
             y,
+            if appdb { "apps.bp" } else { "shell3" },
         );
     } else {
         crate::log_warn!(target: "ui4";
@@ -2528,8 +2532,16 @@ async fn ui4_desktop_shell_launcher_task() {
             let mut requests = DESKTOP_SHELL_LAUNCH_REQUESTS.lock();
             (!requests.is_empty()).then(|| requests.remove(0))
         };
-        if request.is_some() {
-            let _ = crate::shell3::service::request_shell3();
+        if let Some(request) = request {
+            let startup = request.appdb.then_some(crate::shell3::startup::Startup::AppDb {
+                source: request.source,
+                anchor: (request.x, request.y),
+            });
+            if let Err(error) = crate::shell3::service::request_shell3_with_startup(startup) {
+                crate::log_warn!(target: "ui4";
+                    "ui4/input: desktop shell launch rejected appdb={} error={:?}\n", request.appdb, error,
+                );
+            }
         } else {
             DESKTOP_SHELL_LAUNCH_SIGNAL.wait().await;
         }
@@ -3394,6 +3406,7 @@ fn desktop_context_menu_action_at(
         2 => Some(DesktopContextMenuAction::Shell),
         3 => Some(DesktopContextMenuAction::Link),
         4 => Some(DesktopContextMenuAction::Codex),
+        5 => Some(DesktopContextMenuAction::AppDb),
         _ => None,
     }
 }
@@ -4113,7 +4126,7 @@ mod tests {
             height: 256,
         };
         let y = super::DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX
-            + super::CONTEXT_MENU_ROW_HEIGHT_PX * 2
+            + super::CONTEXT_MENU_ROW_HEIGHT_PX * 3
             + 1;
         assert_eq!(
             desktop_context_menu_action_at(menu, 12, y),
@@ -4122,6 +4135,10 @@ mod tests {
         assert_eq!(
             desktop_context_menu_action_at(menu, 12, y + super::CONTEXT_MENU_ROW_HEIGHT_PX),
             Some(DesktopContextMenuAction::Codex)
+        );
+        assert_eq!(
+            desktop_context_menu_action_at(menu, 12, y + super::CONTEXT_MENU_ROW_HEIGHT_PX * 2),
+            Some(DesktopContextMenuAction::AppDb)
         );
     }
 

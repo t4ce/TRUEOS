@@ -10,6 +10,10 @@ pub(crate) enum Startup {
         source: crate::ui4::Ui4CursorSource,
         anchor: (u32, u32),
     },
+    AppDb {
+        source: crate::ui4::Ui4CursorSource,
+        anchor: (u32, u32),
+    },
     Blueprint {
         archive: String,
         bytes: Vec<u8>,
@@ -24,14 +28,15 @@ impl Startup {
             Self::GuestShell { access_account } | Self::Blueprint { access_account, .. } => {
                 Some(*access_account)
             }
-            Self::Link { .. } => None,
+            Self::Link { .. } | Self::AppDb { .. } => None,
         }
     }
 
     /// Desktop entry points retain their placement across first-paint retries.
     pub(super) fn configure_window(&self, shell: &mut super::Shell3) {
-        let Self::Link { anchor, .. } = self else {
-            return;
+        let anchor = match self {
+            Self::Link { anchor, .. } | Self::AppDb { anchor, .. } => anchor,
+            _ => return,
         };
         let Some((cell_width, cell_height)) =
             crate::r::services::shell3_font_service::cell_extent(super::service::microfont_scale())
@@ -56,9 +61,14 @@ impl Startup {
     }
 
     pub(super) fn launch(self, shell: &mut super::Shell3) {
+        let desktop = match &self {
+            Self::Link { source, anchor } | Self::AppDb { source, anchor } => Some((*source, *anchor)),
+            _ => None,
+        };
         match self {
             Self::GuestShell { .. } => {}
-            Self::Link { source, anchor } => {
+            Self::AppDb { .. } => shell.launch_named_app("AppDB", false),
+            Self::Link { .. } => {
                 match super::link::start(shell.tui_frontend()) {
                     Ok(()) => shell.enter_native_terminal("link"),
                     Err(error) => super::MatrixSlots::echo(
@@ -66,20 +76,6 @@ impl Startup {
                         shell.active_matrix_lifetime,
                         error,
                     ),
-                }
-                if let Some(window) = shell.show.window() {
-                    if let Err(error) = crate::ui4::select_window_for_cursor_at(
-                        source,
-                        crate::ui4::WindowOwner::SHELL3_SERVICE,
-                        window,
-                        anchor.0,
-                        anchor.1,
-                    ) {
-                        crate::log_warn!(target: "ui4/link";
-                            "ui4/link: terminal selection failed window={} cursor={}:{}:{} error={:?}\n",
-                            window.raw(), source.controller_id, source.slot_id, source.ep_target, error,
-                        );
-                    }
                 }
             }
             Self::Blueprint {
@@ -106,6 +102,22 @@ impl Startup {
                         shell.active_matrix_lifetime,
                         error,
                     ),
+                }
+            }
+        }
+        if let Some((source, anchor)) = desktop {
+            if let Some(window) = shell.show.window() {
+                if let Err(error) = crate::ui4::select_window_for_cursor_at(
+                    source,
+                    crate::ui4::WindowOwner::SHELL3_SERVICE,
+                    window,
+                    anchor.0,
+                    anchor.1,
+                ) {
+                    crate::log_warn!(target: "ui4";
+                        "ui4: desktop terminal selection failed window={} cursor={}:{}:{} error={:?}\n",
+                        window.raw(), source.controller_id, source.slot_id, source.ep_target, error,
+                    );
                 }
             }
         }

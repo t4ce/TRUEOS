@@ -532,6 +532,9 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
         let horizontal_inset = super::input_broker::DESKTOP_CONTEXT_MENU_HORIZONTAL_INSET_PX;
         let vertical_inset = super::input_broker::DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX;
         let row_text_y = 0;
+        // Capitals occupy the first nine rows of MicroFont's eleven-row cell.
+        // Split the remaining whitespace evenly around each divider.
+        let divider_offset_y = row_height.saturating_sub(9 * 2) / 2;
         let row_top = menu_rect.y.saturating_add(vertical_inset);
         push_overlay_rect(
             &mut rects,
@@ -546,7 +549,8 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
             push_overlay_rect(
                 &mut rects,
                 menu_rect.x.saturating_add(horizontal_inset),
-                row_top.saturating_add(row.saturating_mul(row_height)),
+                row_top.saturating_add(row.saturating_mul(row_height))
+                    .saturating_sub(divider_offset_y),
                 menu_rect
                     .width
                     .saturating_sub(horizontal_inset.saturating_mul(2)),
@@ -554,7 +558,7 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
                 Rgba8::new(180, 188, 204, 150),
             );
         }
-        for (row, label) in [(0u32, "COLOR PICKER"), (1u32, "CHROMATIC"), (2u32, "SHELL"), (3u32, "LINK"), (4u32, "CODEX")] {
+        for (row, label) in [(0u32, "COLOR PICKER"), (1u32, "CHROMATIC"), (2u32, "SHELL"), (3u32, "LINK"), (4u32, "CODEX"), (5u32, "APPDB")] {
             let y = row_top
                 .saturating_add(row.saturating_mul(row_height))
                 .saturating_add(row_text_y);

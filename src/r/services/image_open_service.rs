@@ -5,12 +5,19 @@ fn sources(payload: &[u8]) -> Result<Vec<String>, i32> {
     if payload.is_empty() || payload.len() > trueos_vm::vmcall::PAYLOAD_CAP {
         return Err(-1);
     }
+    // Resolve ordinary callers through their own app/common view. Presenting
+    // an image does not require permission to name the entire filesystem.
+    // Without either view, fail closed rather than using the unrooted fallback.
+    if !crate::r::io::env::trueosfs_scope_granted()
+        && crate::r::io::env::current_app_fs_root().is_none()
+    {
+        return Err(-13);
+    }
     let mut paths = Vec::new();
     for path in payload.split(|byte| *byte == 0) {
         if paths.len() == 32 { return Err(-1); }
         let path = core::str::from_utf8(path).map_err(|_| -1)?;
         crate::r::path::FsPath::parse(path, false).map_err(|_| -1)?;
-        if !crate::r::io::env::trueosfs_scope_granted() { return Err(-13); }
         let path = crate::r::io::env::resolve_fs_path(path, false).ok_or(-1)?;
         paths.push(path);
     }

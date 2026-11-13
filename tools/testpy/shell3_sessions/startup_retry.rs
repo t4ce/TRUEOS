@@ -114,6 +114,7 @@ mod shell3 {
         guest_bindings: Vec<Option<crate::AccountId>>,
         launches: Vec<(String, Vec<u8>, u64, Option<String>)>,
         launch_accounts: Vec<Option<crate::AccountId>>,
+        named_launches: Vec<(String, u64)>,
         launch_error: bool,
         errors: Vec<&'static str>,
         terminal_selected: bool,
@@ -130,6 +131,19 @@ mod shell3 {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub(crate) struct WindowGeometry { pub x: i32, pub y: i32, pub width: u32, pub height: u32 }
         pub fn microfont_scale() -> u32 { 1 }
+        pub(super) fn launch_appdb(name: &str, frontend: u64) -> Result<super::QueuedApp, &'static str> {
+            super::WORLD.with_borrow_mut(|world| {
+                assert!(world.bound, "AppDB must follow frontend/window binding");
+                assert_eq!(world.boundary_events.last(), Some(&"local-account"));
+                world.boundary_events.push("blueprint");
+                world.named_launches.push((name.into(), frontend));
+                if world.launch_error { return Err("vm-admission-failed"); }
+                Ok(super::QueuedApp { slot: "apps".into() })
+            })
+        }
+        pub(super) fn launch_alias(_: &str, _: u64) -> Result<super::QueuedApp, &'static str> {
+            panic!("desktop AppDB must launch the built-in directly");
+        }
         pub(crate) fn request_shell3_with_startup(startup: Option<super::startup::Startup>) -> Result<u32, &'static str> {
             super::WORLD.with_borrow_mut(|world| {
                 world.request_calls += 1;
@@ -571,6 +585,34 @@ mod shell3 {
             source: crate::ui4::Ui4CursorSource { controller_id: 2, slot_id: 3, ep_target: 4 },
             anchor: (1800, 1000),
         }
+    }
+
+    #[test]
+    fn appdb_waits_for_first_paint_then_enters_apps_and_selects_the_requesting_cursor() {
+        let mut shell = Shell3::fixture();
+        let source = crate::ui4::Ui4CursorSource { controller_id: 2, slot_id: 3, ep_target: 4 };
+        let startup = startup::Startup::AppDb { source, anchor: (1800, 1000) };
+        assert_eq!(startup.guest_account(), None);
+        startup.configure_window(&mut shell);
+        shell.pending_startup = Some(startup);
+        shell.show.outcomes.extend([Err("copy-unavailable"), Ok(())]);
+        assert!(run(shell.present()).is_err());
+        WORLD.with_borrow(|world| {
+            assert!(world.named_launches.is_empty());
+            assert_eq!(world.configured.len(), 1);
+        });
+        crate::ui4::WORLD.with_borrow(|world| assert!(world.selections.is_empty()));
+        run(shell.present()).unwrap();
+        run(shell.present()).unwrap();
+        assert_eq!(shell.active_matrix_slot.as_deref(), Some("apps"));
+        WORLD.with_borrow(|world| {
+            assert_eq!(world.named_launches, vec![("apps".into(), 33)]);
+            assert!(world.terminal_selected);
+            assert!(world.link_launches.is_empty());
+        });
+        crate::ui4::WORLD.with_borrow(|world| assert_eq!(world.selections, vec![(
+            source, crate::ui4::WindowOwner::SHELL3_SERVICE, crate::ui4::WindowId(7), 1800, 1000,
+        )]));
     }
 
     #[test]

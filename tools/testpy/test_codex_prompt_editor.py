@@ -43,16 +43,16 @@ def menu_source():
                     "fn desktop_context_menu_exposes_codex_directly_below_link()")
     result += """
     #[test]
-    fn fourth_menu_row_fits_at_the_screen_corner() {
-        for (width,height) in [(1920,1080),(1024,768),(256,128)] {
+    fn last_menu_row_fits_at_the_screen_corner() {
+        for (width,height) in [(1920,1080),(1024,768),(256,192)] {
             let menu = context_menu_rect((width-1,height-1),width,height);
             assert!(menu.x+menu.width <= width);
             assert!(menu.y+menu.height <= height);
             let x=menu.x+menu.width/2;
             let y=menu.y+DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX
-                +3*CONTEXT_MENU_ROW_HEIGHT_PX+CONTEXT_MENU_ROW_HEIGHT_PX/2;
+                +5*CONTEXT_MENU_ROW_HEIGHT_PX+CONTEXT_MENU_ROW_HEIGHT_PX/2;
             assert_eq!(desktop_context_menu_action_at(menu,x,y),
-                Some(DesktopContextMenuAction::Codex));
+                Some(DesktopContextMenuAction::AppDb));
             assert_eq!(desktop_context_menu_action_at(menu,menu.x+menu.width,y),None);
         }
     }
