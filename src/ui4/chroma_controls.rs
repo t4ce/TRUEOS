@@ -11,6 +11,9 @@ use alloc::vec::Vec;
 use trueos_time::{Duration, Instant, Timer};
 
 const GRAY: u32 = u32::from_le_bytes([64, 64, 64, 128]);
+const TEXT_COLOR: [u8; 4] = [0, 0, 0, 255];
+// The font API takes straight RGBA and premultiplies it into the cached cell.
+const TEXT_BACKGROUND: [u8; 4] = [128, 128, 128, 128];
 const LABELS: [&str; 5] = [
     "SOFTEN YELLOWS",
     "SHADOW TINT",
@@ -46,8 +49,8 @@ impl Controls {
     pub async fn new(width: u32, height: u32) -> Result<Self, &'static str> {
         let mut layout = Layout::new(width, height)?;
         crate::r::services::shell3_font_service::prepare().await?;
-        // Reuse the font service's physical presentation metrics, fitting the
-        // longest hint into the narrow controls column without truncation.
+        // Fit shared physical font metrics to the controls column, then use
+        // half-sized labels.
         if let Some((cell_width, cell_height)) =
             crate::r::services::shell3_font_service::cell_extent(
                 crate::r::services::shell3_font_service::DEFAULT_UI4_FONT_SCALE,
@@ -61,6 +64,8 @@ impl Controls {
             layout.cell_height = fitted_height;
             layout.cell_width = (cell_width * fitted_height / cell_height).max(1);
         }
+        layout.cell_width = (layout.cell_width / 2).max(1);
+        layout.cell_height = (layout.cell_height / 2).max(1);
         let cache = crate::intel::gpgpu::allocate_font_instance_rgba8_surface(
             layout.controls_width,
             height,
@@ -86,27 +91,12 @@ impl Controls {
                 l.slider_start + i as u32 * l.row_height,
             )?;
         }
-        text(&mut operations, &l, "CHROMATIC", l.margin, height / 24)?;
         text(
             &mut operations,
             &l,
             "HUE / SATURATION",
             l.margin,
             l.curve.y - l.cell_height - 10,
-        )?;
-        text(
-            &mut operations,
-            &l,
-            "WSAD / DRAG ROTATE",
-            l.margin,
-            height - 2 * l.cell_height - 12,
-        )?;
-        text(
-            &mut operations,
-            &l,
-            "ESC CLOSE",
-            l.margin,
-            height - l.cell_height - 9,
         )?;
         fill(
             &mut operations,
@@ -118,9 +108,34 @@ impl Controls {
             },
             GRAY,
         );
+        for index in 0..7 {
+            let (x, _) = l.curve_point(index, 0.0);
+            fill(
+                &mut operations,
+                Rect {
+                    x: x - l.controls_x,
+                    y: l.curve.y,
+                    width: 1,
+                    height: l.curve.height,
+                },
+                GRAY,
+            );
+        }
+        // The outer guides also form the frame's left and right edges.
+        for y in [l.curve.y, l.curve.y + l.curve.height - 1] {
+            fill(
+                &mut operations,
+                Rect {
+                    x: l.margin,
+                    y,
+                    width: l.curve.width,
+                    height: 1,
+                },
+                GRAY,
+            );
+        }
         let s = controls.cache_surface();
         let plan = BcsPlan::new(s, &operations).map_err(|_| "chroma-controls-cache-plan")?;
-        controls.in_flight = true;
         let mut poisoned = false;
         // Pin the cache before the first await: cancellation can otherwise
         // drop its backing while an admitted BCS0 batch still references it.
@@ -245,8 +260,8 @@ fn text(ops: &mut Vec<BcsOp>, l: &Layout, label: &str, x: u32, y: u32) -> Result
             ch,
             l.cell_width,
             l.cell_height,
-            [230, 230, 230, 255],
-            [0, 0, 0, 0],
+            TEXT_COLOR,
+            TEXT_BACKGROUND,
             false,
         )?;
         copy.destination_x = left;

@@ -13,8 +13,8 @@ mod geometry;
 use geometry::{ATLAS_HEIGHT, ATLAS_WIDTH, Projection, atlas_uv, ease_node};
 
 const _: () = assert!(LUT_ENTRIES <= ATLAS_WIDTH * ATLAS_HEIGHT);
-// apps/maxpix/scene.rs POINT_WIDTHS_RAW: the first step after 1px is 2px.
-const POINT_WIDTH_PX: u32 = 2;
+// apps/maxpix/scene.rs POINT_WIDTHS_RAW: the next step after 2px is 4px.
+const POINT_WIDTH_PX: u32 = 4;
 
 pub(super) struct ChromaPoints {
     mesh: render::ResidentTriangleMesh,

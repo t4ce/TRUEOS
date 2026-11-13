@@ -122,9 +122,6 @@ pub(crate) async fn ui4_chroma_service_task() {
                     Ui4InputEvent::Pointer(event) if event.window == active.window => {
                         grade_dirty |= active.pointer(event, &mut settings);
                     }
-                    Ui4InputEvent::Keyboard(event) if event.window == active.window => {
-                        active.keyboard(event.event);
-                    }
                     _ => {}
                 }
             }
@@ -292,7 +289,7 @@ async fn open(
         }
     };
     ESCAPE.store(false, Ordering::Release);
-    let _ = super::set_window_title(OWNER, window, "CHROMATIC · drag / WASD rotate · Esc closes");
+    let _ = super::set_window_title(OWNER, window, "CHROMATIC · drag to rotate · Esc closes");
     crate::log_info!(target: "ui4/chroma";
         "chroma: opened fullscreen={}x{} background=transparent dots=4913 primitive=point-list color=pipe-a-3dlut controls=bcs0-cache+microfont grade-persists-on-escape=1\n",
         width, height);
@@ -392,24 +389,6 @@ impl Editor {
         }
         self.dirty |= changed;
         changed
-    }
-
-    fn keyboard(&mut self, event: crate::r::keyboard::TrueosKeyboardOutputEvent) {
-        use crate::r::keyboard::*;
-        if event.kind != KEYBOARD_OUTPUT_KIND_TEXT {
-            return;
-        }
-        let Some(character) = char::from_u32(event.codepoint) else {
-            return;
-        };
-        match character.to_ascii_lowercase() {
-            'a' => self.yaw -= 0.08,
-            'd' => self.yaw += 0.08,
-            'w' => self.pitch = (self.pitch - 0.08).clamp(-1.4, 1.4),
-            's' => self.pitch = (self.pitch + 0.08).clamp(-1.4, 1.4),
-            _ => return,
-        }
-        self.dirty = true;
     }
 
     async fn paint(&mut self, settings: &Settings) -> Result<(), &'static str> {
