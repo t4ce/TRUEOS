@@ -1307,6 +1307,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
             }
             (Some(paused_at), None) => {
                 let paused = package_now.saturating_duration_since(paused_at);
+                codex_handoff::shift_deadlines(paused.as_millis());
                 package_next_boundary = package_next_boundary + paused;
                 package_started = package_started + paused;
                 stream_next_deadline = stream_next_deadline + paused;

@@ -54,6 +54,10 @@ mod video_frame;
 pub(crate) mod window_arc;
 mod window_broker;
 
+pub(crate) fn codex_handoff_changed(owner: WindowOwner, window: WindowId) {
+    window_broker::collapse_animation_changed(owner, window);
+}
+
 const INTERACTION_CADENCE_HZ: u64 = 60;
 
 /// Absolute 60 Hz deadlines represented on Embassy's 1 kHz clock. The fractional

@@ -3162,7 +3162,7 @@ pub(crate) fn window_composition_revision() -> u64 {
 }
 
 pub(crate) fn window_transitions_active() -> bool {
-    if super::collapse_animation::active() || !TRANSITION_RETIRED_FRAMES.lock().is_empty() {
+    if super::collapse_animation::active() || super::codex_handoff::active() || !TRANSITION_RETIRED_FRAMES.lock().is_empty() {
         return true;
     }
     WINDOW_BROKER
@@ -3774,6 +3774,7 @@ pub(super) fn follow_collapsed_cursor(
     x: u32,
     y: u32,
 ) -> Result<(), WindowBrokerError> {
+    super::codex_handoff::cancel(owner,id);
     let output_extent = super::output_dimensions();
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
@@ -3782,10 +3783,12 @@ pub(super) fn follow_collapsed_cursor(
     let placement = collapsed_cursor_placement(*tile, x, y, output_extent);
     if placement == *tile { return Ok(()); }
     *tile = placement;
+    let icon=window.collapse.as_ref().unwrap().frame;
     window.revision = next_serial(window.revision);
     window.damage = Some(DamageRegion::FULL);
     broker.mark_composition_changed();
     drop(broker);
+    super::codex_handoff::queue(owner,id,icon);
     super::cursor_frame_inout::selection_strip_stack_changed();
     Ok(())
 }
@@ -3821,7 +3824,7 @@ fn release_collapse(owner: WindowOwner, session: Option<WindowSessionId>) {
     };
     for (id, frame) in icons {
         super::codex_handoff::cancel(owner, id);
-    super::collapse_animation::cancel(owner, id);
+        super::collapse_animation::cancel(owner, id);
         retire_frame_when_released(frame);
     }
 }

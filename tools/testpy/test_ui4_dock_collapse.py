@@ -63,6 +63,9 @@ def harness_source():
     collapse_code = item(COLLAPSE, "Collapse") + "\n" + block(collapse, "impl Collapse {")
     follow_block = block(input_source, "if let Some(target) = self.cursors[index].collapse_drag {")
     absorb_block = block(input_source, "if self.cursors[index].absorb_select {")
+    restore_block = input_source.split("        // The same live circle used for docking", 1)[1].split(
+        "        if previous_routed_buttons == 0 && pressed != 0 {", 1)[0]
+    restore_block = "        // The same live circle used for docking" + restore_block
     return r'''#![allow(dead_code)]
 use std::sync::{Mutex, MutexGuard};
 struct TestMutex<T>(Mutex<T>);
@@ -87,6 +90,16 @@ mod ui4 {
     pub(crate) fn output_dimensions() -> Option<(u32, u32)> { Some((1920, 1080)) }
     pub(crate) use window_broker::*;
     mod cursor_frame_inout { pub(crate) fn selection_strip_stack_changed() {} }
+    mod codex_handoff {
+        use super::*;
+        pub(crate) fn project(w:WindowSnapshot)->WindowSnapshot{w}
+        pub(crate) fn cancel(_:WindowOwner,_:WindowId){}
+        pub(crate) fn queue(_:WindowOwner,_:WindowId,_:FrameHandle){}
+        pub(crate) fn folded_target()->Option<(WindowOwner,WindowId)>{
+            let (owner,id)=window_broker::test_target();
+            (window_broker::collapse_state(owner,id)==Some(true)).then_some((owner,id))
+        }
+    }
     mod collapse_animation {
         use super::*;
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -103,6 +116,7 @@ mod ui4 {
     mod collapse {
         use super::*;
         @COLLAPSE_CODE@
+        @RESTORE_PRESS@
         pub(crate) fn ensure_window_collapse(owner: WindowOwner, id: WindowId) -> Result<(), CollapseError> {
             // Model only image allocation, which belongs to the GPU service.
             window_broker::install_test_icon(owner, id).map_err(|_| CollapseError::NotFound)
@@ -241,25 +255,42 @@ mod ui4 {
             collapse_at_cursor(owner, id, 640, 1079).unwrap();
             (owner, id)
         }
+        pub(crate) fn test_target()->(WindowOwner,WindowId){
+            let broker=WINDOW_BROKER.lock();
+            (broker.windows[0].owner,WindowId(pack_handle(0,broker.windows[0].generation).unwrap()))
+        }
     }
     mod input_broker {
         use super::*;
         @GEOMETRY_CONSTANTS@
         @GEOMETRY_CODE@
         @WINDOW_TARGET@
+        const PRIMARY_BUTTON_MASK:u32=1;
+        fn spirit_dock_circle()->Option<Ui4SpiritDockCircle>{
+            Some(Ui4SpiritDockCircle{center_x:500,center_y:400,radius:150})
+        }
         struct Route {
             x: u32, y: u32, buttons_down: u32, visible_after_motion: bool,
             collapse_drag: Option<WindowTarget>, capture: Option<WindowTarget>,
             absorb_select: bool, suppress_context_menu_open: bool,
+            spirit_restore_press: Option<(WindowTarget,super::collapse::RestorePress)>,
         }
         struct Event { buttons_down: u32 }
-        struct Input { cursors: Vec<Route>, forwarded: usize }
+        struct Input { cursors: Vec<Route>, forwarded: usize, authorized: bool, selected: Option<WindowTarget> }
         impl Input {
+            fn select_frame(&mut self,_:usize,target:Option<WindowTarget>,_:u32,_:bool){self.selected=target;}
             fn pointer(&mut self, x: u32, y: u32, buttons_down: u32, pressed: u32) {
                 let index = 0;
                 let event = Event { buttons_down };
+                let previous_routed_buttons=self.cursors[0].buttons_down;
+                let released=previous_routed_buttons & !buttons_down;
+                let (combo_id,vcursor)=(0,false);
+                let authorized=self.authorized;
+                let allowed=|_:WindowTarget|authorized;
                 @FOLLOW_BLOCK@
+                @RESTORE_BLOCK@
                 @ABSORB_BLOCK@
+                self.cursors[0].buttons_down=buttons_down;
                 self.forwarded += 1;
             }
         }
@@ -271,7 +302,8 @@ mod ui4 {
                 x: 640, y: 1079, buttons_down: 0, visible_after_motion: true,
                 collapse_drag: Some(target), capture: Some(target),
                 absorb_select: false, suppress_context_menu_open: false,
-            }], forwarded: 0 };
+                spirit_restore_press: None,
+            }], forwarded: 0, authorized:true, selected:None };
             input.pointer(800, 600, 0, 0);
             assert!(input.cursors[0].collapse_drag.is_some());
             assert_eq!(super::window_broker::window_snapshot(owner, window).unwrap().placement.x, 768);
@@ -290,6 +322,30 @@ mod ui4 {
             input.pointer(920, 720, 0, 0);
             assert_eq!(input.forwarded, 1);
         }
+        #[test]
+        fn unified_spirit_circle_restores_on_click_and_rejects_drags_or_other_buttons(){
+            for (x,y,moved,secondary,authorized,restores) in [
+                (650,400,false,false,true,true), // circle edge, outside the avatar
+                (500,400,false,false,true,true),
+                (651,400,false,false,true,false),
+                (500,400,true,false,true,false),
+                (500,400,false,true,true,false),
+                (500,400,false,false,false,false),
+            ]{
+                let (owner,window)=super::window_broker::setup_for_input();
+                let mut input=Input{cursors:vec![Route{
+                    x,y,buttons_down:0,visible_after_motion:true,collapse_drag:None,capture:None,
+                    absorb_select:false,suppress_context_menu_open:false,spirit_restore_press:None,
+                }],forwarded:0,authorized,selected:None};
+                input.pointer(x,y,1,1);
+                if moved { input.pointer(x+10,y,1,0); input.pointer(x,y,1,0); }
+                if secondary { input.pointer(x,y,3,2); }
+                input.pointer(x,y,0,0);
+                assert_eq!(super::window_broker::collapse_state(owner,window),Some(!restores));
+                assert_eq!(input.selected,restores.then_some(WindowTarget{owner,window}));
+                if x<=650 && authorized {assert_eq!(input.forwarded,0,"circle gesture must not leak");}
+            }
+        }
         #[cfg(test)] mod geometry_tests {
             use super::*;
             @GEOMETRY_TESTS@
@@ -302,7 +358,8 @@ mod ui4 {
         "@COLLAPSE_CODE@", collapse_code).replace("@GEOMETRY_CONSTANTS@", geometry_constants).replace(
         "@GEOMETRY_CODE@", "\n".join(item(INPUT, name) for name in geometry_functions)).replace(
         "@GEOMETRY_TESTS@", geometry_tests).replace("@FOLLOW_BLOCK@", follow_block).replace(
-        "@ABSORB_BLOCK@", absorb_block).replace("@WINDOW_TARGET@", item(INPUT, "WindowTarget"))
+        "@ABSORB_BLOCK@", absorb_block).replace("@WINDOW_TARGET@", item(INPUT, "WindowTarget")).replace(
+        "@RESTORE_BLOCK@", restore_block).replace("@RESTORE_PRESS@", item(COLLAPSE,"RestorePress") + "\n" + block(collapse,"impl RestorePress {"))
 
 
 def main():

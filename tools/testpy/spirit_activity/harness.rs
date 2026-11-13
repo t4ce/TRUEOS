@@ -103,6 +103,13 @@ mod spirit {
             })
         }
     }
+    pub mod codex_handoff {
+        use core::sync::atomic::{AtomicBool,Ordering};
+        pub static REQUESTED:AtomicBool=AtomicBool::new(false);
+        pub static READY:AtomicBool=AtomicBool::new(false);
+        pub fn needs_crossed()->bool{REQUESTED.load(Ordering::Relaxed)}
+        pub fn crossed_ready(){READY.store(true,Ordering::Relaxed);}
+    }
     pub mod spirit_vfx { pub fn set_idle_vfx(_: bool) {} }
     #[path = "@TRUEOS_ROOT@/src/spirit/lilly_protocol.rs"]
     pub mod lilly_protocol;
@@ -132,6 +139,20 @@ mod tests {
     fn next() -> protocol::LillyScheduledAnimation { protocol::next_animation().unwrap() }
     fn failure(key: &str) -> bool { ["angry.fists_clenched", "reaction.facepalm"].contains(&key) }
     fn status(value: Option<program_status::ProgramStatus>) { *shell3::tui::STATUS.lock() = value; }
+
+    #[test]
+    fn codex_arrival_prepares_crossed_without_consuming_pending_gesture() {
+        let _lock=reset(0);
+        protocol::enqueue_animation("wave.shy",protocol::SpiritRgba8::WHITE).unwrap();
+        spirit::codex_handoff::REQUESTED.store(true,Ordering::Relaxed);
+        let prep=next();assert_eq!(prep.animation.key,"transition.neutral_to_crossed");
+        assert!(!spirit::codex_handoff::READY.load(Ordering::Relaxed));
+        now(prep.boundary_ms);
+        assert_eq!(next().animation.key,"idle.crossed.soft_blink");
+        assert!(spirit::codex_handoff::READY.load(Ordering::Relaxed));
+        spirit::codex_handoff::REQUESTED.store(false,Ordering::Relaxed);
+        assert_eq!(next().animation.key,"wave.shy");
+    }
 
     #[test]
     fn centers_once_and_uses_existing_retimed_frame_helper() {

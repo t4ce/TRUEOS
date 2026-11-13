@@ -213,7 +213,11 @@ pub(super) struct Ui4SpiritDockCircle {
 }
 
 pub(super) fn spirit_dock_circle() -> Option<Ui4SpiritDockCircle> {
-    if !super::drag_drop::codex_receiver_ready() { return None; }
+    if !super::drag_drop::codex_receiver_ready()
+        && crate::spirit::codex_handoff::folded_target().is_none()
+    {
+        return None;
+    }
     // marker_anchor reports the applied hardware-cursor-plane geometry, rather
     // than Spirit's queued destination. Its center is the cursor hotspot.
     let (_, _, left, top, width, height) = crate::spirit::marker_anchor()?;
@@ -363,6 +367,7 @@ struct CursorRoute {
     requested_context_menu_gesture: Option<u64>,
     suppress_context_menu_open: bool,
     collapse_press: Option<(WindowTarget, super::collapse::RestorePress)>,
+    spirit_restore_press: Option<(WindowTarget, super::collapse::RestorePress)>,
     /// A dock-collapsed icon follows this source until the next placing click.
     collapse_drag: Option<WindowTarget>,
     selection_anchor: Option<(u32, u32)>,
@@ -405,6 +410,7 @@ impl CursorRoute {
             requested_context_menu_gesture: None,
             suppress_context_menu_open: false,
             collapse_press: None,
+            spirit_restore_press: None,
             collapse_drag: None,
             selection_anchor: None,
             absorb_select: false,
@@ -426,6 +432,7 @@ impl CursorRoute {
         self.dock_fields_visible = false;
         self.dock_preview = None;
         self.collapse_press = None;
+        self.spirit_restore_press = None;
         self.collapse_drag = None;
         self.selection_anchor = None;
     }
@@ -818,6 +825,7 @@ impl InputBroker {
         if route.capture.is_some_and(|target| !allowed(target))
             || route.collapse_drag.is_some_and(|target| !allowed(target))
             || route.collapse_press.is_some_and(|(target, _)| !allowed(target))
+            || route.spirit_restore_press.is_some_and(|(target, _)| !allowed(target))
             || route.resize_latch.is_some_and(|(target, _)| !allowed(target))
         {
             self.cursors[index].clear_window_interaction();
@@ -1077,6 +1085,42 @@ impl InputBroker {
                         DesktopContextMenuAction::Codex => super::request_codex_prompt_open(source, anchor),
                         DesktopContextMenuAction::AppDb => request_desktop_shell_launch(source, anchor.0, anchor.1, true),
                     }
+                }
+            }
+            return;
+        }
+
+        // The same live circle used for docking is the folded Codex's restore
+        // hitbox. Own its whole click before selecting a frame underneath it.
+        // Drag/drop, resize and menu gestures have already had first refusal.
+        let spirit_circle = spirit_dock_circle();
+        let inside_spirit = spirit_circle.is_some_and(|circle| spirit_circle_contains(circle, x, y));
+        if previous_routed_buttons == 0
+            && pressed == PRIMARY_BUTTON_MASK
+            && !self.cursors[index].absorb_select
+            && inside_spirit
+            && let Some((owner, window)) = super::codex_handoff::folded_target()
+        {
+            let target = WindowTarget { owner, window };
+            if allowed(target) {
+                self.cursors[index].spirit_restore_press =
+                    Some((target, super::collapse::RestorePress::new(x, y)));
+            }
+        }
+        if let Some((target, mut press)) = self.cursors[index].spirit_restore_press {
+            press.update(x, y, buttons_down & !PRIMARY_BUTTON_MASK != 0);
+            self.cursors[index].spirit_restore_press = Some((target, press));
+            self.cursors[index].buttons_down = event.buttons_down;
+            self.cursors[index].x = x;
+            self.cursors[index].y = y;
+            if released & PRIMARY_BUTTON_MASK != 0 {
+                self.cursors[index].spirit_restore_press = None;
+                self.cursors[index].capture = None;
+                if press.clicked(inside_spirit)
+                    && super::codex_handoff::folded_target() == Some((target.owner, target.window))
+                    && super::window_broker::toggle_collapse(target.owner, target.window).is_ok()
+                {
+                    self.select_frame(index, Some(target), combo_id, vcursor);
                 }
             }
             return;

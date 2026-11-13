@@ -90,6 +90,12 @@ test passed607 exact bottom-centered DMA uploads;28 existing activity/sequencing
 tests also passed. Delivery ZIP and library ZIP were read back and compared to
 their source bytes. No new kernel ELF build or hardware boot is claimed.
 
+The procedural runtime integration now chains this resident sequence after
+Codex's slide into the cursor plane. See [../CODEX-HANDOFF.md](../CODEX-HANDOFF.md)
+for native64 assets, crop-adjusted chest placement, ownership and restore input.
+The validation evidence above describes the original pack integration; the
+handoff document records the later runtime checks and hardware limitations.
+
 The before/after packs, unpacked comparisons and `integration.json` evidence live
 in `/home/t4ce/.codex/generated_images/lily-wish-c-production-20261113`.
 
