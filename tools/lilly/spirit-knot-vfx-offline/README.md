@@ -36,7 +36,10 @@ Lilly is a **separate clean sprite layer**, at scale 0.65, using the same seven
 Hide her to compare complete knots, or disable her animation. This experiment
 does not approximate or alter the production AuraBloom sprite pass.
 
-The GLSL ES shader is an offline design study. Selecting a variation precedes
-porting it to production C++ for OpenCL and baking/auditing its artifacts. No
-kernel code, production mode IDs, settings, or working-state selection changes
-are made here.
+The original four GLSL ES studies remain available here. Spark lattice and
+Resonance have been selected and ported to the production C++ for OpenCL shader
+as IDs 12 and 13. Working uses Spark lattice at speed 3, scale 1.4, opacity 0.75,
+and intensity 1 → 4 → 1 over seven seconds. Unread completion uses Resonance
+at its authored speed 1 and intensity 2, with the same scale and opacity.
+Both expand to scale 3 before fading out. Runtime mapping and transition details
+are documented in `crates/trueos-shader/gpgpu/kernels/SPIRIT_CPP_REPASS.md`.

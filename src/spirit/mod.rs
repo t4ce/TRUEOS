@@ -571,6 +571,7 @@ fn submit_spirit_vfx_frame(
         background_mode: snapshot.background_mode,
         clock_seconds_of_day: snapshot.clock_seconds_of_day,
         background_phase_override: snapshot.background_phase_override,
+        background_scale: snapshot.background_scale,
         background_opacity: snapshot.opacity,
         background_speed: snapshot.speed,
         background_intensity: snapshot.intensity,

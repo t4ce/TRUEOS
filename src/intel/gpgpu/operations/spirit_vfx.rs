@@ -1,8 +1,7 @@
 const SPIRIT_VFX_INITIAL_TRACE_FRAMES: u32 = 30;
 const SPIRIT_VFX_PERIODIC_TRACE_FRAMES: u32 = 60;
 const SPIRIT_VFX_ENCODING_LOG_LIMIT: u32 = 2;
-/// One invariant footprint for every Spirit procedural background. Keeping
-/// this at the control-page writer makes scale non-negotiable for all callers.
+/// Legacy background footprint. Knot modes may expand during their exit.
 pub(crate) const SPIRIT_VFX_BACKGROUND_PRESENT_SCALE: f32 = 1.171875;
 
 #[derive(Copy, Clone, Debug)]
@@ -11,6 +10,7 @@ pub(crate) struct SpiritVfxControl {
     pub(crate) background_mode: u32,
     pub(crate) clock_seconds_of_day: u32,
     pub(crate) background_phase_override: Option<f32>,
+    pub(crate) background_scale: f32,
     pub(crate) background_opacity: f32,
     pub(crate) background_speed: f32,
     pub(crate) background_intensity: f32,
@@ -450,7 +450,7 @@ fn spirit_vfx_write_control(
         core::ptr::write_volatile(dwords.add(2), frame);
         core::ptr::write_volatile(
             dwords.add(3),
-            matches!(control.background_mode, 2..=11)
+            matches!(control.background_mode, 2..=13)
                 .then_some(control.background_mode)
                 .unwrap_or(0),
         );
@@ -464,7 +464,12 @@ fn spirit_vfx_write_control(
             dwords.add(5),
             spirit_vfx_bounded(control.background_opacity, 0.0, 1.0, 0.0).to_bits(),
         );
-        core::ptr::write_volatile(dwords.add(6), SPIRIT_VFX_BACKGROUND_PRESENT_SCALE.to_bits());
+        let scale = if matches!(control.background_mode, 12 | 13) {
+            spirit_vfx_bounded(control.background_scale, 0.25, 3.0, 1.4)
+        } else {
+            SPIRIT_VFX_BACKGROUND_PRESENT_SCALE
+        };
+        core::ptr::write_volatile(dwords.add(6), scale.to_bits());
         core::ptr::write_volatile(
             dwords.add(7),
             spirit_vfx_bounded(background_speed, 0.0, 4.0, 1.0).to_bits(),
@@ -757,7 +762,7 @@ fn submit_spirit_vfx_batch(
     }
     let started_tick = direct_rcs_now_tick();
     let dev = super::claimed_device()?;
-    let background_upload = if matches!(control.background_mode, 2..=11) {
+    let background_upload = if matches!(control.background_mode, 2..=13) {
         Some(upload_spirit_vfx_background_rgba8_kernel()?)
     } else {
         None

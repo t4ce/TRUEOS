@@ -1,7 +1,7 @@
 # Spirit C++/IGC visual repass
 
 Spirit's C++ shaders provide the visual vocabulary without replacing its
-runtime architecture. The two self-contained `.clcpp` sources compile through
+runtime architecture. The two `.clcpp` entry sources and their headers compile through
 Clang C++ for OpenCL, SPIR-V, and Intel IGC. They are the sole maintained
 Spirit shader sources; there is no parallel OpenCL-C implementation.
 
@@ -29,6 +29,25 @@ smaller minute sectors, and one thin outer seconds sector consume integer
 seconds-of-day through the existing time dword. HH, MM, and SS are quantized
 before pixel math, so the seconds sector changes exactly once per second.
 
+Background IDs 12 and 13 append the procedural knot studies selected from
+`tools/lilly/spirit-knot-vfx-offline/knot.frag`. Their shared geometry lives in
+`include/spirit_vfx_knot.hpp`; no logo texture or mask is uploaded.
+
+Terminal activity selects **Spark lattice (12)** while Codex is working and
+**Resonance (13)** after a completed turn remains unread. Codex's existing
+acknowledgement report releases the ready effect on CLI interaction. Blocked
+input keeps Water ripples. These are transient overrides of the persistent panel.
+
+Spark lattice has fixed speed **3**, opacity **0.75**, and scale **1.4**.
+Intensity follows a smooth cosine cycle **1 → 4 → 1 over seven seconds** of
+wall time, independently of shader speed. Repeated status reports do not restart
+it. Resonance retains its preview speed **1** and intensity **2**, with the same
+scale and opacity. Entry fades opacity over 650 ms without ramping speed.
+On exit, each knot expands from its current scale to **3** over 650 ms, then
+fades opacity to zero over another 650 ms before selecting the next background.
+Resuming the outgoing status reverses its scale and opacity continuously;
+new requests during exit replace the pending effect without restarting exit.
+
 The fifteen non-clean sprite effects retain their authored algorithms and
 four-slider controls. C++ templates add restrained secondary filaments grouped
 by visual intent: pearlescent aura/dream contours, energized neon/ice/electric
@@ -42,7 +61,7 @@ does not receive the secondary layer.
 The repass preserves:
 
 - kernel names and pointer argument order;
-- stable original background IDs `2..10`, new C++ background ID `11`, and
+- stable original background IDs `2..10`, appended C++ background IDs `11..13`, and
   sprite IDs `0..15`;
 - the version-1 layout in dwords 0–31 plus append-only clock dword 32;
 - SIMD16 and 96 bytes of local-ID payload;
@@ -59,13 +78,27 @@ and byte-identical two-root reproduction.
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `spirit_vfx_background_rgba8.bin` | 109,608 | `2f856f0e338df1eef71b89ed5dd390ceb2fe8323cc9de7cdae2537a63895340e` |
-| `spirit_vfx_sprite_rgba8.bin` | 656,728 | `2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac` |
+| `spirit_vfx_background_rgba8.bin` | 224,248 | `af8097d1f52e914091e480f3ee43111cab92b5bba19bd2f73f3f3456e9a506d8` |
+| `spirit_vfx_sprite_rgba8.bin` | 656,728 | `a5bca7b15af0bcab952d093a184876fed01fbce4e4c7d55feffaaf55c33ce5f7` |
 
 The background maps at `0x0D430000`; its larger C++ image requires the sprite
-mapping at `0x0D450000`. In a two-walker batch the background remains the
-instruction base and the sprite entry is relative `0x20040`. A clean batch
+mapping at `0x0D470000`. In a two-walker batch the background remains the
+instruction base and the sprite entry is relative `0x40040`. Compile-time bounds
+checks keep both images disjoint and below the demo window. A clean batch
 uses the sprite mapping as its instruction base and entry `0x40`.
+
+Host regression checks for the activity envelope, control page, and submission
+encoding:
+
+```sh
+python3 tools/testpy/test_spirit_codex_background.py
+python3 tools/testpy/test_spirit_vfx_command_frontier.py
+python3 tools/testpy/test_spirit_vfx_ppgtt_evidence.py
+```
+
+The first tool can also export a 30 Hz working → unread-ready → acknowledged
+timeline from the actual Rust state machine with
+`--timeline bld/spirit-codex-activity.csv`.
 
 ## Bake and review
 

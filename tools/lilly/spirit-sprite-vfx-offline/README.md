@@ -33,14 +33,14 @@ authored parameter defaults and both per-effect palettes.
 From the repository root:
 
 ```sh
-make -C tools/spirit-sprite-vfx-offline run
+make -C tools/lilly/spirit-sprite-vfx-offline run
 ```
 
 A static transparent PNG grid remains available. Set a different animation
 time or output path when comparing temporal modes:
 
 ```sh
-make -C tools/spirit-sprite-vfx-offline render \
+make -C tools/lilly/spirit-sprite-vfx-offline render \
   TIME=0.75 OUTPUT=bld/spirit-sprite-vfx-grid-075.png
 ```
 
@@ -57,3 +57,25 @@ The grid is row-major:
 | 2 | Ice shimmer | Hologram | RGB glitch | Dissolve |
 | 3 | Ghost trail | Electric arc | Rainbow prism | Hit flash |
 | 4 | Pixel wave | Toon ink | Liquid warp | Dream bloom |
+
+## LilyUp local preview
+
+`preview_local.py` opens the three cropped `LilyUp/PNG_shared32_cropped`
+frames with all sixteen sprite effects. Press 1/2/3 to select a frame, Space
+for pause, or Escape to close. It uses pyopencl, numpy, pygame-ce and Pillow.
+For the current local environment:
+
+```sh
+/tmp/lily-vfx-env/bin/python3 tools/lilly/spirit-sprite-vfx-offline/preview_local.py
+```
+
+This preview compiles the maintained shader source as OpenCL C for the host
+GPU. It lowers the C++ template mode argument to a runtime argument, removes
+the Intel subgroup attribute, and preserves the effect equations. It does
+not exercise the Intel production SPIR-V binary. Presets are read from main.c.
+Frames use scale 1.0. A screenshot is saved to LilyUp/shared32-vfx-demo.png.
+
+The native C viewer also accepts `LILLY_SPRITE_PNG=/absolute/path.png` to
+replace its archived animation with a static PNG at scale 1.0; it still
+requires development headers and a runtime that supports the production
+SPIR-V artifact.

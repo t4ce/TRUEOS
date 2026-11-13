@@ -3,7 +3,7 @@ CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -Wall -Wextra -Wpedantic
 LDLIBS += -l:libOpenCL.so.1 -lpng16 -lXrender -lX11 -lm
 
-REPO_ROOT := ../..
+REPO_ROOT := ../../..
 BUILD_DIR := $(REPO_ROOT)/bld/tools
 PROGRAM := $(BUILD_DIR)/spirit_sprite_vfx_offline
 SPRITE_ARTIFACT := $(REPO_ROOT)/crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.spv

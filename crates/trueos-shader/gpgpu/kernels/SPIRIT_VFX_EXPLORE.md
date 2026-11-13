@@ -15,10 +15,11 @@ One 60 Hz Embassy issue produces one detached GuC submission. The default is
    inter-walker cache dependency. The sprite pass starts from transparent and
    presents only the current immutable Lilly RGBA frame.
 2. If enabled, `spirit_vfx_background_rgba8` writes every pixel first. It
-   supports the selected ten-mode UI background range under stable IDs 2
+   supports the original UI background range under stable IDs 2
    through 10: `Energy ring`, `Magic circle`, `Nebula smoke`, `Cyber grid`,
    `Portal vortex`, `Speed lines`, `Bokeh field`, `Water ripples`, and `Pixel
-   burst`, plus C++ ID 11 `Magic time circle`.
+   burst`, plus C++ ID 11 `Magic time circle` and Codex knot IDs 12 `Spark lattice`
+   and 13 `Resonance`.
    `Cyber grid` contains only its moving grid and `Portal vortex` only its
    spiral arms; neither mode adds expanding circular bands. `Nebula smoke`
    preserves an unaffected inner 60%, then uses a broad linear allocation-edge
@@ -53,12 +54,19 @@ grid Param 1 moves, following a two-second
 `[radius 9..12..9, strength 2.5, pulse 0, brighten 0]` and uses Aura bloom's
 authored palette.
 
-All procedural backgrounds use a fixed live presentation scale of `1.171875`.
+Legacy procedural backgrounds use a fixed live presentation scale of `1.171875`.
 The authored reference radius `0.32` therefore lands at 96 pixels in the
 256-pixel surface, leaving a uniform 32-pixel outer margin. This applies to the
-complete set, including the transient move portal.
+legacy set, including the transient move portal.
 The move transition continues to ramp speed and intensity, but no longer grows
 its spatial footprint.
+
+The selected Codex knot backgrounds use scale `1.4`, opacity `0.75`, and a
+two-stage exit: grow to scale `3` over 650 ms, then fade to zero over 650 ms
+before changing modes. Spark lattice uses fixed speed `3` and a seven-second
+`1 → 4 → 1` intensity cycle while working. Resonance uses speed `1` and intensity
+`2` until a completed turn is acknowledged. See `SPIRIT_CPP_REPASS.md` for the
+activity mapping and regression commands.
 
 ## Preview-compatible control interface
 
@@ -133,7 +141,8 @@ colors, transform, sampling, alpha cutoff, sprite parameters and colors,
 resident-source geometry, destination pitch, UI revision, the half-second
 presentation-rate estimate, final edge-feather width, and an append-only clock
 extension. Dword 4 always carries smooth animation-frame time for the sprite
-walker and background IDs 2 through 10. Dword 32 carries exact integer UTC
+walker and non-clock background IDs. Dword 6 retains the fixed legacy scale
+and carries the bounded animated scale for IDs 12 and 13. Dword 32 carries exact integer UTC
 seconds-of-day for `Magic time circle` ID 11 only. Both kernel entry
 points validate magic/version and their own surface dimensions.
 
@@ -151,15 +160,15 @@ legacy OpenCL-C, or duplicate shader implementation.
 
 | Artifact | Bytes | BTIs | Cross-thread | Per-thread | SHA-256 |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `spirit_vfx_background_rgba8.bin` | 109,608 | 2 | 64 | 96 | `2f856f0e338df1eef71b89ed5dd390ceb2fe8323cc9de7cdae2537a63895340e` |
-| `spirit_vfx_sprite_rgba8.bin` | 656,728 | 3 | 96 | 96 | `2ee466aa00e631119e8de1eb9fa2d53a1b39d46cc56b4ce2e16ff18f653343ac` |
+| `spirit_vfx_background_rgba8.bin` | 224,248 | 2 | 64 | 96 | `af8097d1f52e914091e480f3ee43111cab92b5bba19bd2f73f3f3456e9a506d8` |
+| `spirit_vfx_sprite_rgba8.bin` | 656,728 | 3 | 96 | 96 | `a5bca7b15af0bcab952d093a184876fed01fbce4e4c7d55feffaaf55c33ce5f7` |
 
 Both artifacts use text offset `0x40` within their own Zebin. The clean default
-maps only the sprite at `0x0D450000`, uses that mapping as the instruction base,
+maps only the sprite at `0x0D470000`, uses that mapping as the instruction base,
 and addresses its entry at relative offset `0x40`. With a procedural background
 enabled, the runtime additionally maps it at `0x0D430000`, selects that mapping
 as the shared instruction base, and addresses the sprite at relative offset
-`0x20040`.
+`0x40040`.
 
 The full C++ visual map and physical `cpp spirit` selector are documented in
 [`SPIRIT_CPP_REPASS.md`](SPIRIT_CPP_REPASS.md).

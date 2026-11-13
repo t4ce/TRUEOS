@@ -2,7 +2,8 @@
 //
 // The dispatch is fixed at 256x256. It writes premultiplied BGRA8 bytes into
 // the exact Intel cursor backbuffer. The retained modes use stable IDs 2
-// through 11, names, parameters, and two-color contract.
+// through 11, names, parameters, and two-color contract. Codex knot
+// backgrounds append Spark lattice (12) and Resonance (13).
 
 #include "include/trueos_clcpp.hpp"
 
@@ -119,6 +120,8 @@ static inline uint vfx_pack_bgra8_premultiplied(float3 color, float alpha)
     uint ai = (uint)(a * 255.0f + 0.5f);
     return (ai << 24) | (r << 16) | (g << 8) | b;
 }
+
+#include "include/spirit_vfx_knot.hpp"
 
 // The production compositions retain their large-form semantic base and add
 // a deliberately small, mode-specific detail layer.
@@ -378,6 +381,14 @@ __kernel void spirit_vfx_background_rgba8(
         vfx_finite_or(as_float(control[VFX_CTRL_BG_INTENSITY_F32]), 2.0f),
         0.1f,
         4.0f);
+
+    if (background_id == 12u || background_id == 13u) {
+        dst_bgra[y * (dst_pitch_bytes >> 2) + x] = vfx_knot_background(
+            background_id, uv, point, scale, time * speed, intensity, opacity,
+            vfx_unpack_rgb(control[VFX_CTRL_BG_COLOR_A]),
+            vfx_unpack_rgb(control[VFX_CTRL_BG_COLOR_B]));
+        return;
+    }
 
     float alpha = 0.0f;
     float color_mix = 0.0f;

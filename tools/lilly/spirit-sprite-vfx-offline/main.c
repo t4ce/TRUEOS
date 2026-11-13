@@ -349,6 +349,35 @@ static uint8_t *extract_lilly_frame(
     if (frame >= LILLY_FRAME_COUNT) {
         die("fixed Lilly frame index is outside the asset");
     }
+    const char *sprite_path = getenv("LILLY_SPRITE_PNG");
+    if (sprite_path != NULL && sprite_path[0] != '\0') {
+        png_image image = {0};
+        image.version = PNG_IMAGE_VERSION;
+        if (!png_image_begin_read_from_file(&image, sprite_path)) {
+            fprintf(stderr, "cannot read sprite %s: %s\n", sprite_path, image.message);
+            exit(EXIT_FAILURE);
+        }
+        image.format = PNG_FORMAT_RGBA;
+        if (image.width == 0 || image.height == 0
+            || image.width > SPIRIT_SIZE || image.height > SPIRIT_SIZE) {
+            png_image_free(&image);
+            die("custom sprite must fit within 256x256");
+        }
+        uint8_t *rgba = malloc(PNG_IMAGE_SIZE(image));
+        if (rgba == NULL) {
+            png_image_free(&image);
+            die("out of memory for custom sprite");
+        }
+        if (!png_image_finish_read(&image, NULL, rgba, 0, NULL)) {
+            free(rgba);
+            png_image_free(&image);
+            die("libpng could not decode custom sprite");
+        }
+        *width_out = image.width;
+        *height_out = image.height;
+        png_image_free(&image);
+        return rgba;
+    }
     char command[256];
     int written = snprintf(
         command,
@@ -566,7 +595,7 @@ static void fill_control(
     control[2] = frame;
     control[3] = 0;
     control[4] = float_bits((float)frame * (1.0f / 60.0f));
-    control[13] = float_bits(0.65f);
+    control[13] = float_bits(getenv("LILLY_SPRITE_PNG") ? 1.0f : 0.65f);
     control[14] = float_bits(3.14159265359f);
     control[15] = float_bits(0.02f);
     control[16] = 0;

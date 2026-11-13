@@ -5,10 +5,16 @@ const SKYBOX_SAMPLE_RGB565_ADLS_GPU: u64 = 0x0D38_0000;
 const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_GPU: u64 = 0x0D40_0000;
 const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU: u64 = 0x0D43_0000;
 // Give both Spirit images dedicated, non-overlapping instruction windows.
-const SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU: u64 = 0x0D45_0000;
-// The C++ Spirit sprite image extends through 0x0D4F_xxxx. Keep the standalone
-// demo comfortably outside Spirit's shared instruction-base window.
+const SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU: u64 = 0x0D47_0000;
+// The knot background ends below 0x0D47_0000 and the sprite below 0x0D52_0000.
+// Keep the standalone demo outside Spirit's shared instruction-base window.
 const CPP_DEMO_RGBA8_ADLS_GPU: u64 = 0x0D60_0000;
+const _: () = {
+    assert!(SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU + SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN.len() as u64
+        <= SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU);
+    assert!(SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU + SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN.len() as u64
+        <= CPP_DEMO_RGBA8_ADLS_GPU);
+};
 const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU: u64 = 0x0D70_0000;
 const PARTICLE_CRAFT_ADLS_GPU: u64 = 0x0D78_0000;
 const HELIO_RETAINED_TRANSFORM_ADLS_GPU: u64 = 0x0DB0_0000;

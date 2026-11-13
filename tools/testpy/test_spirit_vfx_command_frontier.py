@@ -392,8 +392,21 @@ fn tgl_vfe_allocation_covers_each_real_walker_payload_within_32kib() {
 fn desktop_and_other_physical_targets_preserve_complete_legacy_batch_bytes() {
     for background in [false,true] {
         super::physical(0x8086,0x4680,12);let legacy=encoded(background);
-        // Captured from the production encoder before adding TGL compute mode.
-        let hash=legacy.iter().flat_map(|dw|dw.to_le_bytes()).fold(0xcbf29ce484222325u64,
+        // The larger knot artifact moved the sprite instruction window from
+        // D450000 to D470000. Normalize only that reviewed relocation before
+        // comparing every byte with the pre-TGL encoder snapshot.
+        let mut normalized=legacy.clone();
+        if background {
+            let sprite_entry=SPIRIT_VFX_SPRITE_IDD_OFFSET_BYTES/4;
+            assert_eq!(legacy[sprite_entry],SPIRIT_VFX_SPRITE_TEXT_OFFSET_BYTES as u32);
+            normalized[sprite_entry]=0x20040;
+        } else {
+            let offsets=command_offsets(&legacy);
+            let sba=*offsets.iter().find(|&&i|legacy[i]==STATE_BASE_ADDRESS_CMD).unwrap();
+            assert_eq!(legacy[sba+10]&0xfffff000,SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU as u32);
+            normalized[sba+10]=0x0d450000|(legacy[sba+10]&0xfff);
+        }
+        let hash=normalized.iter().flat_map(|dw|dw.to_le_bytes()).fold(0xcbf29ce484222325u64,
             |h,b|(h^u64::from(b)).wrapping_mul(0x100000001b3));
         assert_eq!(hash,if background {0x8429439a404d7777}else{0xee095d261120bd81});
         for (vendor,device,revision) in [(0x8086,0x4680,12),(0x8086,0xa780,4),

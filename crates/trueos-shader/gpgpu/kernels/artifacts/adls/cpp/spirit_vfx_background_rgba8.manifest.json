@@ -5,10 +5,10 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "73c583b7cfbd0b0d95294380452799840b059ddb607b9eaa0da3d4ba8209a23e",
-      "size_bytes": 109608,
+      "sha256": "af8097d1f52e914091e480f3ee43111cab92b5bba19bd2f73f3f3456e9a506d8",
+      "size_bytes": 224248,
       "type": "relocatable",
-      "ze_info_section_offset": 106568,
+      "ze_info_section_offset": 221208,
       "ze_info_section_size": 2205
     },
     "kernels": [
@@ -126,13 +126,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 34912,
+          "entry_size": 134120,
           "section_alignment": 0,
           "section_name": ".text.spirit_vfx_background_rgba8",
           "section_offset": 64,
-          "section_size": 35072,
-          "sha256": "e560fd2007d21f2baa27a45ad44a227aebf48b54fdba534d7c0c0002084787eb",
-          "symbol_size": 34912,
+          "section_size": 134272,
+          "sha256": "a1081459a171865c5f7ea1878ac645ccecd792ae1bcfa0a6058a930579d02d27",
+          "symbol_size": 134120,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -148,10 +148,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 35208,
-      "embedded_section_size": 71288,
-      "sha256": "57715314ce0baa075ed3a01553f010bb5aaafbcb2fa53ef93c34d34b7eeade9e",
-      "size_bytes": 71288
+      "embedded_section_offset": 134408,
+      "embedded_section_size": 86724,
+      "sha256": "0566371cebbabcf8fa5713f341553facac2492ea773eb9dbae367ee1186d3cd7",
+      "size_bytes": 86724
     }
   },
   "provenance": {
@@ -218,7 +218,7 @@
       "description": "Clang C++ for OpenCL -> LLVM bitcode -> llvm-spirv"
     },
     "profile": {
-      "path": "tools/intel-gpu-bakery/profiles/adls-4680-r0c-cpp.json",
+      "path": "/home/t4ce/Repositories/tools/intel-gpu-bakery/profiles/adls-4680-r0c-cpp.json",
       "sha256": "66835e5d4fd37f63d767e7e11314ae0cd728eeb7a18abac6fbc90851346816b6"
     },
     "publication_policy": {
@@ -339,7 +339,7 @@
       }
     },
     "toolchain_lock": {
-      "path": "tools/intel-gpu-bakery/toolchains/adls-cpp-proof.lock.json",
+      "path": "/home/t4ce/Repositories/tools/intel-gpu-bakery/toolchains/adls-cpp-proof.lock.json",
       "sha256": "048afdb4e1525e0e72dfd1033448e6b7776b6a71fbf04f093d13505e232d6671"
     }
   },
@@ -350,14 +350,19 @@
   "source": {
     "inputs": [
       {
+        "path": "crates/trueos-shader/gpgpu/kernels/include/spirit_vfx_knot.hpp",
+        "sha256": "f5637afb031a6d4b68982f6bac987093cddd30aa65ae3b4514bb59978b315ac1",
+        "size_bytes": 4414
+      },
+      {
         "path": "crates/trueos-shader/gpgpu/kernels/include/trueos_clcpp.hpp",
         "sha256": "1d8844eeaea238b758b0b2889d591af37b34df2c038ba0fb2177871130059612",
         "size_bytes": 1334
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/spirit_vfx_background_rgba8.clcpp",
-        "sha256": "647c06930247653547c223ecff7e252580ca1397da2c0890185da1d30383ebdb",
-        "size_bytes": 24731
+        "sha256": "c7a8b531c17a8e828fc5e3e981b8f958eb2197b05e75179209bfb1d0585d3e26",
+        "size_bytes": 25190
       }
     ],
     "language": "C++ for OpenCL",
