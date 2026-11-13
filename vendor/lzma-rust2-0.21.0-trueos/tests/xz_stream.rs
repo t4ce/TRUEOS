@@ -1,0 +1,809 @@
+use std::io::{ErrorKind, Read, Write};
+
+use lzma_rust2::{Action, Status, XzOptions, XzReader, XzStream, XzWriter};
+
+static EXECUTABLE: &str = "tests/data/executable.exe";
+static PG100: &str = "tests/data/pg100.txt";
+static PG6800: &str = "tests/data/pg6800.txt";
+static INPUT_HTML: &str = "tests/data/input.html";
+
+fn encode_xz(data: &[u8], preset: u32) -> Vec<u8> {
+    let options = XzOptions::with_preset(preset);
+    let mut writer = XzWriter::new(Vec::new(), options).unwrap();
+    writer.write_all(data).unwrap();
+    writer.finish().unwrap()
+}
+
+fn decode_with_stream(data: &[u8]) -> Vec<u8> {
+    let mut decoder = XzStream::new(false);
+    let mut decompressed = Vec::new();
+    let mut output_buf = [0u8; 4096];
+    let mut in_pos = 0;
+
+    loop {
+        let action = if in_pos >= data.len() {
+            Action::Finish
+        } else {
+            Action::Run
+        };
+        let result = decoder
+            .process(&data[in_pos..], &mut output_buf, action)
+            .unwrap();
+        in_pos += result.bytes_consumed;
+        decompressed.extend_from_slice(&output_buf[..result.bytes_produced]);
+        if result.status == Status::StreamEnd {
+            break;
+        }
+    }
+    decompressed
+}
+
+fn test_round_trip(path: &str, preset: u32) {
+    let data = std::fs::read(path).unwrap();
+    let compressed = encode_xz(&data, preset);
+    let decompressed = decode_with_stream(&compressed);
+    assert!(decompressed == data);
+
+    let mut liblzma_decompressed = Vec::new();
+    {
+        use liblzma::read::XzDecoder;
+        let mut decoder = XzDecoder::new(compressed.as_slice());
+        decoder.read_to_end(&mut liblzma_decompressed).unwrap();
+    }
+    assert!(liblzma_decompressed == data);
+}
+
+#[test]
+fn round_trip_empty() {
+    let compressed = encode_xz(b"", 6);
+    let decompressed = decode_with_stream(&compressed);
+    assert!(decompressed.is_empty());
+}
+
+#[test]
+fn round_trip_executable_0() {
+    test_round_trip(EXECUTABLE, 0);
+}
+#[test]
+fn round_trip_executable_1() {
+    test_round_trip(EXECUTABLE, 1);
+}
+#[test]
+fn round_trip_executable_2() {
+    test_round_trip(EXECUTABLE, 2);
+}
+#[test]
+fn round_trip_executable_3() {
+    test_round_trip(EXECUTABLE, 3);
+}
+#[test]
+fn round_trip_executable_4() {
+    test_round_trip(EXECUTABLE, 4);
+}
+#[test]
+fn round_trip_executable_5() {
+    test_round_trip(EXECUTABLE, 5);
+}
+#[test]
+fn round_trip_executable_6() {
+    test_round_trip(EXECUTABLE, 6);
+}
+#[test]
+fn round_trip_executable_7() {
+    test_round_trip(EXECUTABLE, 7);
+}
+#[test]
+fn round_trip_executable_8() {
+    test_round_trip(EXECUTABLE, 8);
+}
+#[test]
+fn round_trip_executable_9() {
+    test_round_trip(EXECUTABLE, 9);
+}
+
+#[test]
+fn round_trip_pg100_0() {
+    test_round_trip(PG100, 0);
+}
+#[test]
+fn round_trip_pg100_1() {
+    test_round_trip(PG100, 1);
+}
+#[test]
+fn round_trip_pg100_2() {
+    test_round_trip(PG100, 2);
+}
+#[test]
+fn round_trip_pg100_3() {
+    test_round_trip(PG100, 3);
+}
+#[test]
+fn round_trip_pg100_4() {
+    test_round_trip(PG100, 4);
+}
+#[test]
+fn round_trip_pg100_5() {
+    test_round_trip(PG100, 5);
+}
+#[test]
+fn round_trip_pg100_6() {
+    test_round_trip(PG100, 6);
+}
+#[test]
+fn round_trip_pg100_7() {
+    test_round_trip(PG100, 7);
+}
+#[test]
+fn round_trip_pg100_8() {
+    test_round_trip(PG100, 8);
+}
+#[test]
+fn round_trip_pg100_9() {
+    test_round_trip(PG100, 9);
+}
+
+#[test]
+fn round_trip_pg6800_0() {
+    test_round_trip(PG6800, 0);
+}
+#[test]
+fn round_trip_pg6800_1() {
+    test_round_trip(PG6800, 1);
+}
+#[test]
+fn round_trip_pg6800_2() {
+    test_round_trip(PG6800, 2);
+}
+#[test]
+fn round_trip_pg6800_3() {
+    test_round_trip(PG6800, 3);
+}
+#[test]
+fn round_trip_pg6800_4() {
+    test_round_trip(PG6800, 4);
+}
+#[test]
+fn round_trip_pg6800_5() {
+    test_round_trip(PG6800, 5);
+}
+#[test]
+fn round_trip_pg6800_6() {
+    test_round_trip(PG6800, 6);
+}
+#[test]
+fn round_trip_pg6800_7() {
+    test_round_trip(PG6800, 7);
+}
+#[test]
+fn round_trip_pg6800_8() {
+    test_round_trip(PG6800, 8);
+}
+#[test]
+fn round_trip_pg6800_9() {
+    test_round_trip(PG6800, 9);
+}
+
+#[test]
+fn decode_tiny_output_buffer() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let compressed = encode_xz(&data, 6);
+
+    let mut decoder = XzStream::new(false);
+    let mut decompressed = Vec::new();
+    let mut output_buf = [0u8; 1];
+    let mut in_pos = 0;
+
+    loop {
+        let action = if in_pos >= compressed.len() {
+            Action::Finish
+        } else {
+            Action::Run
+        };
+        let result = decoder
+            .process(&compressed[in_pos..], &mut output_buf, action)
+            .unwrap();
+        in_pos += result.bytes_consumed;
+        decompressed.extend_from_slice(&output_buf[..result.bytes_produced]);
+        if result.status == Status::StreamEnd {
+            break;
+        }
+    }
+    assert!(decompressed == data);
+    assert_eq!(decoder.total_out(), data.len() as u64);
+    assert_eq!(decoder.total_in(), compressed.len() as u64);
+}
+
+#[test]
+fn cross_compat_with_xzreader() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let compressed = encode_xz(&data, 6);
+
+    let stream_result = decode_with_stream(&compressed);
+
+    let mut reader = lzma_rust2::XzReader::new(compressed.as_slice(), false);
+    let mut reader_result = Vec::new();
+    reader.read_to_end(&mut reader_result).unwrap();
+
+    assert_eq!(stream_result, reader_result);
+    assert!(stream_result == data);
+}
+
+#[test]
+fn decoder_total_tracking() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let compressed = encode_xz(&data, 6);
+
+    let mut decoder = XzStream::new(false);
+    let mut output_buf = [0u8; 4096];
+    let mut in_pos = 0;
+    let mut total_produced = 0;
+
+    loop {
+        let action = if in_pos >= compressed.len() {
+            Action::Finish
+        } else {
+            Action::Run
+        };
+        let result = decoder
+            .process(&compressed[in_pos..], &mut output_buf, action)
+            .unwrap();
+        in_pos += result.bytes_consumed;
+        total_produced += result.bytes_produced;
+        if result.status == Status::StreamEnd {
+            break;
+        }
+    }
+
+    assert_eq!(decoder.total_in(), compressed.len() as u64);
+    assert_eq!(decoder.total_out(), data.len() as u64);
+    assert_eq!(total_produced, data.len());
+}
+
+#[test]
+fn concatenated_streams() {
+    let data_a = std::fs::read(INPUT_HTML).unwrap();
+    let data_b = b"Second stream payload.";
+
+    let mut concatenated = encode_xz(&data_a, 6);
+    concatenated.extend_from_slice(&encode_xz(data_b, 3));
+
+    let mut decoder = XzStream::new(true);
+    let mut decompressed = Vec::new();
+    let mut output_buf = [0u8; 4096];
+    let mut in_pos = 0;
+
+    loop {
+        let action = if in_pos >= concatenated.len() {
+            Action::Finish
+        } else {
+            Action::Run
+        };
+        let result = decoder
+            .process(&concatenated[in_pos..], &mut output_buf, action)
+            .unwrap();
+        in_pos += result.bytes_consumed;
+        decompressed.extend_from_slice(&output_buf[..result.bytes_produced]);
+        if result.status == Status::StreamEnd {
+            break;
+        }
+    }
+
+    let mut expected = data_a.clone();
+    expected.extend_from_slice(data_b);
+    assert!(decompressed == expected);
+}
+
+#[test]
+fn zero_length_output_buffer() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let compressed = encode_xz(&data, 1);
+
+    let mut decoder = XzStream::new(false);
+    let mut output_buf = [0u8; 0];
+    let result = decoder
+        .process(&compressed, &mut output_buf, Action::Run)
+        .unwrap();
+    assert_eq!(result.bytes_produced, 0);
+}
+
+#[test]
+fn error_on_corrupted_payload() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let mut compressed = encode_xz(&data, 1);
+    let mid = compressed.len() / 2;
+    compressed[mid] ^= 0xFF;
+
+    let mut decoder = XzStream::new(false);
+    let mut output_buf = [0u8; 4096];
+    let mut in_pos = 0;
+
+    let mut errored = false;
+    for _ in 0..1000 {
+        let action = if in_pos >= compressed.len() {
+            Action::Finish
+        } else {
+            Action::Run
+        };
+        match decoder.process(&compressed[in_pos..], &mut output_buf, action) {
+            Ok(result) => {
+                in_pos += result.bytes_consumed;
+                if result.status == Status::StreamEnd {
+                    break;
+                }
+            }
+            Err(_) => {
+                errored = true;
+                break;
+            }
+        }
+    }
+    assert!(errored, "Expected error on corrupted payload");
+}
+
+#[test]
+fn process_after_stream_end() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let compressed = encode_xz(&data, 1);
+    let mut decoder = XzStream::new(false);
+    let mut output_buf = [0u8; 4096];
+    let mut in_pos = 0;
+
+    loop {
+        let action = if in_pos >= compressed.len() {
+            Action::Finish
+        } else {
+            Action::Run
+        };
+        let result = decoder
+            .process(&compressed[in_pos..], &mut output_buf, action)
+            .unwrap();
+        in_pos += result.bytes_consumed;
+        if result.status == Status::StreamEnd {
+            break;
+        }
+    }
+
+    let result = decoder.process(&[], &mut output_buf, Action::Finish);
+    match result {
+        Ok(r) => {
+            assert_eq!(r.bytes_consumed, 0);
+            assert_eq!(r.bytes_produced, 0);
+        }
+        Err(_) => {}
+    }
+}
+
+#[test]
+fn error_on_corrupted_magic() {
+    let mut compressed = encode_xz(b"test", 1);
+    compressed[0] = 0xFF;
+
+    let mut decoder = XzStream::new(false);
+    let mut output_buf = [0u8; 4096];
+    let result = decoder.process(&compressed, &mut output_buf, Action::Run);
+    assert!(result.is_err());
+}
+
+#[test]
+fn error_on_truncated_input() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let compressed = encode_xz(&data, 1);
+    let truncated = &compressed[..compressed.len() / 2];
+
+    let mut decoder = XzStream::new(false);
+    let mut output_buf = [0u8; 4096];
+    let mut in_pos = 0;
+
+    let mut errored = false;
+    for _ in 0..1000 {
+        let action = if in_pos >= truncated.len() {
+            Action::Finish
+        } else {
+            Action::Run
+        };
+        match decoder.process(&truncated[in_pos..], &mut output_buf, action) {
+            Ok(result) => {
+                in_pos += result.bytes_consumed;
+                if result.status == Status::StreamEnd {
+                    break;
+                }
+                if in_pos >= truncated.len()
+                    && result.bytes_consumed == 0
+                    && result.bytes_produced == 0
+                {
+                    match decoder.process(&[], &mut output_buf, Action::Finish) {
+                        Ok(_) => break,
+                        Err(_) => {
+                            errored = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                errored = true;
+                break;
+            }
+        }
+    }
+    assert!(errored, "Expected error on truncated input");
+}
+
+fn decode_bcj_xz(compressed_path: &str, original_path: &str) {
+    let compressed = std::fs::read(compressed_path).unwrap();
+    let original = std::fs::read(original_path).unwrap();
+
+    let mut decoder = XzStream::new(false);
+    let mut decompressed = Vec::new();
+    let mut output_buf = [0u8; 4096];
+    let mut in_pos = 0;
+
+    loop {
+        let action = if in_pos >= compressed.len() {
+            Action::Finish
+        } else {
+            Action::Run
+        };
+        let result = decoder
+            .process(&compressed[in_pos..], &mut output_buf, action)
+            .unwrap();
+        in_pos += result.bytes_consumed;
+        decompressed.extend_from_slice(&output_buf[..result.bytes_produced]);
+        if result.status == Status::StreamEnd {
+            break;
+        }
+    }
+    assert_eq!(decompressed.len(), original.len());
+    assert!(decompressed == original);
+}
+
+#[test]
+fn decode_bcj_x86() {
+    decode_bcj_xz("tests/data/wget-x86.xz", "tests/data/wget-x86");
+}
+
+#[test]
+fn decode_bcj_arm() {
+    decode_bcj_xz("tests/data/wget-arm.xz", "tests/data/wget-arm");
+}
+
+#[test]
+fn decode_bcj_arm64() {
+    decode_bcj_xz("tests/data/wget-arm64.xz", "tests/data/wget-arm64");
+}
+
+#[test]
+fn decode_bcj_arm_thumb() {
+    decode_bcj_xz("tests/data/wget-arm-thumb.xz", "tests/data/wget-arm-thumb");
+}
+
+#[test]
+fn decode_bcj_ia64() {
+    decode_bcj_xz("tests/data/wget-ia64.xz", "tests/data/wget-ia64");
+}
+
+#[test]
+fn decode_bcj_ppc() {
+    decode_bcj_xz("tests/data/wget-ppc.xz", "tests/data/wget-ppc");
+}
+
+#[test]
+fn decode_bcj_sparc() {
+    decode_bcj_xz("tests/data/wget-sparc.xz", "tests/data/wget-sparc");
+}
+
+#[test]
+fn decode_bcj_riscv() {
+    decode_bcj_xz("tests/data/wget-riscv.xz", "tests/data/wget-riscv");
+}
+
+#[test]
+fn decode_bcj_x86_byte_at_a_time() {
+    let compressed = std::fs::read("tests/data/wget-x86.xz").unwrap();
+    let original = std::fs::read("tests/data/wget-x86").unwrap();
+
+    let mut decoder = XzStream::new(false);
+    let mut decompressed = Vec::new();
+    let mut output_buf = [0u8; 4096];
+    let mut ci = 0;
+
+    while ci < compressed.len() {
+        let action = if ci == compressed.len() - 1 {
+            Action::Finish
+        } else {
+            Action::Run
+        };
+        let result = decoder
+            .process(&compressed[ci..ci + 1], &mut output_buf, action)
+            .unwrap();
+        decompressed.extend_from_slice(&output_buf[..result.bytes_produced]);
+        if result.bytes_consumed == 0 {
+            continue;
+        }
+        ci += result.bytes_consumed;
+        if result.status == Status::StreamEnd {
+            break;
+        }
+    }
+    assert_eq!(decompressed.len(), original.len());
+    assert!(decompressed == original);
+}
+
+#[test]
+fn failed_stream_stays_failed() {
+    let compressed = encode_xz(b"Hello, world!", 6);
+    let mut broken = compressed.clone();
+    broken[0] ^= 0xFF;
+
+    let mut decoder = XzStream::new(false);
+    let mut output_buf = [0u8; 4096];
+
+    let error = decoder
+        .process(&broken, &mut output_buf, Action::Finish)
+        .unwrap_err();
+    assert!(!error.to_string().contains("already failed"));
+
+    // The same decoder gets nowhere now, even on bytes that decode fine on
+    // their own.
+    let error = decoder
+        .process(&compressed, &mut output_buf, Action::Finish)
+        .unwrap_err();
+    assert!(error.to_string().contains("already failed"));
+
+    assert!(decode_with_stream(&compressed) == b"Hello, world!");
+}
+
+/// What a block with the given dictionary size needs, in KiB: the decoder state
+/// plus the dictionary, and no range decoder buffer.
+fn block_memory(dict_size: u32) -> u32 {
+    40 + dict_size / 1024
+}
+
+#[test]
+fn memory_limit_is_enforced_from_process() {
+    let compressed = encode_xz(b"Hello, world!", 6);
+    let mut output_buf = [0u8; 4096];
+
+    // The constructor cannot fail; the limit is checked once a block header has
+    // been parsed.
+    let mut decoder = XzStream::new_mem_limit(false, 1);
+    let error = decoder
+        .process(&compressed, &mut output_buf, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+
+    // A generous limit works on the same bytes.
+    assert!(decode_with_stream(&compressed) == b"Hello, world!");
+}
+
+#[test]
+fn memory_limit_matches_the_dictionary_in_the_block_header() {
+    let dict_size = XzOptions::with_preset(6).lzma_options.dict_size;
+    let compressed = encode_xz(b"Hello, world!", 6);
+    let needed = block_memory(dict_size);
+    let mut output_buf = [0u8; 4096];
+
+    let mut decoder = XzStream::new_mem_limit(false, needed);
+    let mut decompressed = Vec::new();
+    let mut pos = 0;
+    loop {
+        let result = decoder
+            .process(&compressed[pos..], &mut output_buf, Action::Finish)
+            .unwrap();
+        pos += result.bytes_consumed;
+        decompressed.extend_from_slice(&output_buf[..result.bytes_produced]);
+        if result.status == Status::StreamEnd {
+            break;
+        }
+        assert!(result.bytes_consumed != 0 || result.bytes_produced != 0);
+    }
+    assert!(decompressed == b"Hello, world!");
+
+    let mut decoder = XzStream::new_mem_limit(false, needed - 1);
+    let error = decoder
+        .process(&compressed, &mut output_buf, Action::Finish)
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::OutOfMemory);
+}
+
+/// Decodes until the stream fails, and returns why. Panics if it is accepted.
+fn stream_error(data: &[u8]) -> std::io::Error {
+    let mut decoder = XzStream::new(false);
+    let mut output = [0u8; 4096];
+    let mut in_pos = 0;
+
+    for _ in 0..64 {
+        match decoder.process(&data[in_pos..], &mut output, Action::Finish) {
+            Ok(result) => {
+                in_pos += result.bytes_consumed;
+                assert_ne!(result.status, Status::StreamEnd, "the stream was accepted");
+            }
+            Err(error) => return error,
+        }
+    }
+    panic!("the stream neither ended nor failed");
+}
+
+/// A valid stream, and the same stream cut inside its LZMA2 chunk. The chunk
+/// header declares more data than is handed over. The core cannot lean on the
+/// length and still holds bytes back when the input runs out.
+fn whole_and_cut_inside_the_lzma2_chunk(data: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let stream = encode_xz(data, 1);
+    // Stream header, block header and LZMA2 chunk header are 12 + 12 + 6 bytes.
+    assert!(
+        stream[24] >= 0xC0,
+        "expected an LZMA2 chunk that carries properties"
+    );
+    assert!(
+        stream.len() > 30 + 500 + 20,
+        "the chunk is too short to cut"
+    );
+
+    let cut = stream[..30 + 500].to_vec();
+    (stream, cut)
+}
+
+/// Damages each of the twenty bytes that can still be held back, one at a time,
+/// and splits the positions by verdict: corrupt data, or a stream cut short.
+/// Positions count back from the end. `1` is the last byte handed over.
+fn split_held_back_damage(stream: &[u8]) -> (Vec<usize>, Vec<usize>) {
+    let mut corrupt = Vec::new();
+    let mut short = Vec::new();
+
+    for back in 1..=20 {
+        let mut damaged = stream.to_vec();
+        let at = damaged.len() - back;
+        damaged[at] ^= 0xFF;
+
+        let error = stream_error(&damaged);
+        if error.kind() == ErrorKind::UnexpectedEof {
+            short.push(back);
+        } else {
+            corrupt.push(back);
+        }
+    }
+
+    (corrupt, short)
+}
+
+/// The held back bytes have to be decoded once the caller says the input ended.
+/// A symbol that is already in hand and already broken is otherwise reported as
+/// a stream that was cut short. Which positions carry one is a property of this
+/// stream. All twenty are damaged and the split is pinned.
+#[test]
+fn finish_reports_corrupt_data_in_the_held_back_input() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let (whole, cut) = whole_and_cut_inside_the_lzma2_chunk(&data);
+    let (corrupt, _) = split_held_back_damage(&cut);
+
+    assert_eq!(
+        corrupt,
+        [10, 12, 13, 16, 17, 18],
+        "the damage the decoder can already see changed"
+    );
+
+    // The broken symbol lies entirely in the bytes handed over. The same
+    // damage in the whole stream fails in the same way.
+    for back in corrupt {
+        let at = cut.len() - back;
+
+        let mut damaged_cut = cut.clone();
+        damaged_cut[at] ^= 0xFF;
+        let cut_error = stream_error(&damaged_cut);
+
+        let mut damaged_whole = whole.clone();
+        damaged_whole[at] ^= 0xFF;
+        let whole_error = stream_error(&damaged_whole);
+
+        assert_eq!(cut_error.kind(), whole_error.kind(), "byte {back} back");
+        assert_eq!(
+            cut_error.to_string(),
+            whole_error.to_string(),
+            "byte {back} back"
+        );
+    }
+}
+
+/// The other half of that decision. A symbol that can only be finished by
+/// reading the zero padding is no evidence that the data is wrong, only that
+/// the stream stops too early.
+#[test]
+fn finish_reports_a_short_stream_when_the_held_back_symbol_needs_more_input() {
+    let data = std::fs::read(INPUT_HTML).unwrap();
+    let (_, cut) = whole_and_cut_inside_the_lzma2_chunk(&data);
+
+    let error = stream_error(&cut);
+    assert_eq!(error.kind(), ErrorKind::UnexpectedEof, "{error}");
+
+    let (_, short) = split_held_back_damage(&cut);
+
+    assert_eq!(
+        short,
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 15, 19, 20],
+        "damage the decoder cannot make out on its own was reported as corrupt"
+    );
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+/// The block header follows the 12 byte stream header. Its first byte gives the
+/// size, its last four bytes the CRC32 of the rest.
+fn repair_block_header_crc(stream: &mut [u8]) {
+    let size = (stream[12] as usize + 1) * 4;
+    let end = 12 + size;
+    let crc = crc32(&stream[12..end - 4]).to_le_bytes();
+    stream[end - 4..end].copy_from_slice(&crc);
+}
+
+/// The same bytes through the reader, which shares the header parsing.
+fn reader_error(data: &[u8]) -> std::io::Error {
+    let mut decompressed = Vec::new();
+    XzReader::new(data, false)
+        .read_to_end(&mut decompressed)
+        .expect_err("the stream was accepted")
+}
+
+/// Bits 2-5 of the block flags are reserved. A set bit means the header has an
+/// unknown field. It should not be parsed.
+#[test]
+fn block_flags_reserved_bits_are_rejected() {
+    for bits in [0x04u8, 0x08, 0x10, 0x20, 0x3C] {
+        let mut stream = encode_xz(b"block flags", 1);
+        stream[13] |= bits;
+        repair_block_header_crc(&mut stream);
+
+        assert_eq!(stream_error(&stream).kind(), ErrorKind::Unsupported);
+        assert_eq!(reader_error(&stream).kind(), ErrorKind::Unsupported);
+    }
+}
+
+/// The header checksum is verified first. A damaged header is reported as
+/// corrupt and not as unsupported.
+#[test]
+fn a_broken_block_header_checksum_comes_before_the_reserved_bits() {
+    let mut stream = encode_xz(b"block flags", 1);
+    stream[13] |= 0x3C;
+
+    assert_eq!(stream_error(&stream).kind(), ErrorKind::InvalidData);
+    assert_eq!(reader_error(&stream).kind(), ErrorKind::InvalidData);
+}
+
+/// The stream header flags sit at offset 6, their CRC32 right behind them.
+fn repair_stream_header_crc(stream: &mut [u8]) {
+    let crc = crc32(&stream[6..8]).to_le_bytes();
+    stream[8..12].copy_from_slice(&crc);
+}
+
+/// The first byte of the stream flags is reserved, and so is the upper nibble
+/// of the second one, which holds the check type.
+#[test]
+fn stream_flags_reserved_bits_are_rejected() {
+    for (offset, bits) in [(6usize, 0x01u8), (6, 0x80), (7, 0x10), (7, 0xF0)] {
+        let mut stream = encode_xz(b"stream flags", 1);
+        stream[offset] |= bits;
+        repair_stream_header_crc(&mut stream);
+
+        assert_eq!(stream_error(&stream).kind(), ErrorKind::Unsupported);
+        assert_eq!(reader_error(&stream).kind(), ErrorKind::Unsupported);
+    }
+}
+
+/// The same for the stream header.
+#[test]
+fn a_broken_stream_header_checksum_comes_before_the_reserved_bits() {
+    let mut stream = encode_xz(b"stream flags", 1);
+    stream[6] |= 0x01;
+
+    assert_eq!(stream_error(&stream).kind(), ErrorKind::InvalidData);
+    assert_eq!(reader_error(&stream).kind(), ErrorKind::InvalidData);
+}

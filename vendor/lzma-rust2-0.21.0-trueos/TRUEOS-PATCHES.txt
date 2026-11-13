@@ -1,0 +1,13 @@
+Upstream: lzma-rust2 0.21.0, copied from the published crates.io source.
+License: Apache-2.0; see LICENSE. Cargo.toml.orig remains upstream reference.
+
+TRUEOS dependency port:
+- Cargo.toml pins the optional SHA-2 dependency to =0.10.9 instead of 0.11,
+  with default-features=false to preserve no_std kernel builds (0.10 defaults
+  to std, unlike 0.11).
+- All upstream compression/decompression/checksum implementation sources remain unchanged.
+- The XZ feature still enables SHA-2 and still validates SHA-256 block checksums.
+- Tests cover an externally generated SHA-256 XZ stream and a corrupted checksum.
+
+This keeps the decoder fixes from lzma-rust2 0.21 while sharing the kernel's
+existing digest 0.10 crypto ecosystem. Do not disable XZ or checksum validation.
