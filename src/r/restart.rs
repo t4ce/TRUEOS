@@ -1,7 +1,8 @@
 //! Blueprint restart policy for cold boots and live kernel replacement.
 //!
 //! These paths are intentionally exclusive. A power-on, reset, or ACPI reboot
-//! starts local Blueprints from AppDB, falling back to Appstore pullbot. A live update
+//! starts selected local Blueprints from AppDB. Custom startup manifests may
+//! fall back to Appstore pullbot. A live update
 //! leaves applications closed unless the legacy checkpoint feature is enabled.
 
 use alloc::{string::String, vec::Vec};
@@ -129,6 +130,10 @@ pub(crate) async fn restart_apps_task(spawner: Spawner) {
         crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
         super::startup_config::reload().await;
         let manifest = super::startup_config::manifest();
+        // Omitting a bundled default app is intentional. In particular, a
+        // build with Appstore but without Hull must not download Hull just
+        // because the repository's default startup manifest names it.
+        let embedded_defaults = manifest.as_ref() == COLD_START_BLUEPRINTS_JSON;
         let config: ColdStartConfiguration =
             match serde_json::from_slice(&manifest) {
                 Ok(config) => config,
@@ -143,7 +148,7 @@ pub(crate) async fn restart_apps_task(spawner: Spawner) {
             }
             Timer::after(Duration::from_millis(app.settle_ms)).await;
             let result = (|| {
-                if app.online_selector.is_none() {
+                if app.online_selector.is_none() || embedded_defaults {
                     if let Some(bytes) = crate::app_db::get(&app.archive)? {
                         let mut request = crate::hv::launcher::LaunchRequest::new(app.archive.clone(), bytes);
                         request.args = app.args.clone();
@@ -151,7 +156,12 @@ pub(crate) async fn restart_apps_task(spawner: Spawner) {
                         if let Some(instance) = &app.instance {
                             request.instance = crate::hv::BlueprintInstanceRequest::named(instance.clone());
                         }
-                        return crate::hv::launcher::enqueue(request, None).map(|_| ());
+                        return crate::hv::launcher::enqueue(request, None).map(|_| true);
+                    }
+                    if embedded_defaults {
+                        // An explicit/custom manifest still has the normal
+                        // online path below; default boot only starts local apps.
+                        return Ok(false);
                     }
                 }
                 let script = app.pullbot_script()?;
@@ -159,10 +169,11 @@ pub(crate) async fn restart_apps_task(spawner: Spawner) {
                     .ok_or_else(|| String::from("Appstore builtin unavailable"))?;
                 let mut request = crate::hv::launcher::LaunchRequest::new("apps.bp".into(), bytes);
                 request.script = Some(script);
-                crate::hv::launcher::enqueue(request, None).map(|_| ())
+                crate::hv::launcher::enqueue(request, None).map(|_| true)
             })();
             match result {
-                Ok(()) => crate::log!("restart: cold-start queued archive={} slot={}\n", app.archive, app.slot),
+                Ok(true) => crate::log!("restart: cold-start queued archive={} slot={}\n", app.archive, app.slot),
+                Ok(false) => crate::log!("restart: omitted default app archive={}; no automatic download\n", app.archive),
                 Err(error) => crate::log!("restart: cold-start failed archive={} error={}\n", app.archive, error),
             }
         }

@@ -1,19 +1,22 @@
 //! Volatile application catalog and Blueprint byte store.
 //!
-//! `app.db` is deliberately RAM-only. The kernel opens its compressed host-built
-//! redb image; online downloads add or replace rows until reboot.
+//! `app.db` is deliberately RAM-only. With bundled apps, the kernel opens its
+//! compressed host-built redb image. Kernel-only builds create the same tables
+//! empty. Online downloads can add or replace rows in either mode until reboot.
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::Write;
 
 use redb::{
-    Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, StorageBackend,
-    TableDefinition,
+    Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition,
 };
+#[cfg(feature = "buildin-apps")]
+use redb::StorageBackend;
 use sha2::{Digest, Sha256};
 use spin::{Mutex, Once};
 
+#[cfg(feature = "buildin-apps")]
 const APP_DB_IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.db.lz4"));
 include!(concat!(env!("OUT_DIR"), "/appdb-seed.rs"));
 const APPS: TableDefinition<&str, &[u8]> = TableDefinition::new("apps");
@@ -61,25 +64,53 @@ fn sha256_hex(bytes: &[u8]) -> String {
     text
 }
 
-/// Open the host-built app.db image in writable RAM before launch requests.
+/// Initialize a writable catalog before launch requests, seeded or empty.
 pub(crate) fn init_bsp() -> Result<usize, String> {
-    let image = crate::r::lz4::decompress_frame_cpu(APP_DB_IMAGE, APP_DB_IMAGE_LEN)
-        .map_err(|err| alloc::format!("decompress app.db image: {err:?}"))?;
-    if image.len() != APP_DB_IMAGE_LEN {
-        return Err(String::from("app.db image length mismatch"));
-    }
     let backend = redb::backends::InMemoryBackend::new();
-    backend
-        .set_len(image.len() as u64)
-        .map_err(|err| alloc::format!("allocate app.db image: {err}"))?;
-    backend
-        .write(0, &image)
-        .map_err(|err| alloc::format!("load app.db image: {err}"))?;
-    drop(image);
+    #[cfg(feature = "buildin-apps")]
+    {
+        let image = crate::r::lz4::decompress_frame_cpu(APP_DB_IMAGE, APP_DB_IMAGE_LEN)
+            .map_err(|err| alloc::format!("decompress app.db image: {err:?}"))?;
+        if image.len() != APP_DB_IMAGE_LEN {
+            return Err(String::from("app.db image length mismatch"));
+        }
+        backend
+            .set_len(image.len() as u64)
+            .map_err(|err| alloc::format!("allocate app.db image: {err}"))?;
+        backend
+            .write(0, &image)
+            .map_err(|err| alloc::format!("load app.db image: {err}"))?;
+    }
     let database = Database::builder()
         .set_cache_size(64 * 1024 * 1024)
         .create_with_backend(backend)
-        .map_err(|err| alloc::format!("open app.db image: {err}"))?;
+        .map_err(|err| alloc::format!("open app.db: {err}"))?;
+    #[cfg(not(feature = "buildin-apps"))]
+    {
+        let write = database
+            .begin_write()
+            .map_err(|err| alloc::format!("begin empty app.db initialization: {err}"))?;
+        {
+            let _apps = write
+                .open_table(APPS)
+                .map_err(|err| alloc::format!("create empty apps table: {err}"))?;
+            let _hashes = write
+                .open_table(HASHES)
+                .map_err(|err| alloc::format!("create empty hashes table: {err}"))?;
+            let _updated = write
+                .open_table(UPDATED)
+                .map_err(|err| alloc::format!("create empty dates table: {err}"))?;
+            let mut metadata = write
+                .open_table(METADATA)
+                .map_err(|err| alloc::format!("create empty metadata table: {err}"))?;
+            metadata.insert(trueos_appbundle::METADATA_KEY,
+                include_bytes!("../../TRUEOS-Blueprints/appbundle.json").as_slice())
+                .map_err(|err| alloc::format!("seed empty app bundle metadata: {err}"))?;
+        }
+        write
+            .commit()
+            .map_err(|err| alloc::format!("commit empty app.db initialization: {err}"))?;
+    }
     let (count, controllers) = {
         let read = database
             .begin_read()

@@ -1394,6 +1394,12 @@ fn negotiate_modern(common: core::ptr::NonNull<VirtioPciCommonCfg>) -> Option<bo
 }
 
 fn find_device() -> Option<pci::PciDevice> {
+    // This gate also covers init_first(): a disabled Virgl/virtio GPU path
+    // must not enable bus mastering or allocate DMA queues. The existing
+    // Limine framebuffer logo fallback remains available.
+    if !cfg!(feature = "subsystem-virgl") {
+        return None;
+    }
     let mut found = None;
     pci::with_devices(|list| {
         for dev in list {

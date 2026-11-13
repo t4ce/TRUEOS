@@ -93,12 +93,20 @@ test = false
 bench = false
 
 [features]
-default = ["trueos_h264_encode_stream", "trueos_task_profile", "odin-native-gpgpu"]
-trueos_h264_encode_stream = []
+default = ["buildin-apps", "subsystem-usb", "subsystem-igpu", "subsystem-virgl", "trueos_h264_encode_stream", "trueos_task_profile", "odin-native-gpgpu"]
+# Bundle the configured Blueprint apps. Without this feature the same kernel
+# starts with an empty writable app catalog; its runtime APIs remain available.
+buildin-apps = []
+# Cloud build selections control device admission. Shared ABI/types remain
+# compiled; these flags do not promise complete driver-code removal.
+subsystem-usb = []
+subsystem-igpu = []
+subsystem-virgl = []
+trueos_h264_encode_stream = ["subsystem-igpu"]
 trueos_h264_encode_probe = ["trueos_h264_encode_stream"]
 trueos_task_profile = ["trueos-executor/trueos-task-profile"]
 # Enable runtime-generated native compute for odin.son development.
-odin-native-gpgpu = []
+odin-native-gpgpu = ["subsystem-igpu"]
 # Compatibility experiments are excluded from the normal VMX lifecycle.
 # RAM pause/resume does not require checkpoint storage or replication.
 legacy_vm_checkpoint = []

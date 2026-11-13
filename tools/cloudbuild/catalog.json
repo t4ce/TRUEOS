@@ -1,0 +1,246 @@
+{
+  "schema": 2,
+  "default_preset": "universal",
+  "description": "Choose your kernel subsystems and the exact apps bundled with TRUEOS.",
+  "semantics": "Each bundled app is an independent payload choice; selecting none gives Kernel only. USB, Intel iGPU, and Virgl switches control device initialization. Shared interfaces and driver code remain compiled; complete driver binary pruning is not implemented.",
+  "features": [
+    {
+      "id": "buildins",
+      "label": "Bundled apps (buildins)",
+      "description": "Compatibility shorthand for all or no bundled apps. The individual app checklist chooses an exact set; selected kernel capabilities remain available.",
+      "kind": "packaging",
+      "cargo_feature": "buildin-apps",
+      "requires": []
+    },
+    {
+      "id": "usb",
+      "label": "USB",
+      "description": "Claim xHCI controllers and enable USB input, storage, MIDI, and network devices.",
+      "cargo_feature": "subsystem-usb",
+      "requires": []
+    },
+    {
+      "id": "igpu",
+      "label": "Intel iGPU",
+      "description": "Initialize supported Intel display, render, media, and compute hardware.",
+      "cargo_feature": "subsystem-igpu",
+      "requires": []
+    },
+    {
+      "id": "virgl",
+      "label": "Virgl / virtio GPU",
+      "description": "Initialize the QEMU virtio GPU and its Virgl compositor when available.",
+      "cargo_feature": "subsystem-virgl",
+      "requires": []
+    },
+    {
+      "id": "h264",
+      "label": "H.264 streaming",
+      "description": "Build the Intel hardware video streaming service.",
+      "cargo_feature": "trueos_h264_encode_stream",
+      "requires": ["igpu"]
+    },
+    {
+      "id": "native_gpgpu",
+      "label": "Native GPGPU development",
+      "description": "Enable runtime-generated native compute for odin.son development.",
+      "cargo_feature": "odin-native-gpgpu",
+      "requires": ["igpu"]
+    },
+    {
+      "id": "task_profile",
+      "label": "Task profiling",
+      "description": "Build executor task profiling and diagnostics.",
+      "cargo_feature": "trueos_task_profile",
+      "requires": []
+    },
+    {
+      "id": "speech",
+      "label": "Experimental speech",
+      "description": "Build the optional CPU speech and Kokoro services; runtime model assets are still required.",
+      "cargo_feature": "trueos_ttstt",
+      "requires": []
+    }
+  ],
+  "buildins_source": {
+    "repository": "t4ce/TRUEOS-Buildins",
+    "commit": "794a711607a159d97319f73c96ec0d8a29953c9f",
+    "manifest": "buildins.json"
+  },
+  "buildins": [
+    {
+      "id": "apps",
+      "label": "Appstore",
+      "description": "Browse, download, verify, and launch applications. Omit it when you supply apps another way."
+    },
+    {
+      "id": "commander",
+      "label": "Commander",
+      "description": "Terminal-to-VLayer control with keyboard and mouse input."
+    },
+    {
+      "id": "hull",
+      "label": "Hull",
+      "description": "The default desktop application. Omitting it also skips its default startup."
+    },
+    {
+      "id": "trauma",
+      "label": "Trauma",
+      "description": "HTTP and HTTPS downloads with retry support."
+    },
+    {
+      "id": "ssh",
+      "label": "SSH",
+      "description": "Connect to remote hosts with the SSH client."
+    },
+    {
+      "id": "img",
+      "label": "Image viewer",
+      "description": "View PNG and JPEG images with gallery browsing, pan, and zoom."
+    },
+    {
+      "id": "os",
+      "label": "OS",
+      "description": "System installation, live updates, reboot, and shutdown controls."
+    },
+    {
+      "id": "backup",
+      "label": "Backup",
+      "description": "Whole-disk backup and restore tools."
+    },
+    {
+      "id": "termdir",
+      "label": "Termdir",
+      "description": "Browse and manage files through the directory explorer."
+    },
+    {
+      "id": "edit",
+      "label": "Edit",
+      "description": "Read and edit text with the terminal editor."
+    },
+    {
+      "id": "share",
+      "label": "Share",
+      "description": "Serve application files through the standalone WebDAV app."
+    },
+    {
+      "id": "paper",
+      "label": "Paper",
+      "description": "An editable sheet with gridpaper, linepaper, and whitepaper modes."
+    }
+  ],
+  "presets": [
+    {
+      "id": "universal",
+      "label": "Universal",
+      "description": "Preserve the current default build: USB, supported Intel graphics, and the QEMU fallback.",
+      "features": ["buildins", "usb", "igpu", "virgl", "h264", "native_gpgpu", "task_profile"],
+      "buildins": ["apps", "commander", "hull", "trauma", "ssh", "img", "os", "backup", "termdir", "edit", "share", "paper"]
+    },
+    {
+      "id": "intel-desktop",
+      "label": "Intel desktop",
+      "description": "Supported Intel graphics with USB input, media streaming, and native compute.",
+      "features": ["buildins", "usb", "igpu", "h264", "native_gpgpu", "task_profile"],
+      "buildins": ["apps", "commander", "hull", "trauma", "ssh", "img", "os", "backup", "termdir", "edit", "share", "paper"]
+    },
+    {
+      "id": "qemu-virgl",
+      "label": "QEMU / Virgl",
+      "description": "USB and the virtio GPU compositor, with Intel device initialization disabled.",
+      "features": ["buildins", "usb", "virgl", "task_profile"],
+      "buildins": ["apps", "commander", "hull", "trauma", "ssh", "img", "os", "backup", "termdir", "edit", "share", "paper"]
+    },
+    {
+      "id": "kernel-only",
+      "label": "Kernel only",
+      "description": "No bundled apps, including the file explorer, app store, and text editor. Keep the normal kernel capabilities and choose your own subsystem switches.",
+      "features": ["usb", "igpu", "virgl", "h264", "native_gpgpu", "task_profile"],
+      "buildins": []
+    }
+  ],
+  "size_estimates": {
+    "schema": 1,
+    "reference": {
+      "label": "TRUEOS 0.0.235",
+      "version": "0.0.235",
+      "origin": "user-attached release archive",
+      "profile": "release",
+      "profile_basis": "user-described release; no build sidecar in archive",
+      "source_commit": null,
+      "tag_commit": "75e9b1dc08189d3bba546213b4d5f3b4f3ee9757",
+      "archive_bytes": 19447079,
+      "archive_sha256": "ddb2191bb6d6ef6aee0f03fdc21d874d57f4c0cc48a4ddfcc19bc4059a496c04",
+      "kernel_elf_bytes": 26213712,
+      "kernel_elf_sha256": "8fb5569f61b06da7078a4c82b1393f763fa15fc0083d382f0c4087b9740d9363",
+      "note": "Measured release reference. The archive does not prove its source revisions; rebuilt sizes may differ."
+    },
+    "buildins": {
+      "apps": {
+        "packed_bp_bytes": 125526,
+        "elf_bytes": 234024
+      },
+      "commander": {
+        "packed_bp_bytes": 56626,
+        "elf_bytes": 111240
+      },
+      "hull": {
+        "packed_bp_bytes": 3019130,
+        "elf_bytes": 6876568
+      },
+      "trauma": {
+        "packed_bp_bytes": 378732,
+        "elf_bytes": 682016
+      },
+      "ssh": {
+        "packed_bp_bytes": 647986,
+        "elf_bytes": 1150840
+      },
+      "img": {
+        "packed_bp_bytes": 128797,
+        "elf_bytes": 217968
+      },
+      "os": {
+        "packed_bp_bytes": 92018,
+        "elf_bytes": 174752
+      },
+      "backup": {
+        "packed_bp_bytes": 94810,
+        "elf_bytes": 173784
+      },
+      "termdir": {
+        "packed_bp_bytes": 336520,
+        "elf_bytes": 609032
+      },
+      "edit": {
+        "packed_bp_bytes": 475282,
+        "elf_bytes": 1053448
+      },
+      "share": {
+        "packed_bp_bytes": 735292,
+        "elf_bytes": 1364960
+      },
+      "paper": {
+        "packed_bp_bytes": 24482,
+        "elf_bytes": 40624
+      }
+    },
+    "kernel": {
+      "base_bytes": 20388475,
+      "basis": "derived",
+      "label": "Kernel + assets baseline",
+      "embedded_appdb_packed_bytes": 5825237,
+      "note": "Release kernel ELF minus its embedded compressed AppDB; includes other assets and layout overhead. Not a measured kernel-only build."
+    },
+    "subsystems": {
+      "status": "unmeasured",
+      "note": "Subsystem reductions are not measured. USB, Intel iGPU, and Virgl switches currently control initialization; no byte savings are deducted."
+    },
+    "units": {
+      "label": "kB",
+      "bytes_per_unit": 1000,
+      "rounding": "Sum exact byte counts before rounding to the nearest whole kB."
+    },
+    "note": "Selected-app and omitted-app totals use packed BP bytes. Kernel plus apps is an additive estimate, not a final ELF, compressed download, or RAM measurement."
+  }
+}

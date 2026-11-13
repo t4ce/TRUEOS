@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -22,7 +23,10 @@ class RigCommands(unittest.TestCase):
         self.bin = self.root / 'bin'
         self.bin.mkdir()
         self.env = dict(os.environ, PATH=f'{self.bin}:{os.environ["PATH"]}',
-                        TEST_ROOT=str(self.root))
+                        TEST_ROOT=str(self.root), TEST_REAL_PYTHON=sys.executable)
+        for name in ('TRUEOS_CLOUDBUILD_SPEC', 'TRUEOS_BUILDINS_SOURCE', 'TRUEOS_BUILDINS_DIR',
+                     'TRUEOS_BUILDINS_SELECTION', 'TRUEOS_BUILDINS_NATIVE_ONLY', 'CARGO_TARGET_DIR'):
+            self.env.pop(name, None)
 
     def script(self, path, text):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -189,6 +193,11 @@ printf '%s\\0' "$CARGO_BUILD_JOBS" "$RAYON_NUM_THREADS" "$TRUEOS_BUILD_SCOPE" "$
         script = self.root / 'tools/trueos-boot/prepare.sh'
         script.parent.mkdir(parents=True)
         shutil.copy(ROOT / 'tools/trueos-boot/prepare.sh', script)
+        for name in ('build_plan.py', 'catalog.json'):
+            destination = self.root / 'tools/cloudbuild' / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(ROOT / 'tools/cloudbuild' / name, destination)
+        self.script(self.bin / 'git', "printf '%s\\n' '1111111111111111111111111111111111111111'\n")
         buildins = self.root / 'buildins'
         (buildins / 'tools').mkdir(parents=True)
         (buildins / 'tools/build.py').touch()
@@ -199,15 +208,8 @@ printf '%s\\0' "$CARGO_BUILD_JOBS" "$RAYON_NUM_THREADS" "$TRUEOS_BUILD_SCOPE" "$
         firmware.parent.mkdir(parents=True)
         firmware.write_bytes(b'firmware')
         self.script(self.bin / 'python3', '''
-if [[ $1 == */build_api_prm.py ]]; then
-    echo api-reference >> "$TEST_ROOT/trace"
-    test "$(cat "$TEST_ROOT/Cargo.lock")" = "resolved lock"
-    test "$TRUEOS_API_SOURCE_ROOT" = "$TEST_ROOT"
-    test "$2" = --output
-    test "$3" = "$TEST_ROOT/../TRUEOS-Blueprints/crates/trueos-ide/api-prm"
-    if [[ ${API_STATUS:-0} != 0 ]]; then exit "$API_STATUS"; fi
-    touch "$TEST_ROOT/api-ready"
-    exit 0
+if [[ $1 == */build_plan.py ]]; then
+    exec "$TEST_REAL_PYTHON" "$@"
 fi
 if [[ $1 == */bundle.py ]]; then
     echo bundle >> "$TEST_ROOT/trace"
@@ -217,14 +219,21 @@ if [[ $1 == */bundle.py ]]; then
     echo "bundle:$TEST_KERNEL_PROFILE" > "$2/TrueOS.tar.lz4"
     exit "${BUNDLE_STATUS:-0}"
 fi
-echo buildins >> "$TEST_ROOT/trace"
-test -f "$TEST_ROOT/api-ready"
+test "$1" = "$TEST_ROOT/tools/cloudbuild/buildins.py"
 test -f "$TEST_ROOT/Cargo.lock"
+# The selected adapter owns Edit's private reference stage. It must not be a
+# separate preparation command that writes into the sibling source checkout.
+if [[ ,$TRUEOS_BUILDINS_SELECTION, == *,edit,* ]]; then
+    echo api-reference >> "$TEST_ROOT/trace"
+    test "$TRUEOS_API_SOURCE_ROOT" = "$TEST_ROOT"
+    if [[ ${API_STATUS:-0} != 0 ]]; then exit "$API_STATUS"; fi
+fi
+echo buildins >> "$TEST_ROOT/trace"
 if [[ ${TEST_NATIVE_ONLY:-0} = 1 ]]; then
     test "$TRUEOS_BUILDINS_NATIVE_ONLY" = 1
     test "${!#}" = --native-only
     mkdir -p "$TRUEOS_BUILDINS_DIR"
-    echo '{"buildins":["paper"]}' > "$TRUEOS_BUILDINS_DIR/buildins.json"
+    "$TEST_REAL_PYTHON" -c 'import json, os; print(json.dumps({"buildins": os.environ["TRUEOS_BUILDINS_SELECTION"].split(",")}, separators=(",", ":")))' > "$TRUEOS_BUILDINS_DIR/buildins.json"
     echo '{"native_only":true}' > "$TRUEOS_BUILDINS_DIR/ready.json"
 else
     test "$TRUEOS_BUILDINS_NATIVE_ONLY" = 0
@@ -279,7 +288,7 @@ echo runtime > "$3"
         normal.write_text('previous full kernel')
         roots = []
         for _ in range(2):
-            result = subprocess.run(['bash', str(script), '--release', '--native-only'], env=self.env,
+            result = subprocess.run(['bash', str(script), '--release', '--buildins', 'paper', '--native-only'], env=self.env,
                                     capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             generation = (self.root / 'tgt/pxe-current').resolve()
@@ -289,6 +298,33 @@ echo runtime > "$3"
             self.assertEqual((Path(roots[-1]) / 'kernel.map').read_text(), 'link-map\n')
             self.assertEqual(normal.read_text(), 'previous full kernel')
         self.assertNotEqual(roots[0], roots[1])
+
+    def test_native_no_app_generation_has_no_app_readiness_or_sibling_work(self):
+        script = self.prepare_fixture('release')
+        self.env['TEST_NATIVE_ONLY'] = '1'
+        self.env['TRUEOS_BUILDINS_SOURCE'] = str(self.root / 'missing-buildins-source')
+        result = subprocess.run(['bash', str(script), '--no-buildins', '--native-only'], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        generation = (self.root / 'tgt/pxe-current').resolve()
+        import json
+        self.assertEqual(json.loads((generation / 'buildins.json').read_text()), {'buildins': []})
+        self.assertFalse((generation / 'buildins-ready.json').exists())
+        isolated = Path((generation / 'native-only-build-root').read_text().strip())
+        self.assertTrue((isolated / 'kernel.map').is_file())
+        self.assertFalse((isolated / 'buildins').exists())
+        trace = (self.root / 'trace').read_text().splitlines()
+        self.assertFalse(any(step in ('buildins', 'api-reference') for step in trace))
+
+    def test_normal_preparation_respects_caller_kernel_target_directory(self):
+        script = self.prepare_fixture('release')
+        self.env['CARGO_TARGET_DIR'] = str(self.root / 'alternate kernel target')
+        result = subprocess.run(['bash', str(script), '--release'], env=self.env,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((Path(self.env['CARGO_TARGET_DIR']) / 'x86_64-unknown-trueos/release/TRUEOS').read_text(), 'kernel\n')
+        self.assertEqual((self.root / 'tgt/pxe-current/TRUEOS.elf').read_text(), 'runtime\n')
+        self.assertFalse((self.root / 'tgt/x86_64-unknown-trueos').exists())
 
     def test_clean_release_creates_kernel_lock_before_building_apps(self):
         script = self.prepare_fixture('release')

@@ -215,6 +215,12 @@ pub fn init_once() {
     if INIT.swap(true, Ordering::AcqRel) {
         return;
     }
+    // Shared GPU interfaces stay compiled. Device-dependent services already
+    // gate on the claimed-device/readiness state established below.
+    if !cfg!(feature = "subsystem-igpu") {
+        crate::log!("intel: disabled by build selection; display device remains unclaimed\n");
+        return;
+    }
     let Some(dev) = find_dev() else {
         crate::log!("intel: no Intel display-class PCI device claimed\n");
         return;

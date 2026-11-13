@@ -27,6 +27,42 @@ boot files available for comparison and recovery. The preparer writes only to
 The preparer defaults to release. `--dev` uses the dev kernel and stages
 `tgt/usb-debug/`.
 
+### Kernel only / no buildins
+
+This is a regular build option:
+
+```sh
+bash tools/trueos-boot/prepare.sh --release --no-buildins
+# Or: bash tools/trueos-boot/prepare.sh --dev --no-buildins
+```
+
+It skips building and embedding the bundled apps, including the file explorer,
+app store, and text editor. The selected kernel capabilities remain available,
+and the app database starts empty and writable. TRUEOS-Buildins is not needed
+for this mode; the kernel's TRUEOS-Blueprints source dependencies and archived
+toolchain still are. The cloud selector exposes the same choice as the regular
+**Kernel only** preset or **None** in the bundled-app checklist. It combines with
+subsystem deselection; see [the kernel-only guide](../cloudbuild/KERNEL_ONLY.md).
+
+If `TRUEOS_CLOUDBUILD_SPEC` is set, that manifest determines the app-payload
+choice. `--no-buildins` cannot override a manifest that includes buildins.
+
+### Individual buildins
+
+Each of the 12 existing buildins is independently selectable. For example,
+keep the directory explorer and text editor with the normal kernel features:
+
+```sh
+bash tools/trueos-boot/prepare.sh --release --buildins termdir,edit
+```
+
+Use `--buildins all` for the normal app payload, or `--buildins none` for the
+same payload as `--no-buildins`. A subset compiles and embeds only its selected
+app packages; empty skips the entire app build. A supplied cloud manifest
+must agree with an explicit local selection. See
+[Individual buildins](../cloudbuild/BUILDINS.md) for the app list, cloud request
+format, and first-boot behavior.
+
 Preparation uses Cargo's normal parallelism. Set
 `CARGO_BUILD_JOBS` when a particular build needs a different job count.
 For an explicit resource-limited diagnostic run, prefix the preparation command
@@ -55,25 +91,38 @@ All twelve configured builtins use the audited core/alloc target: Commander,
 Img, OS, Backup, Termdir, Paper, Edit, Apps, Hull, Share, Trauma and SSH.
 `cargo rigreal --native-only` verifies them in isolation. Each invocation creates a fresh
 `tgt/native-only.XXXXXX/` directory containing separate builtin and kernel
-targets, a twelve-app AppDB, and a kernel link map. No prior Cargo object or AppDB
-is reused in these targets. The normal configuration continues to select all
-apps in `TRUEOS-Buildins/buildins.json`.
+targets, an AppDB for the exact selected apps, and a kernel link map. No prior
+Cargo object or AppDB is reused in these targets. The default selection still
+includes all twelve apps in `TRUEOS-Buildins/buildins.json`.
+
+The preparation script combines this validation mode with an explicit app list:
+
+```sh
+bash tools/trueos-boot/prepare.sh --release --buildins termdir,edit --native-only
+bash tools/trueos-boot/prepare.sh --release --no-buildins --native-only
+```
+
+`--native-only` validates the selected list; it never removes apps from a local
+or supplied cloud manifest. With no buildins, it still creates a fresh kernel
+target and link map while skipping all app work. Outside this isolated mode,
+the preparer respects `CARGO_TARGET_DIR` for the kernel ELF.
 
 The isolated generation is published and resets the rig through the usual
 workflow. Its `native-only-build-root`, `buildins.json` and
 `buildins-ready.json` record the exact inputs outside the three-member boot
 archive. The driver rejects a selected builtin that requires std or imports a
-symbol from the existing Unix classifier. The kernel's libc/POSIX allocation,
+symbol from the existing Unix classifier. A no-buildins generation records an
+empty `buildins.json` and has no app readiness record. The kernel's libc/POSIX allocation,
 descriptor, process, signal and pthread compatibility providers have been
 removed, including their reexported C allocation aliases. Legacy Blueprint
 imports fail prebind and cannot fall through to loader stubs. Freestanding
 memory, string and math helpers remain available.
 
-The normal workflow selects the same twelve builtins. SSH uses the shared
+SSH uses the shared
 Sunset source for incoming and outgoing sessions; the outgoing app adds its
 key-file and curve features without enabling them for the incoming kernel.
 
-Without `--native-only`, both commands attempt all apps from the sibling `TRUEOS-Buildins/buildins.json`,
+By default, both commands build all apps from the sibling `TRUEOS-Buildins/buildins.json`,
 create and compress an app.db redb image containing their normal Blueprint
 packages, embed that image in the kernel, build the release EFI loader, and
 create `TrueOS.tar.lz4` from the prepared native boot files. They publish the
@@ -95,7 +144,11 @@ The native loader keeps that file below 4 GiB. PXE and USB receive the same
 runtime image. A stripping failure prevents publication and reset.
 
 The buildins belong to the kernel generation; they have no separate publishing
-step. The small driver in `TRUEOS-Buildins/tools/build.py` uses the pinned Rust
+step. The selected-set adapter in `tools/cloudbuild/buildins.py` reuses the
+app compiler and packager in `TRUEOS-Buildins/tools/build.py` and seeds AppDB
+from the exact selected manifest. When Edit is selected, its shared IDE crate
+and generated API reference are staged under the selected build output's `dependencies/`
+so the sibling source checkout remains clean. The builder uses the pinned Rust
 toolchain, Python 3.11+, `patch`, `nm`, `readelf`, and the host `liblz4` library.
 It keeps the TRUEOS std adaptations in a private sysroot and leaves the installed
 toolchain unchanged. Set `TRUEOS_BUILDINS_SOURCE` to select another source checkout.
@@ -127,7 +180,7 @@ custom object target.
 
 Generated app sources, dependency locks, Cargo caches, linked objects, packages,
 database images, and logs live in `tgt/buildins/dev/` or `tgt/buildins/release/`.
-Dev and release caches stay separate. The driver invokes Cargo for every app on
+Dev and release caches stay separate. The driver invokes Cargo for every selected app on
 each run; Cargo decides which Rust inputs need recompilation. Unchanged staged
 sources retain their timestamps. Packaging runs when the Cargo `.o` content,
 Blueprint flags, or package format changes, and validates the stripped module
@@ -179,7 +232,7 @@ The rig build does not start an HTTP server. `pxe3.js` serves the three native
 boot files over TFTP and only `/TrueOS.tar.lz4` over HTTP. Online disk installation retains its
 separate `https://trueos.eu/TrueOS.lz4` endpoint and older ISO-containing bundle.
 
-The kernel build verifies that the prepared set matches the current sources and
+With `buildin-apps` enabled, the kernel build verifies that the prepared set matches the current sources and
 contains every configured app. Missing, stale or failed app builds stop the flow
 before the kernel is published or the rig is reset. A direct `cargo build`
 consumes a verified prepared set. Refresh the complete dev generation without

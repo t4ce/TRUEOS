@@ -434,9 +434,25 @@ fn manifest_names(text: &str) -> Result<Vec<String>, String> {
 }
 
 fn generate_app_buildins() {
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_BUILDIN_APPS");
     println!("cargo:rerun-if-env-changed=TRUEOS_BUILDINS_DIR");
     println!("cargo:rerun-if-env-changed=TRUEOS_BUILDINS_SOURCE");
+    println!("cargo:rerun-if-env-changed=TRUEOS_BUILDINS_SELECTION");
     println!("cargo:rerun-if-env-changed=TRUEOS_BUILDINS_NATIVE_ONLY");
+    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    if env::var_os("CARGO_FEATURE_BUILDIN_APPS").is_none() {
+        // No app payload and no sibling Buildins check in a kernel-only build.
+        // Explicitly replace generated files so even a reused OUT_DIR cannot
+        // retain a previous build's apps. The runtime creates empty RAM tables.
+        fs::write(out.join("app.db.lz4"), []).expect("clear omitted app.db payload");
+        fs::write(
+            out.join("appdb-seed.rs"),
+            "const APP_DB_EXPECTED_APPS: usize = 0;\n",
+        )
+        .expect("generate empty app.db metadata");
+        println!("cargo:warning=kernel-only build: no buildin apps embedded");
+        return;
+    }
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let profile = if env::var("PROFILE").as_deref() == Ok("release") {
         "release"
@@ -449,13 +465,20 @@ fn generate_app_buildins() {
     let source = env::var_os("TRUEOS_BUILDINS_SOURCE")
         .map(PathBuf::from)
         .unwrap_or_else(|| manifest_dir.join("../TRUEOS-Buildins"));
+    let selection = env::var("TRUEOS_BUILDINS_SELECTION").unwrap_or_else(|_| String::from("all"));
+    let adapter = manifest_dir.join("tools/cloudbuild/buildins.py");
+    println!("cargo:rerun-if-changed={}", adapter.display());
     let mut command = std::process::Command::new("python3");
-    command.arg(source.join("tools/build.py"));
+    command.arg(adapter);
     if env::var("TRUEOS_BUILDINS_NATIVE_ONLY").as_deref() == Ok("1") {
         command.arg("--native-only");
     }
     let checked = command
         .arg("--check")
+        .arg("--source")
+        .arg(&source)
+        .arg("--selection")
+        .arg(&selection)
         .arg("--kernel")
         .arg(&manifest_dir)
         .arg("--profile")
@@ -482,7 +505,6 @@ fn generate_app_buildins() {
         .unwrap_or_else(|err| panic!("required app.db image {}: {err}", image.display()));
     let raw_size = fs::metadata(directory.join("app.db")).expect("prepared redb image").len();
     assert!(raw_size > 0, "prepared app.db must not be empty");
-    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     fs::write(out.join("app.db.lz4"), bytes).expect("embed compressed app.db");
     fs::write(out.join("appdb-seed.rs"), format!(
         "const APP_DB_IMAGE_LEN: usize = {raw_size};\nconst APP_DB_EXPECTED_APPS: usize = {};\n", names.len()

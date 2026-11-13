@@ -35,6 +35,12 @@ static BSP_HEADLESS_SKIP_CRABUSB_XHCI_CLAIM: core::sync::atomic::AtomicBool =
 
 #[trueos_executor::task]
 pub async fn usb_controller_service_task() {
+    // Keep shared HID/storage ABI types available, but never claim an xHCI
+    // controller when USB was deselected for this build.
+    if !cfg!(feature = "subsystem-usb") {
+        crate::log!("crabusb: disabled by build selection; xhci remains unclaimed\n");
+        return;
+    }
     if BSP_HEADLESS_SKIP_CRABUSB_XHCI_CLAIM.load(core::sync::atomic::Ordering::Acquire) {
         crate::log!(
             "crabusb: BSP headless boot experiment enabled; xhci remains enumerated and unclaimed\n"
