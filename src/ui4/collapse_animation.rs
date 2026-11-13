@@ -449,6 +449,10 @@ pub(super) fn project(mut collapsed: WindowSnapshot) -> WindowSnapshot {
     collapsed
 }
 
+pub(super) fn active_for(owner:WindowOwner,window:WindowId)->bool {
+    ANIMATIONS.lock().iter().any(|a|!a.cancelled&&a.owner==owner&&a.window==window)
+}
+
 pub(super) fn active() -> bool {
     !ANIMATIONS.lock().is_empty()
 }

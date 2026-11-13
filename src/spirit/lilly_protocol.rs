@@ -972,6 +972,17 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
     if let Some(idle) = IDLE_STRATEGY.lock().as_mut() {
         idle.settle_posture();
     }
+    #[cfg(not(test))]
+    if super::codex_handoff::needs_crossed() {
+        let mut state = IDLE_STRATEGY.lock();
+        let idle = state.get_or_insert_with(|| LillyIdleStrategy::new(Instant::now()));
+        if !idle.crossed {
+            idle.pending_crossed=Some(true);
+            return resolve(IDLE_CROSS_ARMS_TRANSITION, *LAST_RGBA.lock());
+        }
+        super::codex_handoff::crossed_ready();
+        return resolve_static_idle(IDLE_CROSSED_SOFT_BLINK, *LAST_RGBA.lock(), 100);
+    }
     {
         let mut activity = ACTIVITY_GESTURES.lock();
         let activity = activity.get_or_insert_with(LillyActivityGestures::new);

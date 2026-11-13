@@ -15,7 +15,8 @@ const LILLY_EXPECTED_LOGICAL_FRAMES: usize = LILLY_EXPECTED_ASSETS * LILLY_FRAME
 const LILLY_IDENTITY_SOURCE_MAP: [u8; LILLY_FRAMES_PER_ASSET] = [1, 2, 3, 4, 5, 6, 7];
 const GPU_PAGE_BYTES: usize = 4096;
 const LILLY_EXECUTION_GPU_BASE: u64 = 0x3000_0000;
-const LILLY_EXECUTION_GPU_LIMIT: u64 = 0x4000_0000;
+// Final256KiB is reserved for the single producer's procedural source.
+const LILLY_EXECUTION_GPU_LIMIT: u64 = 0x3ffc_0000;
 const _: () = assert!(LILLY_EXECUTION_GPU_BASE.is_multiple_of(GPU_PAGE_BYTES as u64));
 const _: () = assert!(LILLY_EXECUTION_GPU_LIMIT.is_multiple_of(GPU_PAGE_BYTES as u64));
 const _: () = assert!(LILLY_EXECUTION_GPU_BASE < LILLY_EXECUTION_GPU_LIMIT);
@@ -184,6 +185,15 @@ pub(crate) fn resident_frame(name: &str) -> Option<LillyResidentFrame> {
     }
     let (directory, index) = split_frame_name(name)?;
     find_source_frame(frames, directory, index).map(|frame| frame.surface)
+}
+
+/// Copy only a frame belonging to this immutable resident allocation.
+pub(super) fn copy_frame(frame: LillyResidentFrame, destination: &mut [u8]) -> bool {
+    let resident = LILLY_RESIDENT.lock();
+    let Some(resident) = resident.as_ref() else { return false; };
+    if destination.len() != frame.bytes || !resident.frames.iter().any(|f| f.surface == frame) { return false; }
+    let Some(offset) = frame.phys.checked_sub(resident.allocation.phys()).and_then(|v|usize::try_from(v).ok()) else { return false; };
+    resident.allocation.read(offset, destination)
 }
 
 /// Resolve a complete resident asset by semantic identity. This is the normal

@@ -55,6 +55,11 @@ mod gpu {
                 crate::WRITES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 true
             }
+            pub fn read(&self, offset:usize, dst:&mut [u8])->bool {
+                let data=self.data.lock().unwrap();
+                let Some(src)=data.get(offset..offset+dst.len()) else{return false;};
+                dst.copy_from_slice(src); true
+            }
             pub fn flush(&self) {
                 crate::FLUSHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }

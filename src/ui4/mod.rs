@@ -6,6 +6,7 @@
 pub(crate) mod blueprint_ui4;
 mod collapse;
 mod collapse_animation;
+mod codex_handoff;
 mod color_picker;
 mod chroma_animation;
 mod chroma_color;

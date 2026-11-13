@@ -54,6 +54,14 @@ impl ResidentDmaBuffer {
         true
     }
 
+    /// Copy immutable resident source pixels without lending the allocation pointer.
+    pub(crate) fn read(&self, offset: usize, destination: &mut [u8]) -> bool {
+        let Some(end) = offset.checked_add(destination.len()) else { return false; };
+        if end > self.bytes { return false; }
+        unsafe { core::ptr::copy_nonoverlapping(self.virt.add(offset), destination.as_mut_ptr(), destination.len()); }
+        true
+    }
+
     pub(crate) fn flush(&self) {
         crate::intel::dma_flush(self.virt, self.bytes);
     }

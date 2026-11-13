@@ -1580,10 +1580,10 @@ impl WindowRecord {
             maximized: self.dock_target == Some(WindowDockTarget::Maximize),
             dock_target: self.dock_target,
         };
-        Some(super::collapse_animation::project(
+        Some(super::codex_handoff::project(super::collapse_animation::project(
             self.collapse
                 .map_or(snapshot, |collapse| collapse.project(snapshot)),
-        ))
+        )))
     }
 
     /// Retained transition/resize placements must not restore an obsolete z.
@@ -3070,6 +3070,7 @@ pub(crate) fn publish_window_frame(
 }
 
 pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), WindowBrokerError> {
+    super::codex_handoff::cancel(owner, id);
     super::collapse_animation::cancel(owner, id);
     let icon = {
         let mut broker = WINDOW_BROKER.lock();
@@ -3632,6 +3633,7 @@ pub(super) fn install_collapse(
     id: WindowId,
     mut icon: super::collapse::Collapse,
 ) -> Result<(), WindowBrokerError> {
+    super::codex_handoff::cancel(owner, id);
     super::collapse_animation::cancel(owner, id);
     let old = {
         let mut broker = WINDOW_BROKER.lock();
@@ -3657,6 +3659,7 @@ pub(super) fn install_collapse(
 }
 
 pub(super) fn clear_collapse(owner: WindowOwner, id: WindowId) {
+    super::codex_handoff::cancel(owner, id);
     super::collapse_animation::cancel(owner, id);
     let icon = {
         let mut broker = WINDOW_BROKER.lock();
@@ -3717,6 +3720,7 @@ fn change_collapse(
     if !toggle && collapse_state(owner, id) == Some(true) {
         return Ok(());
     }
+    super::codex_handoff::cancel(owner, id);
     super::collapse_animation::cancel(owner, id);
     let output_extent = super::output_dimensions();
     let mut broker = WINDOW_BROKER.lock();
@@ -3748,6 +3752,7 @@ fn change_collapse(
     }
     broker.mark_composition_changed();
     drop(broker);
+    if collapsing { super::codex_handoff::queue(owner,id,compact.frame); }
     super::cursor_frame_inout::selection_strip_stack_changed();
     Ok(())
 }
@@ -3796,6 +3801,7 @@ pub(super) fn collapse_animation_changed(owner: WindowOwner, id: WindowId) {
 }
 
 fn release_collapse(owner: WindowOwner, session: Option<WindowSessionId>) {
+    // Per-window cancellation follows the retained icon list below.
     let icons = {
         let mut broker = WINDOW_BROKER.lock();
         let mut icons = Vec::new();
@@ -3814,7 +3820,8 @@ fn release_collapse(owner: WindowOwner, session: Option<WindowSessionId>) {
         icons
     };
     for (id, frame) in icons {
-        super::collapse_animation::cancel(owner, id);
+        super::codex_handoff::cancel(owner, id);
+    super::collapse_animation::cancel(owner, id);
         retire_frame_when_released(frame);
     }
 }

@@ -158,6 +158,12 @@ pub(crate) fn enable_window_collapse(
     pitch: usize,
     rgba: &[u8],
 ) -> Result<(), CollapseError> {
+    // Codex is identified by its running Blueprint identity, never by a label
+    // or by matching another application's image. Old CLI registrations also
+    // receive the new native64 tile, including its authored gray background.
+    let (width,height,pitch,rgba)=if super::codex_handoff::canonical_icon(owner,window) {
+        (64,64,256,&crate::spirit::codex_handoff::ICON[..])
+    } else {(width,height,pitch,rgba)};
     if !(1..=MAX_COLLAPSE_IMAGE_SIZE).contains(&width)
         || !(1..=MAX_COLLAPSE_IMAGE_SIZE).contains(&height)
         || pitch < width as usize * 4

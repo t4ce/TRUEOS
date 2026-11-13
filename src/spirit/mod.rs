@@ -26,6 +26,7 @@ mod lilly;
 mod lilly_cursor;
 mod paper_demo;
 mod codex_drop;
+pub(crate) mod codex_handoff;
 pub(crate) use codex_drop::{introduce_attachments, attachment_intro_input, poll_attachment_intro, cancel_attachment_intro};
 pub(crate) use paper_demo::{GREETING_GRID_HEIGHT_MM, GREETING_GRID_SCALE, GREETING_GRID_WIDTH_MM};
 pub(crate) mod lilly_protocol;
@@ -547,6 +548,10 @@ fn submit_spirit_vfx_frame(
     source_frame: lilly::LillyResidentFrame,
 ) -> Result<GpuInflight, SpiritSubmitError> {
     let lease = acquire_frame_for(id, SpiritBarrierSet::GPU, SpiritFrameProducer::Vfx)?;
+    let handoff = if id == SpiritFenceId::FENCE_0 {
+        codex_handoff::source(source_frame, lease.fence.sequence)
+    } else { None };
+    let source_frame = handoff.unwrap_or(source_frame);
     let target = match gpgpu_bgra_target(lease) {
         Ok(target) => target,
         Err(error) => {
@@ -566,7 +571,7 @@ fn submit_spirit_vfx_frame(
         return Err(SpiritSubmitError::HardwareNotReady);
     };
     let snapshot = spirit_vfx::gpu_snapshot();
-    let control = crate::intel::gpgpu::SpiritVfxControl {
+    let mut control = crate::intel::gpgpu::SpiritVfxControl {
         revision: snapshot.revision,
         background_mode: snapshot.background_mode,
         clock_seconds_of_day: snapshot.clock_seconds_of_day,
@@ -588,6 +593,10 @@ fn submit_spirit_vfx_frame(
         fx_color_a: snapshot.fx_color_a,
         fx_color_b: snapshot.fx_color_b,
     };
+    if handoff.is_some() {
+        control.position_x=0.0; control.position_y=0.0; control.rotation_radians=0.0;
+        control.alpha_cutoff=0.0; control.edge_fade_pixels=0.0; control.shader_mode=0;
+    }
     let Some(first_claim) = crate::r::services::shell3_font_service::claim_first_spirit_producer() else {
         cancel_pending(lease);
         return Err(SpiritSubmitError::Busy);
@@ -1434,6 +1443,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                         complete_frame(active.frame.lease);
                         if active.frame.producer == SpiritFrameProducer::Vfx {
                             presentation_rate.observe_surflive(Instant::now());
+                            codex_handoff::presented(active.frame.lease.fence.sequence);
                         }
                         if !boot_move_queued {
                             boot_move_queued = true;
