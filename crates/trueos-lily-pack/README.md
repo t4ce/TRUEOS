@@ -20,8 +20,11 @@ Spirit embeds `tools/Lilly.lpak` instead of `tools/Lilly.tar.lz4`. It expands ea
 frame once during the existing cold first job, writes all 599 RGBA8 surfaces to
 its persistent DMA allocation, then releases the temporary index/decoder buffers.
 The resident allocation is 157,024,256 bytes (149.75 MiB), fitting the existing
-256 MiB execution VA reservation. Existing shader transforms and presentation
-settings still apply to these bottom-centered source canvases.
+256 MiB execution VA reservation. The sprite walker presents this canvas at
+unit scale with zero rotation: one source pixel per cursor pixel, upright and
+unmirrored. Texel-center sampling preserves pixels with nearest and linear
+sampling. Edge feather defaults to zero so the bottom row stays intact.
+Explicit VFX transforms and effects remain available.
 
 `tools/Lilly.catalog` is unchanged: 70 stable keys, seven logical frames each,
 original timings, playback modes and source repeats. `tools/Lilly.sources` maps

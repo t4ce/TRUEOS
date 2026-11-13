@@ -775,7 +775,7 @@ fn scanrunmon_position(width: u32, height: u32, elapsed_ms: u64) -> SpiritPositi
     }
 }
 
-async fn run_scanrunmon(id: SpiritFenceId, origin: SpiritPosition) {
+async fn run_scanrunmon(id: SpiritFenceId, destination: SpiritPosition) {
     if let Some((width, height)) = crate::intel::complete_scanout_pipeline_dimensions(id.index()) {
         let started = Instant::now();
         loop {
@@ -794,9 +794,9 @@ async fn run_scanrunmon(id: SpiritFenceId, origin: SpiritPosition) {
             }
             Timer::after(Duration::from_millis(1)).await;
         }
-        // Restore even after an interrupted scan; never release or repurpose
+        // Finish at the requested destination even after an interrupted scan; never release or repurpose
         // cursor backing just because movement failed.
-        if let Err(error) = intel_cursor::spirit_cursor_move(id.0, origin.cursor_frame()) {
+        if let Err(error) = intel_cursor::spirit_cursor_move(id.0, destination.cursor_frame()) {
             crate::log_warn!(target: "gfx"; "trueos-spirit: scanrunmon restore failed error={:?}\n", error);
         }
     }
@@ -1155,7 +1155,7 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
             continue;
         }
         // Both signals are consumed by Spirit's single CUR_POS owner. A scan
-        // wake never overwrites the latest ordinary movement request.
+        // wake carries its destination separately from ordinary movement requests.
         let mut movement = core::pin::pin!(MOVE_SIGNALS[id.index()].wait());
         let mut scan = core::pin::pin!(SCANRUNMON_WAKE.wait());
         let next = core::future::poll_fn(|cx| {

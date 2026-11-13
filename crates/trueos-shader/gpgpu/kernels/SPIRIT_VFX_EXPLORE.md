@@ -126,10 +126,14 @@ planes.
 
 ## Final edge feather
 
+LillyDS is bottom-centered on a 256×256 canvas and presented at scale 1.0,
+rotation 0°. Cursor Y is converted explicitly to the shader UV convention,
+keeping X unchanged. Texel-center sampling preserves native pixels.
+
 After background and Lilly have been source-over composed, the sprite kernel
-applies one smooth whole-surface alpha feather. The outermost pixel is exactly
-transparent and the default 12-pixel transition reaches the untouched composed
-result inward. Because the surface is premultiplied BGRA, RGB and alpha are
+can apply one smooth whole-surface alpha feather. It defaults to zero to preserve
+the native bottom row. When enabled, the outermost pixel is exactly transparent
+and the configured transition reaches the untouched composed result inward. Because the surface is premultiplied BGRA, RGB and alpha are
 multiplied by the same factor. `set_edge_fade_pixels()` exposes a bounded 0–16
 pixel width, with zero disabling the operation.
 
@@ -161,7 +165,7 @@ legacy OpenCL-C, or duplicate shader implementation.
 | Artifact | Bytes | BTIs | Cross-thread | Per-thread | SHA-256 |
 | --- | ---: | ---: | ---: | ---: | --- |
 | `spirit_vfx_background_rgba8.bin` | 224,248 | 2 | 64 | 96 | `af8097d1f52e914091e480f3ee43111cab92b5bba19bd2f73f3f3456e9a506d8` |
-| `spirit_vfx_sprite_rgba8.bin` | 656,728 | 3 | 96 | 96 | `a5bca7b15af0bcab952d093a184876fed01fbce4e4c7d55feffaaf55c33ce5f7` |
+| `spirit_vfx_sprite_rgba8.bin` | 658,352 | 3 | 96 | 96 | `3909b5025e181361ef0b2aa8a029ad5a680f136c44a28e60df2b935f5315ea2b` |
 
 Both artifacts use text offset `0x40` within their own Zebin. The clean default
 maps only the sprite at `0x0D470000`, uses that mapping as the instruction base,

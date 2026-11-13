@@ -11,8 +11,8 @@ The live renderer:
 2. loads the checked-in C++ SPIR-V on the host GPU;
 3. dispatches stable Sprite shader IDs 0 through 15 with their exact demo
    defaults and colors;
-4. uses Spirit's live fixed Lilly scale `0.65` and leaves background ID zero
-   in every control page, so the sprite kernel
+4. uses Spirit's native Lilly scale `1.0`, zero rotation, and no edge feather;
+   background ID stays zero in every control page, so the sprite kernel
    starts from transparent pixels and no procedural-background pass runs;
 5. animates all sixteen premultiplied 256x256 results beside a compact control
    panel in one centered, borderless 1344x1024 ARGB window at Spirit's 60 Hz

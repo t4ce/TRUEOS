@@ -36,8 +36,10 @@ paths=[folder/n for n in ['static.png','uncrossed.png','reading-book-v2.png']]
 frames=[]
 for path in paths:
     im=Image.open(path).convert('RGBA')
-    pixels=np.array(im,dtype=np.uint8)
-    frames.append((im.size,cl.Buffer(context,cl.mem_flags.READ_ONLY|cl.mem_flags.COPY_HOST_PTR,hostbuf=pixels)))
+    canvas=Image.new('RGBA',(256,256))
+    canvas.paste(im,((256-im.width)//2,256-im.height))
+    pixels=np.array(canvas,dtype=np.uint8)
+    frames.append((canvas.size,cl.Buffer(context,cl.mem_flags.READ_ONLY|cl.mem_flags.COPY_HOST_PTR,hostbuf=pixels)))
 control=np.zeros(32,dtype=np.uint32)
 floats=control.view(np.float32)
 control[0]=0x53564658;control[1]=1

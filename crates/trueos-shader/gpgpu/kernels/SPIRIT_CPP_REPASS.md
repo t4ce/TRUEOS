@@ -79,7 +79,7 @@ and byte-identical two-root reproduction.
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
 | `spirit_vfx_background_rgba8.bin` | 224,248 | `af8097d1f52e914091e480f3ee43111cab92b5bba19bd2f73f3f3456e9a506d8` |
-| `spirit_vfx_sprite_rgba8.bin` | 656,728 | `a5bca7b15af0bcab952d093a184876fed01fbce4e4c7d55feffaaf55c33ce5f7` |
+| `spirit_vfx_sprite_rgba8.bin` | 658,352 | `3909b5025e181361ef0b2aa8a029ad5a680f136c44a28e60df2b935f5315ea2b` |
 
 The background maps at `0x0D430000`; its larger C++ image requires the sprite
 mapping at `0x0D470000`. In a two-walker batch the background remains the

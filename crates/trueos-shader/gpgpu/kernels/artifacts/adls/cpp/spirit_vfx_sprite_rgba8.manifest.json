@@ -5,7 +5,7 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "e27ed673f4c647af69834438a31dd084e9789a751934fe97ece2d66660b05847",
+      "sha256": "3909b5025e181361ef0b2aa8a029ad5a680f136c44a28e60df2b935f5315ea2b",
       "size_bytes": 658352,
       "type": "relocatable",
       "ze_info_section_offset": 654736,
@@ -156,13 +156,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 502960,
+          "entry_size": 502952,
           "section_alignment": 0,
           "section_name": ".text.spirit_vfx_sprite_rgba8",
           "section_offset": 64,
           "section_size": 503104,
-          "sha256": "e8a20b5ed79c14da376e11eadce847db5c6e80155129d2fa46845811676e1305",
-          "symbol_size": 502960,
+          "sha256": "4805be93f2fbfb992dac6e9ff2d914faea61044ac3f095fdf121b464a3dc3295",
+          "symbol_size": 502952,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -179,9 +179,9 @@
     ],
     "spirv": {
       "embedded_section_offset": 503240,
-      "embedded_section_size": 151424,
-      "sha256": "cda4f5877484406d73da6e097789ed62269a14ced0ca8b9db8d5b07bfb401c40",
-      "size_bytes": 151424
+      "embedded_section_size": 151420,
+      "sha256": "744c54fda780838c80c1b71520c8303264638f85388463260aa344092bb05f4e",
+      "size_bytes": 151420
     }
   },
   "provenance": {
@@ -386,8 +386,8 @@
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/spirit_vfx_sprite_rgba8.clcpp",
-        "sha256": "441f88f4bd1d898f18a601f0d8a5512ac77116da3ddc2f96b6d3ed9b7ece9c2b",
-        "size_bytes": 42052
+        "sha256": "edff0c76419780a49144caf1546824a3c3e35a93dda6e4acc4f107cdece2a679",
+        "size_bytes": 42204
       }
     ],
     "language": "C++ for OpenCL",

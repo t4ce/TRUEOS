@@ -78,7 +78,11 @@ half = { version = "2.7.1", default-features = false }
 libm = { version = "0.2", default-features = false }
 serde = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false }
-sha2 = { version = "=0.11.1", default-features = false }
+# Keep SHA-2 on the digest 0.10 ecosystem used by Sunset, rustls-rustcrypto,
+# ed25519-dalek, P-256/P-384 and RSA. Moving only our direct SHA-2 dependency
+# duplicates the crypto stack. Lift this pin only with a coordinated migration
+# of those consumers and verification that the older stack leaves the kernel graph.
+sha2 = { version = "=0.10.9", default-features = false }
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
 
 [[bin]]
