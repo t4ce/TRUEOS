@@ -89,6 +89,26 @@ pub fn cursor_part(pose: Pose, icon: &[u8], opacity: u8, dst: &mut [u8]) {
         }
     }
 }
+
+/// Source-over into the completed cursor's premultiplied BGRA back buffer.
+/// The caller owns its CPU producer bit and has waited for GPU completion.
+pub fn cursor_bgra_part(pose: Pose, icon: &[u8], opacity: u8, dst: &mut [u8], pitch: usize) {
+    for y in 0..64 {
+        for x in 0..64 {
+            if let Some((dx, dy)) = pose.inside(x, y) {
+                let s = tile_pixel(icon, x, y, opacity);
+                let d = &mut dst[dy * pitch + dx * 4..][..4];
+                let sa = u32::from(s[3]);
+                for c in 0..3 {
+                    let foreground = (u32::from(s[2 - c]) * sa + 127) / 255;
+                    let behind = (u32::from(d[c]) * (255 - sa) + 127) / 255;
+                    d[c] = (foreground + behind).min(255) as u8;
+                }
+                d[3] = (sa + (u32::from(d[3]) * (255 - sa) + 127) / 255).min(255) as u8;
+            }
+        }
+    }
+}
 pub fn ui4_part(pose: Pose, icon: &[u8], opacity: u8, dst: &mut [u8], pitch: usize) {
     dst.fill(0);
     for y in 0..64 {
@@ -108,6 +128,41 @@ pub fn ui4_part(pose: Pose, icon: &[u8], opacity: u8, dst: &mut [u8], pitch: usi
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cpu_stamp_preserves_shaded_pixels_and_bgra_premultiplication() {
+        let pose = Pose {
+            icon: Point { x: -32, y: 10 },
+            cursor: Point::default(),
+        };
+        let mut icon = alloc::vec![0;64*64*4];
+        for p in icon.chunks_exact_mut(4) {
+            p.copy_from_slice(&[200, 100, 50, 128]);
+        }
+        let pitch = 1056;
+        let mut dst = alloc::vec![77;pitch*256];
+        for row in dst.chunks_exact_mut(pitch) {
+            for p in row[..1024].chunks_exact_mut(4) {
+                p.copy_from_slice(&[20, 30, 40, 255]);
+            }
+        }
+        cursor_bgra_part(pose, &icon, 255, &mut dst, pitch);
+        assert_eq!(&dst[..4], &[20, 30, 40, 255]);
+        assert_eq!(&dst[10 * pitch..10 * pitch + 4], &[35, 65, 120, 255]);
+        assert_eq!(
+            &dst[10 * pitch + 32 * 4..10 * pitch + 33 * 4],
+            &[20, 30, 40, 255]
+        );
+        assert!(
+            dst.chunks_exact(pitch)
+                .all(|row| row[1024..].iter().all(|v| *v == 77))
+        );
+        let mut transparent = alloc::vec![0;pitch*256];
+        cursor_bgra_part(pose, &icon, 255, &mut transparent, pitch);
+        assert_eq!(
+            &transparent[10 * pitch..10 * pitch + 4],
+            &[25, 50, 100, 128]
+        );
+    }
     #[test]
     fn all_directions_partition_every_pixel_once() {
         let cursor = Point { x: 300, y: 200 };

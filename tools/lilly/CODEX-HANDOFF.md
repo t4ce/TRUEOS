@@ -20,8 +20,8 @@ Other apps retain their usual movable compact tile. A live Codex Blueprint
    with no mouse input or Lilly frame changes. It takes 320–1100 ms depending on
    distance. The destination follows the applied 256 × 256 cursor plane. Lilly
    can prepare crossed arms during the delay and flight.
-5. At the plane overlap, Spirit composes the inside portion; slot4 draws the
-   outside portion. A 48 px approach margin temporarily raises Spirit's producer
+5. At the plane overlap, Spirit stamps the inside portion after the character's
+   GPU VFX pass; slot4 draws the outside portion. A 48 px approach margin temporarily raises Spirit's producer
    target to 60 Hz. Both portions use one acknowledged integer pose and identical
    native alpha/window opacity. Until the first overlap acknowledgement, slot4
    retains its last complete outside pose. Ordinary Lilly sprite timings remain
@@ -45,10 +45,24 @@ No new buildin, app window, pointer source or Blueprint ABI is introduced.
 
 ## Ownership and presentation
 
-Only Spirit's existing single GPU producer writes a persistent 256 KiB DMA
-source scratch, after its previous source read has completed. It copies immutable
-resident sprites, never a GPU destination. Outside the hardware plane, the
-software sprite needs none of this copying or GPU work. The scratch reserves GPU
+Lilly and Wish C use the configured sprite VFX throughout. The native Codex
+tile is applied afterwards to the completed premultiplied BGRA cursor back
+buffer, through the existing `CPU_AND_GPU` barrier and `write_cpu` API. Ordering
+is GPU completion/release, CPU cache invalidation, alpha-correct stamp, CPU
+flush/release, then cursor eligibility. Ordinary frames keep their GPU-only
+path. A stamp validates its sequence and visual before writing; canceled work
+does not add a logo. The normal background settings are passed through too.
+
+The existing barrier and explicit GPU-then-CPU stamping contract were introduced
+by `t4ce` in commit `4e8e079098cf8f14e138afa484f87d73a4c26848`, 21 July 2026
+23:33 CEST (`ok`).
+
+Only the 100 ms landing crossfade needs the persistent 256 KiB DMA source
+scratch, written by Spirit's single producer after its previous GPU source
+read has completed. It blends immutable resident character sprites before VFX;
+the native tile fades out in the post-pass as the authored chest stamp fades in.
+Outside the hardware plane, the software sprite needs none of this copying or
+GPU work. The scratch reserves GPU
 VA `[0x3ffc0000,0x40000000)`; the asset loader excludes that interval. It remains
 allocated across cancellations so an in-flight read cannot outlive it. GPU Logger
 pauses the handoff clock.
@@ -60,9 +74,8 @@ that acknowledgement on its next presentation. An on-device visual check is
 still needed to assess the brief boundary hold and any one-frame seam; host tests
 cannot establish cross-plane display timing or sustained hardware frame rate.
 
-During the procedural hardware portion, sprite translation, rotation, alpha
-cutoff, edge fade and decorative shader mode reset to clean values. The user's
-Spirit background remains enabled.
+No handoff override disables the character's shader, transform, alpha cutoff
+or edge fade. The post-pass keeps the incoming logo independent of those effects.
 
 ## Native tile and regeneration
 
@@ -106,6 +119,7 @@ the original crop offset a second time. Wish C durations are
 ```sh
 cargo check --release --bin TRUEOS
 python3 tools/testpy/test_codex_handoff.py
+python3 tools/testpy/test_spirit_vfx_cpu_stamp.py
 python3 tools/testpy/test_codex_slot4_sprite.py
 python3 tools/testpy/test_ui4_pointer_groups.py
 python3 tools/testpy/test_ui4_dock_collapse.py

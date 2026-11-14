@@ -60,6 +60,13 @@ mod intel {
     pub fn dma_flush(_: *mut u8, _: usize) {}
 }
 mod spirit {
+    #[derive(Clone, Copy)]
+    pub struct SpiritSurfaceLayout {
+        pub width: u32,
+        pub height: u32,
+        pub pitch_bytes: u32,
+        pub byte_len: usize,
+    }
     pub fn marker_anchor() -> Option<(u32, u32, i32, i32, u32, u32)> {
         Some((
             1920,
@@ -104,7 +111,7 @@ mod spirit {
     }
     #[path = "@TRUEOS_ROOT@/src/spirit/codex_handoff.rs"]
     pub mod codex_handoff;
-    pub fn source(seq: u64) -> Option<lilly::LillyResidentFrame> {
+    pub fn source(seq: u64) -> Option<codex_handoff::Source> {
         codex_handoff::source(lilly::resident_frame("Static_up/static.png")?, seq)
     }
 }
@@ -304,7 +311,29 @@ fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
     time(940);
     assert!(a::fast_updates());
     let last = a::software_visual().unwrap();
-    assert!(spirit::source(10).is_some());
+    let frame = spirit::source(10).unwrap();
+    assert_eq!(
+        frame.surface.phys, 1,
+        "GPU receives the unmodified Lilly sprite"
+    );
+    let layout = spirit::SpiritSurfaceLayout {
+        width: 256,
+        height: 256,
+        pitch_bytes: 1024,
+        byte_len: 256 * 256 * 4,
+    };
+    let mut rendered = vec![0; layout.byte_len];
+    for p in rendered.chunks_exact_mut(4) {
+        p.copy_from_slice(&[20, 30, 40, 255]);
+    }
+    let before = rendered.clone();
+    assert!(frame.stamp.unwrap().apply(&mut rendered, layout));
+    assert_ne!(before, rendered, "logo appears after GPU shading");
+    assert_eq!(
+        &rendered[..4],
+        &[20, 30, 40, 255],
+        "Lilly VFX pixels away from logo survive"
+    );
     assert_eq!(
         a::software_visual().unwrap(),
         last,
@@ -335,6 +364,11 @@ fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
     spirit::source(13).unwrap();
     a::presented(13);
     assert!(a::software_visual().is_none());
+    time(2100);
+    assert!(
+        spirit::source(16).unwrap().stamp.is_none(),
+        "authored ring frames use normal VFX without a native stamp"
+    );
     time(4240);
     spirit::source(14).unwrap();
     a::presented(14);
@@ -361,8 +395,19 @@ fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
     ui4::queue(4);
     ui4::advance();
     time(6000);
-    spirit::source(15).unwrap();
+    let canceled_frame = spirit::source(15).unwrap();
     ui4::cancel(4);
+    let mut canceled_pixels = before.clone();
+    assert!(
+        canceled_frame
+            .stamp
+            .unwrap()
+            .apply(&mut canceled_pixels, layout)
+    );
+    assert_eq!(
+        canceled_pixels, before,
+        "late CPU pass skips a canceled logo"
+    );
     a::presented(15);
     assert!(a::software_visual().is_none());
     assert!(a::visual().is_none());

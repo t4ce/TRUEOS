@@ -547,11 +547,21 @@ fn submit_spirit_vfx_frame(
     present_fps: u32,
     source_frame: lilly::LillyResidentFrame,
 ) -> Result<GpuInflight, SpiritSubmitError> {
-    let lease = acquire_frame_for(id, SpiritBarrierSet::GPU, SpiritFrameProducer::Vfx)?;
-    let handoff = if id == SpiritFenceId::FENCE_0 {
+    // Capture eligibility before reserving the producer bits. An arrival that
+    // starts concurrently waits one frame rather than receiving a GPU-only
+    // lease for a source that needs a post-VFX CPU stamp.
+    let cpu_required = id == SpiritFenceId::FENCE_0 && codex_handoff::active();
+    let required = if cpu_required {
+        SpiritBarrierSet::CPU_AND_GPU
+    } else {
+        SpiritBarrierSet::GPU
+    };
+    let lease = acquire_frame_for(id, required, SpiritFrameProducer::Vfx)?;
+    let handoff = if cpu_required {
         codex_handoff::source(source_frame, lease.fence.sequence)
     } else { None };
-    let source_frame = handoff.unwrap_or(source_frame);
+    let stamp = handoff.and_then(|source| source.stamp);
+    let source_frame = handoff.map_or(source_frame, |source| source.surface);
     let target = match gpgpu_bgra_target(lease) {
         Ok(target) => target,
         Err(error) => {
@@ -571,7 +581,7 @@ fn submit_spirit_vfx_frame(
         return Err(SpiritSubmitError::HardwareNotReady);
     };
     let snapshot = spirit_vfx::gpu_snapshot();
-    let mut control = crate::intel::gpgpu::SpiritVfxControl {
+    let control = crate::intel::gpgpu::SpiritVfxControl {
         revision: snapshot.revision,
         background_mode: snapshot.background_mode,
         clock_seconds_of_day: snapshot.clock_seconds_of_day,
@@ -593,10 +603,6 @@ fn submit_spirit_vfx_frame(
         fx_color_a: snapshot.fx_color_a,
         fx_color_b: snapshot.fx_color_b,
     };
-    if handoff.is_some() {
-        control.position_x=0.0; control.position_y=0.0; control.rotation_radians=0.0;
-        control.alpha_cutoff=0.0; control.edge_fade_pixels=0.0; control.shader_mode=0;
-    }
     let Some(first_claim) = crate::r::services::shell3_font_service::claim_first_spirit_producer() else {
         cancel_pending(lease);
         return Err(SpiritSubmitError::Busy);
@@ -612,7 +618,28 @@ fn submit_spirit_vfx_frame(
         lease,
         submission,
         polls: 0,
+        cpu_required,
+        stamp,
     })
+}
+
+/// The GPU completion is the write-order proof. The CPU bit keeps this back
+/// buffer ineligible for cursor presentation until the hindsight pass flushes.
+fn release_vfx_producers(
+    producing: &GpuInflight,
+    release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
+) -> Result<bool, SpiritSubmitError> {
+    let first_retired = release_gpgpu(producing.lease, release)?;
+    if producing.cpu_required {
+        if let Some(stamp) = producing.stamp {
+            let stamped = write_cpu(producing.lease, |pixels, layout| stamp.apply(pixels, layout))?;
+            if !stamped {
+                return Err(SpiritSubmitError::InvalidCommand);
+            }
+        }
+        release_cpu(producing.lease)?;
+    }
+    Ok(first_retired)
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -957,6 +984,8 @@ struct GpuInflight {
     lease: SpiritFrameLease,
     submission: crate::intel::gpgpu::SpiritVfxSubmission,
     polls: u32,
+    cpu_required: bool,
+    stamp: Option<codex_handoff::Stamp>,
 }
 
 /// Low-cost display-rate feedback for the shader status dot. Only completed
@@ -1359,7 +1388,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     continue;
                 }
                 crate::intel::gpgpu::SpiritVfxCompletion::Complete(release) => {
-                    let first_retired = match release_gpgpu(producing.lease, release) {
+                    let first_retired = match release_vfx_producers(&producing, release) {
                         Ok(first_retired) => first_retired,
                         Err(error) => {
                             cancel_pending(producing.lease);
@@ -1383,13 +1412,14 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     if spirit_should_trace_frame(stream_queued_frames) {
                         crate::log_info!(
                             target: "gfx";
-                            "trueos-spirit: vfx producer released frame={} shader_frame={} tag={} fence={} sequence={} polls={} gate=gpu-only next=cursor-arm\n",
+                            "trueos-spirit: vfx producer released frame={} shader_frame={} tag={} fence={} sequence={} polls={} cpu_hindsight={} gate=all-required-producers next=cursor-arm\n",
                             stream_queued_frames,
                             producing.submission.frame(),
                             producing.submission.tag(),
                             fence_index,
                             producing.lease.fence.sequence,
                             producing.polls,
+                            producing.cpu_required as u8,
                         );
                     }
                     gpu_inflight = None;

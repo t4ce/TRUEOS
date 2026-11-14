@@ -1,6 +1,7 @@
 //! Lilly-owned procedural Codex arrival. UI4 never writes the cursor surface.
 //! Only the single Spirit producer writes the persistent source scratch, after
-//! the preceding GPU source read has retired. No GPU destination is CPU-mapped.
+//! the preceding GPU source read has retired. Native logo stamping uses the
+//! completed back buffer under Spirit's ordered GPU-then-CPU producer barrier.
 extern crate alloc;
 use super::lilly::{self, LillyResidentFrame};
 use crate::ui4::{WindowId, WindowOwner};
@@ -38,6 +39,42 @@ pub(crate) struct Visual {
     pub pose: Pose,
     pub hidden: bool,
     pub opacity: u8,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Source {
+    pub surface: LillyResidentFrame,
+    pub stamp: Option<Stamp>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Stamp {
+    visual: Visual,
+    sequence: u64,
+    opacity: u8,
+}
+impl Stamp {
+    pub(crate) fn apply(self, pixels: &mut [u8], layout: super::SpiritSurfaceLayout) -> bool {
+        let s = STATE.lock();
+        if !s
+            .pending
+            .is_some_and(|(seq, v)| seq == self.sequence && v == self.visual)
+        {
+            return true; // canceled or replaced while the GPU was producing
+        }
+        let pitch = layout.pitch_bytes as usize;
+        if layout.width != 256
+            || layout.height != 256
+            || pitch < 1024
+            || pitch
+                .checked_mul(256)
+                .is_none_or(|bytes| bytes > pixels.len() || bytes > layout.byte_len)
+        {
+            return false;
+        }
+        geometry::cursor_bgra_part(self.visual.pose, ICON, self.opacity, pixels, pitch);
+        true
+    }
 }
 
 struct Arrival {
@@ -226,7 +263,7 @@ pub(super) fn shift_deadlines(paused_ms: u64) {
 }
 
 /// Called by the single normal Spirit producer after its previous GPU read.
-pub(super) fn source(default: LillyResidentFrame, sequence: u64) -> Option<LillyResidentFrame> {
+pub(super) fn source(default: LillyResidentFrame, sequence: u64) -> Option<Source> {
     let now = trueos_time::Instant::now().as_millis();
     let (_, _, cx, cy, 256, 256) = super::marker_anchor()? else {
         return None;
@@ -266,55 +303,67 @@ pub(super) fn source(default: LillyResidentFrame, sequence: u64) -> Option<Lilly
                     opacity,
                 },
             ));
-            return lilly::resident_frame("Static_up/static.png");
+            return Some(Source {
+                surface: lilly::resident_frame("Static_up/static.png")?,
+                stamp: None,
+            });
         }
     }
     let frame = path.and_then(lilly::resident_frame).unwrap_or(default);
-    if s.scratch.is_none() {
-        s.scratch = Some(crate::gpu::resident::ResidentDmaBuffer::allocate_zeroed(
-            BYTES, 4096,
-        )?);
-    }
-    s.pixels.resize(BYTES, 0);
-    if !lilly::copy_frame(frame, &mut s.pixels) {
-        return None;
-    }
-    if wish.is_none() {
-        geometry::cursor_part(pose, ICON, opacity, &mut s.pixels);
-    } else if wish.is_some_and(|t| t < 100) {
-        // Land with the exact gray-backed tile, then blend into the authored
-        // background-free, palette-quantized chest stamp without a pop.
+    let surface = if wish.is_some_and(|t| t < 100) {
+        // Crossfade the two character sources before their ordinary VFX.
+        // The native logo is stamped afterwards and fades out independently.
         let t = wish.unwrap();
+        if s.scratch.is_none() {
+            s.scratch = Some(crate::gpu::resident::ResidentDmaBuffer::allocate_zeroed(
+                BYTES, 4096,
+            )?);
+        }
+        s.pixels.resize(BYTES, 0);
+        if !lilly::copy_frame(frame, &mut s.pixels) {
+            return None;
+        }
         let mut native = alloc::vec![0;BYTES];
         if !lilly::copy_frame(lilly::resident_frame("Static_up/static.png")?, &mut native) {
             return None;
         }
-        geometry::cursor_part(pose, ICON, opacity, &mut native);
         for (out, from) in s.pixels.iter_mut().zip(native) {
             *out = ((u64::from(from) * (100 - t) + u64::from(*out) * t + 50) / 100) as u8;
         }
-    }
-    let dma = s.scratch.as_ref()?;
-    if !dma.write(0, &s.pixels) {
-        return None;
-    }
-    dma.flush();
-    let source = LillyResidentFrame {
-        phys: dma.phys(),
-        gpu: SOURCE_GPU,
-        bytes: BYTES,
-        width: 256,
-        height: 256,
-        pitch_bytes: 1024,
+        let dma = s.scratch.as_ref()?;
+        if !dma.write(0, &s.pixels) {
+            return None;
+        }
+        dma.flush();
+        LillyResidentFrame {
+            phys: dma.phys(),
+            gpu: SOURCE_GPU,
+            bytes: BYTES,
+            width: 256,
+            height: 256,
+            pitch_bytes: 1024,
+        }
+    } else {
+        frame
     };
-    s.pending = Some((
-        sequence,
-        Visual {
-            key,
-            pose,
-            hidden: wish.is_some(),
+    let visual = Visual {
+        key,
+        pose,
+        hidden: wish.is_some(),
+        opacity,
+    };
+    s.pending = Some((sequence, visual));
+    let stamp_opacity = match wish {
+        None => Some(opacity),
+        Some(t) if t < 100 => Some(((u64::from(opacity) * (100 - t) + 50) / 100) as u8),
+        _ => None,
+    };
+    Some(Source {
+        surface,
+        stamp: stamp_opacity.map(|opacity| Stamp {
+            visual,
+            sequence,
             opacity,
-        },
-    ));
-    Some(source)
+        }),
+    })
 }
