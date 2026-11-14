@@ -1780,11 +1780,18 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                 }
                 match submit_spirit_vfx_frame(id, presentation_rate.estimate_fps(), source_frame) {
                     Ok(producing) => {
-                        let period = spirit_vfx_frame_period(&mut stream_cadence_phase);
+                        let fast_handoff = id == SpiritFenceId::FENCE_0 && codex_handoff::fast_updates();
+                        let period = if fast_handoff {
+                            spirit_frame_period(&mut stream_cadence_phase, 60)
+                        } else {
+                            spirit_vfx_frame_period(&mut stream_cadence_phase)
+                        };
                         let scheduled = stream_next_deadline + period;
                         let now = Instant::now();
                         stream_next_deadline = if now > scheduled {
-                            now + period
+                            // A late overlap frame must not add another full
+                            // frame of delay after its GPU/display work.
+                            if fast_handoff { now } else { now + period }
                         } else {
                             scheduled
                         };

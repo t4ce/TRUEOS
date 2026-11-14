@@ -48,24 +48,25 @@ struct Arrival {
     crossed: bool,
     landed: Option<u64>,
     opacity: u8,
+    entered: bool,
 }
 struct State {
     active: Option<Arrival>,
-    absorbed: Vec<Key>,
     committed: Option<Visual>,
     pending: Option<(u64, Visual)>,
     scratch: Option<crate::gpu::resident::ResidentDmaBuffer>,
     pixels: Vec<u8>,
+    last_software: Option<Visual>,
 }
 impl State {
     const fn new() -> Self {
         Self {
             active: None,
-            absorbed: Vec::new(),
             committed: None,
             pending: None,
             scratch: None,
             pixels: Vec::new(),
+            last_software: None,
         }
     }
 }
@@ -88,12 +89,15 @@ pub(crate) fn begin(key: Key, start: Point, opacity: u8) -> bool {
     state.active = Some(Arrival {
         key,
         start,
-        started: trueos_time::Instant::now().as_millis(),
+        // Settlement belongs to this detached sprite, never a compact window.
+        started: trueos_time::Instant::now().as_millis().saturating_add(500),
         duration: (distance / 2).clamp(320, 1100),
         crossed: false,
         landed: None,
         opacity,
+        entered: false,
     });
+    state.last_software = None;
     true
 }
 pub(crate) fn needs_crossed() -> bool {
@@ -109,13 +113,12 @@ pub(crate) fn active() -> bool {
 }
 pub(crate) fn cancel(owner: WindowOwner, window: WindowId) {
     let mut s = STATE.lock();
-    s.absorbed
-        .retain(|key| key.owner != owner || key.window != window);
     if s.active
         .as_ref()
         .is_some_and(|a| a.key.owner == owner && a.key.window == window)
     {
         s.active = None;
+        s.last_software = None;
     }
     if s.committed
         .is_some_and(|v| v.key.owner == owner && v.key.window == window)
@@ -128,24 +131,77 @@ pub(crate) fn cancel(owner: WindowOwner, window: WindowId) {
         s.pending = None;
     }
 }
+#[cfg(test)]
 pub(crate) fn visual() -> Option<Visual> {
     STATE.lock().committed
 }
-pub(crate) fn absorbed(key: Key) -> bool {
-    STATE.lock().absorbed.contains(&key)
+
+/// Absolute-time motion sampled by slot4 at its own display cadence. Outside
+/// the cursor plane it requires no sprite package, GPU submission or window.
+pub(crate) fn software_visual() -> Option<Visual> {
+    let now = trueos_time::Instant::now().as_millis();
+    let paused = super::gpu_logger::active_snapshot().is_some();
+    let (_, _, cx, cy, 256, 256) = super::marker_anchor()? else {
+        return None;
+    };
+    let mut s = STATE.lock();
+    let a = s.active.as_ref()?;
+    if a.landed.is_some() {
+        return s.committed.filter(|v| v.key == a.key && !v.hidden);
+    }
+    let pose = geometry::slide(
+        a.start,
+        Point { x: cx, y: cy },
+        now.saturating_sub(a.started),
+        a.duration,
+    );
+    let v = Visual {
+        key: a.key,
+        pose,
+        hidden: false,
+        opacity: a.opacity,
+    };
+    if paused {
+        return s
+            .committed
+            .filter(|v| v.key == a.key && !v.hidden)
+            .or(s.last_software)
+            .or(Some(v));
+    }
+    if a.entered || pose.near_cursor(0) {
+        // Only the short plane overlap follows cursor acknowledgements. Hold
+        // the last complete outside pose until the first matching latch.
+        return s
+            .committed
+            .filter(|v| v.key == a.key && !v.hidden)
+            .or(s.last_software);
+    }
+    s.last_software = Some(v);
+    Some(v)
 }
 
-/// The latest folded window owns the circle until restored. The animation may
-/// still be playing, but only a presented, fully landed icon is clickable here.
-pub(crate) fn folded_target() -> Option<Key> {
+/// A temporary display-rate producer while the two planes share the sprite.
+/// Ordinary Lilly animation keeps its existing cadence and frame timings.
+pub(crate) fn fast_updates() -> bool {
+    let Some((_, _, cx, cy, 256, 256)) = super::marker_anchor() else {
+        return false;
+    };
     let s = STATE.lock();
-    s.committed
-        .filter(|v| v.hidden && s.active.as_ref().is_some_and(|a| a.key == v.key))
-        .map(|v| v.key)
-        .or_else(|| s.absorbed.last().copied())
+    s.active.as_ref().is_some_and(|a| {
+        a.landed.is_none()
+            && (a.entered
+                || geometry::slide(
+                    a.start,
+                    Point { x: cx, y: cy },
+                    trueos_time::Instant::now()
+                        .as_millis()
+                        .saturating_sub(a.started),
+                    a.duration,
+                )
+                .near_cursor(48))
+    })
 }
-
-/// Commit the UI4 half only after the matching cursor source is SURFLIVE.
+/// Commit the software half only after the matching cursor source is SURFLIVE.
 pub(crate) fn presented(sequence: u64) {
     let changed = {
         let mut s = STATE.lock();
@@ -185,6 +241,10 @@ pub(super) fn source(default: LillyResidentFrame, sequence: u64) -> Option<Lilly
     let key = a.key;
     let opacity = a.opacity;
     let wish = a.landed.map(|t| now.saturating_sub(t));
+    if wish.is_none() && !a.entered && !pose.near_cursor(0) {
+        return None;
+    }
+    a.entered = true;
     let mut path = None;
     if let Some(wish) = wish {
         let mut time = 0;
@@ -196,9 +256,6 @@ pub(super) fn source(default: LillyResidentFrame, sequence: u64) -> Option<Lilly
             }
         }
         if path.is_none() {
-            if !s.absorbed.contains(&key) {
-                s.absorbed.push(key);
-            }
             s.active = None;
             s.pending = Some((
                 sequence,

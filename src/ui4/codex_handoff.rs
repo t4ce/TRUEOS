@@ -1,23 +1,23 @@
-//! UI4's half of Spirit's Codex handoff. Producer geometry is never mutated.
+//! Alternative Codex collapse: retain a restore ticket, never a flying window.
 use super::*;
-use crate::spirit::codex_handoff::{self as arrival, Key, Visual};
-use arrival::geometry::{self, Point};
+use crate::spirit::codex_handoff::{self as arrival, Key};
+use arrival::geometry::Point;
 
-struct Pending {
+#[derive(Clone, Copy, PartialEq)]
+enum Phase {
+    Shrinking,
+    Queued,
+    Sprite,
+}
+#[derive(Clone, Copy)]
+struct Ticket {
     key: Key,
     identity: (u8, u64),
-    settled: Option<u64>,
+    start: Point,
+    opacity: u8,
+    phase: Phase,
 }
-struct State {
-    pending: Option<Pending>,
-    visual: Option<Visual>,
-    frame: Option<FrameHandle>,
-}
-static STATE: spin::Mutex<State> = spin::Mutex::new(State {
-    pending: None,
-    visual: None,
-    frame: None,
-});
+static TICKETS: spin::Mutex<alloc::vec::Vec<Ticket>> = spin::Mutex::new(alloc::vec::Vec::new());
 
 fn identity(owner: WindowOwner, window: WindowId) -> Option<(u8, u64)> {
     let vm = match owner {
@@ -32,187 +32,133 @@ fn identity(owner: WindowOwner, window: WindowId) -> Option<(u8, u64)> {
 pub(super) fn canonical_icon(owner: WindowOwner, window: WindowId) -> bool {
     identity(owner, window).is_some()
 }
-pub(super) fn queue(owner: WindowOwner, window: WindowId, icon: FrameHandle) {
+
+/// Called once, after the collapse transaction releases the broker lock.
+/// Everything needed by the sprite is captured here; flight never queries it.
+pub(super) fn queue(
+    owner: WindowOwner,
+    window: WindowId,
+    icon: FrameHandle,
+    start: Point,
+    opacity: u8,
+) {
     let Some(identity) = identity(owner, window) else {
         return;
     };
-    let mut s = STATE.lock();
-    if s.pending.is_some() || arrival::active() {
-        return;
+    {
+        let mut tickets = TICKETS.lock();
+        if tickets
+            .iter()
+            .any(|t| t.key.owner == owner && t.key.window == window)
+        {
+            return;
+        }
+        tickets.push(Ticket {
+            key: Key {
+                owner,
+                window,
+                icon,
+            },
+            identity,
+            start,
+            opacity,
+            phase: Phase::Shrinking,
+        });
     }
-    s.pending = Some(Pending {
-        key: Key {
-            owner,
-            window,
-            icon,
-        },
-        identity,
-        settled: None,
-    });
+    super::cursor_frame_inout::frame_parked(owner, window);
+    super::input_broker::notify_slot4_visual_change();
+}
+pub(super) fn parked(owner: WindowOwner, window: WindowId) -> bool {
+    TICKETS
+        .lock()
+        .iter()
+        .any(|t| t.key.owner == owner && t.key.window == window)
+}
+pub(super) fn has_parked() -> bool {
+    !TICKETS.lock().is_empty()
 }
 pub(super) fn cancel(owner: WindowOwner, window: WindowId) {
-    arrival::cancel(owner, window);
-    let old = {
-        let mut s = STATE.lock();
-        if s.pending
-            .as_ref()
-            .is_some_and(|p| p.key.owner == owner && p.key.window == window)
-        {
-            s.pending = None;
-        }
-        if s.visual
-            .is_some_and(|v| v.key.owner == owner && v.key.window == window)
-        {
-            s.visual = None;
-            s.frame.take()
-        } else {
-            None
-        }
-    };
-    if let Some(frame) = old {
-        window_broker::retire_frame_when_released(frame);
+    {
+        let mut tickets = TICKETS.lock();
+        tickets.retain(|t| t.key.owner != owner || t.key.window != window);
+        // Same ticket -> sprite lock order as the ownership transfer below.
+        // A concurrent restore cannot be followed by an orphan sprite start.
+        arrival::cancel(owner, window);
     }
+    super::input_broker::notify_slot4_visual_change();
 }
 pub(super) fn active() -> bool {
-    STATE.lock().pending.is_some() || arrival::active()
+    TICKETS.lock().iter().any(|t| t.phase != Phase::Sprite) || arrival::active()
 }
-
 pub(super) fn folded_target() -> Option<(WindowOwner, WindowId)> {
-    let key = arrival::folded_target()?;
-    if identity(key.owner, key.window).is_none()
-        || window_broker::collapse_state(key.owner, key.window) != Some(true)
-        || window_broker::window_snapshot(key.owner, key.window)?.frame != key.icon
-    {
-        return None;
-    }
-    Some((key.owner, key.window))
+    let ticket = TICKETS.lock().last().copied()?;
+    // Validate the live run only when opening, not on every motion sample.
+    (identity(ticket.key.owner, ticket.key.window) == Some(ticket.identity)
+        && window_broker::collapse_state(ticket.key.owner, ticket.key.window) == Some(true))
+    .then_some((ticket.key.owner, ticket.key.window))
 }
 
+/// Driven by the software cursor service, including when no mouse is moving.
 pub(super) fn advance() {
-    let now = trueos_time::Instant::now().as_millis();
-    // Copy observations first: no Spirit or frame-pool work under the broker.
-    let pending = STATE.lock().pending.as_ref().map(|p| (p.key, p.identity));
-    if let Some((key, expected)) = pending {
-        if identity(key.owner, key.window) != Some(expected)
-            || window_broker::collapse_state(key.owner, key.window) != Some(true)
+    let ticket = TICKETS
+        .lock()
+        .iter()
+        .find(|t| t.phase != Phase::Sprite)
+        .copied();
+    if let Some(ticket) = ticket {
+        if ticket.phase == Phase::Shrinking
+            && (identity(ticket.key.owner, ticket.key.window) != Some(ticket.identity)
+                || window_broker::collapse_state(ticket.key.owner, ticket.key.window) != Some(true))
         {
-            cancel(key.owner, key.window);
-        } else if !super::collapse_animation::active_for(key.owner, key.window) {
-            let ready = {
-                let mut s = STATE.lock();
-                s.pending
-                    .as_mut()
-                    .is_some_and(|p| now.saturating_sub(*p.settled.get_or_insert(now)) >= 500)
+            cancel(ticket.key.owner, ticket.key.window);
+            return;
+        }
+        if ticket.phase == Phase::Shrinking
+            && super::collapse_animation::active_for(ticket.key.owner, ticket.key.window)
+        {
+            return;
+        }
+        let detached = {
+            let mut tickets = TICKETS.lock();
+            let Some(t) = tickets.iter_mut().find(|t| t.key == ticket.key) else {
+                return;
             };
-            if ready {
-                if let Some(window) = window_broker::window_snapshot(key.owner, key.window) {
-                    let start = Point {
-                        x: window.placement.x,
-                        y: window.placement.y,
-                    };
-                    if arrival::begin(key, start, window.placement.opacity) {
-                        STATE.lock().pending = None;
-                    }
-                }
+            let detached = t.phase == Phase::Shrinking;
+            if detached {
+                t.phase = Phase::Queued;
             }
-        }
-    }
-    let Some(visual) = arrival::visual() else {
-        return;
-    };
-    if STATE.lock().visual == Some(visual) {
-        return;
-    }
-    let Some(window) = window_broker::window_snapshot(visual.key.owner, visual.key.window) else {
-        return;
-    };
-    if arrival::absorbed(visual.key) || visual.hidden {
-        let old = {
-            let mut s = STATE.lock();
-            s.visual = Some(visual);
-            s.frame.take()
+            if t.phase == Phase::Queued && arrival::begin(t.key, t.start, t.opacity) {
+                t.phase = Phase::Sprite;
+            }
+            detached
         };
-        if let Some(old) = old {
-            window_broker::retire_frame_when_released(old);
+        if detached {
+            // One application composition removes the parked tile. Every
+            // following slide update belongs exclusively to slot4 / Spirit.
+            window_broker::collapse_animation_changed(ticket.key.owner, ticket.key.window);
         }
-        window_broker::collapse_animation_changed(visual.key.owner, visual.key.window);
-        return;
     }
-    let Ok(frame) = create_frame(FrameSpec {
-        output: window.output,
-        content: FrameContent::Image,
-        cadence: FrameCadence::Immutable,
-        buffering: FrameBuffering::Single,
-        format: ScanoutFormat::Rgba8888Premultiplied,
-        width: 64,
-        height: 64,
-        base_color: None,
-    }) else {
-        return;
-    };
-    let result = (|| {
-        let lease = acquire_frame_buffer(frame)?;
-        let result = (|| {
-            let view = writable_rgba_view(lease)?;
-            let bytes = unsafe { core::slice::from_raw_parts_mut(view.virt, view.byte_len) };
-            geometry::ui4_part(
-                visual.pose,
-                arrival::ICON,
-                visual.opacity,
-                bytes,
-                view.pitch as usize,
-            );
-            crate::intel::dma_flush(view.virt, view.byte_len);
-            publish_frame_buffer(lease)
-        })();
-        if result.is_err() {
-            let _ = cancel_frame_buffer(lease);
-        }
-        result
-    })();
-    if result.is_err() {
-        window_broker::retire_frame_when_released(frame);
-        return;
-    }
-    let old = {
-        let mut s = STATE.lock();
-        s.visual = Some(visual);
-        s.frame.replace(frame)
-    };
-    if let Some(old) = old {
-        window_broker::retire_frame_when_released(old);
-    }
-    window_broker::collapse_animation_changed(visual.key.owner, visual.key.window);
 }
 
 pub(super) fn project(mut window: WindowSnapshot) -> WindowSnapshot {
-    let key = Key {
-        owner: window.owner,
-        window: window.id,
-        icon: window.frame,
-    };
-    if arrival::absorbed(key) {
-        window.placement.visible = false;
-        window.presentation_placement.visible = false;
-        return window;
-    }
-    let s = STATE.lock();
-    let Some(visual) = s.visual.filter(|v| {
-        v.key.owner == window.owner && v.key.window == window.id && v.key.icon == window.frame
-    }) else {
-        return window;
-    };
-    if visual.hidden {
-        window.placement.visible = false;
-        window.presentation_placement.visible = false;
-    } else if let Some(frame) = s.frame {
-        window.frame = frame;
-        window.placement.x = visual.pose.icon.x;
-        window.placement.y = visual.pose.icon.y;
-        // The original window opacity is already baked into both tile halves.
-        window.placement.opacity = 255;
-        window.presentation_placement = window.placement;
-        window.buffering = FrameBuffering::Single;
+    let ticket = TICKETS
+        .lock()
+        .iter()
+        .find(|t| t.key.owner == window.owner && t.key.window == window.id)
+        .copied();
+    if let Some(ticket) = ticket {
+        window.interaction = WindowInteraction {
+            movable: false,
+            maximizable: false,
+            receives_input: false,
+            primary_activation: false,
+            hit_testable: false,
+            resize_on_maximize: false,
+        };
+        if ticket.phase != Phase::Shrinking {
+            window.placement.visible = false;
+            window.presentation_placement.visible = false;
+        }
     }
     window
 }

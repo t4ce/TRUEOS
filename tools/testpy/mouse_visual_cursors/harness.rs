@@ -54,6 +54,7 @@ pub mod ui4 {
     }
     pub mod context_menu {pub fn dismiss_for_source(_:super::Ui4CursorSource) {}}
     pub mod window_broker {pub fn note_window_focused(_:u8,_:u32)->Result<(),()> {Ok(())}}
+    pub mod codex_handoff {pub fn parked(_:u8,_:u32)->bool{false}}
     mod routing { use super::*; include!("routing.rs"); }
 }
 

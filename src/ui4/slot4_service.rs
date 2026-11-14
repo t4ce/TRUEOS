@@ -2,10 +2,12 @@
 //!
 //! Slot 4 contains the kernel color picker, fixed-shape colored crosshairs,
 //! one-pixel selection and dock outlines, translucent elliptic dock fields,
-//! selected-frame strips, button hover/press outlines, and context menus. It deliberately does not
+//! selected-frame strips, button hover/press outlines, context menus, and the
+//! detached Codex arrival sprite. It deliberately does not
 //! participate in application-plane composition or its atomic SURF batch.
 //! Cursor input is coalesced to the display cadence; hovered button dashes
-//! add a 15 Hz wake only while present. Virgl reuses the shape
+//! add a 15 Hz wake only while present. The detached sprite uses the display
+//! cadence independently of Lilly's sprite animation. Virgl reuses the shape
 //! builder in its final composition pass instead of queuing an Intel flip.
 
 use alloc::vec::Vec;
@@ -21,6 +23,15 @@ const DOCK_FIELD_ALPHA: u8 = 84;
 type Slot4Rects = Vec<crate::intel::LiveOverlayRect>;
 
 static PRESENTED_RECTS: Mutex<Slot4Rects> = Mutex::new(Slot4Rects::new());
+
+#[derive(Clone, Copy)]
+struct CodexTileRun {
+    x: u8,
+    y: u8,
+    width: u8,
+    rgba: [u8; 4],
+}
+static CODEX_TILE_RUNS: Mutex<Option<Vec<CodexTileRun>>> = Mutex::new(None);
 
 struct Slot4State {
     previous_rects: Slot4Rects,
@@ -68,8 +79,10 @@ pub(crate) async fn ui4_slot4_service_task() {
     let mut next_present = Instant::MIN;
 
     loop {
+        super::codex_handoff::advance();
         let now = Instant::now();
-        visual_dirty |= super::button_outline::due(now);
+        let codex_active = super::codex_handoff::active();
+        visual_dirty |= super::button_outline::due(now) || codex_active;
         if let Some(pending) = state.pending.take() {
             match crate::intel::poll_ui4_live_overlay_flip(pending.flip) {
                 crate::intel::Ui4LiveOverlayFlipPoll::Pending => {
@@ -110,7 +123,11 @@ pub(crate) async fn ui4_slot4_service_task() {
         }
 
         let now = Instant::now();
-        if state.pending.is_none() && !visual_dirty && super::button_outline::wait(now).is_none() {
+        if state.pending.is_none()
+            && !visual_dirty
+            && !codex_active
+            && super::button_outline::wait(now).is_none()
+        {
             super::input_broker::wait_slot4_visual_change().await;
             visual_dirty = true;
             continue;
@@ -127,7 +144,13 @@ pub(crate) async fn ui4_slot4_service_task() {
         } else {
             Duration::MAX
         };
+        let codex_wait = if codex_active {
+            next_present.saturating_duration_since(now)
+        } else {
+            Duration::MAX
+        };
         let wait = present_wait.min(flip_wait)
+            .min(codex_wait)
             .min(super::button_outline::wait(now).unwrap_or(Duration::MAX))
             .max(Duration::from_ticks(1));
         if with_timeout(wait, super::input_broker::wait_slot4_visual_change())
@@ -591,11 +614,124 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
         push_quad_resize_handle(&mut rects, handle, screen_w, screen_h);
     }
 
+    // This is an interaction-plane sprite, not a broker window or an input
+    // cursor. Mouse cursors remain above it and keep their existing routing.
+    if let Some(visual) = crate::spirit::codex_handoff::software_visual() {
+        let mut cached = CODEX_TILE_RUNS.lock();
+        let runs = cached.get_or_insert_with(|| codex_tile_runs(crate::spirit::codex_handoff::ICON));
+        push_codex_tile_runs(&mut rects, visual, runs, screen_w, screen_h);
+    }
+
     for visual in &visuals {
         push_software_cursor_visual(&mut rects, visual, screen_w, screen_h);
     }
 
     rects
+}
+
+/// Compile the immutable native tile once. Movement translates short solid
+/// runs, without inspecting image pixels or publishing frame-pool resources.
+fn codex_tile_runs(icon: &[u8]) -> Vec<CodexTileRun> {
+    let mut runs = Vec::new();
+    for y in 0..64 {
+        let mut x = 0;
+        while x < 64 {
+            let p = &icon[(y * 64 + x) * 4..][..4];
+            let rgba = [p[0], p[1], p[2], p[3]];
+            let start = x;
+            x += 1;
+            while x < 64 && icon[(y * 64 + x) * 4..][..4] == rgba {
+                x += 1;
+            }
+            if rgba[3] != 0 {
+                runs.push(CodexTileRun {
+                    x: start as u8,
+                    y: y as u8,
+                    width: (x - start) as u8,
+                    rgba,
+                });
+            }
+        }
+    }
+    runs
+}
+
+fn push_codex_tile_runs(
+    rects: &mut Slot4Rects,
+    visual: crate::spirit::codex_handoff::Visual,
+    runs: &[CodexTileRun],
+    screen_w: u32,
+    screen_h: u32,
+) {
+    use crate::graphics::primitives::Rgba8;
+    if visual.hidden || visual.opacity == 0 {
+        return;
+    }
+    let cursor = visual.pose.cursor;
+    let icon = visual.pose.icon;
+    if i64::from(icon.x) >= i64::from(cursor.x)
+        && i64::from(icon.y) >= i64::from(cursor.y)
+        && i64::from(icon.x) + 64 <= i64::from(cursor.x) + 256
+        && i64::from(icon.y) + 64 <= i64::from(cursor.y) + 256
+    {
+        return;
+    }
+    // A 64px run cannot straddle both edges of the 256px exclusion, so
+    // clipping emits at most one rectangle per run.
+    rects.reserve(runs.len());
+    for run in runs {
+        let y = i64::from(icon.y) + i64::from(run.y);
+        if y < 0 || y >= i64::from(screen_h) {
+            continue;
+        }
+        let left = (i64::from(icon.x) + i64::from(run.x)).max(0);
+        let right =
+            (i64::from(icon.x) + i64::from(run.x) + i64::from(run.width)).min(i64::from(screen_w));
+        if right <= left {
+            continue;
+        }
+        let alpha = ((u32::from(run.rgba[3]) * u32::from(visual.opacity) + 127) / 255) as u8;
+        if alpha == 0 {
+            continue;
+        }
+        let color = Rgba8::new(run.rgba[0], run.rgba[1], run.rgba[2], alpha);
+        let cursor_left = i64::from(cursor.x);
+        let cursor_right = cursor_left + 256;
+        let excluded = (i64::from(cursor.y)..i64::from(cursor.y) + 256).contains(&y);
+        if !excluded || right <= cursor_left || left >= cursor_right {
+            push_overlay_rect(
+                rects,
+                left as u32,
+                y as u32,
+                (right - left) as u32,
+                1,
+                color,
+            );
+        } else {
+            let first_end = right.min(cursor_left);
+            if first_end > left {
+                push_overlay_rect(
+                    rects,
+                    left as u32,
+                    y as u32,
+                    (first_end - left) as u32,
+                    1,
+                    color,
+                );
+            }
+            let last_start = left.max(cursor_right);
+            if right > last_start {
+                push_overlay_rect(
+                    rects,
+                    last_start as u32,
+                    y as u32,
+                    (right - last_start) as u32,
+                    1,
+                    color,
+                );
+            }
+        }
+    }
 }
 
 /// The large (3x) UI4 crosshair's silhouette, hollow with a two-pixel

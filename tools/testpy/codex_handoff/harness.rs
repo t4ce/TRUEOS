@@ -109,7 +109,6 @@ mod spirit {
     }
 }
 mod ui4 {
-    use std::collections::BTreeMap;
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum WindowOwner {
         Vm(u8),
@@ -131,78 +130,53 @@ mod ui4 {
         pub opacity: u8,
     }
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub enum FrameBuffering {
-        Single,
+    pub struct WindowInteraction {
+        pub movable: bool,
+        pub maximizable: bool,
+        pub receives_input: bool,
+        pub primary_activation: bool,
+        pub hit_testable: bool,
+        pub resize_on_maximize: bool,
     }
     #[derive(Clone, Copy)]
     pub struct WindowSnapshot {
         pub owner: WindowOwner,
         pub id: WindowId,
         pub frame: FrameHandle,
-        pub output: (),
         pub placement: Placement,
         pub presentation_placement: Placement,
-        pub buffering: FrameBuffering,
+        pub interaction: WindowInteraction,
     }
-    pub enum FrameContent {
-        Image,
+    // Deliberately no frame-pool APIs: detached flight cannot allocate/publish
+    // a window image. The only broker work is the lifecycle boundary.
+    pub static QUERIES: crate::AtomicU64 = crate::AtomicU64::new(0);
+    pub static PARKS: crate::AtomicU64 = crate::AtomicU64::new(0);
+    pub static COMPOSITIONS: crate::AtomicU64 = crate::AtomicU64::new(0);
+    pub mod cursor_frame_inout {
+        pub fn frame_parked(_: super::WindowOwner, _: super::WindowId) {
+            super::PARKS.fetch_add(1, crate::Ordering::SeqCst);
+        }
     }
-    pub enum FrameCadence {
-        Immutable,
+    pub mod input_broker {
+        pub fn notify_slot4_visual_change() {}
     }
-    pub enum ScanoutFormat {
-        Rgba8888Premultiplied,
+    pub fn codex_handoff_changed(_: WindowOwner, _: WindowId) {
+        input_broker::notify_slot4_visual_change();
     }
-    pub struct FrameSpec {
-        pub output: (),
-        pub content: FrameContent,
-        pub cadence: FrameCadence,
-        pub buffering: FrameBuffering,
-        pub format: ScanoutFormat,
-        pub width: u32,
-        pub height: u32,
-        pub base_color: Option<()>,
-    }
-    pub struct View {
-        pub virt: *mut u8,
-        pub byte_len: usize,
-        pub pitch: u32,
-    }
-    static NEXT: crate::AtomicU64 = crate::AtomicU64::new(100);
-    static FRAMES: spin::Mutex<BTreeMap<u64, Box<[u8]>>> = spin::Mutex::new(BTreeMap::new());
-    pub fn create_frame(s: FrameSpec) -> Result<FrameHandle, ()> {
-        assert_eq!((s.width, s.height), (64, 64));
-        let n = NEXT.fetch_add(1, crate::Ordering::SeqCst);
-        FRAMES.lock().insert(n, vec![0; 16384].into_boxed_slice());
-        Ok(FrameHandle(n))
-    }
-    pub fn acquire_frame_buffer(f: FrameHandle) -> Result<FrameHandle, ()> {
-        Ok(f)
-    }
-    pub fn writable_rgba_view(f: FrameHandle) -> Result<View, ()> {
-        let mut frames = FRAMES.lock();
-        let data = frames.get_mut(&f.0).ok_or(())?;
-        Ok(View {
-            virt: data.as_mut_ptr(),
-            byte_len: data.len(),
-            pitch: 256,
-        })
-    }
-    pub fn publish_frame_buffer(_: FrameHandle) -> Result<(), ()> {
-        Ok(())
-    }
-    pub fn cancel_frame_buffer(_: FrameHandle) -> Result<(), ()> {
-        Ok(())
-    }
-    pub fn codex_handoff_changed(_: WindowOwner, _: WindowId) {}
     pub mod collapse_animation {
-        pub fn active_for(_: super::WindowOwner, _: super::WindowId) -> bool {
+        pub static CANCEL_AT_TRANSFER: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
+        pub fn active_for(_: super::WindowOwner, window: super::WindowId) -> bool {
+            if CANCEL_AT_TRANSFER.swap(false, crate::Ordering::SeqCst) {
+                super::cancel(window.0);
+            }
             crate::Instant::now().as_millis() < 240
         }
     }
     pub mod window_broker {
         use super::*;
         pub fn collapse_state(_: WindowOwner, _: WindowId) -> Option<bool> {
+            QUERIES.fetch_add(1, crate::Ordering::SeqCst);
             Some(true)
         }
         pub fn window_snapshot(owner: WindowOwner, id: WindowId) -> Option<WindowSnapshot> {
@@ -216,19 +190,32 @@ mod ui4 {
                 owner,
                 id,
                 frame: FrameHandle(9),
-                output: (),
                 placement: p,
                 presentation_placement: p,
-                buffering: FrameBuffering::Single,
+                interaction: WindowInteraction {
+                    movable: true,
+                    maximizable: true,
+                    receives_input: true,
+                    primary_activation: true,
+                    hit_testable: true,
+                    resize_on_maximize: true,
+                },
             }))
         }
-        pub fn retire_frame_when_released(_: FrameHandle) {}
-        pub fn collapse_animation_changed(_: WindowOwner, _: WindowId) {}
+        pub fn collapse_animation_changed(_: WindowOwner, _: WindowId) {
+            COMPOSITIONS.fetch_add(1, crate::Ordering::SeqCst);
+        }
     }
     #[path = "@TRUEOS_ROOT@/src/ui4/codex_handoff.rs"]
     pub mod codex_handoff;
     pub fn queue(id: u32) {
-        codex_handoff::queue(WindowOwner::Shell, WindowId(id), FrameHandle(9));
+        codex_handoff::queue(
+            WindowOwner::Shell,
+            WindowId(id),
+            FrameHandle(9),
+            crate::spirit::codex_handoff::geometry::Point { x: 100, y: 250 },
+            233,
+        );
     }
     pub fn advance() {
         codex_handoff::advance();
@@ -244,95 +231,148 @@ mod ui4 {
     }
 }
 #[test]
-fn production_arrival_delay_ownership_ack_crossed_gate_wish_and_cancellation() {
+fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
     use spirit::codex_handoff as a;
     time(0);
     ui4::queue(2);
     time(1000);
     ui4::advance();
-    assert!(!a::active(), "other app must never enter");
+    assert!(!a::active(), "other apps retain ordinarycollapse");
     time(0);
     ui4::queue(1);
+    assert!(
+        !ui4::snapshot(1).interaction.hit_testable,
+        "selection disabled from request"
+    );
+    assert!(
+        ui4::snapshot(1).placement.visible,
+        "initial shrink may finish"
+    );
+    assert_eq!(ui4::PARKS.load(Ordering::SeqCst), 1);
+    assert!(
+        ui4::folded().is_some(),
+        "circle restores even during shrink"
+    );
     time(239);
     ui4::advance();
     assert!(!a::active());
     time(240);
     ui4::advance();
-    time(739);
-    ui4::advance();
-    assert!(!a::active());
-    time(740);
-    ui4::advance();
     assert!(a::needs_crossed());
     assert!(
-        ui4::folded().is_none(),
-        "circle must not restore an icon still outside Lilly"
+        !ui4::snapshot(1).placement.visible,
+        "no compact window during settlement"
     );
-    assert!(spirit::source(1).is_some());
-    assert!(a::visual().is_none());
-    time(900);
-    assert!(spirit::source(2).is_some());
-    a::presented(1);
-    assert!(a::visual().is_none(), "stale cursor ack must not move UI4");
-    a::presented(2);
-    ui4::advance();
-    assert!(a::visual().is_some());
-    assert_ne!(ui4::snapshot(1).frame, ui4::FrameHandle(9));
-    assert_eq!(a::visual().unwrap().opacity, 233);
     assert_eq!(
-        ui4::snapshot(1).placement.opacity,
-        255,
-        "shared pixel alpha already includes window opacity"
+        ui4::snapshot(1).frame,
+        ui4::FrameHandle(9),
+        "sprite never replaces producer frame"
     );
+    assert_eq!(ui4::COMPOSITIONS.load(Ordering::SeqCst), 1);
+    let queries = ui4::QUERIES.load(Ordering::SeqCst);
+    for t in [240, 500, 739] {
+        time(t);
+        ui4::advance();
+        assert_eq!(a::software_visual().unwrap().pose.icon.x, 100);
+        assert!(spirit::source(1).is_none());
+    }
+    let mut positions = Vec::new();
+    for t in [740, 756, 773, 790, 806, 823, 840, 856, 873, 890, 900] {
+        time(t);
+        ui4::advance();
+        positions.push(a::software_visual().unwrap().pose.icon.x);
+        assert!(
+            spirit::source(1).is_none(),
+            "outside plane needs no Lilly composition"
+        );
+    }
+    assert!(
+        positions.windows(2).all(|p| p[0] < p[1]),
+        "60Hz software motion advances without cursor acknowledgements"
+    );
+    assert!(a::visual().is_none());
+    assert_eq!(
+        ui4::QUERIES.load(Ordering::SeqCst),
+        queries,
+        "flight does not query window state"
+    );
+    assert_eq!(
+        ui4::COMPOSITIONS.load(Ordering::SeqCst),
+        1,
+        "flight does not dirty application compositor"
+    );
+    time(940);
+    assert!(a::fast_updates());
+    let last = a::software_visual().unwrap();
+    assert!(spirit::source(10).is_some());
+    assert_eq!(
+        a::software_visual().unwrap(),
+        last,
+        "await first cursor latch at overlap"
+    );
+    time(956);
+    spirit::source(11).unwrap();
+    a::presented(10);
+    assert!(a::visual().is_none(), "stale ack cannot move software half");
+    a::presented(11);
+    let overlap = a::software_visual().unwrap();
+    assert!(overlap.pose.near_cursor(0));
+    assert_eq!(overlap.opacity, 233);
     crate::CX.store(600, Ordering::SeqCst);
     time(2000);
-    spirit::source(3).unwrap();
-    a::presented(3);
-    ui4::advance();
+    spirit::source(12).unwrap();
+    a::presented(12);
     assert_eq!(
         a::visual().unwrap().pose.icon.x,
         713,
-        "destination follows live Lilly"
+        "live plane destination"
     );
     assert!(
         !a::visual().unwrap().hidden,
-        "arrival must await crossed static"
+        "wait for crossed arms before WishC"
     );
     a::crossed_ready();
-    spirit::source(4).unwrap();
-    a::presented(4);
-    ui4::advance();
-    assert!(!ui4::snapshot(1).placement.visible);
-    assert_eq!(
-        ui4::folded(),
-        Some((ui4::WindowOwner::Shell, ui4::WindowId(1)))
-    );
-    time(2000 + 2240);
-    spirit::source(5).unwrap();
-    a::presented(5);
-    ui4::advance();
-    assert!(!a::needs_crossed());
-    assert!(!ui4::snapshot(1).placement.visible);
-    ui4::queue(3);
+    spirit::source(13).unwrap();
+    a::presented(13);
+    assert!(a::software_visual().is_none());
     time(4240);
-    ui4::advance();
-    time(4740);
-    ui4::advance();
-    assert!(a::active());
-    spirit::source(6).unwrap();
-    a::presented(6);
-    ui4::advance();
+    spirit::source(14).unwrap();
+    a::presented(14);
+    assert!(!a::active());
     assert!(
         !ui4::snapshot(1).placement.visible,
-        "prior absorbed window stays absorbed"
+        "parked independently of ability completion"
+    );
+    ui4::queue(3);
+    ui4::advance();
+    assert!(a::active());
+    assert!(
+        !ui4::snapshot(1).placement.visible,
+        "older fold stays parked"
     );
     ui4::cancel(3);
     assert!(!a::active());
     assert!(ui4::snapshot(3).placement.visible);
     ui4::cancel(1);
-    assert!(
-        ui4::snapshot(1).placement.visible,
-        "restore exposes original icon"
-    );
+    assert!(ui4::snapshot(1).placement.visible);
+    assert!(ui4::snapshot(1).interaction.hit_testable);
     assert!(ui4::folded().is_none());
+    // Cancel an in-flight submission: its late acknowledgement cannot respawn.
+    ui4::queue(4);
+    ui4::advance();
+    time(6000);
+    spirit::source(15).unwrap();
+    ui4::cancel(4);
+    a::presented(15);
+    assert!(a::software_visual().is_none());
+    assert!(a::visual().is_none());
+    assert!(ui4::snapshot(4).placement.visible);
+    // Restore can race the shrink-complete observation. The transfer must
+    // recheck that its ticket is still owned before starting the sprite.
+    ui4::queue(5);
+    ui4::collapse_animation::CANCEL_AT_TRANSFER.store(true, Ordering::SeqCst);
+    ui4::advance();
+    assert!(!a::active());
+    assert!(ui4::folded().is_none());
+    assert!(ui4::snapshot(5).placement.visible);
 }

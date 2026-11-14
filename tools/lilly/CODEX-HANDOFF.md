@@ -4,51 +4,65 @@ UI4's compact tile is natively **64 × 64** (`collapse::Collapse::project`).
 Other apps retain their usual movable compact tile. A live Codex Blueprint
 (`codex.bp`, including its leased Shell3 terminal) instead folds into Lilly:
 
-1. Finish the existing UI4 collapse animation, then wait 500 ms.
-2. Slide the complete gray-backed tile from its current screen position toward
-   Lilly's chest. The destination follows the applied 256 × 256 cursor plane.
-   The slide takes 320–1100 ms depending on distance. Lilly can cross her arms
-   during the slide; landing waits for the crossed pose.
-3. For each pixel of the tile, UI4 draws the portion outside the cursor plane;
-   Spirit draws the portion inside, over Lilly. Both use the same integer
-   screen position and the same straight RGBA raster. UI4 premultiplies only
-   its own portion for its frame format. The original window opacity is baked
-   into both halves once, so translucent windows agree across the boundary.
-4. On landing, blend the native tile into the packed chest stamp over 100 ms,
-   then play the selected Wish C sequence, ending in crossed static. The
-   authored stamp has no gray backdrop; the procedural arriving tile does.
-5. Keep the compact Codex window hidden. A primary click anywhere in the
-   existing radius-150 Lilly/Spirit dock circle restores and focuses it in
-   its original placement. This uses the same live circle as docking. Existing
-   drag/drop, menus and resize gestures take precedence. Movement beyond the
-   existing click tolerance, another button, or denied cursor authority cancels
-   restoration. If multiple Codex windows were folded, restore the latest first.
+1. At the request, capture the compact icon's screen position and opacity as
+   an alternative-collapse restore ticket. Release cursor selection and keyboard
+   focus while retaining the original window and its cursor registrations.
+   Disable its hit testing, movement and input during the initial shrink.
+2. When the existing shrink finishes, remove the compact window from composition.
+   The detached sprite owns the 500 ms settlement delay and subsequent flight.
+   No compact-window drag is armed. A stale drag cannot cancel or move it.
+3. Slot4, the existing software cursor plane, draws the complete native gray-backed
+   tile using 2,439 precomputed RGBA horizontal runs. The cache is built once;
+   each motion sample only translates and clips those runs. It creates no frame
+   resource, publishes no window image, and does not query window state or dirty
+   the application compositor during flight.
+4. Absolute-time smoothstep motion runs on slot4's existing 60 Hz cadence, even
+   with no mouse input or Lilly frame changes. It takes 320–1100 ms depending on
+   distance. The destination follows the applied 256 × 256 cursor plane. Lilly
+   can prepare crossed arms during the delay and flight.
+5. At the plane overlap, Spirit composes the inside portion; slot4 draws the
+   outside portion. A 48 px approach margin temporarily raises Spirit's producer
+   target to 60 Hz. Both portions use one acknowledged integer pose and identical
+   native alpha/window opacity. Until the first overlap acknowledgement, slot4
+   retains its last complete outside pose. Ordinary Lilly sprite timings remain
+   independent and return to their usual producer cadence after landing.
+6. Once crossed arms are ready, blend into the packed chest stamp over 100 ms
+   and play Wish C, ending in crossed static. The authored stamp omits gray;
+   the procedural arriving tile includes it.
+7. The restore ticket remains after playback. A primary click anywhere in the
+   existing radius-150 Lilly/Spirit dock circle restores and focuses the window
+   at its original placement. This works during the shrink, delay and flight as
+   well. Existing drag/drop, menus and resize gestures take precedence. Movement
+   beyond click tolerance, another button, or denied cursor authority cancels the
+   click. Multiple requests serialize; circle clicks restore the latest first.
 
-The window's original producer frame, geometry and interaction stay owned by
-UI4. Restoration, close, icon replacement and owner cleanup cancel the retained
-handoff. No new buildin or Blueprint ABI is introduced.
+`src/ui4/codex_handoff.rs` owns only the lifecycle boundary and restore tickets.
+`src/spirit/codex_handoff.rs` owns the sprite motion and Wish C playback.
+`src/ui4/slot4_service.rs` owns software-plane rendering and wake cadence.
+Restoration, close, icon replacement and owner cleanup cancel the ticket and
+sprite together; a late cursor acknowledgement cannot respawn a canceled icon.
+No new buildin, app window, pointer source or Blueprint ABI is introduced.
 
 ## Ownership and presentation
 
-`src/ui4/codex_handoff.rs` identifies the live Blueprint and publishes the
-outside portion as an immutable UI4 frame. `src/spirit/codex_handoff.rs` owns
-the slide and Wish C playback. Only Spirit's existing single GPU producer
-writes a persistent 256 KiB DMA source scratch, after its previous source read
-has completed. It copies immutable resident sprites, never a GPU destination.
-The scratch reserves GPU VA `[0x3ffc0000,0x40000000)`; the asset loader excludes
-that interval. The buffer remains allocated across cancellations so a submitted
-read cannot outlive it. GPU Logger pauses the handoff clock.
+Only Spirit's existing single GPU producer writes a persistent 256 KiB DMA
+source scratch, after its previous source read has completed. It copies immutable
+resident sprites, never a GPU destination. Outside the hardware plane, the
+software sprite needs none of this copying or GPU work. The scratch reserves GPU
+VA `[0x3ffc0000,0x40000000)`; the asset loader excludes that interval. It remains
+allocated across cancellations so an in-flight read cannot outlive it. GPU Logger
+pauses the handoff clock.
 
-UI4 consumes only cursor poses acknowledged by the matching CUR_SURFLIVE
-sequence. This rejects stale cursor completion and partitions the geometry
-exactly, but **does not atomically latch the desktop and cursor planes together**.
-The next UI4 submission follows that acknowledgement. Hardware testing is still
-needed to assess a possible one-frame seam at plane entry and output edges.
-No hardware boot or pixel-perfect cross-plane timing is claimed by host tests.
+Slot4 consumes poses acknowledged by matching CUR_SURFLIVE sequences only during
+overlap. This rejects stale completion and partitions geometry exactly, but does
+not atomically latch the software and hardware planes together. Slot4 follows
+that acknowledgement on its next presentation. An on-device visual check is
+still needed to assess the brief boundary hold and any one-frame seam; host tests
+cannot establish cross-plane display timing or sustained hardware frame rate.
 
-During the procedural effect, sprite translation, rotation, alpha cutoff, edge
-fade and decorative shader mode are reset to their clean values so they cannot
-distort the incoming tile. The user's Spirit background remains enabled.
+During the procedural hardware portion, sprite translation, rotation, alpha
+cutoff, edge fade and decorative shader mode reset to clean values. The user's
+Spirit background remains enabled.
 
 ## Native tile and regeneration
 
@@ -92,14 +106,25 @@ the original crop offset a second time. Wish C durations are
 ```sh
 cargo check --release --bin TRUEOS
 python3 tools/testpy/test_codex_handoff.py
+python3 tools/testpy/test_codex_slot4_sprite.py
+python3 tools/testpy/test_ui4_pointer_groups.py
 python3 tools/testpy/test_ui4_dock_collapse.py
 python3 tools/testpy/test_spirit_activity_gestures.py
 python3 tools/testpy/test_ui4_collapse_animation.py
 ```
 
 The handoff harness imports both production modules and checks identity,
-collapse-settle delay, stale acknowledgements, live destination movement,
+detached settlement, motion without cursor/sprite frames or broker queries,
+zero application-compositor updates during flight, stale acknowledgements, live destination movement,
 crossed-pose gating, Wish C completion, multiple folded windows and cancellation.
 Geometry tests cover all eight entry directions and every tile pixel. The dock
 harness exercises the production restore input block, including the shared circle
 edge, rejected drags, extra buttons and denied authority.
+
+The software raster suite compares all emitted pixels against the production
+RGBA partition across eight directions, output edges and four opacity values.
+The pointer-rig tests verify parking releases every selecting cursor while
+preserving registrations for restoration and leaving unrelated windows alone.
+If prepared buildin inputs are stale, the kernel-only check uses the usual
+default subsystem features with `buildin-apps` omitted; no apps are rebuilt or
+deployed by that check.

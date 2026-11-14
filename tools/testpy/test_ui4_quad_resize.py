@@ -17,12 +17,6 @@ def harness_source():
     broker_code = '\n'.join(item('src/ui4/window_broker.rs', name) for name in
                             ['quad_dock_layout', 'quad_dock_rects', 'resize_quad_dock'])
     source = source.replace('        struct TestBroker {', broker_code + '\n        struct TestBroker {')
-    source = source.replace('            fn mark_composition_changed(&mut self)', '''
-            fn snapshots(&self, output: OutputId) -> Vec<WindowSnapshot> {
-                self.windows.iter().enumerate().filter_map(|(slot, w)| w.snapshot(slot))
-                    .filter(|w| w.output == output && w.placement.visible && w.state == WindowState::Ready).collect()
-            }
-            fn mark_composition_changed(&mut self)''')
     source = source.replace('        pub(crate) fn setup_for_input()', r'''
         pub(super) fn quad_layout() -> Option<[WindowSnapshot; 4]> {
             quad_dock_layout(&WINDOW_BROKER.lock().snapshots(0), 1921, 1081)

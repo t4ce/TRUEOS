@@ -66,6 +66,7 @@ def harness_source():
     restore_block = input_source.split("        // The same live circle used for docking", 1)[1].split(
         "        if previous_routed_buttons == 0 && pressed != 0 {", 1)[0]
     restore_block = "        // The same live circle used for docking" + restore_block
+    snapshots_method = block(broker, "    fn snapshots(&self, output: OutputId) -> Vec<WindowSnapshot> {")
     return r'''#![allow(dead_code)]
 use std::sync::{Mutex, MutexGuard};
 struct TestMutex<T>(Mutex<T>);
@@ -73,6 +74,9 @@ impl<T> TestMutex<T> {
     const fn new(value: T) -> Self { Self(Mutex::new(value)) }
     fn lock(&self) -> MutexGuard<'_, T> { self.0.lock().unwrap() }
 }
+mod spirit {pub mod codex_handoff {pub mod geometry {
+    pub struct Point {pub x:i32,pub y:i32}
+}}}
 mod ui4 {
     @APPLICATION_PLANES@
     pub(crate) const PRIMARY_PLANE_SLOT: usize = 0;
@@ -89,12 +93,24 @@ mod ui4 {
     pub(crate) enum CollapseError { NotFound, Busy, Ui4 }
     pub(crate) fn output_dimensions() -> Option<(u32, u32)> { Some((1920, 1080)) }
     pub(crate) use window_broker::*;
-    mod cursor_frame_inout { pub(crate) fn selection_strip_stack_changed() {} }
+    mod cursor_frame_inout {
+        pub(crate) fn selection_strip_stack_changed() {}
+        pub(crate) fn frame_parked(_:super::WindowOwner,_:super::WindowId) {}
+    }
     mod codex_handoff {
         use super::*;
-        pub(crate) fn project(w:WindowSnapshot)->WindowSnapshot{w}
+        pub(crate) static FOLDED:std::sync::atomic::AtomicBool=std::sync::atomic::AtomicBool::new(false);
+        pub(crate) fn project(mut w:WindowSnapshot)->WindowSnapshot{
+            if w.frame==202 && FOLDED.load(std::sync::atomic::Ordering::SeqCst){
+                w.placement.visible=false;
+                w.presentation_placement.visible=false;
+            }
+            w
+        }
         pub(crate) fn cancel(_:WindowOwner,_:WindowId){}
-        pub(crate) fn queue(_:WindowOwner,_:WindowId,_:FrameHandle){}
+        pub(crate) fn queue(_:WindowOwner,_:WindowId,_:FrameHandle,_:crate::spirit::codex_handoff::geometry::Point,_:u8){}
+        pub(crate) fn parked(_:WindowOwner,_:WindowId)->bool{false}
+        pub(crate) fn has_parked()->bool{false}
         pub(crate) fn folded_target()->Option<(WindowOwner,WindowId)>{
             let (owner,id)=window_broker::test_target();
             (window_broker::collapse_state(owner,id)==Some(true)).then_some((owner,id))
@@ -129,6 +145,7 @@ mod ui4 {
         @BROKER_CODE@
         struct TestBroker { windows: Vec<WindowRecord>, changes: usize }
         impl TestBroker {
+            @SNAPSHOTS_METHOD@
             fn checked_window_mut(&mut self, owner: WindowOwner, id: WindowId) -> Result<&mut WindowRecord, WindowBrokerError> {
                 let (slot, generation) = unpack_handle(id.raw())?;
                 let window = self.windows.get_mut(slot).ok_or(WindowBrokerError::InvalidHandle)?;
@@ -177,6 +194,26 @@ mod ui4 {
             assert_eq!(current.resize_epoch, before.resize_epoch);
             assert_eq!(current.publish_serial, before.publish_serial);
             assert_eq!(current.interaction, before.interaction);
+        }
+        #[test]
+        fn folded_icon_is_excluded_from_composition_until_restored() {
+            let (owner,id,before)=setup(true);
+            collapse_at_cursor(owner,id,640,1079).unwrap();
+            assert_eq!(WINDOW_BROKER.lock().snapshots(0).len(),1);
+            super::codex_handoff::FOLDED.store(true,std::sync::atomic::Ordering::SeqCst);
+            // The producer stays visible, and direct lookup must still find
+            // the hidden window for Lilly's working click-to-restore path.
+            assert!(WINDOW_BROKER.lock().windows[0].placement.visible);
+            assert!(!window_snapshot(owner,id).unwrap().placement.visible);
+            let folded_count=WINDOW_BROKER.lock().snapshots(0).len();
+            toggle_collapse(owner,id).unwrap();
+            let restored=WINDOW_BROKER.lock().snapshots(0);
+            super::codex_handoff::FOLDED.store(false,std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(folded_count,0,"projected hidden icon must not reach the compositor");
+            assert_eq!(restored.len(),1);
+            assert_eq!(restored[0].frame,before.frame);
+            assert_eq!(restored[0].placement,before.placement);
+            assert_producer_unchanged(before);
         }
         #[test]
         fn collapse_follow_and_restore_keep_the_producer_intact() {
@@ -359,7 +396,8 @@ mod ui4 {
         "@GEOMETRY_CODE@", "\n".join(item(INPUT, name) for name in geometry_functions)).replace(
         "@GEOMETRY_TESTS@", geometry_tests).replace("@FOLLOW_BLOCK@", follow_block).replace(
         "@ABSORB_BLOCK@", absorb_block).replace("@WINDOW_TARGET@", item(INPUT, "WindowTarget")).replace(
-        "@RESTORE_BLOCK@", restore_block).replace("@RESTORE_PRESS@", item(COLLAPSE,"RestorePress") + "\n" + block(collapse,"impl RestorePress {"))
+        "@RESTORE_BLOCK@", restore_block).replace("@RESTORE_PRESS@", item(COLLAPSE,"RestorePress") + "\n" + block(collapse,"impl RestorePress {")).replace(
+        "@SNAPSHOTS_METHOD@", snapshots_method)
 
 
 def main():

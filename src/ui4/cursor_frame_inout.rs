@@ -322,6 +322,19 @@ impl CursorFrameRig {
         changed
     }
 
+    /// Suspend selection while retaining all frame-owned cursor registrations
+    /// for a later restore. Parking is not a frame lifecycle close.
+    fn frame_parked(&mut self, key: CursorFrameKey) -> bool {
+        let previous_selectors = self.selecting_cursors.len();
+        self.selecting_cursors.retain(|cursor| cursor.selected != key);
+        let mut changed = previous_selectors != self.selecting_cursors.len();
+        if self.selected == Some(key) {
+            self.selected = None;
+            changed = true;
+        }
+        changed
+    }
+
     fn session_closed(&mut self, owner: WindowOwner, session: WindowSessionId) -> bool {
         let selected_was_closed = self.selected.is_some_and(|selected| {
             self.frames.iter().any(|frame| {
@@ -689,6 +702,14 @@ pub(super) fn frame_closed(owner: WindowOwner, window: WindowId) {
         .lock()
         .frame_closed(CursorFrameKey::new(owner, window))
     {
+        signal_visual_change();
+    }
+}
+
+/// Safe when the input broker owns its lock: this only touches the frame rig
+/// and signals presentation, without reacquiring the input broker.
+pub(super) fn frame_parked(owner: WindowOwner, window: WindowId) {
+    if CURSOR_FRAME_RIG.lock().frame_parked(CursorFrameKey::new(owner, window)) {
         signal_visual_change();
     }
 }

@@ -317,13 +317,9 @@ async fn wait_for_default_printer(job_id: u32) -> PrinterSnapshot {
 }
 
 async fn run_print_job(job: PrintJob) {
-    let document = match render_job(&job).await {
-        Ok(document) => document,
-        Err(detail) => {
-            print2d::transition(job.id, PrintJobState::Failed, detail);
-            return;
-        }
-    };
+    // Admission has validated the complete app-composed A4 PWG document.
+    // The printer service owns transport and outcome tracking, not app layout.
+    let document = job.document;
 
     let (printer_uri, printer_detail) = if let Some(printer_uri) = job.printer_uri {
         (printer_uri, "selected-ipp-printer")
@@ -704,8 +700,4 @@ mod tests {
         assert_eq!(printers.len(), 1);
         assert_eq!(printers[0].uri, "ipp://192.168.1.20:631/ipp/print");
     }
-}
-
-async fn render_job(_job: &PrintJob) -> Result<Vec<u8>, &'static str> {
-    Err("print-render-source-unavailable")
 }

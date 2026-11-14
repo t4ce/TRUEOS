@@ -17,6 +17,13 @@ pub struct Pose {
 }
 
 impl Pose {
+    pub fn near_cursor(self, margin: i32) -> bool {
+        let dx = i64::from(self.icon.x) - i64::from(self.cursor.x);
+        let dy = i64::from(self.icon.y) - i64::from(self.cursor.y);
+        let m = i64::from(margin);
+        dx < 256 + m && dy < 256 + m && dx + 64 > -m && dy + 64 > -m
+    }
+
     pub fn inside(self, x: usize, y: usize) -> Option<(usize, usize)> {
         let x = i64::from(self.icon.x) + x as i64 - i64::from(self.cursor.x);
         let y = i64::from(self.icon.y) + y as i64 - i64::from(self.cursor.y);

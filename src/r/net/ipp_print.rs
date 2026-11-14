@@ -144,19 +144,32 @@ impl IppClient {
             "POST {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: TRUEOS/print2d\r\nContent-Type: application/ipp\r\nAccept: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             self.target.path, self.target.authority, content_len
         );
-        self.vnet
-            .send_tcp_all(handle, head.as_bytes())
-            .and_then(|_| self.vnet.send_tcp_all(handle, ipp))
-            .map_err(|_| IppError::Transport)?;
-        if let Some(document) = document {
-            self.vnet
-                .send_tcp_all(handle, document)
-                .map_err(|_| IppError::Transport)?;
-        }
-
-        let deadline = Instant::now() + Duration::from_millis(RESPONSE_TIMEOUT_MS);
         let mut response = Vec::new();
+        // Bound each in-flight command and wait for accepted-byte credit. A
+        // photographic PWG page can be much larger than the native command
+        // queue; enqueueing the whole page at once can drop an accepted prefix.
+        let sent = async {
+            self.send_bytes(handle, head.as_bytes(), &mut response)
+                .await?;
+            self.send_bytes(handle, ipp, &mut response).await?;
+            if let Some(document) = document {
+                self.send_bytes(handle, document, &mut response).await?;
+            }
+            Ok::<_, IppError>(())
+        }
+        .await;
+        if let Err(error) = sent {
+            let _ = self.vnet.submit(v::vnet::Command::Close { handle });
+            return Err(error);
+        }
+        let deadline = Instant::now() + Duration::from_millis(RESPONSE_TIMEOUT_MS);
         loop {
+            // A response can race the final accepted-byte credit. Preserve and
+            // consume it even when no further socket event follows that credit.
+            if let Some(body) = complete_http_body(response.as_slice())? {
+                let _ = self.vnet.submit(v::vnet::Command::Close { handle });
+                return Ok(body);
+            }
             while let Some(event) = self.vnet.pop_event() {
                 match event {
                     v::vnet::Event::TcpData {
@@ -186,6 +199,64 @@ impl IppClient {
             }
             Timer::after(Duration::from_millis(5)).await;
         }
+    }
+
+    async fn send_bytes(
+        &self,
+        handle: v::vnet::NetHandle,
+        bytes: &[u8],
+        response: &mut Vec<u8>,
+    ) -> Result<(), IppError> {
+        let deadline = Instant::now() + Duration::from_millis(RESPONSE_TIMEOUT_MS);
+        for chunk in bytes.chunks(v::vnet::MAX_MSG) {
+            while self.vnet.try_send_tcp_chunk(handle, chunk).is_err() {
+                if Instant::now() >= deadline {
+                    return Err(IppError::ResponseTimeout);
+                }
+                Timer::after(Duration::from_millis(1)).await;
+            }
+            let mut remaining = chunk.len();
+            while remaining != 0 {
+                while let Some(event) = self.vnet.pop_event() {
+                    match event {
+                        v::vnet::Event::TcpSent {
+                            handle: candidate,
+                            len,
+                        } if candidate == handle => {
+                            if len == 0 || len as usize > remaining {
+                                return Err(IppError::Transport);
+                            }
+                            remaining -= len as usize;
+                            if remaining == 0 {
+                                break;
+                            }
+                        }
+                        v::vnet::Event::TcpData {
+                            handle: candidate,
+                            data,
+                        } if candidate == handle => {
+                            if response.len().saturating_add(data.len()) > MAX_RESPONSE_BYTES {
+                                return Err(IppError::InvalidResponse);
+                            }
+                            response.extend_from_slice(data.as_slice());
+                        }
+                        v::vnet::Event::Closed { handle: candidate } if candidate == handle => {
+                            return Err(IppError::Transport);
+                        }
+                        v::vnet::Event::Error { .. } => return Err(IppError::Transport),
+                        _ => {}
+                    }
+                }
+                if remaining == 0 {
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    return Err(IppError::ResponseTimeout);
+                }
+                Timer::after(Duration::from_millis(1)).await;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -223,10 +294,11 @@ fn build_print_job_request(request_id: u32, printer_uri: &str, document_format: 
     push_text_attribute(&mut out, 0x48, "attributes-natural-language", "en");
     push_text_attribute(&mut out, 0x45, "printer-uri", printer_uri);
     push_text_attribute(&mut out, 0x42, "requesting-user-name", "trueos");
-    push_text_attribute(&mut out, 0x42, "job-name", "GridPaper A4");
+    push_text_attribute(&mut out, 0x42, "job-name", "TRUEOS A4");
     push_text_attribute(&mut out, 0x49, "document-format", document_format);
     out.push(0x02); // job-attributes-tag
     push_text_attribute(&mut out, 0x44, "media", "iso_a4_210x297mm");
+    push_text_attribute(&mut out, 0x44, "print-scaling", "none");
     push_text_attribute(&mut out, 0x44, "sides", "one-sided");
     push_text_attribute(&mut out, 0x44, "print-color-mode", "color");
     push_integer_attribute(&mut out, 0x23, "print-quality", 4);
@@ -456,8 +528,14 @@ mod tests {
         assert_eq!(&request[..8], &[2, 0, 0, 2, 0, 0, 0, 7]);
         assert!(
             request
-                .windows(19)
+                .windows(b"iso_a4_210x297mm".len())
                 .any(|window| window == b"iso_a4_210x297mm")
+        );
+        assert_eq!(find_text_attribute(&request, "job-name"), Some("TRUEOS A4"));
+        assert_eq!(find_text_attribute(&request, "print-scaling"), Some("none"));
+        assert_eq!(
+            find_text_attribute(&request, "document-format"),
+            Some("image/pwg-raster")
         );
         assert_eq!(request.last(), Some(&3));
     }

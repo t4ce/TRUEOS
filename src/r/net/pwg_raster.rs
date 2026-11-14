@@ -1,182 +1,96 @@
-//! Minimal PWG Raster producer for one portrait A4 sRGB page.
-
-extern crate alloc;
-
-#[cfg(test)]
-use alloc::{vec, vec::Vec};
-
-
-#[cfg(test)]
-const DPI: u32 = 300;
-
-
-
-#[cfg(test)]
-const PAGE_HEADER_BYTES: usize = 1_796;
-#[cfg(test)]
-const MAX_DOCUMENT_BYTES: usize = 7 * 1024 * 1024;
+//! Validation for the app-composed, exact-size A4 PWG Raster print contract.
+//!
+//! Page layout and compression belong to the producing app. The spooler accepts
+//! only complete 300-dpi sRGB A4 pages, never partial uploads or arbitrary PDL.
 
 pub(crate) const MIME_TYPE: &str = "image/pwg-raster";
+pub(crate) const MIN_DOCUMENT_BYTES: usize = 4 + PAGE_HEADER_BYTES + 1;
+pub(crate) const MAX_DOCUMENT_BYTES: usize = 32 * 1024 * 1024;
+const PAGE_HEADER_BYTES: usize = 1_796;
+const A4_WIDTH: usize = 2_480;
+const A4_HEIGHT: usize = 3_508;
+const MAX_PAGES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg(test)]
-pub(crate) enum EncodeError {
-    InvalidFrame,
-    TooLarge,
+pub(crate) enum InvalidPwg {
+    Size,
+    Header,
+    Raster,
 }
 
-
-
-#[cfg(test)]
-fn page_header(width: u32, height: u32) -> [u8; PAGE_HEADER_BYTES] {
-    let mut header = [0u8; PAGE_HEADER_BYTES];
-    write_cstring(&mut header[0..64], "PwgRaster");
-    write_cstring(&mut header[192..256], "text-and-graphics");
-    write_u32(&mut header, 276, DPI);
-    write_u32(&mut header, 280, DPI);
-    write_u32(&mut header, 308, 0); // short-edge first
-    write_u32(&mut header, 352, 595); // A4 width in PostScript points
-    write_u32(&mut header, 356, 842); // A4 height in PostScript points
-    write_u32(&mut header, 372, width);
-    write_u32(&mut header, 376, height);
-    write_u32(&mut header, 384, 8); // BitsPerColor
-    write_u32(&mut header, 388, 24); // BitsPerPixel
-    write_u32(&mut header, 392, width.saturating_mul(3));
-    write_u32(&mut header, 396, 0); // chunky pixels
-    write_u32(&mut header, 400, 19); // sRGB
-    write_u32(&mut header, 420, 3); // colorants
-    write_u32(&mut header, 452, 1); // one page
-    write_i32(&mut header, 456, 1); // normal cross-feed
-    write_i32(&mut header, 460, 1); // normal feed
-    write_u32(&mut header, 484, 4); // normal quality
-    write_cstring(&mut header[1668..1732], "perceptual");
-    write_cstring(&mut header[1732..1796], "iso_a4_210x297mm");
-    header
-}
-
-#[cfg(test)]
-fn append_compressed_lines(
-    output: &mut Vec<u8>,
-    repetitions: u16,
-    rgb: &[u8],
-) -> Result<(), EncodeError> {
-    output.push((repetitions - 1) as u8);
-    encode_packbits_rgb(rgb, output)?;
-    (output.len() <= MAX_DOCUMENT_BYTES)
-        .then_some(())
-        .ok_or(EncodeError::TooLarge)
-}
-
-#[cfg(test)]
-fn encode_packbits_rgb(rgb: &[u8], output: &mut Vec<u8>) -> Result<(), EncodeError> {
-    if rgb.len() % 3 != 0 {
-        return Err(EncodeError::InvalidFrame);
+pub(crate) fn validate_a4(document: &[u8]) -> Result<usize, InvalidPwg> {
+    if document.len() < MIN_DOCUMENT_BYTES || document.len() > MAX_DOCUMENT_BYTES {
+        return Err(InvalidPwg::Size);
     }
-    let pixels = rgb.len() / 3;
-    let mut cursor = 0usize;
-    while cursor < pixels {
-        let repeated = repeated_pixels(rgb, cursor, pixels).min(128);
-        if repeated >= 2 {
-            output.push((repeated - 1) as u8);
-            output.extend_from_slice(&rgb[cursor * 3..cursor * 3 + 3]);
-            cursor += repeated;
-            continue;
+    if !document.starts_with(b"RaS2") {
+        return Err(InvalidPwg::Header);
+    }
+    let mut cursor = 4usize;
+    let mut pages = 0usize;
+    while cursor < document.len() {
+        if pages == MAX_PAGES {
+            return Err(InvalidPwg::Size);
         }
-
-        let literal_start = cursor;
-        cursor += 1;
-        while cursor < pixels
-            && cursor - literal_start < 128
-            && repeated_pixels(rgb, cursor, pixels) < 2
+        let header = document
+            .get(cursor..cursor + PAGE_HEADER_BYTES)
+            .ok_or(InvalidPwg::Header)?;
+        if header_u32(header, 276) != 300 || header_u32(header, 280) != 300
+            || header_u32(header, 372) != A4_WIDTH as u32 || header_u32(header, 376) != A4_HEIGHT as u32
+            || header_u32(header, 384) != 8 || header_u32(header, 388) != 24
+            || header_u32(header, 392) != A4_WIDTH as u32 * 3 || header_u32(header, 396) != 0
+            || header_u32(header, 400) != 19 || header_u32(header, 420) != 3
+            || header_u32(header, 368) != 0 // no printer-specific media type
+            || !header[1732..1796].starts_with(b"iso_a4_210x297mm\0")
         {
+            return Err(InvalidPwg::Header);
+        }
+        cursor += PAGE_HEADER_BYTES;
+        let mut rows = 0usize;
+        while rows < A4_HEIGHT {
+            let repetitions = usize::from(*document.get(cursor).ok_or(InvalidPwg::Raster)?) + 1;
             cursor += 1;
+            if repetitions > A4_HEIGHT - rows {
+                return Err(InvalidPwg::Raster);
+            }
+            let mut pixels = 0usize;
+            while pixels < A4_WIDTH {
+                let packet = *document.get(cursor).ok_or(InvalidPwg::Raster)?;
+                cursor += 1;
+                // The producer uses the same whole-RGB PackBits subset as the
+                // proven Gridpaper encoder. 128 is not emitted by that encoder.
+                if packet == 128 {
+                    return Err(InvalidPwg::Raster);
+                }
+                let (count, bytes) = if packet <= 127 {
+                    (usize::from(packet) + 1, 3)
+                } else {
+                    let count = 257 - usize::from(packet);
+                    (count, count * 3)
+                };
+                if count > A4_WIDTH - pixels {
+                    return Err(InvalidPwg::Raster);
+                }
+                let end = cursor.checked_add(bytes).ok_or(InvalidPwg::Raster)?;
+                if end > document.len() {
+                    return Err(InvalidPwg::Raster);
+                }
+                cursor = end;
+                pixels += count;
+            }
+            rows += repetitions;
         }
-        let literal_count = cursor - literal_start;
-        if literal_count == 1 {
-            output.push(0);
-            output.extend_from_slice(&rgb[literal_start * 3..literal_start * 3 + 3]);
-        } else {
-            output.push((257usize - literal_count) as u8);
-            output.extend_from_slice(&rgb[literal_start * 3..cursor * 3]);
-        }
+        pages += 1;
     }
-    Ok(())
-}
-
-#[cfg(test)]
-fn repeated_pixels(rgb: &[u8], start: usize, pixels: usize) -> usize {
-    let sample = &rgb[start * 3..start * 3 + 3];
-    let mut count = 1usize;
-    while start + count < pixels
-        && count < 128
-        && &rgb[(start + count) * 3..(start + count) * 3 + 3] == sample
-    {
-        count += 1;
+    if pages == 0 {
+        return Err(InvalidPwg::Raster);
     }
-    count
+    Ok(pages)
+}
+
+fn header_u32(header: &[u8], offset: usize) -> u32 {
+    u32::from_be_bytes(header[offset..offset + 4].try_into().unwrap())
 }
 
 #[cfg(test)]
-fn tenth_mm_to_pixels(tenth_mm: u32) -> u32 {
-    rounded_ratio(u64::from(tenth_mm) * u64::from(DPI), 254)
-}
-
-#[cfg(test)]
-fn rounded_ratio(numerator: u64, denominator: u64) -> u32 {
-    u32::try_from((numerator + denominator / 2) / denominator).unwrap_or(u32::MAX)
-}
-
-#[cfg(test)]
-fn write_u32(header: &mut [u8], offset: usize, value: u32) {
-    header[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
-}
-
-#[cfg(test)]
-fn write_i32(header: &mut [u8], offset: usize, value: i32) {
-    header[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
-}
-
-#[cfg(test)]
-fn write_cstring(destination: &mut [u8], value: &str) {
-    let length = value.len().min(destination.len().saturating_sub(1));
-    destination[..length].copy_from_slice(&value.as_bytes()[..length]);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a4_header_is_network_order_srgb_300() {
-        let width = tenth_mm_to_pixels(A4_WIDTH_TENTH_MM);
-        let height = tenth_mm_to_pixels(A4_HEIGHT_TENTH_MM);
-        let header = page_header(width, height);
-        assert_eq!(&header[..10], b"PwgRaster\0");
-        assert_eq!(&header[276..280], &300u32.to_be_bytes());
-        assert_eq!(&header[372..376], &2480u32.to_be_bytes());
-        assert_eq!(&header[376..380], &3508u32.to_be_bytes());
-        assert_eq!(&header[400..404], &19u32.to_be_bytes());
-    }
-
-    #[test]
-    fn expanded_grid_stays_centered_on_a4_with_ruler_gutter() {
-        assert_eq!((GRID_WIDTH_TENTH_MM, GRID_HEIGHT_TENTH_MM), (1_950, 2_750));
-        assert_eq!((SURFACE_LEFT_TENTH_MM, SURFACE_TOP_TENTH_MM), (35, 70));
-        assert_eq!((SURFACE_WIDTH_TENTH_MM, SURFACE_HEIGHT_TENTH_MM), (1_990, 2_790));
-        assert_eq!(
-            SURFACE_LEFT_TENTH_MM + RULER_GUTTER_TENTH_MM,
-            (A4_WIDTH_TENTH_MM - GRID_WIDTH_TENTH_MM) / 2,
-        );
-        assert_eq!(
-            SURFACE_TOP_TENTH_MM + RULER_GUTTER_TENTH_MM,
-            (A4_HEIGHT_TENTH_MM - GRID_HEIGHT_TENTH_MM) / 2,
-        );
-    }
-
-    #[test]
-    fn packbits_uses_whole_rgb_pixels() {
-        let mut encoded = Vec::new();
-        encode_packbits_rgb(&[255, 255, 255, 255, 255, 255, 1, 2, 3], &mut encoded).unwrap();
-        assert_eq!(encoded, [1, 255, 255, 255, 0, 1, 2, 3]);
-    }
-}
+#[path = "pwg_raster_tests.rs"]
+pub(crate) mod tests;

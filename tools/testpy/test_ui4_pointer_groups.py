@@ -117,6 +117,38 @@ fn signal_visual_change() {}
   rig.select(Some(key),next,crate::graphics::primitives::Rgba8::new(1,2,3,255));
   assert_eq!(rig.cursor_icon(key,next),Ui4CursorIcon::ResizeHorizontal);
  }
+ #[test] fn parking_releases_selection_but_retains_cursor_registration_for_restore() {
+  let (mut rig,key)=rig();let first=source(1);let second=source(2);
+  rig.set_cursor(key,Some(first),Ui4CursorIcon::Loading).unwrap();
+  let image=Arc::new(cursor_image_from_rgba(1,1,0,0,&[50,80,120,255]));
+  rig.register_cursor_image(key,1,Arc::clone(&image)).unwrap();
+  rig.select_cursor_image(key,1).unwrap();
+  rig.set_center_snapped_mouse(key,true).unwrap();
+  rig.select(Some(key),first,crate::graphics::primitives::Rgba8::new(1,2,3,255));
+  rig.select(Some(key),second,crate::graphics::primitives::Rgba8::new(4,5,6,255));
+  assert!(rig.frame_parked(key));
+  assert!(rig.selected.is_none());assert!(rig.selecting_cursors.is_empty());
+  assert_eq!(rig.frames.len(),1);assert_eq!(rig.frames[0].images.len(),1);
+  assert_eq!(rig.frames[0].selected_image,Some(1));
+  assert!(rig.frames[0].center_snapped_mouse);
+  assert!(Arc::ptr_eq(&rig.frames[0].images[0].image,&image));
+  assert!(!rig.frame_parked(key),"parking is idempotent");
+  rig.select(Some(key),first,crate::graphics::primitives::Rgba8::new(1,2,3,255));
+  assert_eq!(rig.cursor_icon(key,first),Ui4CursorIcon::Loading);
+  assert_eq!(rig.center_snapped_frame_for_source(first),Some(key));
+ }
+ #[test] fn parking_preserves_other_windows_focus_and_cursor_ownership() {
+  let (mut rig,key)=rig();let first=source(1);let second=source(2);
+  let other=CursorFrameKey::new(key.owner,super::super::WindowId(2));
+  rig.frame_opened(other,super::super::WindowSessionId(1)).unwrap();
+  rig.select(Some(key),first,crate::graphics::primitives::Rgba8::new(1,2,3,255));
+  rig.select(Some(other),second,crate::graphics::primitives::Rgba8::new(4,5,6,255));
+  assert!(rig.frame_parked(key));
+  assert_eq!(rig.selected,Some(other));
+  assert_eq!(rig.selected_frame_for_source(first),None);
+  assert_eq!(rig.selected_frame_for_source(second),Some(other));
+  assert_eq!(rig.frames.len(),2);
+ }
 }
 '''
 

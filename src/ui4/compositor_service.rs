@@ -433,7 +433,6 @@ fn prepare_async_frame(runtime: &mut Runtime) -> Result<Option<PendingFrame>, Ui
     super::advance_window_close_transitions();
     super::advance_window_open_transitions();
     super::collapse_animation::advance();
-    super::codex_handoff::advance();
     runtime.profile.close_ns = runtime
         .profile
         .close_ns

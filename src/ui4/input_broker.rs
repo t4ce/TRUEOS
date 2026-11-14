@@ -214,7 +214,7 @@ pub(super) struct Ui4SpiritDockCircle {
 
 pub(super) fn spirit_dock_circle() -> Option<Ui4SpiritDockCircle> {
     if !super::drag_drop::codex_receiver_ready()
-        && crate::spirit::codex_handoff::folded_target().is_none()
+        && !super::codex_handoff::has_parked()
     {
         return None;
     }
@@ -640,6 +640,9 @@ impl InputBroker {
         if next.is_some_and(|target| !super::spirit_access::cursor_target_allowed(source, target.cursor_frame_key())) {
             return false;
         }
+        if next.is_some_and(|target| super::codex_handoff::parked(target.owner, target.window)) {
+            return false;
+        }
         let color = self.cursors[cursor_index].color();
         let change = super::cursor_frame_inout::select_frame(
             next.map(WindowTarget::cursor_frame_key),
@@ -787,6 +790,7 @@ impl InputBroker {
         }
         let (combo_id, vcursor) = cursor_hut_metadata(source);
         let snapped_window = super::center_snapped_frame_for_source(source)
+            .filter(|key| !super::codex_handoff::parked(key.owner, key.window))
             .and_then(|key| super::window_broker::window_snapshot(key.owner, key.window));
         let (x, y) = snapped_window.map_or((raw_x, raw_y), |window| {
             let placement = window.presentation_placement;
@@ -822,11 +826,16 @@ impl InputBroker {
         let allowed = |target: WindowTarget| super::spirit_access::cursor_target_allowed(
             source, target.cursor_frame_key());
         let route = &self.cursors[index];
+        let parked = |target: WindowTarget| super::codex_handoff::parked(target.owner, target.window);
         if route.capture.is_some_and(|target| !allowed(target))
             || route.collapse_drag.is_some_and(|target| !allowed(target))
             || route.collapse_press.is_some_and(|(target, _)| !allowed(target))
             || route.spirit_restore_press.is_some_and(|(target, _)| !allowed(target))
             || route.resize_latch.is_some_and(|(target, _)| !allowed(target))
+            || route.capture.is_some_and(parked)
+            || route.collapse_drag.is_some_and(parked)
+            || route.collapse_press.is_some_and(|(target, _)| parked(target))
+            || route.resize_latch.is_some_and(|(target, _)| parked(target))
         {
             self.cursors[index].clear_window_interaction();
         }
@@ -1438,7 +1447,13 @@ impl InputBroker {
                 match super::window_broker::collapse_at_cursor(target.owner, target.id, x, y) {
                     Ok(()) => {
                         let route = &mut self.cursors[index];
-                        route.collapse_drag = Some(WindowTarget::from(target));
+                        // The alternate collapse has already detached input
+                        // ownership. Its sprite never becomes a placing drag.
+                        if super::codex_handoff::parked(target.owner, target.id) {
+                            route.clear_frame_interaction();
+                        } else {
+                            route.collapse_drag = Some(WindowTarget::from(target));
+                        }
                         route.capture = None;
                         route.secondary_start_placement = None;
                         route.secondary_restore_origin = None;
@@ -2330,12 +2345,15 @@ impl InputBroker {
             }
             let (x, y, icon, custom_cursor, stepped_cell) = cursor_visual_presentation(route);
             let drag_preview = super::drag_drop::cursor_preview(route.source);
+            let frame_active = route.capture.or(route.collapse_drag)
+                .is_none_or(|target| !super::codex_handoff::parked(target.owner, target.window));
             let reference_drag = super::drag_drop::codex_reference_drag(route.source);
-            let spirit_dock_circle = (route.dock_fields_visible || reference_drag)
+            let spirit_dock_circle = (frame_active && (route.dock_fields_visible || reference_drag))
                 .then_some(route.spirit_dock_circle).flatten()
                 .filter(|_| super::drag_drop::codex_receiver_ready());
             let selection = route
                 .selection_anchor
+                .filter(|_| frame_active)
                 .filter(|_| drag_preview.is_none())
                 .and_then(|anchor| {
                     (route.buttons_down & PRIMARY_BUTTON_MASK != 0)
@@ -2353,9 +2371,9 @@ impl InputBroker {
                 custom_cursor,
                 stepped_cell,
                 context_menu: route.context_menu,
-                dock_fields_visible: route.dock_fields_visible,
+                dock_fields_visible: frame_active && route.dock_fields_visible,
                 spirit_dock_circle,
-                dock_preview: route.dock_preview,
+                dock_preview: route.dock_preview.filter(|_| frame_active),
                 selection,
             });
         }
@@ -2816,6 +2834,7 @@ pub(crate) fn select_window_for_cursor(
     window: WindowId,
 ) -> Result<bool, Ui4ProgrammaticSelectionError> {
     if visual_only_cursor(source)
+        || super::codex_handoff::parked(owner, window)
         || !super::spirit_access::cursor_target_allowed(source, CursorFrameKey::new(owner, window)) {
         return Err(Ui4ProgrammaticSelectionError::NotReady);
     }
@@ -2851,6 +2870,7 @@ pub(crate) fn reselect_window_for_cursor(
     window: WindowId,
 ) -> Result<bool, Ui4ProgrammaticSelectionError> {
     if visual_only_cursor(source)
+        || super::codex_handoff::parked(owner, window)
         || !super::spirit_access::cursor_target_allowed(source, CursorFrameKey::new(owner, window)) {
         return Err(Ui4ProgrammaticSelectionError::NotReady);
     }
@@ -2880,6 +2900,7 @@ pub(crate) fn select_window_for_cursor_at(
     y: u32,
 ) -> Result<bool, Ui4ProgrammaticSelectionError> {
     if visual_only_cursor(source)
+        || super::codex_handoff::parked(owner, window)
         || !super::spirit_access::cursor_target_allowed(source, CursorFrameKey::new(owner, window)) {
         return Err(Ui4ProgrammaticSelectionError::NotReady);
     }

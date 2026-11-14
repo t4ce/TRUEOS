@@ -1412,6 +1412,9 @@ impl WindowBroker {
                     && window.output == output
             })
             .filter_map(|(slot, window)| window.snapshot(slot))
+            // Presentation effects can hide a logically visible producer,
+            // including a compact Codex tile already folded into Lilly.
+            .filter(|snapshot| snapshot.placement.visible)
             .collect::<Vec<_>>();
         snapshots.sort_unstable_by_key(|window| (window.placement.z, window.id));
         snapshots
@@ -3162,7 +3165,7 @@ pub(crate) fn window_composition_revision() -> u64 {
 }
 
 pub(crate) fn window_transitions_active() -> bool {
-    if super::collapse_animation::active() || super::codex_handoff::active() || !TRANSITION_RETIRED_FRAMES.lock().is_empty() {
+    if super::collapse_animation::active() || !TRANSITION_RETIRED_FRAMES.lock().is_empty() {
         return true;
     }
     WINDOW_BROKER
@@ -3752,7 +3755,11 @@ fn change_collapse(
     }
     broker.mark_composition_changed();
     drop(broker);
-    if collapsing { super::codex_handoff::queue(owner,id,compact.frame); }
+    if collapsing {
+        super::codex_handoff::queue(owner, id, compact.frame,
+            crate::spirit::codex_handoff::geometry::Point { x: compact.placement.x, y: compact.placement.y },
+            compact.placement.opacity);
+    }
     super::cursor_frame_inout::selection_strip_stack_changed();
     Ok(())
 }
@@ -3774,7 +3781,9 @@ pub(super) fn follow_collapsed_cursor(
     x: u32,
     y: u32,
 ) -> Result<(), WindowBrokerError> {
-    super::codex_handoff::cancel(owner,id);
+    if super::codex_handoff::parked(owner, id) {
+        return Err(WindowBrokerError::InteractionDenied);
+    }
     let output_extent = super::output_dimensions();
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
@@ -3783,12 +3792,10 @@ pub(super) fn follow_collapsed_cursor(
     let placement = collapsed_cursor_placement(*tile, x, y, output_extent);
     if placement == *tile { return Ok(()); }
     *tile = placement;
-    let icon=window.collapse.as_ref().unwrap().frame;
     window.revision = next_serial(window.revision);
     window.damage = Some(DamageRegion::FULL);
     broker.mark_composition_changed();
     drop(broker);
-    super::codex_handoff::queue(owner,id,icon);
     super::cursor_frame_inout::selection_strip_stack_changed();
     Ok(())
 }

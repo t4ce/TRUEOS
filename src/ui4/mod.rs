@@ -54,8 +54,8 @@ mod video_frame;
 pub(crate) mod window_arc;
 mod window_broker;
 
-pub(crate) fn codex_handoff_changed(owner: WindowOwner, window: WindowId) {
-    window_broker::collapse_animation_changed(owner, window);
+pub(crate) fn codex_handoff_changed(_owner: WindowOwner, _window: WindowId) {
+    input_broker::notify_slot4_visual_change();
 }
 
 const INTERACTION_CADENCE_HZ: u64 = 60;
