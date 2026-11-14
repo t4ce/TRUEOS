@@ -1156,7 +1156,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let rc = request_payload(vm_id, req_len)
                 .and_then(|idea| core::str::from_utf8(idea).ok())
                 .map(|idea| {
-                    crate::spirit::enqueue_emotion_words(&[idea])
+                    crate::spirit::enqueue_presentation_word(idea)
                         .map(|_| 0)
                         .unwrap_or(-5)
                 })

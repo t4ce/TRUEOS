@@ -854,6 +854,29 @@ pub(crate) fn enqueue_text(text: &str) -> Result<usize, LillyProtocolError> {
     enqueue_package(SpiritPackage::new(Some(String::from(text)), None))
 }
 
+/// Reserved presentation vocabulary on the existing emotion ingress. Ordinary
+/// emotion requests retain their existing randomized variants. Vibe requests
+/// select one existing clip and enter the unmodified clip-boundary sequencer.
+pub(crate) fn enqueue_presentation_word(word: &str) -> Result<usize, LillyProtocolError> {
+    let Some(vibe) = word.strip_prefix("vibe:") else {
+        return enqueue_emotion_words(&[word]);
+    };
+    let tag = match vibe {
+        "neutral" => "idle.crossed.neutral_breath",
+        "wave" => "wave.neutral",
+        "happy" => "happy.cheer",
+        "sad" => "cry.wipe",
+        "affection" => "flirt.heart_hands",
+        "disapprove" => "disapprove.head_shake",
+        "agree" => "agree.firm_nod",
+        "confused" => "confused.question",
+        "idea" => "idea.finger_up",
+        "angry" => "angry.fists_clenched",
+        _ => return Err(LillyProtocolError::UnknownAnimation),
+    };
+    enqueue_animation(tag, SpiritRgba8::WHITE)
+}
+
 /// Map and queue one to three model-facing emotion words as whole Lilly clips.
 ///
 /// The request is all-or-nothing: every word and resident catalog mapping is

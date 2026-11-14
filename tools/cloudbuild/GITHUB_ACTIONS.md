@@ -7,9 +7,9 @@ into the API's private state. The existing receipt finalizer signs licensed
 results. Closing the browser does not stop compilation or collection.
 
 PDJB on the LAN is the intended API host. Server access, DNS, HTTPS and firewall
-configuration are a later joint deployment step. `build.trueos.eu` is the
-proposed hostname in the supplied templates; change it if another hostname is
-chosen. No server deployment or public workflow run was performed to implement
+configuration are a later joint deployment step. The public selector belongs at `https://trueos.eu/build/`, next to the existing
+home page and `/apps`. The Node site proxies `/build/` to Python on loopback,
+removing that prefix while preserving the public Host and Origin. No server deployment or public workflow run was performed to implement
 this integration.
 
 ## Public and private data
@@ -59,12 +59,25 @@ backend. Both processes need the same trusted Cloudbuild code and private state.
 
 ## Run locally or under supervision
 
-The API serves both the selector and `/api` on one origin:
+The Python service serves the selector and API internally. The existing Node
+site mounts it at `/build/`: browser API requests go to `/build/api/...`, and
+Node strips `/build` before forwarding to Python. Other site routes retain
+their current handlers. Fedora needs Node (for the existing site), Python,
+OpenSSH, OpenSSL and CA certificates; it does not need Rust, Cargo, a C compiler
+or a TRUEOS source build toolchain.
+
+The shared `TRUEOS_SITE` now loads `tools/cloudbuild-proxy.js` from `App.js`.
+Its upstream defaults to `http://127.0.0.1:8787`; set `TRUEOS_CLOUDBUILD_URL` in
+the Node service environment if that internal address differs. The maintained
+copy of this adapter is `deploy/site-proxy.cjs`. It streams downloads and
+forwards only the headers needed by Cloudbuild, without website cookies.
+
+Start Python with the public origin, which has no `/build` path:
 
 ```sh
 python3 tools/cloudbuild/cloudbuild.py --state-dir /srv/trueos-build-state \
   serve --actions-config /etc/trueos-cloudbuild/actions.json \
-  --origin https://build.trueos.eu \
+  --origin https://trueos.eu \
   --issuer-key /etc/trueos-cloudbuild/build-issuer
 ```
 
@@ -100,8 +113,9 @@ GITHUB_APP_CLIENT_ID=YOUR_APP_CLIENT_ID
 GITHUB_APP_INSTALLATION_ID=YOUR_INSTALLATION_ID
 ```
 
-The templates expose only loopback port 8787. The Caddy example terminates TLS
-for `build.trueos.eu` and forwards the original Host/Origin. Adapt it to the
+The Python templates expose only loopback port 8787. The Caddy example
+terminates TLS for `trueos.eu` and proxies the existing Node site on port 14000.
+Node handles the `/build/` mount and forwards the public Host/Origin. Adapt it to the
 existing reverse proxy instead of starting a second proxy on occupied ports.
 The systemd units hide the other process's private key. They need matching
 paths before activation. Add ingress rate limits, disk monitoring, state backup,
@@ -110,7 +124,7 @@ and artifact retention appropriate to the eventual public deployment.
 A loopback health check on the server, before public firewall changes:
 
 ```sh
-curl --fail -H 'Host: build.trueos.eu' http://127.0.0.1:8787/api/catalog
+curl --fail -H 'Host: trueos.eu' http://127.0.0.1:8787/api/catalog
 ```
 
 DNS, certificate issuance and external port forwarding remain deployment steps
@@ -157,6 +171,7 @@ API archive deletion. Per-person receipts remain separate from build inputs.
 ```sh
 python3 -m unittest discover -s tools/cloudbuild -p 'test_*.py'
 python3 -m unittest discover -s tools/testpy -p test_rig_commands.py
+TRUEOS_SITE_DIR=/path/to/TRUEOS_SITE node --test tools/cloudbuild/test_site_proxy.cjs
 ```
 
 The Actions tests use a fake transport and explicitly marked sentinel bytes.

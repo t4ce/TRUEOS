@@ -141,6 +141,26 @@ mod tests {
     fn status(value: Option<program_status::ProgramStatus>) { *shell3::tui::STATUS.lock() = value; }
 
     #[test]
+    fn response_vibes_queue_existing_catalog_clips_without_changing_the_sequencer() {
+        let _lock = reset(0);
+        for (vibe, tag) in [
+            ("neutral", "idle.crossed.neutral_breath"), ("wave", "wave.neutral"),
+            ("happy", "happy.cheer"), ("sad", "cry.wipe"),
+            ("affection", "flirt.heart_hands"), ("disapprove", "disapprove.head_shake"),
+            ("agree", "agree.firm_nod"), ("confused", "confused.question"),
+            ("idea", "idea.finger_up"), ("angry", "angry.fists_clenched"),
+        ] {
+            protocol::enqueue_presentation_word(&format!("vibe:{vibe}")).unwrap();
+            assert_eq!(next().animation.key, tag);
+        }
+        assert!(protocol::enqueue_presentation_word("vibe:unknown").is_err());
+        // Legacy callers still use the original emotion selector.
+        assert!(protocol::enqueue_presentation_word("joy").is_ok());
+        let selected = next().animation.key;
+        assert!(["happy.cheer", "idle.uncrossed.quiet_laugh", "silly.teehee"].contains(&selected));
+    }
+
+    #[test]
     fn codex_arrival_prepares_crossed_without_consuming_pending_gesture() {
         let _lock=reset(0);
         protocol::enqueue_animation("wave.shy",protocol::SpiritRgba8::WHITE).unwrap();

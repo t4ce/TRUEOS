@@ -61,7 +61,7 @@ pub unsafe extern "C" fn trueos_cabi_spirit_emotion_play(
     let Ok(idea) = core::str::from_utf8(idea) else {
         return ERROR_BAD_INPUT;
     };
-    crate::spirit::enqueue_emotion_words(&[idea])
+    crate::spirit::enqueue_presentation_word(idea)
         .map(|_| 0)
         .unwrap_or(ERROR_UNAVAILABLE)
 }

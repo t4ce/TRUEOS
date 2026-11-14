@@ -37,7 +37,7 @@ pub(crate) mod spirit_vfx;
 mod window_selection;
 
 #[allow(unused_imports)]
-pub(crate) use lilly_protocol::{LillyEmotion, enqueue_emotion_words, enqueue_emotions};
+pub(crate) use lilly_protocol::{LillyEmotion, enqueue_emotion_words, enqueue_emotions, enqueue_presentation_word};
 
 pub(crate) use window_selection::spirit_window_selection_task;
 

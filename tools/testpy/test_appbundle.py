@@ -186,13 +186,35 @@ fn missing_xerj_rolls_back_updates_even_when_sqlite_is_installed() {
 #[test]
 fn batch_publishes_all_and_refreshes_once_regardless_of_input_order() {
     reset();
-    app_db::insert_downloads(&[download("codex.bp"), download("xerj-service.bp"), download("xerj.bp"), download("sqlite.bp")]).unwrap();
+    app_db::insert_downloads(&[download("codex.bp"), download("xerj-service.bp"), download("xerj.bp"), download("sqlite.bp"), download("lily2vec.bp")]).unwrap();
     assert_eq!(app_db::get("codex.bp").unwrap().unwrap(), download("codex.bp").1);
     assert_eq!(app_db::get("sqlite.bp").unwrap().unwrap(), download("sqlite.bp").1);
     assert_eq!(app_db::get("xerj.bp").unwrap().unwrap(), download("xerj.bp").1);
     assert_eq!(app_db::get("xerj-service.bp").unwrap().unwrap(), download("xerj-service.bp").1);
-    assert_eq!(app_db::list().unwrap().len(), 5);
+    assert_eq!(app_db::list().unwrap().len(), 6);
     assert_eq!(REFRESHES.load(Ordering::SeqCst), 1);
+}
+#[test]
+fn missing_lily_rolls_back_codex_when_other_requirements_are_installed() {
+    reset();
+    app_db::insert_downloads(&[download("sqlite.bp"), download("xerj.bp"), download("xerj-service.bp")]).unwrap();
+    REFRESHES.store(0, Ordering::SeqCst);
+    let before = app_db::list().unwrap();
+    let error = app_db::insert_downloads(&[download("codex.bp")]).unwrap_err();
+    assert!(error.contains("required Blueprint lily2vec.bp is unavailable"));
+    assert_eq!(app_db::list().unwrap(), before);
+    assert!(app_db::get("codex.bp").unwrap().is_none());
+    assert_eq!(REFRESHES.load(Ordering::SeqCst), 0);
+    app_db::insert_downloads(&[download("codex.bp"), download("lily2vec.bp")]).unwrap();
+    assert!(app_db::get("codex.bp").unwrap().is_some());
+    assert!(app_db::get("lily2vec.bp").unwrap().is_some());
+}
+#[test]
+fn lily_alone_succeeds_without_codex() {
+    reset();
+    app_db::insert_downloads(&[download("lily2vec.bp")]).unwrap();
+    assert!(app_db::get("lily2vec.bp").unwrap().is_some());
+    assert!(app_db::get("codex.bp").unwrap().is_none());
 }
 #[test]
 fn sqlite_alone_succeeds_without_codex() {
@@ -236,17 +258,17 @@ fn service_requires_its_engine_without_requiring_codex() {
 }
 #[test]
 fn missing_or_invalid_member_never_imports_any_of_the_batch() {
-    for broken in ["sqlite.bp", "xerj.bp", "xerj-service.bp", "codex.bp"] {
+    for broken in ["sqlite.bp", "xerj.bp", "xerj-service.bp", "lily2vec.bp", "codex.bp"] {
         for invalid in [false, true] {
-            reset(); stage("sqlite.bp"); stage("xerj.bp"); stage("xerj-service.bp"); stage("codex.bp");
+            reset(); stage("sqlite.bp"); stage("xerj.bp"); stage("xerj-service.bp"); stage("lily2vec.bp"); stage("codex.bp");
             let path = format!("common/dl/apps/{broken}");
             if invalid {
                 FILES.lock().unwrap().insert(path, b"corrupt".to_vec());
             } else {
                 FILES.lock().unwrap().remove(&path);
             }
-            assert!(io::install::run(b"common/dl/apps/sqlite.bp\ncommon/dl/apps/xerj.bp\ncommon/dl/apps/xerj-service.bp\ncommon/dl/apps/codex.bp").is_err());
-            for name in ["sqlite.bp", "xerj.bp", "xerj-service.bp", "codex.bp"] {
+            assert!(io::install::run(b"common/dl/apps/sqlite.bp\ncommon/dl/apps/xerj.bp\ncommon/dl/apps/xerj-service.bp\ncommon/dl/apps/lily2vec.bp\ncommon/dl/apps/codex.bp").is_err());
+            for name in ["sqlite.bp", "xerj.bp", "xerj-service.bp", "lily2vec.bp", "codex.bp"] {
                 assert!(app_db::get(name).unwrap().is_none());
             }
             assert_eq!(REFRESHES.load(Ordering::SeqCst), 0);
@@ -255,8 +277,8 @@ fn missing_or_invalid_member_never_imports_any_of_the_batch() {
 }
 #[test]
 fn batch_request_imports_all_and_keeps_single_path_compatibility() {
-    reset(); stage("sqlite.bp"); stage("xerj.bp"); stage("xerj-service.bp"); stage("codex.bp");
-    io::install::run(b"common/dl/apps/sqlite.bp\ncommon/dl/apps/xerj.bp\ncommon/dl/apps/xerj-service.bp\ncommon/dl/apps/codex.bp").unwrap();
+    reset(); stage("sqlite.bp"); stage("xerj.bp"); stage("xerj-service.bp"); stage("lily2vec.bp"); stage("codex.bp");
+    io::install::run(b"common/dl/apps/sqlite.bp\ncommon/dl/apps/xerj.bp\ncommon/dl/apps/xerj-service.bp\ncommon/dl/apps/lily2vec.bp\ncommon/dl/apps/codex.bp").unwrap();
     assert!(app_db::get("sqlite.bp").unwrap().is_some());
     assert!(app_db::get("xerj.bp").unwrap().is_some());
     assert!(app_db::get("xerj-service.bp").unwrap().is_some());
@@ -326,6 +348,12 @@ def main():
         assert seed.read_bytes() == original
         (packages / 'xerj-service.bp').write_bytes(b'TRBP' + bytes(20))
         manifest.write_text('{"buildins":["apps","codex","sqlite","xerj","xerj-service"]}')
+        result = subprocess.run([env['CARGO_TARGET_DIR'] + '/debug/trueos-appdb-seed', str(manifest), str(packages),
+                                 str(seed), '2026-11-08 00:00Z', str(BP / 'appbundle.json')], cwd=path, capture_output=True)
+        assert result.returncode != 0 and b'lily2vec.bp is missing from the seed' in result.stderr
+        assert seed.read_bytes() == original
+        (packages / 'lily2vec.bp').write_bytes(b'TRBP' + bytes(20))
+        manifest.write_text('{"buildins":["apps","codex","sqlite","xerj","xerj-service","lily2vec"]}')
         complete_seed = path / 'complete-seed.db'
         subprocess.run([env['CARGO_TARGET_DIR'] + '/debug/trueos-appdb-seed', str(manifest), str(packages),
                         str(complete_seed), '2026-11-08 00:00Z', str(BP / 'appbundle.json')], cwd=path, check=True)

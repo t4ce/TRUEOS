@@ -2,6 +2,10 @@
 "use strict";
 
 (() => {
+  // Resolve against the loaded script so root and /build/ installations share
+  // the same UI without sending requests to another application's /api route.
+  const apiBase = new URL(".", document.currentScript.src).pathname.replace(/\/$/, "");
+  const apiURL = (path) => apiBase + path;
   const $ = (id) => document.getElementById(id);
   const state = {
     catalog: null,
@@ -201,7 +205,7 @@
     const headers = { Accept: "application/json" };
     if (body !== undefined) headers["Content-Type"] = "application/json";
     if (token) headers.Authorization = `Bearer ${token}`;
-    const response = await fetch(path, {
+    const response = await fetch(apiURL(path), {
       method, headers, signal, credentials: "omit", mode: "same-origin", cache: "no-store",
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
@@ -805,7 +809,7 @@
     $("download-artifact").disabled = true;
     $("download-artifact").textContent = "Downloading…";
     try {
-      const response = await fetch(`/api/jobs/${encodeURIComponent(job.job_id)}/artifact`, {
+      const response = await fetch(apiURL(`/api/jobs/${encodeURIComponent(job.job_id)}/artifact`), {
         headers: { Authorization: `Bearer ${job.accessToken}` }, mode: "same-origin", credentials: "omit", cache: "no-store",
       });
       if (!response.ok) {
