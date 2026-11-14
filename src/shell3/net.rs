@@ -172,7 +172,8 @@ impl Connection {
         if self.rejected { return None; }
         let protocol = (!self.greeting && self.ssh.is_none())
             .then(|| self.pending.as_ref().map(|pending| pending.until)).flatten();
-        [self.deadline, protocol, self.ssh.as_ref().and_then(|ssh| ssh.next_deadline())]
+        [self.deadline, protocol, self.ssh.as_ref().and_then(|ssh| ssh.next_deadline()),
+            self.terminal.as_ref().and_then(Terminal::next_deadline)]
             .into_iter().flatten().min()
     }
 
@@ -325,7 +326,7 @@ pub(super) async fn owner_task(slot: u32) {
     let wake = &OWNER_WAKE[slot as usize];
     let mut clock = crate::chronos::signals::subscribe(crate::chronos::signals::Every::MINUTE);
     crate::log_info!(target: "service";
-        "shell3-ssh: owner online slot={} scheduling=queue-readiness maintenance=civil-minute+protocol-deadlines\n", slot);
+        "shell3-ssh: owner online slot={} scheduling=queue-readiness maintenance=civil-minute+protocol+presentation-deadlines\n", slot);
     loop {
         // Observe before processing/checking state. A publication anywhere
         // before registration then prevents sleeping through that work.

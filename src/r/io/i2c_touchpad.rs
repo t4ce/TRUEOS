@@ -1,13 +1,14 @@
 //! Physical HID-over-I2C touchpad, using the shared HID pointer input path.
 
 use super::{
-    hid_touchpad::{Feature, Pointer, Touchpad},
+    hid_touchpad::{Pointer, Touchpad},
     i2c_hid::{self, Descriptor, Input},
     intel_gpio::GpioLine,
     intel_i2c::Controller,
 };
 use crate::efi::acpi::i2c_hid_firmware::{self, TrackpadFirmware};
 use alloc::vec;
+use core::fmt::Debug;
 use trueos_time::{Duration, Instant, Timer};
 
 const CONTROLLER_ID: u32 = 0x4932_4348; // "I2CH", physical transport namespace.
@@ -66,70 +67,85 @@ fn publish(pointer: Pointer) {
     );
 }
 
-fn feature_value(feature: Feature, bytes: &[u8]) -> Option<u32> {
-    let prefix = usize::from(feature.report_id != 0);
-    if !(1..=32).contains(&feature.bit_size)
-        || (prefix != 0 && bytes.first().copied()? != feature.report_id)
-    {
-        return None;
-    }
-    let mut value = 0;
-    for bit in 0..usize::from(feature.bit_size) {
-        let position = usize::from(feature.bit_offset) + bit;
-        value |= u32::from((bytes.get(prefix + position / 8)? >> (position % 8)) & 1) << bit;
-    }
-    Some(value)
-}
-
-async fn select_input_mode(
-    controller: &mut Controller,
-    address: u8,
+async fn select_input_mode<T: i2c_hid::Transport>(
+    bus: &mut T,
     descriptor: Descriptor,
     decoder: &Touchpad,
-) -> Result<&'static str, &'static str> {
-    let Some(feature) = decoder.input_mode_feature() else {
-        return Ok("descriptor-default");
-    };
-    let length = usize::from(feature.report_len);
-    if length == 0 || length > 256 || feature.report_id == 0 {
-        return Err("unsupported Input Mode feature");
-    }
-    let mut bytes = [0; 256];
-    let mut target = controller.target(address);
-    if descriptor
-        .get_feature(&mut target, feature.report_id, &mut bytes[..length])
-        .await
-        != Ok(length)
-    {
-        // With no other fields there is nothing to preserve. Otherwise a GET
-        // failure must not lead to overwriting unrelated feature settings.
-        if feature.bit_offset != 0 || usize::from(feature.bit_size) != (length - 1) * 8 {
-            return Err("cannot read existing Input Mode feature");
-        }
-    }
+) -> Result<&'static str, &'static str>
+where
+    T::Error: Debug,
+{
     let mode = if decoder.has_precision_reports() {
         3
     } else {
         0
     };
-    feature
-        .set_value(mode, &mut bytes[..length])
-        .ok_or("Input Mode feature cannot be encoded")?;
-    descriptor
-        .set_feature(&mut target, &bytes[..length])
-        .await
-        .map_err(|_| "setting Input Mode failed")?;
-    let readback = descriptor
-        .get_feature(&mut target, feature.report_id, &mut bytes[..length])
-        .await
-        .map_err(|_| "Input Mode readback failed")?;
-    if readback != length || feature_value(feature, &bytes[..readback]) != Some(mode) {
-        return Err("device rejected Input Mode");
+    let settings = [
+        (decoder.input_mode_feature(), mode),
+        (decoder.surface_switch_feature(), 1),
+        (decoder.button_switch_feature(), 1),
+        (decoder.latency_mode_feature(), 0),
+    ];
+    for (index, (feature, _)) in settings.iter().enumerate() {
+        let Some(feature) = feature else {
+            continue;
+        };
+        if settings[..index]
+            .iter()
+            .any(|(other, _)| other.is_some_and(|other| other.report_id == feature.report_id))
+        {
+            continue;
+        }
+        let length = usize::from(feature.report_len);
+        if !(2..=256).contains(&length) || feature.report_id == 0 {
+            return Err("unsupported touchpad control feature");
+        }
+        let mut bytes = [0; 256];
+        if !decoder.feature_report_controls_only(feature.report_id) {
+            // Preserve unrelated writable settings. Constant padding and the
+            // controls below can be constructed without an optional GET.
+            let read = descriptor
+                .get_feature(bus, feature.report_id, &mut bytes[..length])
+                .await;
+            if !matches!(&read, Ok(returned) if *returned == length) {
+                crate::log_warn!(target: "input";
+                    "i2c-trackpad: feature-get failed id={} expected={} result={:?}\n",
+                    feature.report_id, length, read);
+                return Err("cannot preserve existing touchpad feature settings");
+            }
+        }
+        for (control, value) in settings {
+            if let Some(control) = control.filter(|control| control.report_id == feature.report_id)
+            {
+                if usize::from(control.report_len) != length
+                    || control.set_value(value, &mut bytes[..length]).is_none()
+                {
+                    return Err("touchpad control feature cannot be encoded");
+                }
+            }
+        }
+        descriptor
+            .set_feature(bus, &bytes[..length])
+            .await
+            .map_err(|error| {
+                crate::log_warn!(target: "input";
+                "i2c-trackpad: feature-set failed id={} length={} error={:?}\n",
+                feature.report_id, length, error);
+                "setting touchpad control feature failed"
+            })?;
+        crate::log_info!(target: "input";
+            "i2c-trackpad: feature-set accepted id={} length={} verification=input-reports\n",
+            feature.report_id, length);
     }
-    Ok(if mode == 3 {
-        "precision-relative"
+    // SET_REPORT completion is not evidence of a working input stream. Like
+    // the standard multitouch setup, observe input instead of requiring an
+    // additional GET_REPORT echo that this device has failed to provide.
+    Ok(if decoder.input_mode_feature().is_none() {
+        "descriptor-default"
+    } else if mode == 3 {
+        "precision-relative-requested"
     } else {
-        "mouse-compatible"
+        "mouse-compatible-requested"
     })
 }
 
@@ -167,6 +183,11 @@ async fn serve(
             crate::log_warn!(target: "input"; "i2c-trackpad: HID descriptor read failed error={:?}\n", error);
             "HID descriptor unavailable"
         })?;
+    crate::log_info!(target: "input";
+        "i2c-trackpad: HID descriptor vendor={:04x} product={:04x} version={:04x} report_reg=0x{:04x} report_bytes={} command_reg=0x{:04x} data_reg=0x{:04x} max_input={}\n",
+        descriptor.vendor_id, descriptor.product_id, descriptor.version_id,
+        descriptor.report_descriptor_register, descriptor.report_descriptor_length,
+        descriptor.command_register, descriptor.data_register, descriptor.max_input_length);
     descriptor
         .power_on(&mut controller.target(address))
         .await
@@ -189,20 +210,31 @@ async fn serve(
     descriptor
         .report_descriptor(&mut controller.target(address), &mut report_descriptor)
         .await
-        .map_err(|_| "report descriptor read failed")?;
+        .map_err(|error| {
+            crate::log_warn!(target: "input";
+                "i2c-trackpad: report descriptor read error={:?}\n", error);
+            "report descriptor read failed"
+        })?;
     let mut decoder = Touchpad::from_descriptor(&report_descriptor)
         .map_err(|_| "unsupported HID pointer descriptor")?;
-    let mode = select_input_mode(controller, address, descriptor, &decoder).await?;
+    let mode = select_input_mode(&mut controller.target(address), descriptor, &decoder).await?;
     publish(Pointer::default()); // Physical Human device, visible before movement.
     let (tx, rx) = controller.fifo_depths();
     crate::log_important!(target: "input";
-        "i2c-trackpad: ready pci={:02x}:{:02x}.{} address=0x{:02x} hid={:04x}:{:04x} gpio={} mode={} fifo={}/{} poll_ms={} sink=hid-human\n",
+        "i2c-trackpad: ready pci={:02x}:{:02x}.{} address=0x{:02x} hid={:04x}:{:04x} gpio={} mode={} fifo={}/{} poll_ms={} sink=hid-human state=waiting-input\n",
         config.pci_bus, config.pci_slot, config.pci_function, address,
         descriptor.vendor_id, descriptor.product_id, config.gpio_number, mode, tx, rx, POLL_MS);
 
     let mut input = [0; i2c_hid::MAX_INPUT];
     let mut first_activity = true;
     let mut errors = 0u32;
+    let mut reports = 0u64;
+    let mut changes = 0u64;
+    let mut motions = 0u64;
+    let mut button_changes = 0u64;
+    let mut buttons = 0u8;
+    let mut last_activity = None;
+    let mut next_diagnostic = Instant::now().as_millis().saturating_add(5000);
     loop {
         for _ in 0..8 {
             if !line.asserted()? {
@@ -214,7 +246,23 @@ async fn serve(
             match frame {
                 Ok(Input::Report { length }) => {
                     errors = 0;
+                    reports = reports.saturating_add(1);
+                    if reports == 1 {
+                        crate::log_info!(target: "input";
+                            "i2c-trackpad: first-report id={} length={} payload=omitted\n",
+                            input[2], length);
+                    }
                     if let Some(pointer) = decoder.decode_i2c(&input[..length]) {
+                        changes = changes.saturating_add(1);
+                        if pointer.dx != 0 || pointer.dy != 0 {
+                            motions = motions.saturating_add(1);
+                            if motions == 1 {
+                                crate::log_important!(target: "input";
+                                    "i2c-trackpad: headless-motion verified source=i2c-hid report_id={} payload=omitted\n", input[2]);
+                            }
+                        }
+                        button_changes += u64::from(pointer.buttons != buttons);
+                        buttons = pointer.buttons;
                         publish(pointer);
                         if first_activity {
                             first_activity = false;
@@ -238,6 +286,17 @@ async fn serve(
                     break;
                 }
             }
+        }
+        let now = Instant::now().as_millis();
+        if now >= next_diagnostic {
+            let activity = (reports, changes, motions, button_changes);
+            if last_activity != Some(activity) {
+                crate::log_info!(target: "input";
+                    "i2c-trackpad: activity reports={} changes={} motions={} button_changes={} forwarded={} payload=omitted\n",
+                    reports, changes, motions, button_changes, changes);
+                last_activity = Some(activity);
+            }
+            next_diagnostic = now.saturating_add(5000);
         }
         Timer::after(Duration::from_millis(POLL_MS)).await;
     }

@@ -7,6 +7,7 @@ use core::ptr::NonNull;
 use trueos_time::{Duration, Instant, Timer};
 
 use super::{designware_i2c, i2c_hid};
+use crate::pci::firmware_bar_wire::{self, Reservation};
 use crate::pci::{self, PciDevice};
 
 const OWNER: &str = "input/i2c-hid";
@@ -63,6 +64,142 @@ impl Drop for Claim {
 
 struct Registers {
     base: NonNull<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Bar0 {
+    low: u32,
+    high: Option<u32>,
+}
+
+impl Bar0 {
+    fn read(device: PciDevice) -> Self {
+        let (low, high) = pci::read_bar_raw(device.bus, device.slot, device.function, 0);
+        Self { low, high }
+    }
+
+    fn address(self) -> Option<u64> {
+        if self.low == u32::MAX || self.low & 1 != 0 {
+            return None;
+        }
+        let high = match (self.low >> 1) & 3 {
+            0 => 0,
+            2 => u64::from(self.high?),
+            _ => return None,
+        };
+        let address = (high << 32) | u64::from(self.low & !0xf);
+        (address != 0 && address & 0xfff == 0).then_some(address)
+    }
+
+    fn at(self, address: u64) -> Result<Self, Error> {
+        if address == 0 || address & 0xfff != 0 {
+            return Err(error("bar0", "firmware BAR0 address is invalid"));
+        }
+        if self.high.is_none() && address > u64::from(u32::MAX) {
+            return Err(error("bar0", "firmware BAR0 exceeds 32-bit addressing"));
+        }
+        Ok(Self {
+            low: (address as u32 & !0xf) | (self.low & 0xf),
+            high: self.high.map(|_| (address >> 32) as u32),
+        })
+    }
+
+    fn restore(self, device: PciDevice) -> Result<(), Error> {
+        let command = pci::config_read_u16(device.bus, device.slot, device.function, 0x04);
+        if command & (PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER) != 0 {
+            return Err(error(
+                "bar0",
+                "BAR restore requires memory and DMA disabled",
+            ));
+        }
+        if let Some(high) = self.high {
+            pci::config_write_u32(device.bus, device.slot, device.function, 0x14, high);
+        }
+        pci::config_write_u32(device.bus, device.slot, device.function, 0x10, self.low);
+        if Self::read(device) != self {
+            return Err(error("bar0", "firmware BAR0 restore readback failed"));
+        }
+        Ok(())
+    }
+}
+
+fn firmware_reservation(device: PciDevice) -> Result<Reservation, Error> {
+    let bytes =
+        crate::limine::module_bytes_by_string(firmware_bar_wire::MODULE_CMDLINE).ok_or(error(
+            "bar0",
+            "BAR0 unassigned; bootloader PCI reservations missing",
+        ))?;
+    firmware_bar_wire::find(
+        bytes,
+        0,
+        device.bus,
+        device.slot,
+        device.function,
+        device.vendor_id,
+        device.device_id,
+        0,
+    )
+    .map_err(|_| error("bar0", "bootloader PCI reservations invalid"))?
+    .ok_or(error(
+        "bar0",
+        "BAR0 unassigned; firmware reservation unavailable",
+    ))
+}
+
+/// Restore only an existing firmware allocation. UEFI owns address selection;
+/// the input driver never guesses a hole or relocates another PCI function.
+async fn prepare_pci(device: PciDevice) -> Result<(u64, u64), Error> {
+    let before = Bar0::read(device);
+    let command = pci::config_read_u16(device.bus, device.slot, device.function, 0x04);
+    configure_pci_command(device, false)?;
+    power_on(device).await?;
+    // D3hot -> D0 can reset both BARs and PCI command. Keep decode off while
+    // restoring the split 64-bit address, then verify the final decode policy.
+    configure_pci_command(device, false)?;
+    let after = Bar0::read(device);
+    crate::log_info!(target: "input";
+        "intel-i2c: pci={:02x}:{:02x}.{} command_before=0x{:04x} bar0_before={:08x}:{:08x} bar0_after_d0={:08x}:{:08x}\n",
+        device.bus, device.slot, device.function, command,
+        before.high.unwrap_or(0), before.low, after.high.unwrap_or(0), after.low);
+    if before.address().is_some() && before != after {
+        before.restore(device)?;
+        crate::log_info!(target: "input"; "intel-i2c: BAR0 restored source=pre-d0\n");
+    }
+    let current = Bar0::read(device);
+    if current.low == u32::MAX || current.low & 1 != 0 || !matches!((current.low >> 1) & 3, 0 | 2) {
+        return Err(error("bar0", "BAR0 is not a valid memory BAR"));
+    }
+    // The function is exclusively claimed, with memory and DMA disabled.
+    let size = pci::bar_size_bytes(device.bus, device.slot, device.function, 0)
+        .filter(|size| size.is_power_of_two() && *size >= MAP_BYTES as u64)
+        .ok_or(error("bar0", "BAR0 size is unavailable or invalid"))?;
+    let physical = if let Some(address) = current.address() {
+        address
+    } else {
+        // A nonzero, malformed assignment is not permission to replace it.
+        let raw_address =
+            (u64::from(current.high.unwrap_or(0)) << 32) | u64::from(current.low & !0xf);
+        if raw_address != 0 {
+            return Err(error("bar0", "BAR0 is not page aligned"));
+        }
+        let reservation = firmware_reservation(device)?;
+        if reservation.length != size {
+            return Err(error(
+                "bar0",
+                "firmware reservation disagrees with BAR0 size",
+            ));
+        }
+        current.at(reservation.base)?.restore(device)?;
+        crate::log_info!(target: "input";
+            "intel-i2c: BAR0 restored source=uefi-reservation base=0x{:x} size=0x{:x}\n",
+            reservation.base, reservation.length);
+        reservation.base
+    };
+    if physical & (size - 1) != 0 || physical.checked_add(size).is_none() {
+        return Err(error("bar0", "BAR0 assignment is not aligned to its size"));
+    }
+    configure_pci_command(device, true)?;
+    Ok((physical, size))
 }
 
 impl Registers {
@@ -122,31 +259,7 @@ impl Controller {
         let claim = Claim { device };
         // Every subsequent error drops this guard, including an async error
         // during DesignWare configuration, so no failed probe leaks a claim.
-        // Quiesce DMA/INTx before D0, rather than allowing a firmware-owned
-        // engine to run during the D3hot recovery interval. D0 can reset PCI
-        // command state, so apply and verify the final decode policy again.
-        configure_pci_command(device, false)?;
-        power_on(device).await?;
-        configure_pci_command(device, true)?;
-
-        let (bar_low, _) = pci::read_bar_raw(device.bus, device.slot, device.function, 0);
-        if bar_low == u32::MAX || bar_low & 1 != 0 || (bar_low >> 1) & 3 == 3 {
-            return Err(error("bar0", "BAR0 is not a valid memory BAR"));
-        }
-        let physical = device
-            .bar_address(0)
-            .filter(|&base| base != 0 && base & 0xfff == 0)
-            .ok_or(error("bar0", "BAR0 is absent or not page aligned"))?;
-        physical
-            .checked_add(MAP_BYTES as u64)
-            .ok_or(error("bar0", "BAR0 address overflows"))?;
-        // This sizing probe is confined to the exclusively admitted function,
-        // with DMA disabled; the PCI helper restores BARs and decode state.
-        let size = pci::bar_size_bytes(device.bus, device.slot, device.function, 0)
-            .ok_or(error("bar0", "BAR0 size unavailable"))?;
-        if size < MAP_BYTES as u64 {
-            return Err(error("bar0", "BAR0 does not contain LPSS registers"));
-        }
+        let (physical, _) = prepare_pci(device).await?;
         let base = pci::mmio::map_mmio_region_exact(physical, MAP_BYTES)
             .map_err(|_| error("map", "BAR0 MMIO mapping failed"))?;
         let mut registers = Registers { base };
@@ -334,6 +447,9 @@ async fn power_on(device: PciDevice) -> Result<(), Error> {
         .await;
     }
     let observed = pci::config_read_u16(device.bus, device.slot, device.function, offset);
+    crate::log_info!(target: "input";
+        "intel-i2c: pci={:02x}:{:02x}.{} pm_cap=0x{:02x} pmcsr_before=0x{:04x} pmcsr_after=0x{:04x}\n",
+        device.bus, device.slot, device.function, capability, pmcsr, observed);
     if observed == u16::MAX || observed & PMCSR_STATE != 0 {
         return Err(error("power", "PCI function did not enter D0"));
     }

@@ -226,7 +226,7 @@ pub fn refresh_appdb_names() {
         current.names = names;
         current.generation = current.generation.wrapping_add(1);
         drop(current);
-        SHELL_WORK_AVAILABLE.notify_all();
+        notify_work();
     }
 }
 

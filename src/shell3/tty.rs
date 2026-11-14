@@ -103,6 +103,16 @@ impl Terminal {
         self.refresh_controls();
     }
 
+    pub(super) fn next_deadline(&self) -> Option<trueos_time::Instant> {
+        if self.closing || self.view.lines.is_none()
+            || (self.view.terminal_active && self.shell.command_feedback.is_none())
+        {
+            return None;
+        }
+        self.shell.next_presentation_deadline(self.view.controls_sampled_at)
+            .map(trueos_time::Instant::from_nanos)
+    }
+
     pub(super) fn resize(&mut self, columns: usize, rows: usize) {
         if self.shell.get_size() != (columns, rows) {
             self.shell.set(columns, rows);

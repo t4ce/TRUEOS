@@ -2092,6 +2092,21 @@ impl Shell3 {
         snapshot.with_reveal(1, &status.left, self.aka_transition.frame(now))
     }
 
+    /// Timed shell work remains necessary while an app's first frame is held
+    /// behind accepted-command feedback. SSH otherwise sleeps on work events.
+    pub(super) fn next_presentation_deadline(&self, now: u64) -> Option<u64> {
+        let marker = (!service::working_vmx_slots().is_empty()
+            || !MatrixSlots::background_active_slots().is_empty())
+            .then(|| now.saturating_add(100_000_000 - now % 100_000_000));
+        [
+            self.command_feedback.as_ref().and_then(|feedback| feedback.next_deadline(now)),
+            self.active_vmx_app().is_none()
+                .then(|| self.title_transition.next_deadline(now)).flatten(),
+            self.aka_transition.next_deadline(now),
+            marker,
+        ].into_iter().flatten().min()
+    }
+
     fn cursor_blink_phase() -> bool {
         trueos_time::Instant::now().as_millis() / 500 % 2 == 0
     }

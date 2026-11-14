@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Run production SSH owner/router scheduling with deterministic host boundaries.
 
-Connection/worker/task code, bounded queues, wait registration, and SSH readiness
-predicates come from production. Only encryption, AP placement, and time are
-controlled fixtures; no sockets, account state, or hardware are touched.
+Connection/worker/task code, queues, wait registration, SSH readiness, and
+terminal presentation deadlines come from production. Animation code is also
+unchanged; rendering, encryption, AP placement, and time are controlled host
+boundaries. No sockets, account state, or hardware are touched.
 """
 from pathlib import Path
 import re
@@ -19,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     adapter = (ROOT / "src/net/adapter.rs").read_text()
     ssh = (ROOT / "src/shell3/ssh.rs").read_text()
+    shell = (ROOT / "src/shell3/shell3.rs").read_text()
+    terminal = (ROOT / "src/shell3/tty.rs").read_text()
     transport = (ROOT / "src/shell3/net.rs").read_text()
     transport = re.sub(r"#\[trueos_executor::task(?:\([^\n]*\))?\]\n", "", transport)
     transport = transport.replace("//!", "//")
@@ -28,6 +31,9 @@ def main():
         "QUEUE": item(adapter, "pub struct NetQueue<T>") + "\n" + item(adapter, "impl<T> NetQueue<T>"),
         "SSH_READINESS": item(ssh, "pub(super) fn needs_progress(&self)") + "\n"
         + item(ssh, "pub(super) fn next_deadline(&self)"),
+        "SHELL_PRESENTATION": item(shell, "pub(super) fn next_presentation_deadline("),
+        "TERMINAL_DEADLINE": item(terminal, "pub(super) fn next_deadline("),
+        "TRUEOS_ROOT": str(ROOT),
         "TRANSPORT": transport,
     }
     for key, value in fields.items():

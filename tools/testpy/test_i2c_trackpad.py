@@ -16,10 +16,12 @@ HARNESS = r'''
 #![allow(dead_code)]
 extern crate alloc;
 extern crate self as trueos_time;
+#[macro_export] macro_rules! log_info { (target:$target:literal;$($args:tt)*) => {{let _=format_args!($($args)*);}}; }
 pub struct Duration; impl Duration { pub fn from_millis(_:u64)->Self {Self} }
 pub struct Instant; impl Instant {pub fn now()->Self{Self} pub fn as_millis(&self)->u64{0}}
 pub struct Timer; impl Timer {pub async fn after(_:Duration) {}}
 mod pci {
+ #[path=@BAR_WIRE@] pub mod firmware_bar_wire;
  #[derive(Clone,Copy,Debug)] pub struct PciDevice{pub bus:u8,pub slot:u8,pub function:u8,pub vendor_id:u16,pub device_id:u16,pub class:u8,pub subclass:u8}
  impl PciDevice {pub fn bar_address(&self,_:usize)->Option<u64>{Some(0x100000)}}
  pub fn release_device_claim(_:u8,_:u8,_:u8,_:&str)->bool{true}
@@ -28,10 +30,12 @@ mod pci {
  pub fn config_read_u16(_:u8,_:u8,_:u8,_:u16)->u16{0}
  pub fn config_read_u8(_:u8,_:u8,_:u8,_:u16)->u8{0}
  pub fn config_write_u16(_:u8,_:u8,_:u8,_:u16,_:u16){}
+ pub fn config_write_u32(_:u8,_:u8,_:u8,_:u16,_:u32){}
  pub fn read_bar_raw(_:u8,_:u8,_:u8,_:u8)->(u32,Option<u32>){(0x100000,None)}
  pub fn bar_size_bytes(_:u8,_:u8,_:u8,_:u8)->Option<u64>{Some(0x1000)}
  pub mod mmio {pub fn map_mmio_region_exact(_:u64,_:usize)->Result<core::ptr::NonNull<u8>,()>{Err(())}}
 }
+mod limine {pub fn module_bytes_by_string(_:&[u8])->Option<&'static [u8]>{None}}
 mod efi { pub mod acpi {
  #[path=@RESOURCES@] pub mod i2c_hid;
  #[path=@FIRMWARE@] pub mod i2c_hid_firmware;
@@ -52,7 +56,6 @@ mod usb2 {pub mod hid {
 }}
 @IDENTITY@
 @PUBLISH@
-@FEATURE_VALUE@
 
 fn complete<T>(future:impl core::future::Future<Output=T>)->T {
  let mut future=core::pin::pin!(future);
@@ -99,13 +102,6 @@ fn framed_relative_input_reaches_the_shared_pointer_sink_with_physical_identity(
  });
 }
 
-#[test]
-fn input_mode_readback_requires_the_actual_field_and_correct_report_id() {
- let feature=Feature{report_id:4,report_len:2,bit_offset:0,bit_size:8};
- assert_eq!(feature_value(feature,&[4,3]),Some(3));
- assert_eq!(feature_value(feature,&[4]),None);
- assert_eq!(feature_value(feature,&[9,3]),None);
-}
 '''
 
 
@@ -123,13 +119,13 @@ def main():
         "PLATFORM": "src/r/io/intel_i2c.rs",
         "GPIO": "src/r/io/intel_gpio.rs",
         "DECODER": "src/r/io/hid_touchpad.rs",
+        "BAR_WIRE": "src/pci/firmware_bar_wire.rs",
     }.items():
         source = source.replace("@" + marker + "@", json.dumps(str(ROOT / path)))
     source = source.replace("@IDENTITY@", "\n".join(
         re.search(rf"const {name}:.*?;", driver)[0]
         for name in ("CONTROLLER_ID", "SLOT_ID", "ENDPOINT")))
     source = source.replace("@PUBLISH@", item(driver, "fn publish("))
-    source = source.replace("@FEATURE_VALUE@", item(driver, "fn feature_value("))
     channel = re.search(r'channel\s*=\s*"([^"]+)"', (ROOT / "rust-toolchain.toml").read_text())[1]
     environment = os.environ.copy()
     if args.dsdt:

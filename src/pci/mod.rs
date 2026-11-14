@@ -1,6 +1,7 @@
 #![allow(hidden_glob_reexports)]
 
 pub mod bar_alloc;
+pub(crate) mod firmware_bar_wire;
 pub mod mmio;
 pub mod nvme;
 pub(crate) mod nvme_backend;

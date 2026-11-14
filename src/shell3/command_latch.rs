@@ -24,6 +24,12 @@ impl Feedback {
 
     pub fn finished(&self, now: u64) -> bool { self.dissolve.frame(self.animation_time(now)).is_none() }
 
+    pub fn next_deadline(&self, now: u64) -> Option<u64> {
+        // Completed feedback still needs reconciliation to release navigation.
+        let Some(at) = self.dissolve.next_deadline(self.animation_time(now)) else { return Some(now); };
+        Some(self.started.saturating_add(at.saturating_sub(self.started).saturating_mul(2)))
+    }
+
     pub fn runs(&self, columns: usize, now: u64) -> Vec<MetaFmtStr> {
         let Some(frame) = self.dissolve.frame(self.animation_time(now)) else { return Vec::new(); };
         let mut runs = alloc::vec![MetaFmtStr::new(" ".repeat(columns.saturating_sub(self.width) / 2))];

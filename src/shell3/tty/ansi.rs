@@ -9,6 +9,7 @@ pub(super) struct AnsiView {
     pub(super) lines: Option<Vec<update::RenderedLine>>,
     pub(super) cursor_column: Option<usize>,
     pub(super) terminal_active: bool,
+    pub(super) controls_sampled_at: u64,
     bracketed_paste: bool,
     mouse: MouseOptions,
 }
@@ -19,6 +20,7 @@ impl AnsiView {
             lines: enabled.then(Vec::new),
             cursor_column: None,
             terminal_active: false,
+            controls_sampled_at: 0,
             bracketed_paste: false,
             mouse: MouseOptions::default(),
         }
@@ -94,6 +96,9 @@ impl Terminal {
         if self.view.lines.is_none() || self.closing {
             return;
         }
+        // Base the next animation step on this paint, not a later clock read
+        // that could skip the final frame or the handoff's completion.
+        self.view.controls_sampled_at = crate::chronos::monotonic_nanos();
         if let Some(drain) = tui::take_remote_output(
             self.shell.tui_frontend, super::OUTPUT_LIMIT.saturating_sub(self.output.len()),
         ) {

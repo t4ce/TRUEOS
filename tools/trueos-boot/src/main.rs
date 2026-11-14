@@ -12,6 +12,9 @@ mod graphics;
 mod handoff;
 mod network;
 mod paging;
+mod pci_resources;
+#[path = "../../../src/pci/firmware_bar_wire.rs"]
+mod firmware_bar_wire;
 mod screen;
 mod smp;
 mod time;
@@ -395,6 +398,9 @@ pub unsafe extern "efiapi" fn efi_main(image_handle: Handle, st: *mut SystemTabl
         Ok(bytes) => modules.push(Blob { phys: bytes.as_ptr() as u64, len: bytes.len(),
             path: "/EFI/BOOT/BOOTX64.EFI", cmdline: "trueos.install.bootx64" }),
         Err(error) => log!("Installer EFI module unavailable: {error}"),
+    }
+    if let Some(reservations) = pci_resources::capture(bs, |event| log!("PCI firmware BAR: {event:?}")) {
+        modules.push(reservations);
     }
     files.close();
     stage("Preparing boot responses");

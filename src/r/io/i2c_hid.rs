@@ -146,11 +146,14 @@ impl Descriptor {
             .await
             .map_err(Error::Transport)?;
         let frame_length = usize::from(word(&response, 0));
-        if frame_length < 3 || frame_length > output.len() + 2 || response[2] != report_id {
+        if frame_length < 3 || response[2] != report_id {
             return Err(Error::InvalidReport);
         }
-        output[..frame_length - 2].copy_from_slice(&response[2..frame_length]);
-        Ok(frame_length - 2)
+        // Some devices advertise more feature bytes than the requested read.
+        // Keep the returned portion bounded by the bytes actually transferred.
+        let length = (frame_length - 2).min(output.len());
+        output[..length].copy_from_slice(&response[2..length + 2]);
+        Ok(length)
     }
 
     fn report_command(self, output: &mut [u8], opcode: u8, report_id: u8) -> usize {
@@ -332,7 +335,13 @@ mod tests {
             Ok(2)
         );
         assert_eq!(output, [4, 3]);
-        for response in [[4, 0, 9, 3], [5, 0, 4, 3], [0, 0, 4, 3]] {
+        let mut fake = bus(&[0x24, 0, 0x34, 2, 0x25, 0], &[66, 0, 4, 3]);
+        assert_eq!(
+            run(descriptor().get_feature(&mut fake, 4, &mut output)),
+            Ok(2)
+        );
+        assert_eq!(output, [4, 3]);
+        for response in [[4, 0, 9, 3], [0, 0, 4, 3]] {
             let mut fake = bus(&[0x24, 0, 0x34, 2, 0x25, 0], &response);
             assert_eq!(
                 run(descriptor().get_feature(&mut fake, 4, &mut output)),

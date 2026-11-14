@@ -10,7 +10,10 @@ use std::{sync::{Arc, atomic::{AtomicU64, AtomicUsize, Ordering}}, task::{Wake, 
 static NOW: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Instant(u64);
-impl Instant { pub fn now() -> Self { Self(NOW.load(Ordering::SeqCst)) } }
+impl Instant {
+    pub fn now() -> Self { Self(NOW.load(Ordering::SeqCst)) }
+    pub const fn from_nanos(nanos: u64) -> Self { Self(nanos / 1_000_000) }
+}
 #[derive(Clone, Copy)]
 pub struct Duration(u64);
 impl Duration {
@@ -22,11 +25,25 @@ impl core::ops::Add<Duration> for Instant {
 }
 pub struct Timer(Instant);
 impl Timer { pub fn at(at: Instant) -> Self { Self(at) } }
+static TIMERS: spin::Mutex<Vec<(Instant, Waker)>> = spin::Mutex::new(Vec::new());
 impl Future for Timer {
     type Output = ();
-    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
-        if Instant::now() >= self.0 { Poll::Ready(()) } else { Poll::Pending }
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if Instant::now() >= self.0 { Poll::Ready(()) } else {
+            TIMERS.lock().push((self.0, cx.waker().clone()));
+            Poll::Pending
+        }
     }
+}
+fn advance_time(ms: u64) {
+    NOW.store(ms, Ordering::SeqCst);
+    let mut timers = TIMERS.lock();
+    let mut ready = Vec::new();
+    timers.retain(|(at, waker)| {
+        if *at <= Instant(ms) { ready.push(waker.clone()); false } else { true }
+    });
+    drop(timers);
+    for waker in ready { waker.wake(); }
 }
 pub struct Spawner;
 impl Spawner {
@@ -42,7 +59,9 @@ mod percpu {
     pub static SLOT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(2);
     pub fn current_slot() -> usize { SLOT.load(core::sync::atomic::Ordering::SeqCst) }
 }
-mod chronos { pub mod signals {
+mod chronos {
+    pub fn monotonic_nanos() -> u64 { crate::Instant::now().0 * 1_000_000 }
+    pub mod signals {
     pub struct Every;
     impl Every { pub const MINUTE: Self = Self; }
     pub struct Subscription;
@@ -79,17 +98,70 @@ mod net { pub mod adapter {
 } }
 mod shell3 {
     pub const MAX_SHELL3_INSTANCES: usize = 8;
-    pub struct Shell3;
-    impl Shell3 { pub fn new_terminal_sized_reserved(_: u32, _: Option<u16>, _: usize, _: usize) -> Self { Self } }
+    #[derive(Clone, PartialEq)]
+    pub struct MetaFmtStr { pub text: String }
+    impl MetaFmtStr { pub fn new(text: impl Into<String>) -> Self { Self { text: text.into() } } }
+    #[path = "@TRUEOS_ROOT@/src/shell3/transition.rs"]
+    mod transition;
+    #[path = "@TRUEOS_ROOT@/src/shell3/command_latch.rs"]
+    mod command_latch;
+    #[derive(Default)]
+    pub struct Shell3 {
+        command_feedback: Option<command_latch::Feedback>,
+        title_transition: transition::TokenSteps,
+        aka_transition: transition::TokenSteps,
+        vmx_active: bool,
+    }
+    pub static INITIAL_FEEDBACK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    pub static EARLY_APP_CLAIM: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    impl Shell3 {
+        pub fn new_terminal_sized_reserved(_: u32, _: Option<u16>, _: usize, _: usize) -> Self {
+            let mut shell = Self::default();
+            if INITIAL_FEEDBACK.load(core::sync::atomic::Ordering::SeqCst) {
+                shell.command_feedback = Some(command_latch::Feedback::new("gpu", crate::chronos::monotonic_nanos(), false));
+            }
+            shell
+        }
+        fn active_vmx_app(&self) -> Option<()> { self.vmx_active.then_some(()) }
+        @SHELL_PRESENTATION@
+    }
+    pub struct MatrixSlots;
+    impl MatrixSlots {
+        pub fn background_active_slots() -> Vec<String> { BACKGROUND.lock().clone() }
+    }
+    pub static BACKGROUND: spin::Mutex<Vec<String>> = spin::Mutex::new(Vec::new());
     pub mod tty {
-        pub struct Terminal { pub overflow: bool }
+        pub static RECONCILES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+        pub static RELEASES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+        pub struct View {
+            pub lines: Option<Vec<()>>, pub terminal_active: bool, pub controls_sampled_at: u64,
+        }
+        pub struct Terminal {
+            pub overflow: bool, pub closing: bool, pub shell: super::Shell3, pub view: View,
+        }
         impl Terminal {
-            pub fn new_ssh(_: super::Shell3, _: Option<u64>) -> Self { Self { overflow: false } }
-            pub fn reconcile_matrix_selection(&mut self) {}
+            pub fn new_ssh(shell: super::Shell3, _: Option<u64>) -> Self {
+                Self { overflow: false, closing: false, shell,
+                    view: View { lines: Some(Vec::new()), terminal_active: super::EARLY_APP_CLAIM.load(core::sync::atomic::Ordering::SeqCst), controls_sampled_at: crate::chronos::monotonic_nanos() } }
+            }
+            pub fn reconcile_matrix_selection(&mut self) {
+                use core::sync::atomic::Ordering;
+                RECONCILES.fetch_add(1, Ordering::SeqCst);
+                let now = crate::chronos::monotonic_nanos();
+                if self.shell.command_feedback.as_ref().is_some_and(|feedback| feedback.finished(now)) {
+                    self.shell.command_feedback = None;
+                    self.view.terminal_active = true;
+                    RELEASES.fetch_add(1, Ordering::SeqCst);
+                }
+                self.view.controls_sampled_at = now;
+            }
+            @TERMINAL_DEADLINE@
         }
     }
     pub mod service {
         pub static RELEASED: spin::Mutex<Vec<u32>> = spin::Mutex::new(Vec::new());
+        pub static WORKING: spin::Mutex<Vec<String>> = spin::Mutex::new(Vec::new());
+        pub fn working_vmx_slots() -> Vec<String> { WORKING.lock().clone() }
         pub fn release_shell_on_executor(slot: u32) { RELEASED.lock().push(slot); }
         pub fn reserve_terminal_slot() -> Result<u32, ()> { Ok(2) }
     }
@@ -111,10 +183,10 @@ mod shell3 {
                 let mut session = Self::new().unwrap();
                 session.rdp = Some(Rdp(true)); session.encoded = bytes.to_vec(); session
             }
-            pub fn input(&mut self, _: &[u8]) {}
+            pub fn input(&mut self, bytes: &[u8]) { if bytes.starts_with(b"SSH-") { self.shell_requested = true; } }
             pub fn pump(&mut self, _: Option<&mut super::tty::Terminal>) { self.pumps += 1; }
-            pub fn wants_shell(&self) -> bool { false }
-            pub fn size(&self) -> Option<(usize, usize)> { None }
+            pub fn wants_shell(&self) -> bool { self.shell_requested }
+            pub fn size(&self) -> Option<(usize, usize)> { Some((120, 40)) }
             pub fn access_account(&self) -> Option<u64> { Some(7) }
             pub fn output(&mut self) -> &[u8] { &self.encoded[..self.encoded.len().min(self.chunk_limit)] }
             pub fn consume_output(&mut self, count: usize) { self.encoded.drain(..count); }
@@ -128,12 +200,19 @@ mod shell3 {
 
         #[cfg(test)] mod tests {
             use super::*;
-            use crate::{NOW, Instant, Waker, poll, counting};
+            use crate::{NOW, Instant, Ordering, Waker, poll, counting};
 
             fn reset() -> &'static NetQueue<NetCommand> {
                 WORKER_QUEUES.lock().clear();
                 NOW.store(0, core::sync::atomic::Ordering::SeqCst);
+                crate::TIMERS.lock().clear();
                 super::super::service::RELEASED.lock().clear();
+                super::super::service::WORKING.lock().clear();
+                super::super::BACKGROUND.lock().clear();
+                super::super::INITIAL_FEEDBACK.store(false, core::sync::atomic::Ordering::SeqCst);
+                super::super::EARLY_APP_CLAIM.store(false, core::sync::atomic::Ordering::SeqCst);
+                super::super::tty::RECONCILES.store(0, core::sync::atomic::Ordering::SeqCst);
+                super::super::tty::RELEASES.store(0, core::sync::atomic::Ordering::SeqCst);
                 *crate::net::adapter::REGISTRATION.lock() = None;
                 crate::percpu::SLOT.store(2, core::sync::atomic::Ordering::SeqCst);
                 let commands = *COMMANDS.call_once(|| NetQueue::new_leaked("test-ssh-commands", 1));
@@ -150,6 +229,118 @@ mod shell3 {
                     NetCommand::SendTcp { handle, data } => { assert_eq!(handle, NetHandle(expected_handle)); assert_eq!(data, expected); }
                     other => panic!("expected SendTcp, got {other:?}"),
                 }
+            }
+
+            #[test]
+            fn animation_deadlines_include_final_frame_and_feedback_completion() {
+                use super::super::{command_latch::Feedback, transition::TokenSteps, MetaFmtStr};
+                reset();
+                let mut transition = TokenSteps::default();
+                assert_eq!(transition.next_deadline(0), None);
+                transition.start(&[MetaFmtStr::new("gpu")], &[], 75_000_000, false);
+                assert_eq!(transition.next_deadline(0), Some(100_000_000), "future start must not repaint an unchanged frame");
+                assert_eq!(transition.next_deadline(124_999_999), Some(125_000_000));
+                assert_eq!(transition.next_deadline(125_000_000), Some(150_000_000), "the final blank frame needs its own deadline");
+                assert_eq!(transition.next_deadline(150_000_000), None);
+
+                let feedback = Feedback::new("gpu", 0, false);
+                assert_eq!(feedback.next_deadline(0), Some(200_000_000));
+                assert_eq!(feedback.next_deadline(200_000_000), Some(250_000_000));
+                assert!(!feedback.finished(299_999_999));
+                assert_eq!(feedback.next_deadline(299_999_999), Some(300_000_000));
+                assert!(feedback.finished(300_000_000));
+                assert_eq!(feedback.next_deadline(350_000_000), Some(350_000_000), "completed but unreconciled handoff must remain runnable");
+            }
+
+            #[test]
+            fn visible_busy_markers_use_100ms_boundaries_but_idle_apps_have_no_timer() {
+                use super::super::{service, MetaFmtStr, Shell3, tty::Terminal};
+                reset();
+                let mut terminal = Terminal::new_ssh(Shell3::default(), Some(7));
+                assert_eq!(terminal.next_deadline(), None, "a stable idle shell has no presentation timer");
+                terminal.shell.title_transition.start(&[MetaFmtStr::new("CMD")], &[MetaFmtStr::new("System")], 0, false);
+                assert_eq!(terminal.next_deadline(), Some(Instant(25)));
+                terminal.shell.vmx_active = true;
+                assert_eq!(terminal.next_deadline(), None, "VMX app controls suppress the hidden mode legend transition");
+                terminal.shell.aka_transition.start(&[MetaFmtStr::new("old")], &[MetaFmtStr::new("new")], 0, false);
+                assert_eq!(terminal.next_deadline(), Some(Instant(25)));
+                terminal.shell.title_transition.finish();
+                terminal.shell.aka_transition.finish();
+                terminal.shell.vmx_active = false;
+                service::WORKING.lock().push("edit".into());
+                assert_eq!(terminal.next_deadline(), Some(Instant(100)));
+                terminal.view.controls_sampled_at = 199_000_000;
+                assert_eq!(terminal.next_deadline(), Some(Instant(200)));
+                service::WORKING.lock().clear();
+                super::super::BACKGROUND.lock().push("edit".into());
+                assert_eq!(terminal.next_deadline(), Some(Instant(200)));
+                terminal.view.terminal_active = true;
+                assert_eq!(terminal.next_deadline(), None, "an app owning the displayed surface must not inherit hidden shell animation polling");
+                terminal.view.terminal_active = false;
+                terminal.closing = true;
+                assert_eq!(terminal.next_deadline(), None);
+                terminal.closing = false;
+                terminal.view.lines = None;
+                assert_eq!(terminal.next_deadline(), None);
+            }
+
+            #[test]
+            fn presentation_deadline_keeps_last_render_sample_even_if_clock_passes_final_step() {
+                use super::super::{command_latch::Feedback, MetaFmtStr, Shell3, tty::Terminal};
+                reset();
+                let mut shell = Shell3::default();
+                shell.command_feedback = Some(Feedback::new("gpu", 0, false));
+                let mut terminal = Terminal::new_ssh(shell, Some(7));
+                terminal.view.controls_sampled_at = 250_000_000;
+                terminal.view.terminal_active = true;
+                NOW.store(350, Ordering::SeqCst);
+                assert_eq!(terminal.next_deadline(), Some(Instant(300)), "sample from the rendered frame keeps its now-expired completion deadline; an early app claim cannot cancel the hold timer");
+                terminal.shell.command_feedback = None;
+                terminal.view.terminal_active = false;
+                terminal.shell.title_transition.start(&[MetaFmtStr::new("gpu")], &[], 0, false);
+                terminal.view.controls_sampled_at = 50_000_000;
+                assert_eq!(terminal.next_deadline(), Some(Instant(75)), "a legend transition also retains its last blank-frame deadline after completion");
+            }
+
+            #[test]
+            fn owner_releases_timed_handoff_without_input_or_transport_close() {
+                use super::super::{INITIAL_FEEDBACK, EARLY_APP_CLAIM, tty::{RECONCILES, RELEASES}};
+                reset();
+                INITIAL_FEEDBACK.store(true, Ordering::SeqCst);
+                EARLY_APP_CLAIM.store(true, Ordering::SeqCst);
+                let (count, waker) = counting();
+                let mut task = std::pin::pin!(owner_task(2));
+                assert!(poll(task.as_mut(), &waker).is_pending());
+                let queue = queue_for(2).unwrap();
+                queue.push(WorkerEvent::Accepted(NetHandle(91), None)).ok().unwrap();
+                queue.push(WorkerEvent::Socket(NetEvent::TcpData { handle: NetHandle(91), data: b"SSH-test".to_vec() })).ok().unwrap();
+                assert!(poll(task.as_mut(), &waker).is_pending());
+                assert!(queue.is_empty());
+                let reconciles = RECONCILES.load(Ordering::SeqCst);
+                let wakes = count.0.load(Ordering::SeqCst);
+                crate::advance_time(199);
+                assert_eq!(count.0.load(Ordering::SeqCst), wakes);
+                assert!(poll(task.as_mut(), &waker).is_pending());
+                assert_eq!(RECONCILES.load(Ordering::SeqCst), reconciles);
+                crate::advance_time(200);
+                assert!(count.0.load(Ordering::SeqCst) > wakes, "presentation deadline must wake the production owner without packets");
+                assert!(poll(task.as_mut(), &waker).is_pending());
+                assert!(RECONCILES.load(Ordering::SeqCst) > reconciles);
+                assert_eq!(RELEASES.load(Ordering::SeqCst), 0);
+                crate::advance_time(250);
+                assert!(poll(task.as_mut(), &waker).is_pending());
+                assert_eq!(RELEASES.load(Ordering::SeqCst), 0);
+                crate::advance_time(300);
+                assert!(poll(task.as_mut(), &waker).is_pending());
+                assert_eq!(RELEASES.load(Ordering::SeqCst), 1, "real feedback completion must release navigation without a key");
+                assert!(queue.is_empty());
+                assert!(COMMANDS.get().unwrap().is_empty(), "presentation expiry must not be treated as a transport-close timeout");
+                let reconciles = RECONCILES.load(Ordering::SeqCst);
+                let wakes = count.0.load(Ordering::SeqCst);
+                crate::advance_time(1_000);
+                assert!(poll(task.as_mut(), &waker).is_pending());
+                assert_eq!(RECONCILES.load(Ordering::SeqCst), reconciles, "after the handoff, the active app has no shell timer");
+                assert_eq!(count.0.load(Ordering::SeqCst), wakes);
             }
 
             #[test]

@@ -66,6 +66,18 @@ their current handlers. Fedora needs Node (for the existing site), Python,
 OpenSSH, OpenSSL and CA certificates; it does not need Rust, Cargo, a C compiler
 or a TRUEOS source build toolchain.
 
+For selector-only browsing, `export_site.py --site /path/to/TRUEOS_SITE` packages
+just the public runtime into the website. With no `TRUEOS_CLOUDBUILD_URL`, Node
+starts this Python service automatically on the first `/build/` visit. Builds
+remain disabled. State defaults to the service account's private
+`~/.local/state/trueos-cloudbuild`, outside public files. Python 3.11+ must exist.
+`TRUEOS_CLOUDBUILD_ORIGIN` defaults to `https://trueos.eu`; set it explicitly for
+local testing. `TRUEOS_CLOUDBUILD_STATE_DIR` selects private writable state,
+`TRUEOS_CLOUDBUILD_PORT` changes loopback port 8787, and `TRUEOS_PYTHON` selects the
+interpreter. Restart Node after packaging. Production sets
+`TRUEOS_CLOUDBUILD_URL=http://127.0.0.1:8787` to use the separately supervised API
+and Actions adapter instead of automatic selector-only startup.
+
 The shared `TRUEOS_SITE` now loads `tools/cloudbuild-proxy.js` from `App.js`.
 Its upstream defaults to `http://127.0.0.1:8787`; set `TRUEOS_CLOUDBUILD_URL` in
 the Node service environment if that internal address differs. The maintained

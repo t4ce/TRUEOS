@@ -26,6 +26,13 @@ impl TokenSteps {
         self.change = Some(Change { width: width(&old).max(width(target)),
             out_steps: steps(&old), in_steps: steps(target), old, target: target.to_vec(), started: now, from_right });
     }
+    /// Next changed frame, including the final target after the dissolve.
+    pub fn next_deadline(&self, now: u64) -> Option<u64> {
+        let change = self.change.as_ref()?;
+        let step = now.saturating_sub(change.started) / STEP_NS;
+        if step >= (change.out_steps + change.in_steps) as u64 { return None; }
+        Some(change.started.saturating_add(step.saturating_add(1).saturating_mul(STEP_NS)))
+    }
     pub fn frame(&self, now: u64) -> Option<Frame> {
         let change = self.change.as_ref()?;
         let step = (now.saturating_sub(change.started) / STEP_NS) as usize;

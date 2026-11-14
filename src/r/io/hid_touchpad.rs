@@ -29,7 +29,7 @@ pub(crate) struct Pointer {
     pub wheel: i32,
 }
 
-/// Location of the Digitizers / Input Mode feature. Report length includes its
+/// Location of a Digitizers control feature. Report length includes its
 /// ID byte when nonzero; bit offsets address the payload after that ID byte.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Feature {
@@ -41,7 +41,7 @@ pub(crate) struct Feature {
 
 impl Feature {
     /// Patch an existing feature report, preserving other fields. A caller can
-    /// pass a zeroed report when the feature consists solely of Input Mode.
+    /// pass a zeroed report when all its data fields are known controls.
     pub(crate) fn set_value(self, value: u32, report: &mut [u8]) -> Option<usize> {
         if !(1..=32).contains(&self.bit_size) {
             return None;
@@ -164,6 +164,10 @@ struct Report {
     contact_slots: usize,
     contact_count: Option<Field>,
     input_mode: Option<Field>,
+    surface_switch: Option<Field>,
+    button_switch: Option<Field>,
+    latency_mode: Option<Field>,
+    unknown_feature_data: bool,
 }
 
 impl Report {
@@ -185,7 +189,21 @@ impl Report {
         contact_slots: 0,
         contact_count: None,
         input_mode: None,
+        surface_switch: None,
+        button_switch: None,
+        latency_mode: None,
+        unknown_feature_data: false,
     };
+
+    fn feature(&self, field: Option<Field>) -> Option<Feature> {
+        let field = field?;
+        Some(Feature {
+            report_id: self.id,
+            report_len: self.feature_bits.div_ceil(8) + u16::from(self.id != 0),
+            bit_offset: field.offset,
+            bit_size: field.size,
+        })
+    }
 
     fn payload<'a>(self, input: &'a [u8]) -> Option<&'a [u8]> {
         let prefix = usize::from(self.id != 0);
@@ -289,6 +307,11 @@ pub(crate) struct Touchpad {
     mouse: Option<Report>,
     touch: Option<Report>,
     input_mode: Option<Feature>,
+    surface_switch: Option<Feature>,
+    button_switch: Option<Feature>,
+    latency_mode: Option<Feature>,
+    controls_only_reports: [u8; MAX_REPORTS],
+    controls_only_count: usize,
     previous: Option<Contact>,
     remainder_x: i64,
     remainder_y: i64,
@@ -312,19 +335,35 @@ impl Touchpad {
         if mouse.is_none() && touch.is_none() {
             return Err(ParseError::NoPointer);
         }
-        let input_mode = reports.iter().find_map(|report| {
-            let field = report.input_mode?;
-            Some(Feature {
-                report_id: report.id,
-                report_len: report.feature_bits.div_ceil(8) + u16::from(report.id != 0),
-                bit_offset: field.offset,
-                bit_size: field.size,
-            })
-        });
+        let input_mode = reports
+            .iter()
+            .find_map(|report| report.feature(report.input_mode));
+        let surface_switch = reports
+            .iter()
+            .find_map(|report| report.feature(report.surface_switch));
+        let button_switch = reports
+            .iter()
+            .find_map(|report| report.feature(report.button_switch));
+        let latency_mode = reports
+            .iter()
+            .find_map(|report| report.feature(report.latency_mode));
+        let mut controls_only_reports = [0; MAX_REPORTS];
+        let mut controls_only_count = 0;
+        for report in reports {
+            if report.feature_bits != 0 && !report.unknown_feature_data {
+                controls_only_reports[controls_only_count] = report.id;
+                controls_only_count += 1;
+            }
+        }
         Ok(Self {
             mouse,
             touch,
             input_mode,
+            surface_switch,
+            button_switch,
+            latency_mode,
+            controls_only_reports,
+            controls_only_count,
             previous: None,
             remainder_x: 0,
             remainder_y: 0,
@@ -334,6 +373,25 @@ impl Touchpad {
 
     pub(crate) fn input_mode_feature(&self) -> Option<Feature> {
         self.input_mode
+    }
+
+    pub(crate) fn surface_switch_feature(&self) -> Option<Feature> {
+        self.surface_switch
+    }
+
+    pub(crate) fn button_switch_feature(&self) -> Option<Feature> {
+        self.button_switch
+    }
+
+    pub(crate) fn latency_mode_feature(&self) -> Option<Feature> {
+        self.latency_mode
+    }
+
+    /// A report can start zeroed only when every nonconstant feature field is
+    /// a control exposed above. Arrays, unknown data and duplicate controls
+    /// require an existing report so unpatched values are preserved.
+    pub(crate) fn feature_report_controls_only(&self, report_id: u8) -> bool {
+        self.controls_only_reports[..self.controls_only_count].contains(&report_id)
     }
 
     pub(crate) fn has_precision_reports(&self) -> bool {
@@ -615,10 +673,20 @@ fn parse(descriptor: &[u8]) -> Result<([Report; MAX_REPORTS], usize), ParseError
                 } else {
                     collections[depth - 1]
                 };
+                if tag == 11
+                    && value & 1 == 0
+                    && bits != 0
+                    && (value & 3 != 2 || !(1..=32).contains(&globals.size))
+                {
+                    report.unknown_feature_data = true;
+                }
                 // Only variable data fields map independently to usages.
                 if value & 3 == 2 && (1..=32).contains(&globals.size) {
                     for field_index in 0..globals.count {
                         let Some(usage) = locals.usage(field_index, globals.page) else {
+                            if tag == 11 {
+                                report.unknown_feature_data = true;
+                            }
                             continue;
                         };
                         let field = Field {
@@ -628,9 +696,23 @@ fn parse(descriptor: &[u8]) -> Result<([Report; MAX_REPORTS], usize), ParseError
                             max: globals.max,
                         };
                         if tag == 11 {
-                            if collection.app == Application::Configuration && usage == 0x000d_0052
-                            {
-                                report.input_mode = Some(field);
+                            let control = if matches!(
+                                collection.app,
+                                Application::Configuration | Application::Touchpad
+                            ) {
+                                match usage {
+                                    0x000d_0052 => Some(&mut report.input_mode),
+                                    0x000d_0057 => Some(&mut report.surface_switch),
+                                    0x000d_0058 => Some(&mut report.button_switch),
+                                    0x000d_0060 => Some(&mut report.latency_mode),
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            };
+                            match control {
+                                Some(control) if control.is_none() => *control = Some(field),
+                                _ => report.unknown_feature_data = true,
                             }
                             continue;
                         }
@@ -798,6 +880,135 @@ mod tests {
         assert_eq!(&report[..2], &[4, 3]);
         assert_eq!(feature.report_with_value(0, &mut report), Some(2));
         assert_eq!(&report[..2], &[4, 0]);
+        assert_eq!(
+            pad.surface_switch_feature(),
+            Some(Feature {
+                report_id: 6,
+                report_len: 2,
+                bit_offset: 0,
+                bit_size: 1,
+            })
+        );
+        assert_eq!(
+            pad.button_switch_feature(),
+            Some(Feature {
+                report_id: 6,
+                report_len: 2,
+                bit_offset: 1,
+                bit_size: 1,
+            })
+        );
+        assert_eq!(
+            pad.latency_mode_feature(),
+            Some(Feature {
+                report_id: 13,
+                report_len: 2,
+                bit_offset: 0,
+                bit_size: 1,
+            })
+        );
+        for id in [4, 6, 13] {
+            assert!(pad.feature_report_controls_only(id));
+        }
+        for id in [0, 2, 3, 7, 8, 99] {
+            assert!(!pad.feature_report_controls_only(id));
+        }
+    }
+
+    fn shifted_controls_descriptor() -> std::vec::Vec<u8> {
+        std::vec![
+            // A minimal relative mouse collection keeps this a pointer device.
+            0x05, 0x01, 0x09, 0x02, 0xa1, 0x01, 0x85, 0x02, 0x09, 0x30, 0x09, 0x31, 0x15, 0x81,
+            0x25, 0x7f, 0x75, 0x08, 0x95, 0x02, 0x81, 0x06, 0xc0,
+            // Report 20: three constant bits, then three switch bits, then
+            // two InputMode bits. No report ID or bit offset is assumed.
+            0x05, 0x0d, 0x09, 0x0e, 0xa1, 0x01, 0x85, 20, 0x75, 0x03, 0x95, 0x01, 0xb1, 0x03, 0x75,
+            0x01, 0x95, 0x03, 0x09, 0x57, 0x09, 0x58, 0x09, 0x60, 0x15, 0x00, 0x25, 0x01, 0xb1,
+            0x02, 0x75, 0x02, 0x95, 0x01, 0x09, 0x52, 0x25, 0x03, 0xb1, 0x02, 0xc0,
+        ]
+    }
+
+    #[test]
+    fn control_ids_offsets_and_shared_report_patching_come_from_the_descriptor() {
+        let pad = Touchpad::from_descriptor(&shifted_controls_descriptor()).unwrap();
+        assert!(pad.feature_report_controls_only(20));
+        assert!(!pad.feature_report_controls_only(4));
+        let mode = pad.input_mode_feature().unwrap();
+        let surface = pad.surface_switch_feature().unwrap();
+        let buttons = pad.button_switch_feature().unwrap();
+        let latency = pad.latency_mode_feature().unwrap();
+        assert_eq!(
+            (
+                mode.report_id,
+                mode.report_len,
+                mode.bit_offset,
+                mode.bit_size
+            ),
+            (20, 2, 6, 2)
+        );
+        assert_eq!(
+            (surface.report_id, surface.bit_offset, surface.bit_size),
+            (20, 3, 1)
+        );
+        assert_eq!(
+            (buttons.report_id, buttons.bit_offset, buttons.bit_size),
+            (20, 4, 1)
+        );
+        assert_eq!(
+            (latency.report_id, latency.bit_offset, latency.bit_size),
+            (20, 5, 1)
+        );
+        let mut report = [20, 0];
+        mode.set_value(3, &mut report).unwrap();
+        surface.set_value(1, &mut report).unwrap();
+        buttons.set_value(1, &mut report).unwrap();
+        latency.set_value(0, &mut report).unwrap();
+        assert_eq!(report, [20, 0xd8]);
+    }
+
+    #[test]
+    fn unknown_writable_feature_data_requires_preserving_the_existing_report() {
+        let mut descriptor = shifted_controls_descriptor();
+        descriptor.pop();
+        descriptor.extend_from_slice(&[
+            // Vendor data follows the controls in the same report.
+            0x06, 0x00, 0xff, 0x09, 0x01, 0x75, 0x08, 0x95, 0x01, 0xb1, 0x02, 0xc0,
+        ]);
+        let pad = Touchpad::from_descriptor(&descriptor).unwrap();
+        assert!(!pad.feature_report_controls_only(20));
+        let mode = pad.input_mode_feature().unwrap();
+        assert_eq!(mode.report_len, 3);
+        let mut previous = [20, 0, 0xa5];
+        mode.set_value(3, &mut previous).unwrap();
+        assert_eq!(previous, [20, 0xc0, 0xa5]);
+    }
+
+    #[test]
+    fn constant_padding_is_ignored_but_unpatchable_feature_data_is_conservative() {
+        let mut padded = shifted_controls_descriptor();
+        padded.pop();
+        padded.extend_from_slice(&[0x75, 0x08, 0x95, 0x01, 0xb1, 0x03, 0xc0]);
+        let pad = Touchpad::from_descriptor(&padded).unwrap();
+        assert!(pad.feature_report_controls_only(20));
+        assert_eq!(pad.input_mode_feature().unwrap().report_len, 3);
+
+        for extra in [
+            // Array data cannot be patched through a single Feature field.
+            &[0x75, 0x01, 0x95, 0x01, 0x09, 0x57, 0xb1, 0x00][..],
+            // A field with no usage is not a known control.
+            &[0x75, 0x01, 0x95, 0x01, 0xb1, 0x02][..],
+            // Wider-than-supported data must not be zeroed accidentally.
+            &[0x75, 0x40, 0x95, 0x01, 0x09, 0x52, 0xb1, 0x02][..],
+            // A second InputMode field is not covered by the first Feature.
+            &[0x75, 0x02, 0x95, 0x01, 0x09, 0x52, 0xb1, 0x02][..],
+        ] {
+            let mut descriptor = shifted_controls_descriptor();
+            descriptor.pop();
+            descriptor.extend_from_slice(extra);
+            descriptor.push(0xc0);
+            let pad = Touchpad::from_descriptor(&descriptor).unwrap();
+            assert!(!pad.feature_report_controls_only(20));
+        }
     }
 
     #[test]
@@ -848,12 +1059,18 @@ mod tests {
     fn report_ids_come_from_the_descriptor() {
         let mut descriptor = SYNAPTICS.to_vec();
         for index in 0..descriptor.len() - 1 {
-            if descriptor[index] == 0x85 && (2..=4).contains(&descriptor[index + 1]) {
+            if descriptor[index] == 0x85 && matches!(descriptor[index + 1], 2 | 3 | 4 | 6 | 13) {
                 descriptor[index + 1] += 16;
             }
         }
         let mut pad = Touchpad::from_descriptor(&descriptor).unwrap();
         assert_eq!(pad.input_mode_feature().unwrap().report_id, 20);
+        assert_eq!(pad.surface_switch_feature().unwrap().report_id, 22);
+        assert_eq!(pad.button_switch_feature().unwrap().report_id, 22);
+        assert_eq!(pad.latency_mode_feature().unwrap().report_id, 29);
+        for id in [20, 22, 29] {
+            assert!(pad.feature_report_controls_only(id));
+        }
         assert_eq!(
             pad.decode_hid(&[18, 0, 3, 4]),
             Some(Pointer {

@@ -43,7 +43,8 @@ const ASYNC_FS_MAX_VIRTUAL_READ_PATH: usize = "vFile:hull-navigation/".len() + 4
 /// Completion acknowledges the import; this operation never launches a VM.
 pub(crate) fn is_virtual_write(path: &str) -> bool {
     path.starts_with(crate::r::services::hull_download_service::PREFIX)
-        || path == "vFile:appdb-install" || path == trueos_ide::store_protocol::REQUEST
+        || path == "vFile:appdb-install" || path.as_bytes() == trueos_appbundle::RAM_INSTALL_VFILE
+        || path == trueos_ide::store_protocol::REQUEST
         || crate::r::services::ide_workspace_service::is_write(path)
 }
 
@@ -777,6 +778,8 @@ fn stage_write(
         trueos_ide::store_protocol::MAX_FRAME_BYTES as u64
     } else if path.starts_with(crate::r::services::ide_workspace_service::VFILE_PREFIX) {
         crate::r::services::ide_workspace_service::MAX_FRAME_BYTES as u64
+    } else if path.as_bytes() == trueos_appbundle::RAM_INSTALL_VFILE {
+        trueos_appbundle::MAX_INSTALL_BYTES as u64
     } else if path.starts_with("vFile:") {
         ASYNC_FS_MAX_RESULT_BYTES
     } else {
@@ -1137,6 +1140,28 @@ fn mounted_roots_text() -> String {
     out
 }
 
+/// RAM installs validate the same Blueprint imports as disk installs. Readiness
+/// is enforced by each child's normal launcher, never inherited from Apps.
+fn install_appdb_ram(request: &Request, bytes: &[u8]) -> OperationState {
+    if vm_for_owner(request.owner).is_none() { return OperationState::Failed(FS_ERR_BAD_PATH); }
+    let downloads = match trueos_appbundle::decode_ram_install(bytes) {
+        Ok(downloads) => downloads,
+        Err(_) => return OperationState::Failed(FS_ERR_BAD_PARAM),
+    };
+    for (_, bytes) in &downloads {
+        if crate::hv::blueprint::prebind_required_readiness(bytes).is_err() {
+            return OperationState::Failed(FS_ERR_BAD_PARAM);
+        }
+    }
+    match crate::app_db::insert_downloads(&downloads) {
+        Ok(()) => OperationState::Unit,
+        Err(error) => {
+            crate::log_error!(target: "appdb-install"; "RAM AppDB install failed: {}\n", error);
+            OperationState::Failed(FS_ERR_IO)
+        }
+    }
+}
+
 /// Validate every downloaded archive before a single AppDB publication.
 async fn install_appdb(request: &Request, bytes: &[u8]) -> OperationState {
     let actor = request.actor;
@@ -1272,6 +1297,9 @@ async fn process(request: &Request) -> OperationState {
                 Ok(()) => OperationState::Unit,
                 Err(code) => OperationState::Failed(code),
             };
+        }
+        if path.as_bytes() == trueos_appbundle::RAM_INSTALL_VFILE {
+            return install_appdb_ram(request, bytes);
         }
         if path == "vFile:appdb-install" {
             return install_appdb(request, bytes).await;
