@@ -78,6 +78,22 @@ class ServiceSecurityTests(unittest.TestCase):
             {"request": REQUEST if request is None else request, "public_key": public_key or self.user_public},
         )
 
+    def test_signed_destination_cannot_be_switched_before_queueing(self):
+        self.store.grant(self.user_public, "destination-test", self.feature_ids)
+        first = {"mode": "hosted", "repository": "t4ce/TRUEOS", "pins": {"blueprints": "a" * 40}}
+        other = {**first, "repository": "person/TRUEOS"}
+        from identity import normalize_public_key
+        from build_plan import resolve_request
+        manifest = resolve_request(REQUEST, SOURCE)
+        challenge = self.store.new_challenge(manifest, normalize_public_key(self.user_public), self.service.origin, first)
+        signature = self.sign(challenge)
+        with self.assertRaises(service.APIError) as error:
+            self.store.verify_and_queue(challenge["challenge_id"], signature, destination=other)
+        self.assertEqual(error.exception.status, 409)
+        result = self.store.verify_and_queue(challenge["challenge_id"], signature, destination=first)
+        job = self.store.owned_job(result["job_id"], result["access_token"])
+        self.assertEqual(json.loads(job["destination"]), first)
+
     def sign(self, challenge, *, key=None):
         result = subprocess.run(
             ["ssh-keygen", "-Y", "sign", "-f", str(key or self.user_key), "-n", service.NAMESPACE],

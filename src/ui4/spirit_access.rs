@@ -11,12 +11,24 @@ use spin::Mutex;
 const LIMIT: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PermitScope {
+    Shared,
+    KernelOwned {
+        vm: u8,
+        run: u64,
+        cursor: Ui4CursorSource,
+        keyboard_slot: u32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Permit {
     frame: CursorFrameKey,
     session: u32,
     serial: u64,
     keyboard_frontiers: (u32, u32),
     cursor_frontier: u64,
+    scope: PermitScope,
 }
 
 #[derive(Clone, Copy)]
@@ -46,23 +58,37 @@ impl Registry {
     }
 
     fn toggle(&mut self, frame: CursorFrameKey, session: u32) -> Result<bool, ()> {
+        // Human sharing supersedes the private kernel exercise, including any
+        // strokes it has already queued. It never adopts that private permit.
+        self.grants
+            .retain(|grant| grant.frame != frame || grant.scope == PermitScope::Shared);
         if let Some(index) = self.grants.iter().position(|grant| grant.frame == frame) {
             self.grants.swap_remove(index);
             return Ok(false);
         }
+        self.grant(frame, session, PermitScope::Shared)?;
+        Ok(true)
+    }
+
+    fn grant(
+        &mut self,
+        frame: CursorFrameKey,
+        session: u32,
+        scope: PermitScope,
+    ) -> Result<Permit, ()> {
         self.serial = self.serial.checked_add(1).ok_or(())?;
         let keyboard_frontiers = crate::r::keyboard::output_event_frontiers();
         let cursor_frontier = crate::usb2::hid::cursor_event_frontier();
-        self.grants
-            .push(Permit {
-                frame,
-                session,
-                serial: self.serial,
-                keyboard_frontiers,
-                cursor_frontier,
-            })
-            .map_err(|_| ())?;
-        Ok(true)
+        let permit = Permit {
+            frame,
+            session,
+            serial: self.serial,
+            keyboard_frontiers,
+            cursor_frontier,
+            scope,
+        };
+        self.grants.push(permit).map_err(|_| ())?;
+        Ok(permit)
     }
 
     fn contains(&self, permit: Permit) -> bool {
@@ -309,11 +335,20 @@ pub(crate) fn authorize(frame: CursorFrameKey) -> Option<Permit> {
         .grants
         .iter()
         .copied()
-        .find(|grant| grant.frame == frame && grant.session == window.session.raw())
+        .find(|grant| {
+            grant.frame == frame && grant.session == window.session.raw()
+                && grant.scope == PermitScope::Shared
+        })
 }
 
 pub(crate) fn valid(permit: Permit) -> bool {
     live(permit.frame).is_some_and(|window| window.session.raw() == permit.session)
+        && match permit.scope {
+            PermitScope::Shared => true,
+            PermitScope::KernelOwned { vm, run, cursor, keyboard_slot } => {
+                vm_live(vm, Some(run)) && kernel_ai_devices(cursor, keyboard_slot)
+            }
+        }
         && REGISTRY.lock().contains(permit)
 }
 
@@ -357,9 +392,86 @@ pub(crate) fn frame_closed(frame: CursorFrameKey) {
     REGISTRY.lock().grants.retain(|grant| grant.frame != frame);
 }
 
+/// A kernel exercise can control only its own live VM frame through its exact
+/// kernel-owned AI devices. This private permit is not a user sharing grant and
+/// cannot be discovered through authorize(). No guest API issues these leases.
+pub(crate) struct KernelOwnedInput(Permit);
+
+impl Drop for KernelOwnedInput {
+    fn drop(&mut self) {
+        let mut registry = REGISTRY.lock();
+        registry.grants.retain(|permit| *permit != self.0);
+        registry.bindings.retain(|binding| binding.permit != self.0);
+    }
+}
+
+fn kernel_ai_devices(cursor: Ui4CursorSource, keyboard_slot: u32) -> bool {
+    use crate::r::services::{keyboard_control_service as keyboard, mouse_motion_service as mouse};
+    if cursor.controller_id != 0 || cursor.ep_target != 0
+        || !matches!(mouse::cursor_principal(cursor.slot_id), Some(mouse::MouseControlPrincipal::Kernel))
+        || !matches!(keyboard::keyboard_principal(keyboard_slot), Some(keyboard::KeyboardControlPrincipal::Kernel))
+    {
+        return false;
+    }
+    let devices = hut::devices_snapshot();
+    [(hut::HidDeviceKind::Mouse, cursor.slot_id),
+        (hut::HidDeviceKind::Keyboard, keyboard_slot)]
+        .into_iter()
+        .all(|(kind, slot)| devices.iter().any(|device| {
+            device.id.kind == kind && device.id.controller_id == 0
+                && device.id.slot_id == slot && device.id.ep_target == 0
+                && device.virtual_device && device.source_kind == HidSourceKind::Ai
+        }))
+}
+
+pub(crate) fn bind_kernel_owned_input(
+    cursor: Ui4CursorSource,
+    keyboard_slot: u32,
+    frame: CursorFrameKey,
+    vm: u8,
+    run: u64,
+) -> Result<KernelOwnedInput, ()> {
+    if frame.owner != super::WindowOwner::Vm(vm)
+        || !vm_live(vm, Some(run))
+        || !kernel_ai_devices(cursor, keyboard_slot)
+    {
+        return Err(());
+    }
+    let window = live(frame).ok_or(())?;
+    let permit = {
+        let mut registry = REGISTRY.lock();
+        // Do not replace a human grant or steal devices from a live exercise.
+        if registry.grants.iter().any(|grant| {
+            grant.frame == frame || matches!(grant.scope,
+                PermitScope::KernelOwned { cursor: bound, keyboard_slot: keys, .. }
+                    if bound == cursor || keys == keyboard_slot)
+        }) {
+            return Err(());
+        }
+        registry.grant(frame, window.session.raw(),
+            PermitScope::KernelOwned { vm, run, cursor, keyboard_slot })?
+    };
+    let lease = KernelOwnedInput(permit);
+    if !bind_devices(cursor, keyboard_slot, permit, vm, run) {
+        return Err(());
+    }
+    Ok(lease)
+}
+
 /// Bind the shared Spirit devices before queuing input. This retained permit
 /// makes late strokes fail after revocation/regrant or a focus change.
 pub(crate) fn bind_input(
+    cursor: Ui4CursorSource,
+    keyboard_slot: u32,
+    permit: Permit,
+    vm: u8,
+    run: u64,
+) -> bool {
+    permit.scope == PermitScope::Shared
+        && bind_devices(cursor, keyboard_slot, permit, vm, run)
+}
+
+fn bind_devices(
     cursor: Ui4CursorSource,
     keyboard_slot: u32,
     permit: Permit,

@@ -103,7 +103,7 @@ def main():
         elif args.operation == "actions-worker":
             from github_actions import AppToken, GitHub, read_config, work_forever
             config = read_config(args.config)
-            token = AppToken(args.app_client_id, args.installation_id, args.app_key)
+            token = AppToken(args.app_client_id, args.installation_id, args.app_key, config["repository"])
             work_forever(store, config, GitHub(token), once=args.once)
         elif args.operation == "serve":
             if not 1 <= args.port <= 65535:
@@ -111,17 +111,19 @@ def main():
             if args.host not in {"127.0.0.1", "localhost"} and not args.origin:
                 raise ValueError("Set an explicit HTTPS --origin when binding a non-loopback interface")
             origin = args.origin or f"http://{args.host}:{args.port}"
+            destination = None
             source_commit = args.source_commit
             if args.actions_config:
-                from github_actions import read_config
+                from github_actions import read_config, execution_destination
                 config = read_config(args.actions_config)
+                destination = execution_destination(config)
                 if source_commit and source_commit != config["source_commit"]:
                     raise ValueError("serve source must match the Actions configuration")
                 source_commit, args.backend = config["source_commit"], "github-actions"
             elif args.backend == "github-actions":
                 raise ValueError("The Actions backend requires --actions-config with approved source pins")
             service = Service(store, source_commit or checkout_commit(), origin,
-                              issuer_key=args.issuer_key, allow_anonymous=args.allow_anonymous, backend=args.backend)
+                              issuer_key=args.issuer_key, allow_anonymous=args.allow_anonymous, backend=args.backend, destination=destination)
             server = HTTPServer((args.host, args.port), service)
             stopped = threading.Event()
             finalizer = threading.Thread(target=service.finalize_loop, args=(stopped,), daemon=True)

@@ -14,6 +14,7 @@ from pathlib import Path
 import tempfile
 import subprocess
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import urllib.error
@@ -21,7 +22,7 @@ import zipfile
 
 from build_plan import catalog, resolve_request
 from ci import DEPENDENCIES, EXPECTED_RUSTC_COMMIT
-from github_actions import ActionsWorker, AppToken, GitHub, read_config
+from github_actions import ActionsWorker, AppToken, GitHub, read_config, execution_destination
 from service import NAMESPACE, Service, Store
 from identity import verify_receipt
 
@@ -77,9 +78,9 @@ class ActionsTests(unittest.TestCase):
                        'pins': {name: str(i) * 40 for i, name in enumerate(DEPENDENCIES, start=2)}}
         self.store = Store(self.directory / 'state', clock=lambda: self.now)
         self.service = Service(self.store, self.config['source_commit'], 'https://build.example.org',
-                               allow_anonymous=True, backend='github-actions')
+                               allow_anonymous=True, backend='github-actions', destination=execution_destination(self.config))
         self.manifest = resolve_request({'preset': 'kernel-only'}, self.config['source_commit'])
-        self.ticket = self.store.queue_anonymous(self.manifest)
+        self.ticket = self.store.queue_anonymous(self.manifest, execution_destination(self.config))
         self.github = FakeGitHub(self.config)
         self.worker = ActionsWorker(self.store, self.config, self.github)
 
@@ -155,7 +156,7 @@ class ActionsTests(unittest.TestCase):
         public = user.with_suffix('.pub').read_text()
         fingerprint = self.store.grant(public, 'FIXTURE-PRIVATE-LICENSE', [f['id'] for f in catalog()['features']])
         self.service = Service(self.store, self.config['source_commit'], 'https://build.example.org',
-                               issuer_key=issuer, backend='github-actions')
+                               issuer_key=issuer, backend='github-actions', destination=execution_destination(self.config))
         # Complete the previous anonymous fixture so the signed job is next.
         with self.store.connect() as db:
             db.execute("DELETE FROM jobs")
@@ -270,7 +271,7 @@ class ActionsTests(unittest.TestCase):
         expires = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(time.time() + 3600))
         def issue(client, method, path, body):
             self.assertEqual((method, path), ('POST', '/app/installations/123/access_tokens'))
-            self.assertEqual(body, {'permissions': {'actions': 'write', 'contents': 'read'}})
+            self.assertEqual(body, {'repositories': ['TRUEOS'], 'permissions': {'actions': 'write', 'contents': 'read'}})
             jwt = client.token()
             header, payload, sig = jwt.split('.')
             decoded = lambda value: base64.urlsafe_b64decode(value + '=' * (-len(value) % 4))
@@ -281,12 +282,50 @@ class ActionsTests(unittest.TestCase):
             signature.write_bytes(decoded(sig))
             subprocess.run(['openssl', 'dgst', '-sha256', '-verify', str(public), '-signature', str(signature)],
                            input=(header + '.' + payload).encode(), check=True, capture_output=True)
-            return {'token': 'FIXTURE-INSTALLATION-TOKEN', 'expires_at': expires}
+            return {'token': 'FIXTURE-INSTALLATION-TOKEN', 'expires_at': expires,
+                    'repositories': [{'full_name': 't4ce/TRUEOS'}],
+                    'permissions': {'actions': 'write', 'contents': 'read', 'metadata': 'read'}}
         with patch('github_actions.GitHub.json', autospec=True, side_effect=issue) as request:
-            token = AppToken('Iv1fixture', '123', key)
+            token = AppToken('Iv1fixture', '123', key, 't4ce/TRUEOS')
             self.assertEqual(token(), 'FIXTURE-INSTALLATION-TOKEN')
             self.assertEqual(token(), 'FIXTURE-INSTALLATION-TOKEN')
             self.assertEqual(request.call_count, 1)
+
+    def test_installation_token_rejects_other_repositories_and_excess_permissions(self):
+        key = self.directory / "fixture-key"
+        key.write_text("fixture; signing is mocked in this scope-validation test")
+        valid = {"repositories": [{"full_name": "t4ce/TRUEOS"}],
+                 "permissions": {"actions": "write", "contents": "read", "metadata": "read"},
+                 "token": "FIXTURE", "expires_at": "2099-01-01T00:00:00Z"}
+        cases = []
+        for repositories in ([], [{"full_name": "another/TRUEOS"}],
+                             [{"full_name": "t4ce/TRUEOS"}, {"full_name": "t4ce/other"}]):
+            cases.append({**valid, "repositories": repositories})
+        cases.append({**valid, "permissions": {**valid["permissions"], "contents": "write"}})
+        cases.append({**valid, "permissions": {**valid["permissions"], "administration": "write"}})
+        for response in cases:
+            with self.subTest(response=response), patch('github_actions.subprocess.run', return_value=SimpleNamespace(stdout=b'fixture')):
+                with patch('github_actions.GitHub.json', return_value=response):
+                    token = AppToken('Iv1fixture', '123', key, 't4ce/TRUEOS')
+                    with self.assertRaises(ValueError):
+                        token()
+                    self.assertIsNone(token.token)
+
+    def test_changed_destination_is_rejected_before_dispatch(self):
+        changed = execution_destination(self.config)
+        changed["repository"] = "someone/TRUEOS"
+        with self.store.connect() as db:
+            db.execute("UPDATE jobs SET destination=? WHERE id=?", (json.dumps(changed), self.ticket['job_id']))
+        self.worker.tick()
+        self.assertEqual(self.job()['status'], 'failed')
+        self.assertIsNone(self.github.dispatched)
+
+    def test_unbound_legacy_job_cannot_be_dispatched_to_actions(self):
+        with self.store.connect() as db:
+            db.execute("UPDATE jobs SET destination=NULL WHERE id=?", (self.ticket['job_id'],))
+        self.worker.tick()
+        self.assertEqual(self.job()['status'], 'failed')
+        self.assertIsNone(self.github.dispatched)
 
     def test_storage_download_does_not_forward_github_authorization(self):
         class Opener:

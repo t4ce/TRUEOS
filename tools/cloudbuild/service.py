@@ -87,6 +87,8 @@ class Store:
         with self.connect(transaction=True) as db:
             if "phase" not in {row["name"] for row in db.execute("PRAGMA table_info(jobs)")}:
                 db.execute("ALTER TABLE jobs ADD COLUMN phase TEXT")
+            if "destination" not in {row["name"] for row in db.execute("PRAGMA table_info(jobs)")}:
+                db.execute("ALTER TABLE jobs ADD COLUMN destination TEXT")
         self.database.chmod(0o600)
 
     @contextmanager
@@ -146,16 +148,16 @@ class Store:
             raise APIError(403, "This key has no active grant for the selected features. Contact the operator.")
         return grant
 
-    def new_challenge(self, manifest, key, audience):
+    def new_challenge(self, manifest, key, audience, destination=None):
         now = int(self.clock())
         identifier = secrets.token_hex(16)
         expires = now + CHALLENGE_TTL
         payload = canonical_json({
-            "schema": "trueos-build-request/v1", "operation": "request-build",
+            "schema": "trueos-build-request/v2" if destination else "trueos-build-request/v1", "operation": "request-build",
             "audience": audience, "challenge_id": identifier,
             "nonce": secrets.token_urlsafe(32), "key_fingerprint": key["fingerprint"],
             "source_commit": manifest["source_commit"], "config_hash": manifest["config_hash"],
-            "manifest": manifest, "issued_at": now, "expires_at": expires,
+            "manifest": manifest, "destination": destination, "issued_at": now, "expires_at": expires,
         }).decode("ascii")
         with self.connect(transaction=True) as db:
             # Expired challenges cannot authorize a request even after removal.
@@ -168,7 +170,7 @@ class Store:
         return {"challenge_id": identifier, "challenge": payload, "expires_at": expires, "ttl_seconds": CHALLENGE_TTL,
                 "fingerprint": key["fingerprint"], "manifest": manifest, "namespace": NAMESPACE}
 
-    def _insert_job(self, db, manifest, fingerprint=None, license_id=None, challenge_id=None):
+    def _insert_job(self, db, manifest, fingerprint=None, license_id=None, challenge_id=None, destination=None):
         if db.execute("SELECT count(*) FROM jobs WHERE status IN ('queued','building','built')").fetchone()[0] >= 16:
             raise APIError(429, "Build queue is full; try again later.")
         if fingerprint and db.execute("SELECT count(*) FROM jobs WHERE fingerprint=? AND status IN ('queued','building','built')", (fingerprint,)).fetchone()[0] >= 2:
@@ -179,19 +181,22 @@ class Store:
             VALUES (?,?,?,'queued',?,?,?,?)""",
             (identifier, challenge_id, hashlib.sha256(token.encode()).hexdigest(),
              json.dumps(manifest), fingerprint, license_id, int(self.clock())))
+        db.execute("UPDATE jobs SET destination=? WHERE id=?", (json.dumps(destination), identifier))
         return {"job_id": identifier, "access_token": token, "status": "queued", "manifest": manifest}
 
-    def queue_anonymous(self, manifest):
+    def queue_anonymous(self, manifest, destination=None):
         with self.connect(transaction=True) as db:
-            return self._insert_job(db, manifest)
+            return self._insert_job(db, manifest, destination=destination)
 
-    def verify_and_queue(self, identifier, signature, *, audience=None, source_commit=None):
+    def verify_and_queue(self, identifier, signature, *, audience=None, source_commit=None, destination=None):
         if not isinstance(identifier, str) or not ID_RE.fullmatch(identifier):
             raise APIError(400, "Invalid challenge ID")
         with self.connect() as db:
             challenge = db.execute("SELECT * FROM challenges WHERE id=?", (identifier,)).fetchone()
         self._check_challenge(challenge)
         payload = json.loads(challenge["payload"])
+        if payload.get("destination") != destination:
+            raise APIError(409, "The build destination changed; request a new challenge.")
         if (audience is not None and payload["audience"] != audience) or (source_commit is not None and payload["source_commit"] != source_commit):
             raise APIError(409, "The service origin or source revision changed; request a new challenge.")
         if (payload.get("operation") != "request-build" or payload.get("challenge_id") != identifier or
@@ -209,7 +214,7 @@ class Store:
                 raise APIError(409, "Challenge changed during verification; request a new challenge.")
             manifest = validate_manifest(json.loads(current["manifest"]), source_commit)
             grant = self.authorize(db, current["fingerprint"], manifest, int(self.clock()))
-            result = self._insert_job(db, manifest, current["fingerprint"], grant["license_id"], identifier)
+            result = self._insert_job(db, manifest, current["fingerprint"], grant["license_id"], identifier, destination=destination)
             db.execute("UPDATE challenges SET used_at=? WHERE id=?", (int(self.clock()), identifier))
             return result
 
@@ -259,7 +264,7 @@ class Store:
 
 
 class Service:
-    def __init__(self, store, source_commit, origin, *, issuer_key=None, allow_anonymous=False, backend="local"):
+    def __init__(self, store, source_commit, origin, *, issuer_key=None, allow_anonymous=False, backend="local", destination=None):
         parsed = urlsplit(origin)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
             raise ValueError("origin must be a single http(s) origin with no credentials or path")
@@ -275,6 +280,9 @@ class Service:
             raise ValueError("Issuer private key does not exist")
         if backend not in {"local", "github-actions"}:
             raise ValueError("Unsupported build backend")
+        if backend == "github-actions" and destination is None:
+            raise ValueError("Actions requests require an approved build destination")
+        self.destination = json.loads(json.dumps(destination))
         self.backend = backend
         self.allow_anonymous = allow_anonymous
         self.finalize_lock = threading.Lock()
@@ -296,7 +304,7 @@ class Service:
             recent.append(now)
 
     def info(self):
-        return {"catalog": catalog(), "source_commit": self.source_commit, "namespace": NAMESPACE,
+        return {"catalog": catalog(), "source_commit": self.source_commit, "namespace": NAMESPACE, "destination": self.destination,
                 "capabilities": {"anonymous": self.allow_anonymous, "licensed": bool(self.issuer_key),
                                  "worker_mode": self.backend, "artifacts_public": self.backend == "github-actions"}}
 
@@ -314,18 +322,18 @@ class Service:
                 raise APIError(503, "The operator has not configured a license issuer.")
             manifest = resolve_request(body["request"], self.source_commit)
             key = normalize_public_key(body["public_key"])
-            return self.store.new_challenge(manifest, key, self.origin)
+            return self.store.new_challenge(manifest, key, self.origin, self.destination)
         if path == "/api/builds":
             if isinstance(body, dict) and "challenge_id" in body:
                 self.fields(body, {"challenge_id", "signature"})
                 if not self.issuer_key:
                     raise APIError(503, "The operator has not configured a license issuer.")
                 return self.store.verify_and_queue(body["challenge_id"], body["signature"],
-                                                   audience=self.origin, source_commit=self.source_commit)
+                                                   audience=self.origin, source_commit=self.source_commit, destination=self.destination)
             self.fields(body, {"request"})
             if not self.allow_anonymous:
                 raise APIError(403, "Anonymous builds are disabled. Use a key with an active grant.")
-            return self.store.queue_anonymous(resolve_request(body["request"], self.source_commit))
+            return self.store.queue_anonymous(resolve_request(body["request"], self.source_commit), self.destination)
         raise APIError(404, "Endpoint not found")
 
     def get_job(self, identifier, token):
@@ -338,7 +346,8 @@ class Service:
                     row = self.store.owned_job(identifier, token)
         result = {"job_id": row["id"], "status": "building" if row["status"] == "built" else row["status"],
                   "manifest": json.loads(row["manifest"]), "created_at": row["created_at"],
-                  "key_fingerprint": row["fingerprint"], "phase": row["phase"]}
+                  "key_fingerprint": row["fingerprint"], "phase": row["phase"],
+                  "destination": json.loads(row["destination"] or "null")}
         if row["status"] == "succeeded":
             result["artifact"] = {"filename": "TrueOS.tar.lz4", "sha256": row["artifact_sha256"], "size": row["artifact_size"]}
             result["provenance"] = json.loads(row["provenance"])
@@ -372,7 +381,8 @@ class Service:
                        "artifact_sha256": row["artifact_sha256"], "artifact_size": row["artifact_size"],
                        "issued_at": int(self.store.clock()), "expires_at": grant["expires_at"],
                        "issuer_origin": self.origin, "scope": "official-personal-build",
-                       "provenance": json.loads(row["provenance"])}
+                       "provenance": json.loads(row["provenance"]),
+                       "destination": json.loads(row["destination"] or "null")}
             envelope = sign_receipt(receipt, self.issuer_key)
             with self.store.connect(transaction=True) as db:
                 # A grant may be revoked while hashing/signing the artifact.

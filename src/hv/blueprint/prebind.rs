@@ -1,7 +1,10 @@
 use alloc::{string::String, vec::Vec};
 
 pub(crate) fn prebind_base_readiness() -> u32 {
+    // Host preparation always calls load_access_policy on the BSP broker.
+    // Wait for that service, not for a disk/account, before allocating the VM.
     crate::r::readiness::BACKGROUND_AP_WORKER_READY
+        | crate::r::readiness::TRUEOSFS_REQUEST_BROKER_READY
 }
 
 pub(crate) fn prebind_import_readiness(name: &str, filesystem_independent: bool) -> u32 {

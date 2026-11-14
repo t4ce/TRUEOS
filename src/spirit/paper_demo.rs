@@ -66,9 +66,10 @@ pub(super) async fn run() {
     super::ui4_interaction::acquire_response_io(keyboard).await;
     let mut window = None;
     let mut target = None;
+    let mut input_lease = None;
     let result = trueos_time::with_timeout(
         Duration::from_secs(45),
-        exercise(keyboard, &mut window, &mut target),
+        exercise(keyboard, &mut window, &mut target, &mut input_lease),
     )
     .await;
     // Cancel a pending launch as well as closing a live frame. The observer
@@ -98,6 +99,7 @@ pub(super) async fn run() {
         },
     );
     let _ = trueos_time::with_timeout(Duration::from_secs(1), wait_keyboard(keyboard)).await;
+    drop(input_lease);
     super::ui4_interaction::release_response_io(keyboard);
     match result {
         Ok(Ok(())) => crate::log_info!(target: "gfx";
@@ -125,6 +127,7 @@ async fn exercise(
     keyboard: KeyboardControlDevice,
     owned: &mut Option<WindowSnapshot>,
     target: &mut Option<crate::shell3::MatrixTarget>,
+    input_lease: &mut Option<crate::ui4::spirit_access::KernelOwnedInput>,
 ) -> Result<(), &'static str> {
     if crate::r::services::shell3_font_service::laptop_context_bootstrap_enabled() {
         // This automatic greeting draws and types immediately. Keep its RCS
@@ -181,6 +184,20 @@ async fn exercise(
         }
         Timer::after(Duration::from_millis(POLL_MS)).await;
     };
+    // The boot exercise owns this exact launch, not the user's desktop. Keep
+    // its input permit until queued keyboard work has drained in run().
+    let (vm, run) = (*INSTANCE.lock()).ok_or("paper-instance-retired")?;
+    let source = super::lilly_cursor::selection_source().map_err(|_| "cursor-source")?;
+    *input_lease = Some(crate::ui4::spirit_access::bind_kernel_owned_input(
+        source,
+        keyboard.slot_id,
+        crate::ui4::CursorFrameKey::new(window.owner, window.id),
+        vm,
+        run,
+    ).map_err(|_| "paper-owned-input")?);
+    crate::log_info!(target: "gfx";
+        "trueos-spirit: Paper boot input admitted vm={} run={} window={} scope=kernel-owned-frame\n",
+        vm, run, window.id.raw());
     let (screen_width, screen_height) =
         crate::intel::active_scanout_dimensions().ok_or("scanout")?;
     let p = window.placement;
@@ -204,7 +221,6 @@ async fn exercise(
     )
     .map_err(|_| "cell-zero-approach")?;
     wait_cursor().await?;
-    let source = super::lilly_cursor::selection_source().map_err(|_| "cursor-source")?;
     crate::ui4::select_window_for_cursor(source, window.owner, window.id)
         .map_err(|_| "paper-focus")?;
     super::lilly_cursor::queue_primary_click().map_err(|_| "cell-zero-click")?;

@@ -282,6 +282,19 @@ fn direct_rcs_encode_spirit_vfx_batch(
             GPGPU_WALKER_SIMD16_MASK,
         );
         ok &= direct_rcs_push_spirit_vfx_dependency(batch, &mut cursor);
+        if tgl_compute_contract {
+            // TEMPORARY bring-up observation, not a validated workaround.
+            // A separate post-sync QWord distinguishes background fence completion
+            // from sprite dispatch. The extra ordering can itself change
+            // behavior; keep the existing dependency and shaders intact.
+            ok &= direct_rcs_push_pipe_control_post_sync_marker_at(
+                batch,
+                &mut cursor,
+                state.gpu_va.result,
+                SPIRIT_VFX_BACKGROUND_COMPLETE_SLOT,
+                SPIRIT_VFX_BACKGROUND_COMPLETE_MARKER,
+            );
+        }
     }
 
     ok &=

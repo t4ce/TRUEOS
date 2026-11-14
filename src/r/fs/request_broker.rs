@@ -1180,6 +1180,10 @@ fn poll_request_batch(active: &mut Vec<ActiveRequest>, cx: &mut Context<'_>) {
 #[trueos_executor::task]
 pub async fn service_task() {
     BROKER_ONLINE.store(true, Ordering::Release);
+    // Publish only when the BSP service actually starts polling. App launch
+    // preparation consults access policy through this broker even when the
+    // guest has no disk bootstrap. Do not couple this to mount/account state.
+    crate::r::readiness::set(crate::r::readiness::TRUEOSFS_REQUEST_BROKER_READY);
     crate::log_info!(target: "filesystem";
         "trueosfs-request-broker: online realm=bsp callers=background-service-lanes wait=parked-no-executor-poll\n"
     );

@@ -57,11 +57,19 @@ def read_config(path):
     return config
 
 
+def execution_destination(config):
+    """Public execution context bound to the user's signature; no credentials."""
+    return {"mode": "hosted", **json.loads(json.dumps(config))}
+
+
 class AppToken:
     """Mint short-lived installation tokens; the App key stays outside runners."""
-    def __init__(self, client_id, installation_id, private_key):
+    def __init__(self, client_id, installation_id, private_key, repository):
         if not re.fullmatch(r"[A-Za-z0-9_]+", client_id) or not re.fullmatch(r"[0-9]+", installation_id):
             raise ValueError("Invalid GitHub App client or installation ID")
+        if not isinstance(repository, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repository, re.ASCII):
+            raise ValueError("A single target repository is required")
+        self.repository = repository
         self.client_id, self.installation_id = client_id, installation_id
         self.key = Path(private_key)
         if not self.key.is_file():
@@ -81,7 +89,15 @@ class AppToken:
                                    input=signing, capture_output=True, check=True, timeout=10).stdout
         jwt = (signing + b'.' + encode(signature)).decode('ascii')
         response = GitHub(lambda: jwt).json('POST', f'/app/installations/{self.installation_id}/access_tokens',
-                                           {"permissions": {"actions": "write", "contents": "read"}})
+                                           {"repositories": [self.repository.split("/", 1)[1]],
+                                            "permissions": {"actions": "write", "contents": "read"}})
+        repositories = response.get('repositories', [])
+        if (len(repositories) != 1 or repositories[0].get('full_name', '').lower() != self.repository.lower()
+                or response.get('permissions', {}).get('actions') != 'write'
+                or response.get('permissions', {}).get('contents') != 'read'
+                or set(response.get('permissions', {})) - {'actions', 'contents', 'metadata'}
+                or response.get('permissions', {}).get('metadata', 'read') != 'read'):
+            raise ValueError('GitHub token scope does not match the one approved build repository')
         self.token = response['token']
         self.until = datetime.fromisoformat(response['expires_at'].replace('Z', '+00:00')).timestamp() - 120
         return self.token
@@ -162,6 +178,8 @@ class ActionsWorker:
 
     def dispatch(self, job):
         self.phase(job['id'], 'dispatching')
+        if json.loads(job.get('destination') or 'null') != execution_destination(self.config):
+            raise ValueError('Signed build destination does not match this Actions worker')
         manifest = validate_manifest(json.loads(job['manifest']), self.config['source_commit'])
         self.authorize(job, manifest)
         ref = urllib.parse.quote(self.config['ref'], safe='')

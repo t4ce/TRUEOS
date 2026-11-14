@@ -501,6 +501,12 @@ const SPIRIT_VFX_PRE_MARKER_SLOT: usize = 39;
 const SPIRIT_VFX_POST_MARKER_SLOT: usize = 38;
 const SPIRIT_VFX_PRE_MARKER: u32 = 0xC0DE_5F01;
 const SPIRIT_VFX_POST_MARKER: u32 = 0xC0DE_5F02;
+// Temporary TGL background/sprite boundary observation. Execution result
+// storage is private to Spirit; this QWord is separate from POST at 38-39.
+const SPIRIT_VFX_BACKGROUND_COMPLETE_SLOT: usize = 40;
+const SPIRIT_VFX_BACKGROUND_COMPLETE_MARKER: u32 = 0xC0DE_5F03;
+const _: () = assert!(SPIRIT_VFX_BACKGROUND_COMPLETE_SLOT.is_multiple_of(2));
+const _: () = assert!(SPIRIT_VFX_BACKGROUND_COMPLETE_SLOT > SPIRIT_VFX_PRE_MARKER_SLOT);
 
 // Video-frame-only PIPE_CONTROL timestamp QWords. Each timestamp consumes two
 // naturally aligned DWORD result slots. They deliberately do not overlap the

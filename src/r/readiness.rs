@@ -39,6 +39,10 @@ pub const NET_V6_CONFIGURED: u32 = 1 << 14;
 pub const NET_SOCKET_READY: u32 = 1 << 15;
 
 pub const TRUEOSFS_ROOT_MOUNTED: u32 = 1 << 16;
+// The BSP can accept parked filesystem/access-policy requests. This is
+// service readiness only: it proves neither a mounted disk nor an account,
+// loaded policy, or authentication. A diskless boot can publish this bit.
+pub const TRUEOSFS_REQUEST_BROKER_READY: u32 = 1 << 17;
 pub const INTEL_HDA_READY: u32 = 1 << 18;
 pub const GFX_VIRGL_READY: u32 = 1 << 19;
 pub const HTTP_TRUEOSFS_LISTENING: u32 = 1 << 20;
@@ -68,6 +72,7 @@ const READINESS_FLAGS: &[(u32, &str)] = &[
     (NET_V6_CONFIGURED, "NET_V6_CONFIGURED"),
     (NET_SOCKET_READY, "NET_SOCKET_READY"),
     (TRUEOSFS_ROOT_MOUNTED, "TRUEOSFS_ROOT_MOUNTED"),
+    (TRUEOSFS_REQUEST_BROKER_READY, "TRUEOSFS_REQUEST_BROKER_READY"),
     (INTEL_HDA_READY, "INTEL_HDA_READY"),
     (GFX_VIRGL_READY, "GFX_VIRGL_READY"),
     (HTTP_TRUEOSFS_LISTENING, "HTTP_TRUEOSFS_LISTENING"),

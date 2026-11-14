@@ -43,7 +43,7 @@ def harness(package_dir: Path | None = None) -> str:
         "le_u16", "le_u32", "le_u64", "parse_blueprint", "unpack_blueprint",
     ))
     readiness = "\n".join(constant("src/r/readiness.rs", name) for name in (
-        "BACKGROUND_AP_WORKER_READY", "TRUEOSFS_ROOT_MOUNTED", "RAYON_READY",
+        "BACKGROUND_AP_WORKER_READY", "TRUEOSFS_REQUEST_BROKER_READY", "TRUEOSFS_ROOT_MOUNTED", "RAYON_READY",
         "NET_ANY_CONFIGURED", "NET_SOCKET_READY", "TLS_SOCKET_SERVICE_READY", "INTEL_HDA_READY",
     ))
     guest = (ROOT / "src/hv/guest_run.rs").read_text()
@@ -63,7 +63,7 @@ def harness(package_dir: Path | None = None) -> str:
         assert imports, f"no undefined imports found in {module}"
         packaged_test = r'''
 #[test]
-fn prepared_paper_header_and_actual_imports_use_only_background_readiness() {
+fn prepared_paper_header_and_actual_imports_use_only_host_service_readiness() {
     let bytes = include_bytes!(@PACKAGE@);
     let module = blueprint::parse_blueprint(bytes).unwrap();
     assert!(module.is_filesystem_independent(), "prepared Paper lacks its capability");
@@ -75,7 +75,7 @@ fn prepared_paper_header_and_actual_imports_use_only_background_readiness() {
     let flags = (module.flags & !0xff) | 1;
     raw[6..8].copy_from_slice(&flags.to_le_bytes());
     assert_eq!(blueprint::prebind::prebind_required_readiness(&raw).unwrap().0,
-               r::readiness::BACKGROUND_AP_WORKER_READY);
+               r::readiness::BACKGROUND_AP_WORKER_READY | r::readiness::TRUEOSFS_REQUEST_BROKER_READY);
 }
 '''.replace("@PACKAGE@", json.dumps(str(package))).replace("@IMPORTS@", json.dumps(imports))
     return r'''
@@ -197,13 +197,13 @@ fn paper_capability_removes_only_its_async_fs_readiness_dependency() {
     let module = blueprint::parse_blueprint(&bytes).unwrap();
     assert!(module.is_filesystem_independent(), "Paper metadata must set the existing capability");
     let (mask,payload) = blueprint::prebind::prebind_required_readiness(&bytes).unwrap();
-    assert_eq!(mask, BACKGROUND_AP_WORKER_READY);
+    assert_eq!(mask, BACKGROUND_AP_WORKER_READY | TRUEOSFS_REQUEST_BROKER_READY);
     assert_eq!(payload, module.payload);
     // Negative control: the identical original imports without the capability
     // reproduce the disk gate which prevented the RAM-only boot exercise.
     let ordinary = blueprint::package(false, PAPER_IMPORTS);
     assert_eq!(blueprint::prebind::prebind_required_readiness(&ordinary).unwrap().0,
-               BACKGROUND_AP_WORKER_READY | TRUEOSFS_ROOT_MOUNTED);
+               BACKGROUND_AP_WORKER_READY | TRUEOSFS_REQUEST_BROKER_READY | TRUEOSFS_ROOT_MOUNTED);
 }
 
 #[test]
@@ -212,10 +212,10 @@ fn independent_apps_keep_disk_archive_network_and_unsupported_import_checks() {
     for independent in [false,true] {
         let archive = blueprint::package(independent, &["trueos_cabi_archive_extract"]);
         assert_eq!(blueprint::prebind::prebind_required_readiness(&archive).unwrap().0,
-                   BACKGROUND_AP_WORKER_READY | TRUEOSFS_ROOT_MOUNTED);
+                   BACKGROUND_AP_WORKER_READY | TRUEOSFS_REQUEST_BROKER_READY | TRUEOSFS_ROOT_MOUNTED);
         let network = blueprint::package(independent, &["trueos_cabi_net_fetch_start"]);
         assert_eq!(blueprint::prebind::prebind_required_readiness(&network).unwrap().0,
-                   BACKGROUND_AP_WORKER_READY | NET_ANY_CONFIGURED
+                   BACKGROUND_AP_WORKER_READY | TRUEOSFS_REQUEST_BROKER_READY | NET_ANY_CONFIGURED
                    | NET_SOCKET_READY | TLS_SOCKET_SERVICE_READY);
         let retired = blueprint::package(independent, &["trueos_cabi_fs_read"]);
         assert!(blueprint::prebind::prebind_required_readiness(&retired).unwrap_err()

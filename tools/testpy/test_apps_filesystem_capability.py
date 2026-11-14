@@ -32,6 +32,7 @@ mod r { pub mod readiness {
     pub const NET_SOCKET_READY:u32=16;
     pub const TLS_SOCKET_SERVICE_READY:u32=32;
     pub const INTEL_HDA_READY:u32=64;
+    pub const TRUEOSFS_REQUEST_BROKER_READY:u32=128;
 }}
 mod hv { pub mod blueprint {
     pub fn prebind_required_readiness(bytes: &[u8]) -> Result<(), String> {
@@ -76,6 +77,7 @@ const FS_ERR_BAD_PATH:i32=-1; const FS_ERR_BAD_PARAM:i32=-2; const FS_ERR_IO:i32
 }
 #[test] fn apps_contract_keeps_network_and_child_contract_keeps_filesystem() {
     use r::readiness::*;
+    assert_eq!(prebind_base_readiness(), BACKGROUND_AP_WORKER_READY | TRUEOSFS_REQUEST_BROKER_READY);
     assert_eq!(prebind_import_readiness("trueos_cabi_async_fs_read_start", true), 0);
     assert_eq!(prebind_import_readiness("trueos_cabi_async_fs_read_start", false), TRUEOSFS_ROOT_MOUNTED);
     assert_eq!(prebind_import_readiness("trueos_cabi_net_fetch_start", true),

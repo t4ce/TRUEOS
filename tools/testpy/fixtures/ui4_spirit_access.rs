@@ -364,6 +364,340 @@ mod tests {
         (mouse(slot, 0), keyboard(slot + 1, 0))
     }
 
+    fn kernel_ai_pair(slot: u32) -> (Ui4CursorSource, TrueosKeyboardOutputEvent) {
+        let pair = ai_pair(slot, HidSourceKind::Ai);
+        world(|w| {
+            w.mouse.iter_mut().find(|entry| entry.0 == slot).unwrap().1 =
+                MouseControlPrincipal::Kernel;
+            w.keyboard.iter_mut().find(|entry| entry.0 == slot + 1).unwrap().1 =
+                KeyboardControlPrincipal::Kernel;
+        });
+        pair
+    }
+
+    #[test]
+    fn kernel_owned_input_admits_only_its_pair_and_frame_without_sharing_observation() {
+        let (key, _, _) = setup(2301);
+        let other = frame(2302);
+        world(|w| w.windows.push(window(other, 3)));
+        let (cursor, keys) = kernel_ai_pair(2301);
+        let (other_cursor, other_keys) = kernel_ai_pair(2311);
+        let (guest_cursor, guest_keys) = ai_pair(2321, HidSourceKind::Ai);
+        assert!(!access::cursor_target_allowed(cursor, key));
+        assert!(!access::keyboard_target_allowed(&keys, key));
+
+        let lease = access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).unwrap();
+        assert!(access::cursor_target_allowed(cursor, key));
+        assert!(access::keyboard_target_allowed(&keys, key));
+        assert!(access::authorize(key).is_none());
+        assert!(!access::is_granted(key));
+        assert!(!access::cursor_target_allowed(cursor, other));
+        assert!(!access::keyboard_target_allowed(&keys, other));
+        for (other_cursor, other_keys) in [(other_cursor, other_keys), (guest_cursor, guest_keys)] {
+            assert!(!access::cursor_target_allowed(other_cursor, key));
+            assert!(!access::keyboard_target_allowed(&other_keys, key));
+        }
+        let pointer = access::stamp_cursor(cursor, key).unwrap();
+        let keyboard = access::stamp_keyboard(&keys, key).unwrap();
+        assert!(access::stamp_valid(pointer, key));
+        assert!(access::stamp_valid(keyboard, key));
+        assert!(!access::stamp_valid(pointer, other));
+        assert!(!access::stamp_valid(keyboard, other));
+
+        drop(lease);
+        assert!(!access::cursor_target_allowed(cursor, key));
+        assert!(!access::keyboard_target_allowed(&keys, key));
+        assert!(!access::stamp_valid(pointer, key));
+        assert!(!access::stamp_valid(keyboard, key));
+        assert!(access::authorize(key).is_none());
+        access::frame_closed(key);
+        access::frame_closed(other);
+    }
+
+    #[test]
+    fn kernel_owned_input_records_raw_frontiers_and_drop_expires_queued_stamps() {
+        let (key, _, _) = setup(2401);
+        let (cursor, mut keys) = kernel_ai_pair(2401);
+        world(|w| {
+            w.keyboard_frontiers = (100, 200);
+            w.cursor_frontier = 300;
+        });
+        let lease = access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).unwrap();
+        keys.seq = 100;
+        assert!(access::stamp_keyboard(&keys, key).is_none());
+        assert!(!access::cursor_sequence_allowed(cursor, key, 300));
+        keys.seq = 101;
+        let keyboard = access::stamp_keyboard(&keys, key).unwrap();
+        let mut physical = keys;
+        physical.kind = r::keyboard::KEYBOARD_OUTPUT_KIND_PHYSICAL;
+        physical.seq = 200;
+        assert!(access::stamp_keyboard(&physical, key).is_none());
+        physical.seq = 201;
+        let physical_keyboard = access::stamp_keyboard(&physical, key).unwrap();
+        assert!(access::cursor_sequence_allowed(cursor, key, 301));
+        let pointer = access::stamp_cursor(cursor, key).unwrap();
+        drop(lease);
+
+        let replacement = access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).unwrap();
+        assert!(access::cursor_target_allowed(cursor, key));
+        assert!(!access::stamp_valid(pointer, key));
+        assert!(!access::stamp_valid(keyboard, key));
+        assert!(!access::stamp_valid(physical_keyboard, key));
+        let fresh_pointer = access::stamp_cursor(cursor, key).unwrap();
+        assert!(access::stamp_valid(fresh_pointer, key));
+        drop(replacement);
+        access::frame_closed(key);
+    }
+
+    #[test]
+    fn kernel_owned_input_expires_with_frame_session_or_target_vm_lifecycle() {
+        for case in 0..6 {
+            let (key, _, _) = setup(2501 + case);
+            let (cursor, keys) = kernel_ai_pair(2501 + case * 10);
+            let lease = access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).unwrap();
+            let pointer = access::stamp_cursor(cursor, key).unwrap();
+            let keyboard = access::stamp_keyboard(&keys, key).unwrap();
+            match case {
+                0 => access::frame_closed(key),
+                1 => world(|w| w.windows[0].session = WindowSessionId(4)),
+                2 => world(|w| w.vms[0].2 = 8),
+                3 => world(|w| w.vms[0].1.stop_requested = true),
+                4 => world(|w| w.windows[0].state = WindowState::Closing),
+                5 => world(|w| w.vms[0].1.running = false),
+                _ => unreachable!(),
+            }
+            assert!(!access::cursor_target_allowed(cursor, key), "case {case}");
+            assert!(!access::keyboard_target_allowed(&keys, key), "case {case}");
+            assert!(!access::stamp_valid(pointer, key), "case {case}");
+            assert!(!access::stamp_valid(keyboard, key), "case {case}");
+            assert!(!access::is_granted(key));
+            drop(lease);
+            access::frame_closed(key);
+        }
+    }
+
+    #[test]
+    fn kernel_owned_input_rejects_mismatched_owner_run_and_unready_target() {
+        let (key, _, _) = setup(2601);
+        let (cursor, keys) = kernel_ai_pair(2601);
+        let foreign = CursorFrameKey::new(WindowOwner::Vm(2), WindowId::from_raw(2602).unwrap());
+        let kernel = CursorFrameKey::new(WindowOwner::Kernel, WindowId::from_raw(2603).unwrap());
+        world(|w| {
+            w.windows.push(window(foreign, 3));
+            w.windows.push(window(kernel, 3));
+            w.vms.push((2, hv::VmState { running: true, stop_requested: false }, 7));
+        });
+        assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, key, 2, 7).is_err());
+        assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 8).is_err());
+        assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 0).is_err());
+        assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, foreign, 1, 7).is_err());
+        assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, kernel, 1, 7).is_err());
+        assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, frame(2604), 1, 7).is_err());
+        world(|w| w.windows[0].state = WindowState::Closing);
+        assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).is_err());
+        world(|w| {
+            w.windows[0].state = WindowState::Ready;
+            w.vms[0].1.stop_requested = true;
+        });
+        assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).is_err());
+        world(|w| {
+            w.vms[0].1.stop_requested = false;
+            w.vms[0].1.running = false;
+        });
+        assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).is_err());
+        assert!(!access::cursor_target_allowed(cursor, key));
+        assert!(!access::keyboard_target_allowed(&keys, key));
+        assert!(!access::is_granted(key));
+        access::frame_closed(key);
+    }
+
+    #[test]
+    fn kernel_owned_input_requires_both_station_principals_to_be_kernel_owned() {
+        let (key, _, _) = setup(2701);
+        let (cursor, keys) = ai_pair(2701, HidSourceKind::Ai);
+        assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).is_err());
+        world(|w| w.mouse[0].1 = MouseControlPrincipal::Kernel);
+        assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).is_err());
+        world(|w| {
+            w.mouse[0].1 = MouseControlPrincipal::Vm(1);
+            w.keyboard[0].1 = KeyboardControlPrincipal::Kernel;
+        });
+        assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).is_err());
+        assert!(!access::cursor_target_allowed(cursor, key));
+        assert!(!access::keyboard_target_allowed(&keys, key));
+        access::frame_closed(key);
+    }
+
+    #[test]
+    fn kernel_owned_input_rejects_non_ai_nonvirtual_and_foreign_controller_sources() {
+        for case in 0..8 {
+            let (key, _, _) = setup(2801 + case);
+            let (mut cursor, keys) = kernel_ai_pair(2801 + case * 10);
+            world(|w| match case {
+                0 => cursor.controller_id = 4,
+                1 => cursor.ep_target = 1,
+                2 => w.devices[2].source_kind = HidSourceKind::Human,
+                3 => w.devices[3].source_kind = HidSourceKind::Remote,
+                4 => w.devices[2].virtual_device = false,
+                5 => w.devices[3].virtual_device = false,
+                6 => w.devices[3].id.controller_id = 4,
+                7 => w.devices[3].id.ep_target = 1,
+                _ => unreachable!(),
+            });
+            assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).is_err(), "case {case}");
+            assert!(!access::is_granted(key));
+            access::frame_closed(key);
+        }
+    }
+
+    #[test]
+    fn kernel_owned_input_cannot_replace_another_live_lease_or_a_shared_grant() {
+        let (key, _, _) = setup(2901);
+        let (cursor, keys) = kernel_ai_pair(2901);
+        let lease = access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).unwrap();
+        let pointer = access::stamp_cursor(cursor, key).unwrap();
+        let keyboard = access::stamp_keyboard(&keys, key).unwrap();
+        let (other_cursor, other_keys) = kernel_ai_pair(2911);
+        assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).is_err());
+        assert!(access::bind_kernel_owned_input(other_cursor, other_keys.slot_id, key, 1, 7).is_err());
+        assert!(access::cursor_target_allowed(cursor, key));
+        assert!(access::keyboard_target_allowed(&keys, key));
+        assert!(access::stamp_valid(pointer, key));
+        assert!(access::stamp_valid(keyboard, key));
+        assert!(!access::is_granted(key));
+        drop(lease);
+        assert!(!access::stamp_valid(pointer, key));
+        assert!(!access::stamp_valid(keyboard, key));
+        access::frame_closed(key);
+
+        let (shared_key, human, _) = setup(2902);
+        let (cursor, keys) = kernel_ai_pair(2921);
+        access::toggle_from_human(human, shared_key).unwrap();
+        let shared = access::authorize(shared_key).unwrap();
+        assert!(access::bind_kernel_owned_input(cursor, keys.slot_id, shared_key, 1, 7).is_err());
+        assert!(access::valid(shared));
+        assert!(access::is_granted(shared_key));
+        access::frame_closed(shared_key);
+    }
+
+    #[test]
+    fn human_revocation_and_old_kernel_guard_drop_preserve_a_later_shared_grant() {
+        let (key, human, _) = setup(3001);
+        let (cursor, keys) = kernel_ai_pair(3001);
+        let lease = access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).unwrap();
+        let old_pointer = access::stamp_cursor(cursor, key).unwrap();
+        let old_keyboard = access::stamp_keyboard(&keys, key).unwrap();
+        assert_eq!(access::toggle_from_human(human, key), Ok(true));
+        assert!(!access::stamp_valid(old_pointer, key));
+        assert!(!access::stamp_valid(old_keyboard, key));
+        let permit = access::authorize(key).unwrap();
+        assert!(access::bind_input(cursor, keys.slot_id, permit, 1, 7));
+        let pointer = access::stamp_cursor(cursor, key).unwrap();
+        let keyboard = access::stamp_keyboard(&keys, key).unwrap();
+        drop(lease);
+        assert!(access::is_granted(key));
+        assert!(access::valid(permit));
+        assert!(access::cursor_target_allowed(cursor, key));
+        assert!(access::keyboard_target_allowed(&keys, key));
+        assert!(access::stamp_valid(pointer, key));
+        assert!(access::stamp_valid(keyboard, key));
+        assert!(!access::stamp_valid(old_pointer, key));
+        assert!(!access::stamp_valid(old_keyboard, key));
+        access::frame_closed(key);
+    }
+
+    #[test]
+    fn kernel_owned_input_does_not_follow_released_or_reassigned_station_devices() {
+        for case in 0..6 {
+            let (key, _, _) = setup(3101 + case);
+            let (cursor, keys) = kernel_ai_pair(3101 + case * 10);
+            let lease = access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).unwrap();
+            let pointer = access::stamp_cursor(cursor, key).unwrap();
+            let keyboard = access::stamp_keyboard(&keys, key).unwrap();
+            world(|w| match case {
+                0 => w.mouse[0].1 = MouseControlPrincipal::Vm(1),
+                1 => w.keyboard[0].1 = KeyboardControlPrincipal::Vm(1),
+                2 => w.mouse.clear(),
+                3 => w.keyboard.clear(),
+                4 => w.devices.retain(|device| device.id.slot_id != cursor.slot_id),
+                5 => w.devices.retain(|device| device.id.slot_id != keys.slot_id),
+                _ => unreachable!(),
+            });
+            assert!(!access::cursor_target_allowed(cursor, key), "case {case}");
+            assert!(!access::keyboard_target_allowed(&keys, key), "case {case}");
+            assert!(!access::stamp_valid(pointer, key), "case {case}");
+            assert!(!access::stamp_valid(keyboard, key), "case {case}");
+            assert!(!access::is_granted(key));
+            drop(lease);
+            access::frame_closed(key);
+        }
+    }
+
+    #[test]
+    fn dropping_closed_frame_guard_cannot_revoke_a_later_lease_for_that_frame() {
+        let (key, _, _) = setup(3201);
+        let (cursor, keys) = kernel_ai_pair(3201);
+        let old = access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).unwrap();
+        let old_pointer = access::stamp_cursor(cursor, key).unwrap();
+        let old_keyboard = access::stamp_keyboard(&keys, key).unwrap();
+        access::frame_closed(key);
+        world(|w| w.windows[0].session = WindowSessionId(4));
+        let current = access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).unwrap();
+        let pointer = access::stamp_cursor(cursor, key).unwrap();
+        let keyboard = access::stamp_keyboard(&keys, key).unwrap();
+        assert!(!access::stamp_valid(old_pointer, key));
+        assert!(!access::stamp_valid(old_keyboard, key));
+        drop(old);
+        assert!(access::cursor_target_allowed(cursor, key));
+        assert!(access::keyboard_target_allowed(&keys, key));
+        assert!(access::stamp_valid(pointer, key));
+        assert!(access::stamp_valid(keyboard, key));
+        assert!(!access::is_granted(key));
+        drop(current);
+        assert!(!access::stamp_valid(pointer, key));
+        assert!(!access::stamp_valid(keyboard, key));
+        access::frame_closed(key);
+    }
+
+    #[test]
+    fn kernel_owned_input_cannot_rebind_either_device_away_from_a_live_lease() {
+        let (key, _, _) = setup(3301);
+        let other = frame(3302);
+        world(|w| w.windows.push(window(other, 3)));
+        let (cursor, keys) = kernel_ai_pair(3301);
+        let (other_cursor, other_keys) = kernel_ai_pair(3311);
+        let lease = access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).unwrap();
+        let pointer = access::stamp_cursor(cursor, key).unwrap();
+        let keyboard = access::stamp_keyboard(&keys, key).unwrap();
+        for (candidate_cursor, candidate_keys) in [
+            (cursor, keys),
+            (cursor, other_keys),
+            (other_cursor, keys),
+        ] {
+            assert!(access::bind_kernel_owned_input(candidate_cursor, candidate_keys.slot_id, other, 1, 7).is_err());
+            assert!(access::cursor_target_allowed(cursor, key));
+            assert!(access::keyboard_target_allowed(&keys, key));
+            assert!(access::stamp_valid(pointer, key));
+            assert!(access::stamp_valid(keyboard, key));
+        }
+
+        let independent = access::bind_kernel_owned_input(other_cursor, other_keys.slot_id, other, 1, 7).unwrap();
+        assert!(access::cursor_target_allowed(other_cursor, other));
+        assert!(access::keyboard_target_allowed(&other_keys, other));
+        assert!(!access::cursor_target_allowed(other_cursor, key));
+        assert!(!access::keyboard_target_allowed(&other_keys, key));
+        assert!(access::stamp_valid(pointer, key));
+        assert!(access::stamp_valid(keyboard, key));
+        assert!(!access::is_granted(key));
+        assert!(!access::is_granted(other));
+        drop(independent);
+        assert!(access::stamp_valid(pointer, key));
+        assert!(access::stamp_valid(keyboard, key));
+        drop(lease);
+        access::frame_closed(key);
+        access::frame_closed(other);
+    }
+
     fn remote_pair(slot: u32, account: u64) -> (Ui4CursorSource, TrueosKeyboardOutputEvent) {
         let (cursor, mut keys) = ai_pair(slot, HidSourceKind::Remote);
         keys.seq = 11;

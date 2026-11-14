@@ -76,6 +76,7 @@ unsafe impl Sync for SpiritVfxRuntime {}
 struct SpiritVfxSubmitted {
     state: DirectRcsState,
     first_kernel: UploadedKernelArtifact,
+    sprite_kernel: UploadedKernelArtifact,
     control: SpiritVfxBuffer,
     source: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
@@ -354,6 +355,14 @@ fn spirit_vfx_log_mapping_evidence(dev: super::Dev, submitted: SpiritVfxSubmitte
         ("first-kernel", submitted.first_kernel.gpu, submitted.first_kernel.phys, wb),
         ("first-idd", state.gpu_va.batch + idd_offset as u64, state.batch_phys + idd_offset as u64, wb),
         ("first-payload", state.gpu_va.batch + payload_offset as u64, state.batch_phys + payload_offset as u64, wb),
+        ("sprite-kernel", submitted.sprite_kernel.gpu, submitted.sprite_kernel.phys, wb),
+        ("sprite-idd", state.gpu_va.batch + SPIRIT_VFX_SPRITE_IDD_OFFSET_BYTES as u64,
+            state.batch_phys + SPIRIT_VFX_SPRITE_IDD_OFFSET_BYTES as u64, wb),
+        ("sprite-payload", state.gpu_va.batch + SPIRIT_VFX_SPRITE_PAYLOAD_OFFSET_BYTES as u64,
+            state.batch_phys + SPIRIT_VFX_SPRITE_PAYLOAD_OFFSET_BYTES as u64, wb),
+        ("source-sprite", submitted.source.gpu, submitted.source.phys, wb),
+        ("source-sprite-last", submitted.source.gpu.saturating_add(submitted.source.bytes.saturating_sub(1) as u64),
+            submitted.source.phys.saturating_add(submitted.source.bytes.saturating_sub(1) as u64), wb),
         ("control", submitted.control.gpu, submitted.control.phys, wb),
         ("destination", submitted.dst.gpu, submitted.dst.phys, wb | GEN8_PAGE_PWT | GEN8_PAGE_PCD),
     ] {
@@ -363,6 +372,19 @@ fn spirit_vfx_log_mapping_evidence(dev: super::Dev, submitted: SpiritVfxSubmitte
             name, gpu, phys, flags, evidence,
         );
     }
+}
+
+// TEMPORARY companion observation for the TGL inter-walker marker. Read it
+// only on the existing first-two completions or one timeout, never every poll.
+fn spirit_vfx_log_background_boundary(submitted: SpiritVfxSubmitted, tag: u64, phase: &str) {
+    if !crate::intel::render::tgl_spirit_compute_contract() || submitted.background_mode == 0 {
+        return;
+    }
+    let observed = direct_rcs_read_result_slot(submitted.state, SPIRIT_VFX_BACKGROUND_COMPLETE_SLOT);
+    crate::log_important!(target: "gpgpu";
+        "intel/gpgpu: spirit-vfx background-boundary tag={} frame={} phase={} observed=0x{:08X} background_complete={} diagnostic=temporary-post-sync\n",
+        tag, submitted.frame, phase, observed,
+        (observed == SPIRIT_VFX_BACKGROUND_COMPLETE_MARKER) as u8);
 }
 
 static SPIRIT_VFX_RUNTIME: Mutex<Option<SpiritVfxRuntime>> = Mutex::new(None);
@@ -631,6 +653,7 @@ pub(crate) fn poll_spirit_vfx_submission(handle: SpiritVfxSubmission) -> SpiritV
             return SpiritVfxCompletion::Pending;
         }
         if !pending.timeout_logged {
+            spirit_vfx_log_background_boundary(pending.submitted, handle.tag, "first-timeout");
             let reason = if marker == SPIRIT_VFX_POST_MARKER {
                 "spirit-vfx-marker-observed-context-save-timeout"
             } else {
@@ -699,6 +722,7 @@ pub(crate) fn poll_spirit_vfx_submission(handle: SpiritVfxSubmission) -> SpiritV
         if let Ok(retired_index) = SPIRIT_VFX_SAVED_CONTEXT_LOGS.fetch_update(
             Ordering::Relaxed, Ordering::Relaxed, |count| (count < 2).then_some(count + 1),
         ) {
+            spirit_vfx_log_background_boundary(pending.submitted, handle.tag, "retired");
             let saved_control = spirit_vfx_owned_dwords::<1>(
                 pending.submitted.state.context_virt,
                 DIRECT_RCS_CONTEXT_BYTES,
@@ -833,6 +857,7 @@ fn submit_spirit_vfx_batch(
     Some((SpiritVfxSubmitted {
         state,
         first_kernel: background_upload.unwrap_or(sprite_upload),
+        sprite_kernel: sprite_upload,
         control: runtime.control,
         source,
         dst,

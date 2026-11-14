@@ -929,7 +929,7 @@
       if (/^[0-9a-f]{40}$/i.test(state.sourceCommit)) $("source-commit").href = `https://github.com/t4ce/TRUEOS/commit/${state.sourceCommit}`;
       $("connection-status").classList.add("connected");
       $("connection-label").textContent = "Service connected";
-      $("worker-state").textContent = data.capabilities?.worker_mode === "github-actions" ? "Builds run on GitHub Actions" : "Build service connected";
+      $("worker-state").textContent = data.destination?.repository ? `Build destination: ${data.destination.repository}` : data.capabilities?.worker_mode === "github-actions" ? "Builds run on GitHub Actions" : "Build service connected";
       $("artifact-visibility").hidden = data.capabilities?.artifacts_public !== true;
       renderCatalog();
       renderSelection();

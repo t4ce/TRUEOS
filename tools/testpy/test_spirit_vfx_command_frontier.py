@@ -265,7 +265,7 @@ fn sprite_only_keeps_one_walker_and_uses_sprite_instruction_base() {
 }
 
 #[test]
-fn tgl_contract_changes_only_entry_sequence_compute_mode_and_vfe_urb() {
+fn tgl_contract_changes_only_entry_compute_mode_vfe_and_background_observation() {
     for background in [false,true] {
         super::physical(0x8086,0x4680,12);let legacy=encoded(background);
         let legacy_offsets=command_offsets(&legacy);
@@ -291,7 +291,14 @@ fn tgl_contract_changes_only_entry_sequence_compute_mode_and_vfe_urb() {
         expected[scm+2..scm+2+end-sba].copy_from_slice(&legacy[sba..end]);
         let vfe=*offsets.iter().find(|&&i|tgl[i]==MEDIA_VFE_STATE_CMD).unwrap();
         expected[vfe+5]=0x04000000;
-        assert_eq!(tgl,expected,"all other commands, descriptors and payload bytes stay identical");
+        let mut normalized=tgl.clone();
+        if background {
+            let marker=background_marker_offset(&tgl).expect("TGL background observation");
+            let tgl_end=*offsets.last().unwrap()+1;
+            normalized.copy_within(marker+6..tgl_end,marker);
+            normalized[tgl_end-6..tgl_end].fill(0);
+        }
+        assert_eq!(normalized,expected,"all other commands, descriptors and payload bytes stay identical");
         let first_walker=*offsets.iter().find(|&&i|tgl[i]==GPGPU_WALKER_CMD).unwrap();
         assert_eq!(first_walker*4,0x10c,"known-mode entry removes7DWORDs from the prior TGL stream");
         // STATE_COMPUTE_MODE is masked: change only ForceNonCoherent bits4:3.
@@ -301,6 +308,62 @@ fn tgl_contract_changes_only_entry_sequence_compute_mode_and_vfe_urb() {
             let after=(old&!mask)|(write&mask);
             assert_eq!((after>>3)&3,2);
             assert_eq!(after&!mask,old&!mask);
+        }
+    }
+}
+
+fn background_marker_offset(batch:&[u32])->Option<usize> {
+    command_offsets(batch).into_iter().find(|&offset|
+        batch[offset]&0xffff0000==PIPE_CONTROL_CMD&0xffff0000
+        && batch[offset+1]&PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE!=0
+        && batch[offset+2]==0x08200000+(SPIRIT_VFX_BACKGROUND_COMPLETE_SLOT*4)as u32)
+}
+
+#[test]
+fn tgl_background_observation_follows_dependency_before_sprite_dispatch() {
+    super::physical(0x8086,0x9a49,1);
+    let batch=encoded(true);let offsets=command_offsets(&batch);
+    let marker=background_marker_offset(&batch).unwrap();
+    assert_eq!(SPIRIT_VFX_BACKGROUND_COMPLETE_SLOT,40);
+    assert_eq!(SPIRIT_VFX_BACKGROUND_COMPLETE_SLOT%2,0);
+    assert!(SPIRIT_VFX_BACKGROUND_COMPLETE_SLOT>SPIRIT_VFX_PRE_MARKER_SLOT);
+    assert_eq!(&batch[marker..marker+6],&[
+        PIPE_CONTROL_CMD,
+        PIPE_CONTROL_FLUSH_ENABLE|PIPE_CONTROL_CS_STALL|PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE,
+        0x08200000+40*4,0,0xc0de5f03,0,
+    ]);
+    let marker_position=offsets.iter().position(|&offset|offset==marker).unwrap();
+    let dependency=offsets[marker_position-1];
+    let media_flush=offsets[marker_position-2];
+    let background_walker=offsets[marker_position-3];
+    assert_eq!(batch[background_walker],GPGPU_WALKER_CMD);
+    assert_eq!(batch[background_walker+3],SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES as u32);
+    assert_eq!(batch[media_flush],MEDIA_STATE_FLUSH_CMD);
+    assert_eq!(batch[dependency],PIPE_CONTROL_CMD|PIPE_CONTROL_HDC_PIPELINE_FLUSH);
+    assert_eq!(batch[dependency+1],PIPE_CONTROL_INVALIDATE_BITS);
+    assert_eq!(dependency+6,marker);
+    let sprite_idd=offsets[marker_position+1];
+    assert_eq!(marker+6,sprite_idd);
+    assert_eq!(batch[sprite_idd],MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);
+    assert_eq!(batch[sprite_idd+3],SPIRIT_VFX_SPRITE_IDD_OFFSET_BYTES as u32);
+    assert_eq!(batch[offsets[marker_position+2]],GPGPU_WALKER_CMD);
+    let final_marker=offsets.iter().copied().find(|&offset|
+        batch[offset]&0xffff0000==PIPE_CONTROL_CMD&0xffff0000
+        && batch[offset+1]&PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE!=0
+        && batch[offset+2]==0x08200000+(SPIRIT_VFX_POST_MARKER_SLOT*4)as u32).unwrap();
+    assert_eq!(batch[final_marker+4],SPIRIT_VFX_POST_MARKER);
+    assert_eq!(batch[final_marker+5],0);
+}
+
+#[test]
+fn background_observation_is_absent_for_sprite_only_and_other_physical_targets() {
+    super::physical(0x8086,0x9a49,1);
+    assert!(background_marker_offset(&encoded(false)).is_none());
+    for (vendor,device,revision) in [(0x8086,0x4680,12),(0x8086,0xa780,4),
+        (0x8086,0x9a49,0),(0x8086,0x9a49,2),(0x1234,0x9a49,1)] {
+        super::physical(vendor,device,revision);
+        for background in [false,true] {
+            assert!(background_marker_offset(&encoded(background)).is_none());
         }
     }
 }

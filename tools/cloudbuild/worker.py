@@ -114,6 +114,8 @@ def process_one(store: Store, repository: Path, *, timeout=7200,
         backup = None
         published = False
         try:
+            if json.loads(job.get("destination") or "null") is not None:
+                raise ValueError("This request was authorized for a different build destination")
             manifest = validate_manifest(json.loads(job["manifest"]))
             if job["fingerprint"]:
                 with store.connect() as db:

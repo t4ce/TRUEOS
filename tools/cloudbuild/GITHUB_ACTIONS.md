@@ -31,6 +31,70 @@ key grants. Enabling `--allow-anonymous` permits unsigned requests subject to th
 existing queue and ingress limits. No visitor selects repositories, source refs,
 commands, environment variables or toolchains.
 
+## One key identity, two execution models
+
+The intended interface supports hosted builds and builds in the user's GitHub
+account. The existing operator-hosted route is implemented. Multi-account
+GitHub authorization, installation ownership checks and per-user dispatch are
+not enabled yet. Do not point the operator configuration at visitor-supplied
+repositories to imitate those missing checks.
+
+The SSH key proves possession and authorizes an exact request. It is independent
+of GitHub login, repository access, build provenance and permission to log into
+a running TRUEOS machine. A public key listed on GitHub is not proof that the
+current visitor controls its private half. Private SSH keys stay on the user's
+machine, and signing does not grant a runner access to the user's SSH agent.
+
+Actions challenges use schema `trueos-build-request/v2` and bind the execution
+destination as well as the existing origin, nonce, expiry, configuration and
+source. The destination includes the operator repository, workflow, ref and
+immutable dependency pins. Changing these requires a new challenge and SSH
+signature. Jobs retain that destination, and Actions rejects an unbound legacy
+job or one intended for another worker. The receipt records the destination.
+The local compiler worker rejects requests bound to Actions.
+
+GitHub App installation tokens are requested for one repository only, with
+Actions write and Contents read permissions. The adapter checks the returned
+repository and permission scope before using a token, even when an installation
+has broader repository access. No App private key or installation token enters
+the build workflow. The receipt issuer key is a separate secret.
+
+The required multi-account flow is:
+
+1. Authenticate the GitHub user through the App's authorization flow with
+   single-use state and a secure server-side session. Validate callback data.
+2. Confirm installation membership and access to the selected repository using
+   GitHub's APIs. Bind immutable user, installation and repository IDs; never
+   trust a callback installation ID or repository name by itself.
+3. Have the user prove the SSH key with a separate expiring, single-use
+   `github-link@trueos.eu` challenge binding those verified IDs. Linking, key
+   replacement, account changes and unlinking require explicit authentication.
+   Uninstalling the App revokes execution access but does not reassign key ownership.
+4. Resolve either an operator-hosted or verified user-owned execution target.
+   Display the destination before signing. The signed build challenge binds the
+   target IDs and source/workflow pins, preserving one key identity across both.
+5. Verify the actual artifact's trusted build provenance before issuing a
+   TRUEOS receipt. A key signature proves request authorization; a hash checks
+   integrity. Neither proves that an arbitrary user-controlled workflow built
+   the claimed image. User-account results need a pinned trusted builder and
+   verified attestations/identity policy before receiving an official receipt.
+
+Keep entitlement and execution provenance distinct in receipts. A self-built
+image must not acquire an official build claim merely by uploading matching
+JSON. Repositories, logs and artifacts follow the selected GitHub repository's
+visibility; personal linkage records, challenges and receipts stay private.
+
+Account/key unlinking blocks future requests. Existing signed offline receipts
+retain their recorded validity unless a verifier applies a separate revocation
+policy. Key loss must have a documented recovery policy; GitHub login alone must
+not silently replace an entitled SSH key. Neither execution model adds boot-time
+activation, hardware binding, server login access or copy protection.
+
+References: [OpenSSH signatures and namespaces](https://man.openbsd.org/ssh-keygen.1),
+[GitHub setup URL validation](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-setup-url),
+[installation token scope](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app),
+[artifact attestations](https://docs.github.com/en/actions/concepts/security/artifact-attestations).
+
 ## Prepare the approved source and GitHub App
 
 1. Commit and review the integrated sources. Publish the custom workflow on
