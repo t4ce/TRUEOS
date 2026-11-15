@@ -494,16 +494,6 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
                     push_visual_rect(&mut rects, span, color);
                 }
             }
-            let label = if reference { "ATTACH TO CODEX" } else { preview.map_or("AI ACCESS", |preview| {
-                super::input_broker::spirit_dock_label(preview.spirit_access_granted)
-            }) };
-            let text_width = (label.len() as u32).saturating_mul((microfont::FWIDTH * 2) as u32);
-            let text_x = (i64::from(circle.center_x) - i64::from(text_width / 2))
-                .clamp(0, i64::from(screen_w.saturating_sub(text_width))) as u32;
-            let text_y = (i64::from(circle.center_y) - i64::from((microfont::FHEIGHT + 8) as u32))
-                .clamp(0, i64::from(screen_h)) as u32;
-            push_microfont_menu_text(&mut rects, text_x, text_y, text_width.min(screen_w), label,
-                Rgba8::new(255, 255, 255, 255));
         }
     }
 

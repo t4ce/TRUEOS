@@ -103,9 +103,6 @@ define_started_flags!(
     TINYAUDIO_LIVE_HTTP_STARTED
 );
 
-#[cfg(feature = "trueos_ttstt")]
-define_started_flags!(TTSTT_CPU_SERVICE_STARTED, TTSTT_CAPTURE_WRITER_STARTED);
-
 #[cfg(feature = "legacy_vm_checkpoint")]
 define_started_flags!(HV_VM_STORE_STARTED, HV_VM_STORE_NET_STARTED);
 
@@ -309,20 +306,6 @@ fn microfont_warm_gate() -> bool {
     crate::r::readiness::is_set(crate::r::readiness::UI4_COMPOSITOR_READY)
         && (crate::virtio_gpu_logo::output_dimensions().is_some()
             || (crate::intel::guc_submission_ready() && crate::intel::render::warm_state().is_some()))
-}
-
-#[cfg(feature = "trueos_ttstt")]
-fn spawn_ttstt_cpu_service(spawner: Spawner) -> SpawnAttempt {
-    match crate::ai::ttstt_service::ensure_service_started(spawner) {
-        Ok(_) => SpawnAttempt::Spawned,
-        Err(error) => SpawnAttempt::Failed(error),
-    }
-}
-
-#[cfg(feature = "trueos_ttstt")]
-fn spawn_ttstt_capture_writer(spawner: Spawner) -> SpawnAttempt {
-    // TRUEOSFS futures are intentionally local to the BSP executor.
-    spawn_local(spawner, |_spawner| crate::ai::ttstt_capture::writer_task())
 }
 
 fn spawn_smp_hlt_history(spawner: Spawner) -> SpawnAttempt {
@@ -910,14 +893,6 @@ fn html_shack_gate() -> bool {
 }
 
 #[inline]
-#[cfg(feature = "trueos_ttstt")]
-fn ttstt_cpu_service_gate() -> bool {
-    crate::r::readiness::is_set(
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
-    )
-}
-
-#[inline]
 fn user_input_writer_gate() -> bool {
     crate::r::readiness::is_set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED)
 }
@@ -955,7 +930,6 @@ const BP_AUTOSTART_READY: u32 =
 // cannot be promoted behind a shared slice reference.
 const TASK_COUNT: usize = 65
     + cfg!(feature = "trueos_h264_encode_stream") as usize
-    + 2 * cfg!(feature = "trueos_ttstt") as usize
     + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
@@ -1006,22 +980,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         microfont_warm_gate,
         &MICROFONT_WARM_STARTED,
         spawn_microfont_warm,
-    ),
-    #[cfg(feature = "trueos_ttstt")]
-    TaskSpec::configured_gated(
-        crate::allcaps::ttstt::BOOT_RESIDENT_WARM_ENABLED,
-        "ttstt-cpu-service",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        ttstt_cpu_service_gate,
-        &TTSTT_CPU_SERVICE_STARTED,
-        spawn_ttstt_cpu_service,
-    ),
-    #[cfg(feature = "trueos_ttstt")]
-    TaskSpec::enabled(
-        "ttstt-capture-writer",
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
-        &TTSTT_CAPTURE_WRITER_STARTED,
-        spawn_ttstt_capture_writer,
     ),
     TaskSpec::enabled("smp-hlt-history", 0, &SMP_HLT_HISTORY_STARTED, spawn_smp_hlt_history),
     TaskSpec::enabled("ram-usage-history", 0, &RAM_USAGE_HISTORY_STARTED, spawn_ram_usage_history),

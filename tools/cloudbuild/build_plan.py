@@ -188,8 +188,6 @@ def resolve_request(request: dict[str, Any], source_commit: str) -> dict[str, An
         )
     if selected["igpu"] and selected["virgl"]:
         warnings.append("A claimed supported Intel GPU takes precedence over the Virgl fallback.")
-    if selected["speech"]:
-        warnings.append("Experimental speech needs separately provisioned runtime model assets.")
     return {
         **identity,
         "config_hash": hashlib.sha256(canonical_bytes(identity)).hexdigest(),

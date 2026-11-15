@@ -27,10 +27,9 @@ pub(crate) fn spirit_text_present_silent(turn: u64, text: &[u8]) -> i32 {
         return ERROR_UNAVAILABLE;
     }
 
-    #[cfg(not(feature = "trueos_ttstt"))]
     crate::log_info!(
         target: "r";
-        "spirit: voice unavailable reason=ttstt-feature-disabled text_presentation=retained\n"
+        "spirit: voice unavailable reason=tts-owned-by-blueprint text_presentation=retained\n"
     );
     0
 }

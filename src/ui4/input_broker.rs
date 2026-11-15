@@ -3911,10 +3911,6 @@ const fn dock_target_label(target: super::WindowDockTarget) -> &'static str {
     }
 }
 
-pub(super) const fn spirit_dock_label(granted: bool) -> &'static str {
-    if granted { "REVOKE AI" } else { "ALLOW AI" }
-}
-
 fn translated_frame_placement(
     mut placement: WindowPlacement,
     dx: i32,

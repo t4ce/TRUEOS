@@ -31,7 +31,6 @@ progress or a fabricated download.
 | H.264 streaming | Selects the existing streaming Cargo feature; requires iGPU. |
 | Native GPGPU | Selects the existing Odin native compute feature; requires iGPU. |
 | Task profiling | Selects the existing task profiling feature. |
-| Experimental speech | Selects the existing speech feature; runtime models are separate. |
 
 USB/iGPU/Virgl are **device initialization gates**. Shared interfaces and driver
 code remain compiled. This does not establish full binary pruning, measured

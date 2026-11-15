@@ -1,5 +1,7 @@
 # TRUEOS driver and application services
 
+> Speech migration (2026-11-15): Kokoro and TTSTT CPU crates, inference and model residency now belong to `TRUEOS-Blueprints/apps/ttstt`. The `trueos_ttstt` kernel feature and its registry tasks were removed. TTSTT entries below describe the earlier audit snapshot; archived kernel modules are uncompiled migration references under that Blueprint’s `legacy/` directory.
+
 [Overview](runtime-inventory.md) · [Task declarations](runtime-task-index.md)
 
 This inventory covers `src/**` outside the runtime/service layer `src/r/**`, workers, chronos, spirit and core SMP/executor machinery, which are described in other sections. All declarations below are repository-owned; vendor implementation bodies were not searched. There are **84 task-attribute declarations in this source slice: 83 kernel-source declarations plus one uncompiled turbo reference overlay**. Attribute-less service loops and resource pools follow the task table. Source references identify the declaration attribute line; function definition follows it.

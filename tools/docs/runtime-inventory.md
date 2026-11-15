@@ -1,5 +1,7 @@
 # TRUEOS services tasks and pools
 
+> Speech migration (2026-11-15): Kokoro and TTSTT CPU crates, inference and model residency now belong to `TRUEOS-Blueprints/apps/ttstt`. The `trueos_ttstt` kernel feature and its registry tasks were removed. TTSTT entries below describe the earlier audit snapshot; archived kernel modules are uncompiled migration references under that Blueprint’s `legacy/` directory.
+
 TRUEOS runs per-CPU executors, a readiness-gated boot registry, and request-driven tasks for devices, commands, guests, and compute work. **No local LLM inference service is wired into the kernel.** Spirit remains integrated with Codex; TTSTT/Kokoro is the optional speech path for future voice/text work.
 
 Updated 2 November 2026 after [runtime retirement](runtime-retirement.md). Scope is the root kernel, `src/**`, and repository-owned `crates/**`, excluding vendor. The kernel entry is [src/main.rs](../../src/main.rs); there is no separate `kernel/` directory.

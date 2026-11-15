@@ -1,5 +1,7 @@
 # TRUEOS crate services tasks and pools
 
+> Speech migration (2026-11-15): Kokoro and TTSTT CPU crates, inference and model residency now belong to `TRUEOS-Blueprints/apps/ttstt`. The `trueos_ttstt` kernel feature and its registry tasks were removed. TTSTT entries below describe the earlier audit snapshot; archived kernel modules are uncompiled migration references under that Blueprint’s `legacy/` directory.
+
 [Overview](runtime-inventory.md) · [Task declarations](runtime-task-index.md)
 
 Audit scope: `crates/**`, excluding vendor. Evidence is source reachability, not proof that a machine has executed the route. [Cargo.toml:13](../../Cargo.toml#L13) lists 34 crate packages; `trueos-graphics` and `trueos-shader` are additional source directories without Cargo packages. The root default features are `trueos_h264_encode_stream`, `trueos_task_profile`, and `odin-native-gpgpu` ([Cargo.toml:86](../../Cargo.toml#L86)). TTSTT is opt-in; local Lumen inference is retired. LFM CPU/model packages remain workspace libraries for offline development, without kernel dependencies or workers.

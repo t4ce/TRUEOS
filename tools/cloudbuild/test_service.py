@@ -179,7 +179,7 @@ class ServiceSecurityTests(unittest.TestCase):
             job = self.submit(challenge)
             self.assertEqual("buildins" in job["manifest"]["features"], buildins)
         # Packaging cannot authorize a previously ungranted kernel feature.
-        challenge = self.challenge(request={"preset": "qemu-virgl", "features": {"buildins": False, "speech": True}})
+        challenge = self.challenge(request={"preset": "qemu-virgl", "features": {"buildins": False, "igpu": True}})
         self.assert_api_error(403, self.submit, challenge)
 
     def test_exact_app_set_is_bound_to_challenge_job_and_signed_receipt(self):

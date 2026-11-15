@@ -86,14 +86,6 @@ pub mod gfx {
     pub const SCREENSHOT_CAPTURE_ENABLED: bool = false;
 }
 
-
-#[cfg(feature = "trueos_ttstt")]
-pub mod ttstt {
-    /// Keep the service available for command-driven lazy startup without
-    /// reading the complete model set during normal BSP boot.
-    pub const BOOT_RESIDENT_WARM_ENABLED: bool = false;
-}
-
 pub mod media_encode {
     // Single source of truth for stream pacing and AVC SPS VUI timing.
     // The encoder currently validates the 40, 50 and 60 Hz operating points.
@@ -177,7 +169,6 @@ pub mod net {
     // immediate follow-up so this cap does not throttle active RX/TX drains.
     pub const NET_POLL_IDLE_SOFTCAP_MS: u64 = 5;
     pub const NET_SERVICE_SLEEP_US: u64 = 100;
-
 
     pub const DNS_SERVER_MAX: usize = 4;
     pub const IPV6_RS_RETRY_MS: i64 = 5_000;

@@ -53,13 +53,6 @@
       "description": "Build executor task profiling and diagnostics.",
       "cargo_feature": "trueos_task_profile",
       "requires": []
-    },
-    {
-      "id": "speech",
-      "label": "Experimental speech",
-      "description": "Build the optional CPU speech and Kokoro services; runtime model assets are still required.",
-      "cargo_feature": "trueos_ttstt",
-      "requires": []
     }
   ],
   "buildins_source": {

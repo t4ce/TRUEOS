@@ -1,5 +1,7 @@
 # TRUEOS kernel services tasks and pools
 
+> Speech migration (2026-11-15): Kokoro and TTSTT CPU crates, inference and model residency now belong to `TRUEOS-Blueprints/apps/ttstt`. The `trueos_ttstt` kernel feature and its registry tasks were removed. TTSTT entries below describe the earlier audit snapshot; archived kernel modules are uncompiled migration references under that Blueprint’s `legacy/` directory.
+
 [Overview](runtime-inventory.md) · [Task declarations](runtime-task-index.md)
 
 Updated after the 2026-11-02 runtime cleanup. No boot or runtime trace collected. Paths below are repository-relative. **Boot-wired** means a source path exists from `_start`/`kmain`; **conditional** adds a feature, readiness, hardware, topology, or policy gate; **on-demand** means an API/event must submit work; **disabled** means an explicit startup switch prevents the registry from invoking it. Allocation and execution can still fail. These states do not prove a service is currently running.

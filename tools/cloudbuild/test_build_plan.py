@@ -65,7 +65,12 @@ class BuildPlanTests(unittest.TestCase):
                     self.assertEqual(plan["features"], sorted(key for key, value in overrides.items() if value))
                     self.assertEqual(build_plan.validate_manifest(plan, self.COMMIT), plan)
                     accepted += 1
-        self.assertEqual((accepted, rejected), (160, 96))
+        self.assertEqual((accepted, rejected), (80, 48))
+
+    def test_speech_is_an_on_demand_blueprint_not_a_kernel_feature(self):
+        self.assertNotIn("speech", self.ids)
+        with self.assertRaises(ValueError):
+            build_plan.resolve_request({"features": {"speech": True}}, self.COMMIT)
 
     def test_kernel_only_changes_app_payload_and_hash_without_removing_capabilities(self):
         normal = build_plan.resolve_request({}, self.COMMIT)

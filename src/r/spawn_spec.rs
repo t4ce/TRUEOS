@@ -55,25 +55,6 @@ impl TaskSpec {
         }
     }
 
-    #[cfg(feature = "trueos_ttstt")]
-    pub(super) const fn configured_gated(
-        enabled: bool,
-        name: &'static str,
-        required: u32,
-        gate: fn() -> bool,
-        started: &'static AtomicBool,
-        spawn: fn(Spawner) -> SpawnAttempt,
-    ) -> Self {
-        Self {
-            name,
-            disabled: AtomicBool::new(!enabled),
-            required,
-            gate,
-            started,
-            spawn,
-        }
-    }
-
     pub(super) const fn disabled(
         name: &'static str,
         required: u32,
