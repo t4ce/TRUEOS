@@ -45,6 +45,15 @@ This enormous effort enables us to enjoy that privilege of intelligence, and tha
 >
 > Both are legitimate. Advancing the VirGL encoder would be a quick, iterative job, but the author has already built the native Intel stack, so that path is open for anyone who wants it. Mesa and Vulkan are powerful stacks, and someone dedicated to figuring them out for QEMU is welcome: we take that.
 
+<h1 align="center">BUILD THE KERNEL YOUR WAY.</h1>
+
+<p align="center"><strong>TRUEOS · VARIES IN MB BUNDLE · YOUR KERNEL · SAY YES OR NO TO THE DESKTOP</strong></p>
+
+<p align="center"><a href="https://trueos.eu/build/"><img src="docs/assets/trueos-cloudbuild-preview.gif" width="840" alt="Live TRUEOS Cloud Build selector: choose presets, toggle subsystems, select bundled apps, or choose none"></a></p>
+<p align="center"><sub>Recorded from the live selector · <a href="https://trueos.eu/build/">Customize your build at trueos.eu/build</a></sub></p>
+
+Choose a preset, toggle subsystems, and select the apps bundled at first boot—including none. Bundle size varies with your selection; subsystem switches currently control initialization rather than removing every driver byte.
+
 ## § PREFACE: KNOWLEDGE WE BUILD ON
 
 Knowledge grows as people pass on what they have learned, and each generation adds to it. Software and language models are part of that continuing exchange, built from the work of people who wrote, tested, taught, and shared what they knew. TRUEOS builds on that work too.

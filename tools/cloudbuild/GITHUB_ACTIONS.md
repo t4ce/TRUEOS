@@ -242,6 +242,22 @@ archives promptly; the API copy then follows the operator's retention policy.
 There is currently no shared artifact cache, automatic build retry or automatic
 API archive deletion. Per-person receipts remain separate from build inputs.
 
+## First live hosted test: 2026-11-15
+
+The dedicated TRUEOS GitHub App successfully dispatched and collected a real
+[kernel-only build](https://github.com/t4ce/TRUEOS/actions/runs/43653888949)
+from `t4ce/TRUEOS` at `f991e43bd07604a7e896d8332afe38900822b4c0`.
+The HTTP challenge/SSH proof, repository-scoped App authentication, source and
+compiler checks, Actions ZIP digest, manifest/provenance checks, authenticated
+HTTP artifact download and a separate test-issuer receipt were verified.
+The compressed archive is 15,237,718 bytes; its SHA-256 is
+`506eb76d76ac80326f4d2211986e88831f45914b97f262c1e35bffc6b444edbc`.
+Bounded decompression confirmed the 22,441,296-byte ELF64 kernel, UEFI loader
+and GPU firmware. This test used dedicated test subject/issuer keys. It does
+not establish bootability, production receipt trust, multi-account OAuth, or
+public Fedora deployment. See the machine-readable
+[verification record](validation/live-hosted-2026-11-15.json).
+
 ## Validation before public launch
 
 ```sh

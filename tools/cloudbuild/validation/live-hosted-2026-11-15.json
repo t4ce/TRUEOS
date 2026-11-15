@@ -1,0 +1,56 @@
+{
+  "run_url": "https://github.com/t4ce/TRUEOS/actions/runs/43653888949",
+  "source_commit": "f991e43bd07604a7e896d8332afe38900822b4c0",
+  "pins": {
+    "blueprints": "b1ecb7e9fd6e76d317bcfaff45c88162205b8059",
+    "toolchain": "c399451b5455a61f58936c9080cf96f5ad4cb7ef"
+  },
+  "preset": "kernel-only",
+  "buildins": [],
+  "artifact_size": 15237718,
+  "artifact_sha256": "506eb76d76ac80326f4d2211986e88831f45914b97f262c1e35bffc6b444edbc",
+  "kernel_elf_size": 22441296,
+  "archive_members": [
+    {
+      "name": "TRUEOS.elf",
+      "size": 22441296
+    },
+    {
+      "name": "EFI/BOOT/BOOTX64.EFI",
+      "size": 102912
+    },
+    {
+      "name": "EFI/BOOT/tgl_guc_70.bin",
+      "size": 335360
+    }
+  ],
+  "checks": [
+    "App authentication and repository scope",
+    "HTTP challenge and SSH proof",
+    "real Actions build",
+    "verified manifest and provenance",
+    "GitHub artifact digest",
+    "authenticated HTTP download",
+    "test issuer receipt signature and subject/destination/hash binding",
+    "bounded LZ4 decode and archive members",
+    "ELF64 kernel and PE bootloader"
+  ],
+  "test_issuer_only": true,
+  "boot_tested": false,
+  "sources": {
+    "blueprints": {
+      "commit": "b1ecb7e9fd6e76d317bcfaff45c88162205b8059",
+      "repository": "t4ce/TRUEOS-Blueprints"
+    },
+    "toolchain": {
+      "commit": "c399451b5455a61f58936c9080cf96f5ad4cb7ef",
+      "repository": "t4ce/TRUEOS-Rust-Toolchain-nightly-2026-07-10"
+    },
+    "trueos": {
+      "commit": "f991e43bd07604a7e896d8332afe38900822b4c0",
+      "repository": "t4ce/TRUEOS"
+    }
+  },
+  "date": "2026-11-15",
+  "execution": "operator-hosted repository through the dedicated GitHub App; no multi-account OAuth exercised"
+}
