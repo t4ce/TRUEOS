@@ -16,16 +16,6 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 use log_os_core::LogLevel;
 
-const BLUEPRINT_AUDIO_LOG_SAMPLE_EVERY: u32 = 1_000;
-
-static BLUEPRINT_AUDIO_WRITE_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
-static BLUEPRINT_AUDIO_POLL_LOG_SEQ: AtomicU32 = AtomicU32::new(0);
-
-fn sampled_log(counter: &AtomicU32) -> bool {
-    counter.fetch_add(1, Ordering::Relaxed) % BLUEPRINT_AUDIO_LOG_SAMPLE_EVERY == 0
-}
-
-
 fn vm_has_trueosfs_scope(vm_id: u8) -> bool {
     crate::hv::blueprint_process_env_var(vm_id, "TRUEOS_FS_SCOPE").as_deref() == Some("trueosfs")
 }
@@ -382,14 +372,7 @@ pub const OP_BP_EXIT_REASON: u32 = 0xA0; // payload utf8-ish reason string for l
 pub const OP_BP_SHELL_KONSOLE_BEGIN_FRAME: u32 = 0xA1; // arg cols/rows+flags -> resize shell terminal
 pub const OP_BP_SHUTDOWN: u32 = 0xA2; // payload utf8-ish reason, stop current blueprint VM
 pub const OP_BP_RETURN_TO_CLI: u32 = 0xA3; // release rich terminal back to the launching shell2
-pub const OP_BP_AUDIO_WRITE_I16_STEREO_48K: u32 = 0x9A; // payload i16 stereo 48k bytes -> frames/rc
-pub const OP_BP_AUDIO_STOP: u32 = 0x9B; // stop host overlay lane
-pub const OP_BP_AUDIO_PENDING_FRAMES: u32 = 0x9C; // response is host overlay pending frames
-pub const OP_BP_AUDIO_SET_VOLUME_PERCENT: u32 = 0x9D; // arg0 percent -> applied percent
-pub const OP_BP_AUDIO_VOLUME_PERCENT: u32 = 0x9E; // response is host overlay volume percent
-// 0x152..=0x154 are retired native scheduled-audio opcodes; do not reuse.
-/// Read-only host HDA endpoint capability snapshot (response payload V1).
-pub const OP_BP_AUDIO_ENDPOINT_CAPS_V1: u32 = 0x156;
+// 0x9A..=0x9E, 0x152..=0x154 and 0x156 are retired audio opcodes; do not reuse.
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35; // arg0 domain/type, arg1 protocol -> socket/rc
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36; // arg0 socket -> rc
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37; // arg0 socket, arg1 bool -> rc
@@ -4756,145 +4739,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 Ok(snapshot) => write_record_response(vm_id, seq, 0, &snapshot),
                 Err(error) => write_response(vm_id, seq, STATUS_BAD_ARG, error.code(), 0),
             }
-            DispatchOutcome::Resume
-        }
-        OP_BP_AUDIO_WRITE_I16_STEREO_48K => {
-            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
-            if n == 0 || (n & 1) != 0 {
-                crate::log_warn!(
-                    target: "audio";
-                    "blueprint-audio-vmcall: vm={} bad-len bytes={} req_len={}\n",
-                    vm_id,
-                    n,
-                    req_len
-                );
-                write_response(vm_id, seq, STATUS_OK, (-22i64) as u64, 0);
-                return DispatchOutcome::Resume;
-            }
-            let Some(p) = host_ptr(vm_id) else {
-                crate::log_error!(
-                    target: "audio";
-                    "blueprint-audio-vmcall: vm={} missing-host-ptr bytes={}\n",
-                    vm_id,
-                    n
-                );
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let data = unsafe { &(&(*p).payload)[..n] };
-            let mut samples = Vec::with_capacity(n / 2);
-            for bytes in data.chunks_exact(2) {
-                samples.push(i16::from_le_bytes([bytes[0], bytes[1]]));
-            }
-            let log_sample = sampled_log(&BLUEPRINT_AUDIO_WRITE_LOG_SEQ);
-            if log_sample {
-                crate::log_trace!(
-                    target: "audio";
-                    "blueprint-audio-vmcall: vm={} write bytes={} samples={} frames={} pending_before={}\n",
-                    vm_id,
-                    n,
-                    samples.len(),
-                    samples.len() / crate::hda::PCM_CHANNELS,
-                    crate::aud::pcm_lane::pending_frames()
-                );
-                crate::audio_probe!(
-                    "blueprint-audio-vmcall: vm={} write bytes={} samples={} frames={} pending_before={}\n",
-                    vm_id,
-                    n,
-                    samples.len(),
-                    samples.len() / crate::hda::PCM_CHANNELS,
-                    crate::aud::pcm_lane::pending_frames()
-                );
-            }
-            let rc = match crate::aud::pcm_lane::submit_i16_stereo_48k(
-                "blueprint-audio-vmcall",
-                samples,
-            ) {
-                Ok(frames) => frames as i64,
-                Err(crate::aud::pcm_lane::PcmLaneError::QueueFull) => -16,
-                Err(crate::aud::pcm_lane::PcmLaneError::BadShape) => -22,
-                Err(crate::aud::pcm_lane::PcmLaneError::EmptyBuffer) => -5,
-            };
-            if log_sample {
-                crate::log_trace!(
-                    target: "audio";
-                    "blueprint-audio-vmcall: vm={} write-rc={} pending_after={}\n",
-                    vm_id,
-                    rc,
-                    crate::aud::pcm_lane::pending_frames()
-                );
-                crate::audio_probe!(
-                    "blueprint-audio-vmcall: vm={} write-rc={} pending_after={}\n",
-                    vm_id,
-                    rc,
-                    crate::aud::pcm_lane::pending_frames()
-                );
-            }
-            write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_AUDIO_ENDPOINT_CAPS_V1 => {
-            if req_len != 0 || arg0 != 0 || arg1 != 0 {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-            } else {
-                let caps = crate::hda::endpoint_capabilities_v1();
-                write_record_response(vm_id, seq, 0, &caps);
-            }
-            DispatchOutcome::Resume
-        }
-        OP_BP_AUDIO_STOP => {
-            let generation = crate::aud::pcm_lane::request_stop();
-            crate::log_info!(
-                target: "audio";
-                "blueprint-audio-vmcall: vm={} stop generation={}\n",
-                vm_id,
-                generation
-            );
-            crate::audio_probe!(
-                "blueprint-audio-vmcall: vm={} stop generation={}\n",
-                vm_id,
-                generation
-            );
-            write_response(vm_id, seq, STATUS_OK, generation as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_AUDIO_PENDING_FRAMES => {
-            let frames = crate::aud::pcm_lane::pending_frames();
-            if sampled_log(&BLUEPRINT_AUDIO_POLL_LOG_SEQ) {
-                crate::log_trace!(
-                    target: "audio";
-                    "blueprint-audio-vmcall: vm={} pending frames={}\n",
-                    vm_id,
-                    frames
-                );
-            }
-            write_response(vm_id, seq, STATUS_OK, frames as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_AUDIO_SET_VOLUME_PERCENT => {
-            let requested = (arg0 as u32).min(100);
-            let applied = crate::aud::pcm_lane::set_volume_percent(requested as u16);
-            crate::log_info!(
-                target: "audio";
-                "blueprint-audio-vmcall: vm={} set-volume requested={} applied={}\n",
-                vm_id,
-                requested,
-                applied
-            );
-            write_response(vm_id, seq, STATUS_OK, applied as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_AUDIO_VOLUME_PERCENT => {
-            let percent = crate::aud::pcm_lane::volume_percent();
-            if sampled_log(&BLUEPRINT_AUDIO_POLL_LOG_SEQ) {
-                crate::log_trace!(
-                    target: "audio";
-                    "blueprint-audio-vmcall: vm={} volume percent={}\n",
-                    vm_id,
-                    percent
-                );
-            }
-            write_response(vm_id, seq, STATUS_OK, percent as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_SHELL_ATTACHED_READ_BYTE => {

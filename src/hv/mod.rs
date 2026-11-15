@@ -648,9 +648,7 @@ pub enum VmBootMode {
 #[derive(Copy, Clone)]
 enum BlueprintMemoryClass {
     RamAssets,
-    SpeechInference,
     TokioRuntime,
-    AudioPlayer,
     NetworkClient,
     NetworkServer,
     ServerRuntime,
@@ -662,9 +660,7 @@ impl BlueprintMemoryClass {
     const fn label(self) -> &'static str {
         match self {
             Self::RamAssets => "ram-assets",
-            Self::SpeechInference => "speech-inference",
             Self::TokioRuntime => "tokio-runtime",
-            Self::AudioPlayer => "audio-player",
             Self::NetworkClient => "network-client",
             Self::NetworkServer => "network-server",
             Self::ServerRuntime => "server-runtime",
@@ -2946,24 +2942,6 @@ fn classify_blueprint_memory(
         return BlueprintMemoryClass::RamAssets;
     }
 
-    // The self-contained speech service retains its packed Blueprint, unpacked
-    // ELF and relocated model image in the guest heap before inference starts.
-    // Its audio imports must not place it in the small playback-only budget.
-    if archive.strip_suffix(".bp").unwrap_or(archive) == "ttstt" {
-        return BlueprintMemoryClass::SpeechInference;
-    }
-
-    let audio_player_signal = archive_has(archive, "scope-tui")
-        || archive_has(archive, "scope_tui")
-        || archive_has(archive, "aud-player-scope-tui")
-        || archive_has(archive, "aud_player_scope_tui")
-        || import_name_has(imports, "trueos_cabi_audio_")
-        || import_name_has(imports, "audio_open_playback")
-        || import_name_has(imports, "audio_write_i16");
-    if audio_player_signal {
-        return BlueprintMemoryClass::AudioPlayer;
-    }
-
     let network_server_signal = archive_has(archive, "server")
         || import_name_has(imports, "trueos_mio_tcp_listener_")
         || import_name_has(imports, "tcp_listener")
@@ -3053,23 +3031,9 @@ fn blueprint_memory_profile_for(
             // and new backing buffers overlap during growth. Reserve room for
             // the full import; do not accept the former 1 GiB server budget.
             BlueprintMemoryClass::RamAssets => (3072, 3072, 3072, 16, 32, 128),
-            // The embedded English/Heart image needs ~350 MiB across packed,
-            // unpacked and relocated representations. F<=1024 synthesis then
-            // needs up to ~630 MiB of arena plus G2P indexes and workspaces.
-            // Require the full 2 GiB budget: falling back to the playback
-            // profile's 128/256 MiB cannot even relocate the model image.
-            BlueprintMemoryClass::SpeechInference => (2048, 2048, 2048, 16, 32, 128),
             BlueprintMemoryClass::TokioRuntime => (
                 64,
                 round_pow2_mib(base_live_mib.saturating_mul(12).saturating_add(64)).max(128),
-                256,
-                8,
-                16,
-                64,
-            ),
-            BlueprintMemoryClass::AudioPlayer => (
-                128,
-                round_pow2_mib(base_live_mib.saturating_mul(24).saturating_add(128)).max(256),
                 256,
                 8,
                 16,

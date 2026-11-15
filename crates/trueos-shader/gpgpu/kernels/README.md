@@ -54,7 +54,6 @@ compiler and ABI boundary.
 Focused design notes remain beside their sources:
 
 - [CPP_DEMO_SUITE.md](CPP_DEMO_SUITE.md)
-- [CPP_AUDIO_VISUALIZER.md](CPP_AUDIO_VISUALIZER.md)
 - [PARTICLE_CRAFT.md](PARTICLE_CRAFT.md)
 - [SPIRIT_CPP_REPASS.md](SPIRIT_CPP_REPASS.md)
 - [LAB256_MULTIPHASE_EXPLORE.md](LAB256_MULTIPHASE_EXPLORE.md)

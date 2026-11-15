@@ -1,10 +1,10 @@
 //! USB MIDI support.
 
 use core::cmp::min;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crab_usb::Device;
-use heapless::{Deque, Vec};
+use heapless::Vec;
 use spin::Mutex;
 use trueos_executor::Spawner;
 use trueos_time::{Duration as EmbassyDuration, Timer};
@@ -13,15 +13,10 @@ use super::super::api::{InterfaceEndpointError, claim_interface};
 
 const USB_CLASS_AUDIO: u8 = 0x01;
 const USB_SUBCLASS_MIDISTREAMING: u8 = 0x03;
-const PIANO_QUEUE_PKTS: usize = 512;
 const MIDI_INPUT_EVENTS: usize = 256;
-const MIDI_IDLE_SLEEP_MS: u64 = 25;
 const MIDI_READ_TIMEOUT_MS: u64 = 1000;
 const MAX_ACTIVE_MIDI_STREAMS: usize = 8;
 const PIANO_HELD_MAX_NOTES: usize = 8;
-const PIANO_DRAIN_DIRECT_AUDIO_ENABLED: bool = false;
-const PIANO_AUDIBLE_MIN_MS: u32 = 45;
-const PIANO_AUDIBLE_VEL_MS: u32 = 180;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum MidiAdapterKind {
@@ -145,9 +140,6 @@ static PIANO_LAST_HEARTBEAT_SECS: AtomicU64 = AtomicU64::new(u64::MAX);
 static PIANO_NOTE_SEQ: AtomicU32 = AtomicU32::new(0);
 static PIANO_LAST_NOTE: AtomicU32 = AtomicU32::new(0);
 static PIANO_HELD: Mutex<PianoHeldState> = Mutex::new(PianoHeldState::empty());
-static PIANO_AUDIO_ERRS: AtomicU32 = AtomicU32::new(0);
-static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
-static PIANO_QUEUE: Mutex<Deque<[u8; 4], PIANO_QUEUE_PKTS>> = Mutex::new(Deque::new());
 static MIDI_INPUT_RING: Mutex<MidiInputRing> = Mutex::new(MidiInputRing::new());
 
 /// Copy note edges newer than `read_seq`. The ring never consumes events, so
@@ -214,14 +206,6 @@ fn is_active_sensing_heartbeat(pkt: &[u8; 4]) -> bool {
     (pkt[0] & 0x0F) == 0x0F && pkt[1] == 0xFE && pkt[2] == 0 && pkt[3] == 0
 }
 
-#[inline]
-fn secs_to_hms(secs: u64) -> (u64, u64, u64) {
-    let s = secs % 60;
-    let m = (secs / 60) % 60;
-    let h = (secs / 3600) % 24;
-    (h, m, s)
-}
-
 fn piano_set_connected(controller_id: u32, slot_id: u32) {
     PIANO_CONTROLLER.store(controller_id, Ordering::Release);
     PIANO_SLOT.store(slot_id, Ordering::Release);
@@ -236,8 +220,6 @@ fn piano_set_disconnected(controller_id: u32, slot_id: u32) {
         PIANO_LAST_HEARTBEAT_SECS.store(u64::MAX, Ordering::Release);
         PIANO_LAST_NOTE.store(0, Ordering::Release);
         *PIANO_HELD.lock() = PianoHeldState::empty();
-        let mut q = PIANO_QUEUE.lock();
-        while q.pop_front().is_some() {}
     }
 }
 
@@ -316,34 +298,6 @@ pub(crate) fn piano_connected() -> bool {
     PIANO_SLOT.load(Ordering::Acquire) != 0
 }
 
-fn maybe_start_piano_drain(spawner: &Spawner) {
-    if PIANO_DRAIN_STARTED
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return;
-    }
-
-    match piano_drain_loop() {
-        Ok(token) => {
-            spawner.spawn(token);
-            crate::log!("piano: drain loop started\n");
-        }
-        Err(err) => {
-            PIANO_DRAIN_STARTED.store(false, Ordering::Release);
-            crate::log!("piano: drain loop token failed: {:?}\n", err);
-        }
-    }
-}
-
-fn piano_push_packet(pkt: [u8; 4]) {
-    let mut q = PIANO_QUEUE.lock();
-    if q.push_back(pkt).is_err() {
-        let _ = q.pop_front();
-        let _ = q.push_back(pkt);
-    }
-}
-
 #[inline]
 fn midi_note_on_from_packet(pkt: &[u8; 4]) -> Option<(u8, u8)> {
     let cin = pkt[0] & 0x0F;
@@ -364,63 +318,6 @@ fn midi_note_off_from_packet(pkt: &[u8; 4]) -> Option<u8> {
     } else {
         None
     }
-}
-
-fn piano_play_packet(pkt: [u8; 4]) {
-    let Some((note, velocity)) = midi_note_on_from_packet(&pkt) else {
-        return;
-    };
-
-    let duration_ms = PIANO_AUDIBLE_MIN_MS + (u32::from(velocity) * PIANO_AUDIBLE_VEL_MS / 127);
-    if let Err(err) = crate::aud::play_midi_note(note, velocity, duration_ms) {
-        let n = PIANO_AUDIO_ERRS
-            .fetch_add(1, Ordering::AcqRel)
-            .wrapping_add(1);
-        if n <= 4 {
-            crate::log!("piano: audible note failed err={}\n", err);
-        }
-    }
-}
-
-#[trueos_executor::task]
-pub async fn piano_drain_loop() {
-    async move {
-        loop {
-            let slot = PIANO_SLOT.load(Ordering::Acquire);
-            if slot == 0 {
-                Timer::after(EmbassyDuration::from_millis(MIDI_IDLE_SLEEP_MS)).await;
-                continue;
-            }
-
-            let pkt_opt = { PIANO_QUEUE.lock().pop_front() };
-            let Some(pkt) = pkt_opt else {
-                Timer::after(EmbassyDuration::from_millis(MIDI_IDLE_SLEEP_MS)).await;
-                continue;
-            };
-
-            let hb = PIANO_LAST_HEARTBEAT_SECS.load(Ordering::Acquire);
-            if hb == u64::MAX {
-                crate::log!("piano: --:--:-- ~ {}.{}.{}.{}\n", pkt[0], pkt[1], pkt[2], pkt[3]);
-            } else {
-                let (h, m, s) = secs_to_hms(hb);
-                crate::log!(
-                    "piano: {:02}:{:02}:{:02} ~ {}.{}.{}.{}\n",
-                    h,
-                    m,
-                    s,
-                    pkt[0],
-                    pkt[1],
-                    pkt[2],
-                    pkt[3]
-                );
-            }
-
-            if PIANO_DRAIN_DIRECT_AUDIO_ENABLED {
-                piano_play_packet(pkt);
-            }
-        }
-    }
-    .await;
 }
 
 fn register_active_midi_stream(stream: ActiveMidiStream) -> bool {
@@ -517,7 +414,6 @@ fn handle_midi_packets(adapter: MidiAdapterKind, controller_id: u32, slot_id: u3
                 piano_record_held_note_off(note);
                 push_input_event(controller_id, slot_id, &pkt, note, 0, false);
             }
-            piano_push_packet(pkt);
         } else if let Some((note, velocity)) = midi_note_on_from_packet(&pkt) {
             push_input_event(controller_id, slot_id, &pkt, note, velocity, true);
         } else if let Some(note) = midi_note_off_from_packet(&pkt) {
@@ -718,7 +614,6 @@ pub(crate) async fn maybe_start_midi(
         return false;
     };
 
-    maybe_start_piano_drain(spawner);
 
     let device = match host.open_device(dev_info).await {
         Ok(device) => device,

@@ -4,7 +4,6 @@ pub(crate) struct ShaderToyRuntimeState {
     selected: u32,
     seed: u32,
     extent: (u32, u32),
-    audio: Option<crate::aud::audio_visualizer::AudioVisualizerSubscription>,
     particles: Option<GpgpuOwnedParticleCraftState>,
     particles_need_reset: bool,
     brush: CppCloudBrush,
@@ -12,16 +11,13 @@ pub(crate) struct ShaderToyRuntimeState {
 }
 
 impl ShaderToyRuntimeState {
-    pub(crate) fn stop_audio(&mut self) {
-        self.audio = None;
-    }
+
 
     pub(crate) const fn new(seed: u32) -> Self {
         Self {
             selected: 0,
             seed,
             extent: (0, 0),
-            audio: None,
             particles: None,
             particles_need_reset: true,
             brush: CppCloudBrush::new(),
@@ -46,7 +42,6 @@ impl ShaderToyRuntimeState {
             return GpgpuRgba8KernelResult::default();
         }
         if self.selected != params.shader_id {
-            self.audio = None;
             self.particles = None;
             self.particles_need_reset = true;
             self.brush = CppCloudBrush::new();
@@ -60,18 +55,6 @@ impl ShaderToyRuntimeState {
         match params.shader_id {
             1..=6 => shadertoy_rgba8_surface_full(dst, params),
             16 => self.environment.render(dst, params),
-            7 => {
-                self.audio.get_or_insert_with(
-                    crate::aud::audio_visualizer::AudioVisualizerSubscription::acquire,
-                );
-                let snapshot = crate::aud::audio_visualizer::snapshot();
-                cpp_audio_visualizer_rgba8_surface_full(
-                    dst,
-                    params.time_seconds,
-                    params.frame,
-                    &snapshot,
-                )
-            }
             8..=14 => {
                 if params.shader_id == 14 && params.flags & 2 != 0 {
                     let x = params

@@ -1,3 +1,4 @@
+# Intentional retirement of all 17 legacy audio playback/monitor exports; surviving signatures unchanged.
 # Additive UI4 maximum frame extent v1; all 388 existing signatures verified unchanged.
 # Additive Microfont stroke request v2; all 387 existing signatures verified unchanged.
 # Additive Microfont glyph sprite request/status v1; all existing signatures verified unchanged.
@@ -53,4 +54,4 @@
 # Additive bounded subdocument fetch with host-applied Referer context; all previous signatures verified unchanged.
 # Additive non-consuming final GET URL metadata; all 369 previous signatures verified unchanged.
 # Intentional retirement of the QJS-only mouse stream; every surviving signature verified unchanged.
-a9e7ba6cc3c0dbc0bbf8c173016104ff25a747c0868229418ad44523a7d0781c
+9203899042492fb326c1ae337d23ccb9897005824b75f81d7e7bb4ed7d06dbac

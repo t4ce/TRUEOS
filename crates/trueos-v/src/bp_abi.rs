@@ -1432,44 +1432,6 @@ unsafe extern "C" {
     ) -> i32;
     pub safe fn trueos_cabi_smtp_password_configured() -> i32;
 
-    pub fn trueos_cabi_audio_open_playback(
-        format: u32,
-        channels: u32,
-        rate_hz: u32,
-        out_handle: *mut u32,
-    ) -> i32;
-    pub safe fn trueos_cabi_audio_close(handle: u32) -> i32;
-    pub safe fn trueos_cabi_audio_start(handle: u32) -> i32;
-    pub safe fn trueos_cabi_audio_drop(handle: u32) -> i32;
-    pub safe fn trueos_cabi_audio_set_paused(handle: u32, paused: u32) -> i32;
-    pub safe fn trueos_cabi_audio_paused(handle: u32) -> i32;
-    pub safe fn trueos_cabi_audio_set_volume_percent(handle: u32, percent: u32) -> i32;
-    pub safe fn trueos_cabi_audio_volume_percent(handle: u32) -> i32;
-    pub safe fn trueos_cabi_audio_drain(handle: u32, timeout_ms: u64) -> i32;
-    pub fn trueos_cabi_audio_write_i16_interleaved(
-        handle: u32,
-        samples_ptr: *const i16,
-        sample_count: usize,
-    ) -> isize;
-    pub fn trueos_cabi_audio_write_i16_stereo_48k(
-        samples_ptr: *const i16,
-        sample_count: usize,
-    ) -> isize;
-    pub safe fn trueos_cabi_audio_queued_frames(handle: u32) -> isize;
-    pub safe fn trueos_cabi_audio_buffer_frames(handle: u32) -> isize;
-    pub safe fn trueos_cabi_audio_state(handle: u32) -> i32;
-    pub fn trueos_cabi_audio_endpoint_caps_v1(
-        out: *mut crate::vaudio::AudioEndpointCapabilitiesV1,
-        out_size: usize,
-    ) -> i32;
-    pub safe fn trueos_cabi_audio_monitor_start_cursor(preroll_samples: usize) -> u64;
-    pub fn trueos_cabi_audio_monitor_read_i16_since(
-        cursor: u64,
-        out_ptr: *mut i16,
-        out_cap: usize,
-        out_next_cursor: *mut u64,
-    ) -> isize;
-
     pub fn trueos_cabi_vgpu_open(requested_caps: u64, out_device: *mut u64) -> i32;
     pub fn trueos_cabi_vgpu_scalar_f32_v1(
         device: u64,
@@ -2266,18 +2228,6 @@ mod scalar_import_safety {
     const _: extern "C" fn(u32, u64) -> i32 = super::trueos_cabi_net_fetch_wait;
     const _: extern "C" fn(u32, u64) -> i32 = super::trueos_cabi_net_fetch_bytes_wait;
     const _: extern "C" fn() -> i32 = super::trueos_cabi_smtp_password_configured;
-    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_audio_close;
-    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_audio_start;
-    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_audio_drop;
-    const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_audio_set_paused;
-    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_audio_paused;
-    const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_audio_set_volume_percent;
-    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_audio_volume_percent;
-    const _: extern "C" fn(u32, u64) -> i32 = super::trueos_cabi_audio_drain;
-    const _: extern "C" fn(u32) -> isize = super::trueos_cabi_audio_queued_frames;
-    const _: extern "C" fn(u32) -> isize = super::trueos_cabi_audio_buffer_frames;
-    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_audio_state;
-    const _: extern "C" fn(usize) -> u64 = super::trueos_cabi_audio_monitor_start_cursor;
     const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_input_combo_remove;
     const _: extern "C" fn() -> usize = super::trueos_cabi_env_args_count;
     const _: extern "C" fn() -> i32 = super::trueos_cabi_shell_attached_read_byte;

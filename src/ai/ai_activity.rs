@@ -1,5 +1,4 @@
 //! Passive reasoning observer contract while local inference is unavailable.
-//! Speech activity continues through the audio/TTSTT presentation path.
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AiReasoningPhase {

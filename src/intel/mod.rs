@@ -18,8 +18,6 @@ mod guc;
 pub(crate) mod guc_ctb;
 pub(crate) mod guc_submission;
 pub(crate) mod interrupts;
-#[path = "sound/hda.rs"]
-pub mod hda;
 pub(crate) mod media;
 pub(crate) mod opencl;
 pub(crate) mod ppgtt;

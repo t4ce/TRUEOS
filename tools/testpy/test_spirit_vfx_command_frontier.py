@@ -24,7 +24,6 @@ def compute_entry_calls() -> str:
         ("effects", "direct_rcs_encode_skybox_sample_rgb565_batch"),
         ("two_d", "direct_rcs_finish_two_buffer_dispatch_batch"),
         ("shadertoy", "direct_rcs_encode_shadertoy_batch"),
-        ("cpp_audio_visualizer", "direct_rcs_encode_cpp_audio_visualizer_rgba8_batch"),
         ("particle_craft", "direct_rcs_encode_particle_craft_batch"),
         ("cpp_demo", "direct_rcs_encode_cpp_demo_rgba8_batch"),
         ("lz4_blocks", "encode_lz4_batch"),

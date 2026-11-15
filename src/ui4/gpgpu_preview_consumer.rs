@@ -45,7 +45,6 @@ pub(crate) enum GpgpuPreviewPreset {
     Static,
 
     CppCloudHighWisps,
-    CppAudio,
     CppParticle,
 }
 
@@ -55,13 +54,12 @@ impl GpgpuPreviewPreset {
             Self::Static => "static",
 
             Self::CppCloudHighWisps => "cpp-cloud-high-wisps",
-            Self::CppAudio => "cpp-audio",
             Self::CppParticle => "cpp-particle",
         }
     }
 
     pub(crate) const fn is_cpp(self) -> bool {
-        matches!(self, |Self::CppCloudHighWisps| Self::CppAudio | Self::CppParticle)
+        matches!(self, Self::CppCloudHighWisps | Self::CppParticle)
     }
 
     pub(crate) const fn is_resizable_cpp(self) -> bool {
@@ -76,7 +74,7 @@ impl GpgpuPreviewPreset {
         match self {
             Self::Static => "slot1-direct",
 
-            Self::CppCloudHighWisps | Self::CppAudio | Self::CppParticle => "slot1-direct",
+            Self::CppCloudHighWisps | Self::CppParticle => "slot1-direct",
         }
     }
 }
@@ -340,9 +338,6 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
             desired = PREVIEW_CONTROL.lock().desired;
             applied_serial = desired.serial;
             if desired.running {
-                crate::aud::audio_visualizer::set_enabled(
-                    desired.config.preset == GpgpuPreviewPreset::CppAudio,
-                );
                 mark_starting(desired);
                 match initialize_previews(desired) {
                     Ok(previews) => {
@@ -385,7 +380,6 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
                         active = previews;
                     }
                     Err(reason) => {
-                        crate::aud::audio_visualizer::set_enabled(false);
                         mark_faulted(desired, reason);
                         crate::log_warn!(
                             target: "ui4";
@@ -396,7 +390,6 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
                     }
                 }
             } else {
-                crate::aud::audio_visualizer::set_enabled(false);
                 mark_idle(applied_serial, "stopped");
             }
         }
@@ -685,7 +678,6 @@ async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'stati
     }
     let publish_result = match preview.config.preset {
         GpgpuPreviewPreset::CppCloudHighWisps
-        | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => match gpu_release {
             Some(release) => publish_gpgpu_frame_buffer(lease, release),
             None => Err(FramePoolError::ProducerReleaseRequired),
@@ -933,25 +925,6 @@ fn dispatch_preview_kernel(
                 error: "cpp-demo-dispatch-failed",
             }
         }
-        GpgpuPreviewPreset::CppAudio => {
-            let seconds = preview.metrics.elapsed_ms as f32 / 1_000.0;
-            let snapshot = crate::aud::audio_visualizer::snapshot();
-            let result = crate::intel::gpgpu::cpp_audio_visualizer_rgba8_surface_full(
-                surface,
-                seconds,
-                preview.metrics.attempted as u32,
-                &snapshot,
-            );
-            PreviewDispatchResult {
-                ok: result.ok,
-                submitted: result.submitted,
-                iterations: crate::aud::audio_visualizer::AUDIO_VISUALIZER_FFT_FRAMES as u32,
-                marker: result.marker,
-                submit_ms: result.submit_ms,
-                release: result.release,
-                error: "cpp-audio-visualizer-dispatch-failed",
-            }
-        }
         GpgpuPreviewPreset::CppParticle => {
             let seconds = preview.metrics.elapsed_ms as f32 / 1_000.0;
             let attempted = preview.metrics.attempted;
@@ -1000,7 +973,6 @@ fn dispatch_preview_kernel(
 const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
     match preset {
         GpgpuPreviewPreset::CppCloudHighWisps
-        | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "pipe-control+post-marker-exact-surface",
 
         GpgpuPreviewPreset::Static => "clflush-mfence-before-publish",
@@ -1012,7 +984,7 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
 
         GpgpuPreviewPreset::Static => "cpu-static",
 
-        GpgpuPreviewPreset::CppCloudHighWisps | GpgpuPreviewPreset::CppAudio => "guc-cpp-single",
+        GpgpuPreviewPreset::CppCloudHighWisps => "guc-cpp-single",
         GpgpuPreviewPreset::CppParticle => "guc-cpp-stateful-three-pass",
     }
 }
@@ -1021,7 +993,6 @@ const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
     match preset {
         GpgpuPreviewPreset::Static => WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
         GpgpuPreviewPreset::CppCloudHighWisps
-        | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => {
             WindowPlane::Universal(preview_plane_slot(preset) as u8)
         }
@@ -1033,7 +1004,6 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
     match preset {
 
         GpgpuPreviewPreset::CppCloudHighWisps
-        | GpgpuPreviewPreset::CppAudio
         | GpgpuPreviewPreset::CppParticle => "ui4-cpp-resizable-slot1",
 
         GpgpuPreviewPreset::Static => "ui4-overlay",
@@ -1394,12 +1364,6 @@ fn stop_active_previews(
     let Some(first) = previews.first() else {
         return;
     };
-    if previews
-        .iter()
-        .any(|preview| preview.config.preset == GpgpuPreviewPreset::CppAudio)
-    {
-        crate::aud::audio_visualizer::set_enabled(false);
-    }
 
     let direct_close = previews_support_direct_close(&previews);
     let frame_lifecycle_transferred = if direct_close {
@@ -1681,7 +1645,7 @@ fn aggregate_preview_metrics(previews: &[ActivePreview]) -> GpgpuPreviewMetrics 
 }
 
 const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
-    if matches!(preset, |GpgpuPreviewPreset::CppAudio| GpgpuPreviewPreset::CppParticle) {
+    if matches!(preset, GpgpuPreviewPreset::CppParticle) {
         return 1;
     }
     super::ALPHA_OVERLAY_PLANE_SLOT
@@ -1727,7 +1691,6 @@ mod tests {
     fn cpp_modes_share_the_resizable_slot1_application_surface() {
         let modes = [
             GpgpuPreviewPreset::CppCloudHighWisps,
-            GpgpuPreviewPreset::CppAudio,
         ];
         for mode in modes {
             assert_eq!(preview_extent(mode), (PREVIEW_WIDTH, PREVIEW_HEIGHT));

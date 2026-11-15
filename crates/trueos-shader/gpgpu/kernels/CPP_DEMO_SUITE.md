@@ -23,7 +23,6 @@ Open the ShaderToy Blueprint: F8 selects the four-panel gallery; F9–F12
 select Aurora, Julia, SDF and Voronoi. Left/Right reaches Retro Sun and High
 Wisps (IDs 13 and 14), as well as live audio (F7) and ParticleCraft (ID 15).
 The seven gallery views reuse this one artifact with its original mode values.
-See [`CPP_AUDIO_VISUALIZER.md`](CPP_AUDIO_VISUALIZER.md) for the real audio input.
 
 Shell2 `cpp` has been removed. `win` now owns the separate 30-window retained
 UI4 demo; `win status`, `win stop` and focused Escape manage that demo.

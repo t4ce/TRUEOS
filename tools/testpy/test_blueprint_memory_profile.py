@@ -46,33 +46,22 @@ mod hv { pub mod blueprint {
 @PRODUCTION@
 
 #[test]
-fn embedded_tts_gets_inference_budget_before_generic_audio_or_network_roles() {
-    let imports = [hv::blueprint::ElfImport { name: "trueos_cabi_audio_open_playback" },
-        hv::blueprint::ElfImport { name: "trueos_mio_tcp_listener_bind" }];
-    for archive in ["ttstt.bp", "ttstt"] {
-        let class = classify_blueprint_memory(archive, 133_254_144,
-            hv::blueprint::ElfAllocStats { alloc_bytes: 132_067_536 }, &imports);
-        assert!(matches!(class, BlueprintMemoryClass::SpeechInference));
-        let profile = blueprint_memory_profile_for(class, 128);
-        assert_eq!(profile.class.label(), "speech-inference");
-        assert_eq!((profile.heap_lower_mib, profile.heap_recommended_mib, profile.heap_upper_mib), (2048, 2048, 2048));
-        // Guest launch-state cloning retains both packed and unpacked bytes,
-        // then the loader allocates a second executable/model representation.
-        let retained = 88_282_231usize + 133_254_144 + 132_067_536;
-        let synthesis = 630 * MIB + 64 * MIB;
-        assert!(profile.heap_lower_mib * MIB > retained + synthesis);
+fn retired_audio_roles_receive_no_special_budget() {
+    let audio = [hv::blueprint::ElfImport { name: "trueos_cabi_audio_open_playback" }];
+    for archive in ["ttstt.bp", "ttstt", "scope-tui.bp", "aud-player-scope-tui.bp", "player.bp"] {
+        let class = classify_blueprint_memory(archive, MIB,
+            hv::blueprint::ElfAllocStats { alloc_bytes: MIB }, &audio);
+        assert!(matches!(class, BlueprintMemoryClass::Unknown));
     }
+    let network = [hv::blueprint::ElfImport { name: "trueos_cabi_audio_open_playback" },
+        hv::blueprint::ElfImport { name: "trueos_mio_tcp_listener_bind" }];
+    let class = classify_blueprint_memory("ttstt.bp", 133_254_144,
+        hv::blueprint::ElfAllocStats { alloc_bytes: 132_067_536 }, &network);
+    assert!(matches!(class, BlueprintMemoryClass::NetworkServer));
 }
 
 #[test]
-fn playback_and_ordinary_servers_keep_their_existing_budgets() {
-    let audio = [hv::blueprint::ElfImport { name: "trueos_cabi_audio_open_playback" }];
-    let class = classify_blueprint_memory("player.bp", MIB,
-        hv::blueprint::ElfAllocStats { alloc_bytes: MIB }, &audio);
-    assert!(matches!(class, BlueprintMemoryClass::AudioPlayer));
-    let profile = blueprint_memory_profile_for(class, 1);
-    assert_eq!((profile.heap_lower_mib, profile.heap_recommended_mib, profile.heap_upper_mib), (128, 256, 256));
-
+fn ordinary_servers_keep_their_existing_budgets() {
     let network = [hv::blueprint::ElfImport { name: "trueos_mio_tcp_listener_bind" }];
     let class = classify_blueprint_memory("sqlite.bp", MIB,
         hv::blueprint::ElfAllocStats { alloc_bytes: MIB }, &network);
@@ -82,7 +71,7 @@ fn playback_and_ordinary_servers_keep_their_existing_budgets() {
 }
 
 #[test]
-fn ram_asset_admission_stays_above_speech_when_its_peak_is_required() {
+fn ram_asset_admission_keeps_its_required_peak_budget() {
     let imports = [hv::blueprint::ElfImport { name: "trueos_cabi_archive_lz4_decode_start_v1" }];
     let class = classify_blueprint_memory("ttstt.bp", MIB,
         hv::blueprint::ElfAllocStats::default(), &imports);

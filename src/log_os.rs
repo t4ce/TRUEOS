@@ -197,7 +197,6 @@ pub(crate) mod flags {
     } else {
         LogLevelPolicy::up(LogLevelFilter::Info)
     };
-    pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Warn);
     pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Trace);
     pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Trace);
     pub(crate) const EXECUTOR_REALM_LOG_LEVEL: LogLevelPolicy =
@@ -286,7 +285,6 @@ pub(crate) mod flags {
             LogArea::Gfx => GFX_LOG_LEVEL,
             LogArea::Gpgpu => GPGPU_LOG_LEVEL,
             LogArea::Render => RENDER_LOG_LEVEL,
-            LogArea::Hda => HDA_LOG_LEVEL,
             LogArea::Hv => HV_LOG_LEVEL,
             LogArea::Apps => APPS_LOG_LEVEL,
             LogArea::ExecutorRealm => EXECUTOR_REALM_LOG_LEVEL,

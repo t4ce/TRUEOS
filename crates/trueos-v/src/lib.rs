@@ -29,7 +29,6 @@ pub mod vled {
     }
 }
 
-pub mod alsa_compat;
 pub mod borrow;
 pub mod bp_abi;
 pub mod calculator_base;
@@ -40,7 +39,6 @@ pub mod ffi;
 pub mod legacy_fs_abi;
 pub mod sync;
 pub mod varchive;
-pub mod vaudio;
 pub mod vbios;
 pub mod vcabi;
 pub mod vclock;

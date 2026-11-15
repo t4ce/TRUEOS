@@ -406,14 +406,7 @@ pub const OP_BP_EXIT_REASON: u32 = 0xA0;
 pub const OP_BP_SHELL_KONSOLE_BEGIN_FRAME: u32 = 0xA1;
 pub const OP_BP_SHUTDOWN: u32 = 0xA2;
 pub const OP_BP_RETURN_TO_CLI: u32 = 0xA3;
-pub const OP_BP_AUDIO_WRITE_I16_STEREO_48K: u32 = 0x9A;
-pub const OP_BP_AUDIO_STOP: u32 = 0x9B;
-pub const OP_BP_AUDIO_PENDING_FRAMES: u32 = 0x9C;
-pub const OP_BP_AUDIO_SET_VOLUME_PERCENT: u32 = 0x9D;
-pub const OP_BP_AUDIO_VOLUME_PERCENT: u32 = 0x9E;
-// 0x152..=0x154 are retired native scheduled-audio opcodes; do not reuse.
-/// Read-only host HDA endpoint capability snapshot (response payload V1).
-pub const OP_BP_AUDIO_ENDPOINT_CAPS_V1: u32 = 0x156;
+// 0x9A..=0x9E, 0x152..=0x154 and 0x156 are retired audio opcodes; do not reuse.
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35;
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36;
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37;

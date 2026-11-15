@@ -31,7 +31,6 @@ const IDLE_CROSS_ARMS_TRANSITION: &str = "transition.neutral_to_crossed";
 const IDLE_UNCROSS_ARMS_TRANSITION: &str = "transition.uncross_arms";
 const AI_REASONING_START_ANIMATION: &str = "agree.firm_nod";
 const AI_REASONING_FINISH_ANIMATION: &str = "idea.finger_up";
-const SPEECH_TALK_ANIMATION: &str = "talk.calm.uncrossed";
 const FAILED_ANIMATIONS: [&str; 2] = ["angry.fists_clenched", "reaction.facepalm"];
 const FAILED_FRAME_PERIOD_MS: u16 = 80;
 const RUNNING_ANIMATION: &str = "idea.finger_up";
@@ -711,7 +710,6 @@ static PACKAGE_RING: Mutex<SpiritPackageRing> = Mutex::new(SpiritPackageRing::ne
 static LAST_RGBA: Mutex<SpiritRgba8> = Mutex::new(SpiritRgba8::WHITE);
 static IDLE_STRATEGY: Mutex<Option<LillyIdleStrategy>> = Mutex::new(None);
 static EMOTION_SELECTOR: Mutex<Option<LillyEmotionSelector>> = Mutex::new(None);
-static SPEECH_PLAYING: AtomicBool = AtomicBool::new(false);
 static FAILED_REACTION: Mutex<Option<LillyFailedReaction>> = Mutex::new(None);
 static LAST_FAILED_VARIANT: Mutex<Option<usize>> = Mutex::new(None);
 static ACTIVITY_GESTURES: Mutex<Option<LillyActivityGestures>> = Mutex::new(None);
@@ -764,20 +762,6 @@ fn take_failed_reaction(
             *pending = None;
             Ok(Some(scheduled))
         }
-    }
-}
-
-/// Mixer-owned speech state. `true` is published only when Lumen PCM is about
-/// to enter the live audio buffer; `false` follows its final drained sample.
-pub(crate) fn set_speech_playing(playing: bool) {
-    let previous = SPEECH_PLAYING.swap(playing, Ordering::AcqRel);
-    if previous != playing {
-        crate::log_info!(
-            target: "gfx";
-            "trueos-spirit: lumen speech playback={} clip={} synchronization=audio-mixer-boundary\n",
-            if playing { "started" } else { "drained" },
-            SPEECH_TALK_ANIMATION,
-        );
     }
 }
 
@@ -1045,11 +1029,6 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
 
         if crate::ai::ai_activity::reasoning_active() {
             return next_idle_animation(*LAST_RGBA.lock());
-        }
-
-        if SPEECH_PLAYING.load(Ordering::Acquire) {
-            pause_idle_strategy();
-            return resolve(SPEECH_TALK_ANIMATION, *LAST_RGBA.lock());
         }
 
         if let Some(scheduled) = take_failed_reaction(Instant::now().as_millis())? {

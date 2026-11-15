@@ -12,7 +12,6 @@ static SHADERTOY_MANDELBOX_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex
 static SHADERTOY_PALETTE_GRID_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_COSMIC_STRANDS_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_PROTEAN_CLOUDS_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static PARTICLE_CRAFT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static HELIO_RETAINED_TRANSFORM_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SPIRIT_VFX_BACKGROUND_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);

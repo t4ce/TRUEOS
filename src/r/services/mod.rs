@@ -5,9 +5,7 @@ pub(crate) mod ide_workspace_service;
 pub(crate) mod ide_source_service;
 
 pub mod gamepad_control_service;
-pub mod gna_audio_frontend_service;
 
-pub mod hda_capture_lane;
 pub mod hid_udp_service;
 pub(crate) mod hull_font_service;
 pub(crate) mod hull_download_service;
@@ -28,3 +26,4 @@ pub mod vcpy_service;
 pub(crate) mod video_open_service;
 pub mod video_service;
 pub(crate) mod live_video_service;
+pub(crate) mod audio_http;

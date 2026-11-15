@@ -62,7 +62,6 @@ define_started_flags!(
     HTTP_TRUEOSFS_STARTED,
     WS_TIME_STARTED,
     LAN_DISCOVERY_STARTED,
-    MIDI_PIANO_UDP_STARTED,
     PRINTER_DISCOVERY_STARTED,
     PRINTER_SPOOLER_STARTED,
     GPU_COMPLETION_REAPER_STARTED,
@@ -87,8 +86,6 @@ define_started_flags!(
     GPGPU_UI4_SVG_PROBE_CONSUMER_STARTED,
     HW_PIC_SERVICE_STARTED,
     FALLBACK_LOGO_UI_STARTED,
-    INTEL_HDA_AUDIO_DEMO_STARTED,
-    GNA_AUDIO_FRONTEND_SERVICE_STARTED,
     RAPLE_SERVICE_STARTED,
     THERMAL_SERVICE_STARTED,
     HTML_SHACK_SERVICE_STARTED,
@@ -99,8 +96,7 @@ define_started_flags!(
     BP_AUTOSTART_STARTED,
     FACTORY_RAM_PROBE_STARTED,
     LOGTOTCP_STARTED,
-    TINYAUDIO_SERVICE_STARTED,
-    TINYAUDIO_LIVE_HTTP_STARTED
+    AUDIO_HTTP_STARTED
 );
 
 #[cfg(feature = "legacy_vm_checkpoint")]
@@ -569,10 +565,6 @@ fn spawn_printer_spooler(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::printer::printer_spooler_task())
 }
 
-fn spawn_midi_piano_udp(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::net::midi_udp::midi_piano_udp_task())
-}
-
 fn spawn_gpu_completion_reaper(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::intel::gpgpu::gpu_completion_reaper_task())
 }
@@ -792,13 +784,6 @@ fn spawn_fallback_logo_ui_task(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::virtio_gpu_logo::fallback_logo_task())
 }
 
-fn spawn_intel_hda_audio_demo_task(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_worker(spawner, |worker_spawner| {
-        let _ = worker_spawner;
-        crate::intel_hda_audio_demo::task()
-    })
-}
-
 fn spawn_raple_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::power::rapl::raple_service())
 }
@@ -812,18 +797,8 @@ fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
     spawn_bool_result_to_attempt(crate::surfer::spawn_html_fetch_service())
 }
 
-fn spawn_gna_audio_frontend_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_eff_worker(spawner, |_worker_spawner| {
-        crate::r::services::gna_audio_frontend_service::gna_audio_frontend_service_task()
-    })
-}
-
-fn spawn_tinyaudio_service(spawner: Spawner) -> SpawnAttempt {
-    spawn_on_eff_worker(spawner, |_worker_spawner| crate::aud::esynth::tinyaudio_service_task())
-}
-
-fn spawn_tinyaudio_live_http(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::aud::audio_live_http::tinyaudio_live_http_task())
+fn spawn_audio_http(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::r::services::audio_http::audio_http_task())
 }
 
 #[inline]
@@ -928,7 +903,7 @@ const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
 // Own the AtomicBool fields in a static array; an interior-mutable temporary
 // cannot be promoted behind a shared slice reference.
-const TASK_COUNT: usize = 65
+const TASK_COUNT: usize = 61
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1111,12 +1086,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_lan_discovery,
     ),
     TaskSpec::enabled(
-        "midi-piano-udp",
-        crate::r::readiness::NET_ANY_CONFIGURED,
-        &MIDI_PIANO_UDP_STARTED,
-        spawn_midi_piano_udp,
-    ),
-    TaskSpec::enabled(
         "printer-discovery",
         crate::r::readiness::NET_ANY_CONFIGURED,
         &PRINTER_DISCOVERY_STARTED,
@@ -1292,12 +1261,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &FALLBACK_LOGO_UI_STARTED,
         spawn_fallback_logo_ui_task,
     ),
-    TaskSpec::disabled(
-        "intel-hda-audio-demo",
-        0,
-        &INTEL_HDA_AUDIO_DEMO_STARTED,
-        spawn_intel_hda_audio_demo_task,
-    ),
     TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
     TaskSpec::enabled("thermal-service", 0, &THERMAL_SERVICE_STARTED, spawn_thermal_service),
     TaskSpec::enabled_gated(
@@ -1308,22 +1271,10 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         html_fetch_service,
     ),
     TaskSpec::enabled(
-        "gna-audio-front-end",
-        crate::r::readiness::INTEL_HDA_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        &GNA_AUDIO_FRONTEND_SERVICE_STARTED,
-        spawn_gna_audio_frontend_service,
-    ),
-    TaskSpec::enabled(
-        "tinyaudio_service",
-        crate::r::readiness::INTEL_HDA_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        &TINYAUDIO_SERVICE_STARTED,
-        spawn_tinyaudio_service,
-    ),
-    TaskSpec::enabled(
-        "tinyaudio-live-http",
-        crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::INTEL_HDA_READY,
-        &TINYAUDIO_LIVE_HTTP_STARTED,
-        spawn_tinyaudio_live_http,
+        "audio-http",
+        crate::r::readiness::NET_ANY_CONFIGURED,
+        &AUDIO_HTTP_STARTED,
+        spawn_audio_http,
     ),
     TaskSpec::enabled_gated(
         "user-input-record-writer",

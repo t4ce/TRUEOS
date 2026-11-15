@@ -49,14 +49,13 @@ pub(crate) fn prebind_import_readiness(name: &str, filesystem_independent: bool)
         mask |= crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::NET_SOCKET_READY;
     }
 
-    if name.starts_with("trueos_cabi_hda_") || name.starts_with("trueos_cabi_audio_") {
-        mask |= crate::r::readiness::INTEL_HDA_READY;
-    }
-
     mask
 }
 
 pub(crate) fn retired_import_error(name: &str) -> Option<&'static str> {
+    if name.starts_with("trueos_cabi_audio_") || name.starts_with("trueos_cabi_hda_") {
+        return Some("retired audio import; kernel audio exports are no longer supported");
+    }
     if name.starts_with("ring_core_") {
         return Some(
             "retired Ring crypto import; rebuild the Blueprint with a RustCrypto backend",
@@ -85,11 +84,6 @@ pub(crate) fn retired_import_error(name: &str) -> Option<&'static str> {
         | "sys_panic"
         | "sys_sha_buffer"
         | "trueos_cabi_async_fs_metadata_start_v1"
-        | "trueos_cabi_audio_native_render_v1"
-        | "trueos_cabi_audio_native_render_v2"
-        | "trueos_cabi_audio_native_render_v3"
-        | "trueos_cabi_audio_native_sample_register_v1"
-        | "trueos_cabi_audio_native_sample_remove_v1"
         | "trueos_cabi_konsole_write_row"
         | "trueos_cabi_konsole_set_cursor"
         | "trueos_cabi_konsole_end_frame"

@@ -18,7 +18,6 @@ mod allcaps;
 mod allocators;
 pub mod allports;
 mod app_db;
-mod aud;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 #[path = "hv/blueprint/blueprint_net_broker.rs"]
 mod blueprint_net_broker;
@@ -46,8 +45,6 @@ mod gpu;
 mod graphics;
 mod hv;
 mod intel;
-#[path = "intel/sound/intel_hda_audio_demo.rs"]
-mod intel_hda_audio_demo;
 mod iso9660;
 mod limine;
 mod live_update;
@@ -98,7 +95,6 @@ mod workers;
 mod x2apic;
 
 // Re-exports
-pub(crate) use crate::intel::hda;
 pub(crate) use portio::{inb, inl, inw, outb, outl, outw};
 pub use r::pat as pattern;
 pub use r::time;
@@ -227,9 +223,6 @@ pub extern "C" fn kmain() -> ! {
     pci::enumerate_impl();
     log_os::set_emulator_uart_logging(intel::is_emulator_environment());
     intel::init_once();
-    if intel::has_claimed_device() {
-        let _ = hda::boot_probe_once();
-    }
 
     //vga::cube::tick();
 
@@ -257,8 +250,6 @@ pub extern "C" fn kmain() -> ! {
     // Worker spawners for APs are registered in `cpu::ap_start` once each AP brings up its executor.
 
     net::init();
-    #[cfg(target_os = "trueos")]
-    aud::alsa_trueos_backend::install();
 
     if crate::allcaps::probes::MIO_BOOT_PROBE {
         mio_probe::log_boot_probe();

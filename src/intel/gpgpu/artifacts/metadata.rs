@@ -181,16 +181,6 @@ pub(crate) const SHADERTOY_PROTEAN_CLOUDS_ADLS_ARTIFACT: GpgpuKernelArtifact =
         &SHADERTOY_PROTEAN_CLOUDS_ADLS_CPP_ABI_CONTRACT,
     );
 
-pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::new(
-        CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME,
-        CPP_AUDIO_VISUALIZER_RGBA8_ADLS_CPP_ABI_CONTRACT.target,
-        &[],
-        &[],
-        CPP_AUDIO_VISUALIZER_RGBA8_ADLS_BIN_SHA256,
-        Some(&CPP_AUDIO_VISUALIZER_RGBA8_ADLS_CPP_ABI_CONTRACT),
-    );
-
 pub(crate) const PARTICLE_CRAFT_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::new(
     PARTICLE_CRAFT_KERNEL_NAME,
     PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT.target,

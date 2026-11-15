@@ -53,7 +53,6 @@ pub enum LogArea {
     Gfx,
     Gpgpu,
     Render,
-    Hda,
     Hv,
     Apps,
     ExecutorRealm,
@@ -63,7 +62,7 @@ pub enum LogArea {
 }
 
 impl LogArea {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 15] = [
         Self::Global,
         Self::Boot,
         Self::Service,
@@ -73,7 +72,6 @@ impl LogArea {
         Self::Gfx,
         Self::Gpgpu,
         Self::Render,
-        Self::Hda,
         Self::Hv,
         Self::Apps,
         Self::ExecutorRealm,
@@ -97,7 +95,6 @@ impl LogArea {
             Self::Gfx => "gfx",
             Self::Gpgpu => "gpgpu",
             Self::Render => "render",
-            Self::Hda => "hda",
             Self::Hv => "hv",
             Self::Apps => "apps",
             Self::ExecutorRealm => "executor-realm",
@@ -118,7 +115,6 @@ impl LogArea {
             Self::Gfx => 6,
             Self::Gpgpu => 7,
             Self::Render => 8,
-            Self::Hda => 9,
             Self::Hv => 10,
             Self::Apps => 11,
             Self::ExecutorRealm => 12,
@@ -143,14 +139,14 @@ impl LogAreaSet {
     pub const GFX: Self = LogArea::Gfx.set();
     pub const GPGPU: Self = LogArea::Gpgpu.set();
     pub const RENDER: Self = LogArea::Render.set();
-    pub const HDA: Self = LogArea::Hda.set();
     pub const HV: Self = LogArea::Hv.set();
     pub const APPS: Self = LogArea::Apps.set();
     pub const EXECUTOR_REALM: Self = LogArea::ExecutorRealm.set();
     pub const EXECUTOR_CACHE: Self = LogArea::ExecutorCache.set();
     pub const INTEL_MEDIA_NGIN: Self = LogArea::IntelMediaNgin.set();
     pub const BLUEPRINT: Self = LogArea::Blueprint.set();
-    pub const ALL: Self = Self((1 << 16) - 1);
+    // Bit 9 belonged to the retired hardware-audio area.
+    pub const ALL: Self = Self(((1 << 16) - 1) & !(1 << 9));
 
     pub const fn one(area: LogArea) -> Self {
         area.set()
@@ -249,8 +245,6 @@ pub fn target_log_area(target: &str) -> LogArea {
         "render" | "intel/render" | "scratch" => LogArea::Render,
         "media" | "intel-media" | "intel/media" | "intel/media2" | "intel/media-encode"
         | "intel/hw_pic" | "intel/hw_pic-stage" => LogArea::IntelMediaNgin,
-        "hda" => LogArea::Hda,
-        "audio" => LogArea::Apps,
         "hv" | "hyperv" | "hypervisor" => LogArea::Hv,
         "apps" => LogArea::Apps,
         "blueprint" | "bp" => LogArea::Blueprint,
@@ -263,9 +257,6 @@ pub fn target_log_area(target: &str) -> LogArea {
 pub fn module_path_log_area(path: &str) -> LogArea {
     let path = path.strip_prefix("TRUEOS::").unwrap_or(path);
 
-    if path_prefix(path, "aud") {
-        return LogArea::Hda;
-    }
     if path_prefix(path, "acpi") || path_prefix(path, "aml") {
         return LogArea::Boot;
     }

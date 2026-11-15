@@ -21,9 +21,7 @@ pub(crate) fn cpp_demo_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *CPP_DEMO_RGBA8_UPLOAD.lock()
 }
 
-pub(crate) fn cpp_audio_visualizer_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD.lock()
-}
+
 
 
 
@@ -167,11 +165,6 @@ fn shadertoy_artifact_slot(
             SHADERTOY_PROTEAN_CLOUDS_ADLS_GPU,
             &SHADERTOY_PROTEAN_CLOUDS_UPLOAD,
         ),
-        7 => (
-            CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT,
-            CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU,
-            &CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD,
-        ),
         8 => (CPP_DEMO_RGBA8_ADLS_ARTIFACT, CPP_DEMO_RGBA8_ADLS_GPU, &CPP_DEMO_RGBA8_UPLOAD),
         15 => (PARTICLE_CRAFT_ADLS_ARTIFACT, PARTICLE_CRAFT_ADLS_GPU, &PARTICLE_CRAFT_UPLOAD),
         _ => return None,
@@ -241,9 +234,7 @@ pub(crate) fn register_shadertoy_package(shader_id: u32, package: &[u8]) -> bool
 }
 
 /// Executable bytes must first be admitted from a Blueprint-owned package.
-pub(crate) fn upload_cpp_audio_visualizer_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    *CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD.lock()
-}
+
 
 /// Executable bytes must first be admitted from a Blueprint-owned package.
 pub(crate) fn upload_particle_craft_kernel() -> Option<UploadedKernelArtifact> {
@@ -407,7 +398,6 @@ fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
         | SHADERTOY_MANDELBOX_KERNEL_NAME
         | SHADERTOY_PALETTE_GRID_KERNEL_NAME
         | SHADERTOY_COSMIC_STRANDS_KERNEL_NAME
-        | CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME
         | PARTICLE_CRAFT_KERNEL_NAME
         | HELIO_RETAINED_TRANSFORM_KERNEL_NAME
         | SPIRIT_VFX_BACKGROUND_RGBA8_KERNEL_NAME
@@ -468,11 +458,6 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: CPP_DEMO_RGBA8_ADLS_ARTIFACT,
             gpu: CPP_DEMO_RGBA8_ADLS_GPU,
             upload: &CPP_DEMO_RGBA8_UPLOAD,
-        }),
-        CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT,
-            gpu: CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU,
-            upload: &CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD,
         }),
         PARTICLE_CRAFT_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: PARTICLE_CRAFT_ADLS_ARTIFACT,

@@ -50,7 +50,6 @@ exclude = [
     # Cargo matches workspace exclusions against package directories, so this
     # nested package needs its own entry.
     "vendor/CrabUSB/usb-host",
-    "vendor/tinyaudio",
 ]
 
 # Keep the common no_std dependency policy in one place.  Features stay at
@@ -135,8 +134,6 @@ object = { version = "0.39.1", default-features = false, features = ["read_core"
 unicode-segmentation = { version = "1", default-features = false }
 unicode-width = { version = "0.2.2", default-features = false }
 log_os_core = { package = "log-os", path = "vendor/log-os", default-features = false }
-tinyaudio = { path = "vendor/tinyaudio", default-features = false }
-alsa = { version = "0.11.0", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["custom-provider", "tls12"] }
 rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12", "zeroize"] }
 chacha20poly1305 = { version = "0.10.1", default-features = false }
@@ -151,8 +148,6 @@ zune-jpeg = { version = "0.5.15", default-features = false, features = ["x86", "
 crc32fast = { version = "1.5.0", default-features = false }
 sha2 = { workspace = true }
 embedded-websocket = { version = "0.9.4", default-features = false }
-symphonia-core = { version = "0.5.5", default-features = false }
-symphonia-codec-aac = { version = "0.5.5", default-features = false }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "multicast", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
 dma-api = { version = "=0.7.3", default-features = false }
 crab-usb = { path = "vendor/CrabUSB/usb-host", default-features = false }

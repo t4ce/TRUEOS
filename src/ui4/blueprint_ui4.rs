@@ -7784,10 +7784,6 @@ fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurface
     DYNAMIC_CONTEXT_MENU_EVENTS
         .lock()
         .retain(|(owner, window, _)| *owner != surface.owner || *window != surface.window);
-    if let Some(state) = surface.shadertoy_state.as_mut() {
-        // A retained GPU allocation after failure does not need a live PCM tap.
-        state.stop_audio();
-    }
     if surface.gpu_submission_unretired {
         let _ = finish_window_session(surface.owner, surface.session);
         crate::log_error!(target: "ui4/blueprint-frame";
