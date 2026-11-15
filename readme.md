@@ -54,6 +54,11 @@ This enormous effort enables us to enjoy that privilege of intelligence, and tha
 
 Choose a preset, toggle subsystems, and select the apps bundled at first boot—including none. Bundle size varies with your selection; subsystem switches currently control initialization rather than removing every driver byte.
 
+<p align="center"><img src="docs/assets/trueos-cloudbuild-install.gif" width="640" alt="TRUEOS Cloudbuild GitHub App installation: choose an account, allow only the TRUEOS repository, then receive the installation confirmation"></p>
+<p align="center"><sub>The first verified installation: account selection → repository permissions → confirmation.</sub></p>
+
+The GitHub App is installed only for the repositories you select. The example above grants access to `t4ce/TRUEOS`: code and metadata are read-only, while Actions access lets the service start builds and retrieve their artifacts. SSH-key approval is separate; your private signing key stays on your machine. See the [Cloudbuild integration status](tools/cloudbuild/GITHUB_ACTIONS.md) for the hosted build test and the remaining multi-account connection work.
+
 ## § PREFACE: KNOWLEDGE WE BUILD ON
 
 Knowledge grows as people pass on what they have learned, and each generation adds to it. Software and language models are part of that continuing exchange, built from the work of people who wrote, tested, taught, and shared what they knew. TRUEOS builds on that work too.
