@@ -643,6 +643,7 @@ pub enum VmBootMode {
 #[derive(Copy, Clone)]
 enum BlueprintMemoryClass {
     RamAssets,
+    SpeechInference,
     TokioRuntime,
     AudioPlayer,
     NetworkClient,
@@ -656,6 +657,7 @@ impl BlueprintMemoryClass {
     const fn label(self) -> &'static str {
         match self {
             Self::RamAssets => "ram-assets",
+            Self::SpeechInference => "speech-inference",
             Self::TokioRuntime => "tokio-runtime",
             Self::AudioPlayer => "audio-player",
             Self::NetworkClient => "network-client",
@@ -2913,6 +2915,13 @@ fn classify_blueprint_memory(
         return BlueprintMemoryClass::RamAssets;
     }
 
+    // The self-contained speech service retains its packed Blueprint, unpacked
+    // ELF and relocated model image in the guest heap before inference starts.
+    // Its audio imports must not place it in the small playback-only budget.
+    if archive.strip_suffix(".bp").unwrap_or(archive) == "ttstt" {
+        return BlueprintMemoryClass::SpeechInference;
+    }
+
     let audio_player_signal = archive_has(archive, "scope-tui")
         || archive_has(archive, "scope_tui")
         || archive_has(archive, "aud-player-scope-tui")
@@ -2987,6 +2996,13 @@ fn estimate_blueprint_memory_profile(
     let stats = crate::hv::blueprint::elf_alloc_stats(unpacked).unwrap_or_default();
     let class = classify_blueprint_memory(archive, module.raw_payload_len, stats, imports);
     let base_live_mib = ceil_mib(module.raw_payload_len).max(ceil_mib(stats.alloc_bytes));
+    blueprint_memory_profile_for(class, base_live_mib)
+}
+
+fn blueprint_memory_profile_for(
+    class: BlueprintMemoryClass,
+    base_live_mib: usize,
+) -> BlueprintVmMemoryProfile {
     // A retained-scene process simultaneously owns the packed module, its
     // relocated REL image, and Picasso's RAM database. Scale the minimum with
     // the image so a large GLB cannot fall back to a heap that cannot retain
@@ -3006,6 +3022,12 @@ fn estimate_blueprint_memory_profile(
             // and new backing buffers overlap during growth. Reserve room for
             // the full import; do not accept the former 1 GiB server budget.
             BlueprintMemoryClass::RamAssets => (3072, 3072, 3072, 16, 32, 128),
+            // The embedded English/Heart image needs ~350 MiB across packed,
+            // unpacked and relocated representations. F<=1024 synthesis then
+            // needs up to ~630 MiB of arena plus G2P indexes and workspaces.
+            // Require the full 2 GiB budget: falling back to the playback
+            // profile's 128/256 MiB cannot even relocate the model image.
+            BlueprintMemoryClass::SpeechInference => (2048, 2048, 2048, 16, 32, 128),
             BlueprintMemoryClass::TokioRuntime => (
                 64,
                 round_pow2_mib(base_live_mib.saturating_mul(12).saturating_add(64)).max(128),

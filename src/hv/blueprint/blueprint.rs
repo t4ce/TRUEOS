@@ -175,6 +175,18 @@ impl PortalImageAllocation {
             alloc()
         };
         if base.is_null() {
+            if let Some(vm_id) = vm_id {
+                let stats = crate::allocators::hv_guest_heap_stats(vm_id);
+                return Err(alloc::format!(
+                    "portal image allocation failed size={} align={} vm={} heap_bytes={} free_bytes={} largest_free={}",
+                    layout.size(),
+                    layout.align(),
+                    vm_id,
+                    stats.heap_end.saturating_sub(stats.heap_start),
+                    stats.free_bytes,
+                    stats.largest_free_block,
+                ));
+            }
             return Err(alloc::format!(
                 "portal image allocation failed size={} align={}",
                 layout.size(),
