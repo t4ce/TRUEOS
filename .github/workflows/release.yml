@@ -100,6 +100,7 @@ jobs:
             printf '## Download\n\n[Download %s](%s)\n\n' "$RELEASE_ASSET" "$download"
             printf '| item | sha256 |\n| --- | --- |\n| release bundle | `%s` |\n\n' "$sha256"
             printf 'Source commit: `%s`\n' "$SOURCE_COMMIT"
+            printf '\n[build it your way](https://trueos.eu/builds)\n'
           } > tgt/release-notes.md
 
       - name: Publish the release

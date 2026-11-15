@@ -18,6 +18,7 @@ function mountCloudbuild(app, options = {}) {
     throw new Error('TRUEOS_CLOUDBUILD_URL must be an HTTP(S) origin without credentials or a path');
   }
   const transport = target.protocol === 'https:' ? https : http;
+  app.get(/^\/builds\/?$/, (_req, res) => res.redirect(308, '/build/'));
   app.get(/^\/build$/, (_req, res) => res.redirect(308, '/build/'));
   app.use('/build', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
