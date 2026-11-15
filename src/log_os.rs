@@ -603,17 +603,6 @@ macro_rules! log_error {
     }};
 }
 
-#[macro_export]
-macro_rules! audio_probe {
-    ($($tt:tt)*) => {{
-        $crate::log_os::log_with_area_purpose(
-            $crate::log_os::flags::LogArea::Hda,
-            $crate::log_os::LogLevel::Trace,
-            Some("audio"),
-            format_args!($($tt)*),
-        );
-    }};
-}
 
 pub fn log(args: fmt::Arguments<'_>) {
     log_os_core::log(&TRUEOS_LOG_ROUTER, args);

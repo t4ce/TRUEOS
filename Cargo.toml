@@ -217,9 +217,6 @@ smoltcp = { path = "vendor/smoltcp-0.13.1" }
 zune-core = { path = "vendor/zune-core-0.5.1" }
 zune-jpeg = { path = "vendor/zune-jpeg-0.5.15" }
 dma-api = { path = "vendor/dma-api-0.7.3" }
-alsa = { path = "vendor/alsa-0.11.0" }
-symphonia-core = { path = "vendor/symphonia-core-0.5.5-trueos" }
-symphonia-codec-aac = { path = "vendor/symphonia-codec-aac-0.5.5-trueos" }
 
 [build-dependencies]
 sha2 = { workspace = true }
