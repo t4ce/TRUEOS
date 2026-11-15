@@ -161,17 +161,72 @@ mod tests {
     }
 
     #[test]
-    fn codex_arrival_prepares_crossed_without_consuming_pending_gesture() {
-        let _lock=reset(0);
-        protocol::enqueue_animation("wave.shy",protocol::SpiritRgba8::WHITE).unwrap();
-        spirit::codex_handoff::REQUESTED.store(true,Ordering::Relaxed);
-        let prep=next();assert_eq!(prep.animation.key,"transition.neutral_to_crossed");
+    fn codex_arrival_finishes_active_clip_and_holds_crossed_without_draining_queue() {
+        let _lock = reset(0);
+        protocol::enqueue_animation("wave.shy", protocol::SpiritRgba8::WHITE).unwrap();
+        let active = next();
+        assert_eq!(active.animation.key, "wave.shy");
+        protocol::enqueue_animation("happy.cheer", protocol::SpiritRgba8::WHITE).unwrap();
+
+        // A chest landing requests preparation while the worker still owns
+        // this schedule. The request does not replace its remaining frames.
+        now(active.boundary_ms / 2);
+        spirit::codex_handoff::REQUESTED.store(true, Ordering::Relaxed);
         assert!(!spirit::codex_handoff::READY.load(Ordering::Relaxed));
-        now(prep.boundary_ms);
-        assert_eq!(next().animation.key,"idle.crossed.soft_blink");
-        assert!(spirit::codex_handoff::READY.load(Ordering::Relaxed));
-        spirit::codex_handoff::REQUESTED.store(false,Ordering::Relaxed);
-        assert_eq!(next().animation.key,"wave.shy");
+        assert_eq!(
+            active.frame_at_elapsed(active.boundary_ms - 1),
+            Some(active.animation.frames[6]),
+        );
+        now(active.boundary_ms);
+        let prep = next();
+        assert_eq!(prep.animation.key, "transition.neutral_to_crossed");
+        assert!(!spirit::codex_handoff::READY.load(Ordering::Relaxed));
+
+        // Readiness starts only after the whole posture transition. Keep the
+        // same crossed static while the handoff owns the fade and Wish C.
+        let ready_at = active.boundary_ms + prep.boundary_ms;
+        for offset in [0, 100, 200, 1000, 2400] {
+            now(ready_at + offset);
+            let held = next();
+            assert_eq!(held.animation.key, "idle.crossed.soft_blink");
+            assert_eq!(held.frame_at_elapsed(50), Some(held.animation.frames[0]));
+            assert!(spirit::codex_handoff::READY.load(Ordering::Relaxed));
+        }
+        spirit::codex_handoff::REQUESTED.store(false, Ordering::Relaxed);
+        assert_eq!(next().animation.key, "happy.cheer");
+    }
+
+    #[test]
+    fn codex_arrival_reestablishes_crossed_after_uncrossed_speech_exactly_once() {
+        let _lock = reset(0);
+        assert_eq!(next().animation.key, "idle.uncrossed.soft_blink");
+        now(15_000);
+        let initial_preparation = next();
+        assert_eq!(initial_preparation.animation.key, "transition.neutral_to_crossed");
+        now(15_000 + initial_preparation.boundary_ms);
+        assert_eq!(next().animation.key, "idle.crossed.soft_blink");
+
+        // Speech changes the visible posture while the remembered native
+        // idle endpoint remains crossed. The landing must prepare it again.
+        protocol::set_speech_playing(true);
+        let speech = next();
+        assert_eq!(speech.animation.key, "talk.calm.uncrossed");
+        protocol::set_speech_playing(false);
+        protocol::enqueue_animation("wave.shy", protocol::SpiritRgba8::WHITE).unwrap();
+        spirit::codex_handoff::REQUESTED.store(true, Ordering::Relaxed);
+        now(15_000 + initial_preparation.boundary_ms + speech.boundary_ms);
+        let preparation = next();
+        assert_eq!(preparation.animation.key, "transition.neutral_to_crossed");
+        assert!(!spirit::codex_handoff::READY.load(Ordering::Relaxed));
+
+        let ready_at = Instant::now().as_millis() + preparation.boundary_ms;
+        for offset in [0, 100, 200] {
+            now(ready_at + offset);
+            assert_eq!(next().animation.key, "idle.crossed.soft_blink");
+            assert!(spirit::codex_handoff::READY.load(Ordering::Relaxed));
+        }
+        spirit::codex_handoff::REQUESTED.store(false, Ordering::Relaxed);
+        assert_eq!(next().animation.key, "wave.shy");
     }
 
     #[test]

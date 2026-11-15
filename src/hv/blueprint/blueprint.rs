@@ -20,6 +20,8 @@ pub(crate) const BLUEPRINT_CAP_REPLICATABLE: u16 = 1 << 8;
 pub(crate) const BLUEPRINT_CAP_ARGV_ENTRY_V1: u16 = 1 << 9;
 pub(crate) const BLUEPRINT_CAP_FILESYSTEM_INDEPENDENT: u16 = 1 << 10;
 pub(crate) const BLUEPRINT_CAP_TRUEOSFS_SCOPE: u16 = 1 << 11;
+/// Advisory VM carrier placement; never excludes otherwise eligible carriers.
+pub(crate) const BLUEPRINT_CAP_PREFER_PERFORMANCE_CORE: u16 = 1 << 12;
 const ELF64_HEADER_LEN: usize = 64;
 const ELF64_RELA_LEN: usize = 24;
 const SHT_PROGBITS: u32 = 1;
@@ -59,6 +61,10 @@ impl BlueprintModule<'_> {
 
     pub(crate) const fn has_trueosfs_scope(&self) -> bool {
         self.flags & BLUEPRINT_CAP_TRUEOSFS_SCOPE != 0
+    }
+
+    pub(crate) const fn prefers_performance_core(&self) -> bool {
+        self.flags & BLUEPRINT_CAP_PREFER_PERFORMANCE_CORE != 0
     }
 }
 

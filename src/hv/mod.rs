@@ -59,7 +59,8 @@ use x86_64::registers::segmentation::{CS, DS, ES, FS, GS, SS, Segment};
 
 use crate::shell3::MatrixTarget;
 
-use guest_work::{VmLaneProfile, pick_vm_hull_lane};
+use guest_work::{VmLaneProfile, select_vm_lane_target_with_preference};
+use lane::CorePreference;
 use memory::*;
 const MAIN_LOOP_MARKER: &[u8] = b"main: entering executor loop";
 const VMX_PAGE_SIZE: usize = 4096;
@@ -242,6 +243,10 @@ static VMXON_PA_BY_CPU: [AtomicU64; TRUEOS_VM_CPU_SLOT_LIMIT] =
 static VMX_CORE_CONTRACT_SUMMARY_LOGGED: AtomicBool = AtomicBool::new(false);
 static VM_BOOT_MODES: [Mutex<VmBootMode>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(VmBootMode::Hull) }; TRUEOS_VM_ID_LIMIT];
+// Retain the admission hint across pause/resume after the loader consumes the
+// Blueprint bytes. Fresh starts always replace it, including non-Blueprint VMs.
+static VM_CORE_PREFERENCES: [Mutex<CorePreference>; TRUEOS_VM_ID_LIMIT] =
+    [const { Mutex::new(CorePreference::Any) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_PENDING_LAUNCH_STATES: [Mutex<Option<BlueprintPendingLaunchState>>;
     TRUEOS_VM_ID_LIMIT] = [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_LAUNCH_STATES: [Mutex<Option<BlueprintLaunchState>>; TRUEOS_VM_ID_LIMIT] =
@@ -2263,6 +2268,23 @@ fn start_with_mode(
     if let Some(mode) = VM_BOOT_MODES.get(vm_id as usize) {
         *mode.lock() = boot_mode;
     }
+    // Read the package's advisory flag before moving the pending launch state.
+    // Selection happens here on the host, before spawning the VMX carrier task;
+    // no userspace/Tokio thread or guest scheduler affinity is involved.
+    let core_preference = if let Some(pending) = pending_blueprint.as_ref() {
+        if blueprint::parse_blueprint(&pending.module_bytes)
+            .is_ok_and(|module| module.prefers_performance_core())
+        {
+            CorePreference::PreferPerformance
+        } else {
+            CorePreference::Any
+        }
+    } else if vm.pause_latched.load(Ordering::Acquire) {
+        *VM_CORE_PREFERENCES[vm_id as usize].lock()
+    } else {
+        CorePreference::Any
+    };
+    *VM_CORE_PREFERENCES[vm_id as usize].lock() = core_preference;
     if let Some(pending) = pending_blueprint {
         if let Some(slot) = BLUEPRINT_PENDING_LAUNCH_STATES.get(vm_id as usize) {
             *slot.lock() = Some(pending);
@@ -2273,7 +2295,7 @@ fn start_with_mode(
     }
 
     let profile = VmLaneProfile::vm_default();
-    let mut target = match pick_vm_hull_lane() {
+    let mut target = match select_vm_lane_target_with_preference(profile, core_preference) {
         Ok(target) => target,
         Err(error) => {
             clear_blueprint_pending_launch(vm_id);
@@ -2323,6 +2345,15 @@ fn start_with_mode(
         target.core_kind_name(),
         memory::active_guest_stack_mb_for_vm(vm_id)
     );
+    if core_preference == CorePreference::PreferPerformance {
+        hvimportantf(format_args!(
+            "hv: vm{} carrier preference=performance selected_slot={} selected_kind={} fallback={}",
+            vm_id,
+            target.slot,
+            target.core_kind_name(),
+            target.core_kind != crate::workers::CORE_KIND_PERF,
+        ));
+    }
     let generation = vm
         .run_generation
         .fetch_add(1, Ordering::AcqRel)

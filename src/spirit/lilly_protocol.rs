@@ -998,12 +998,17 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
     if super::codex_handoff::needs_crossed() {
         let mut state = IDLE_STRATEGY.lock();
         let idle = state.get_or_insert_with(|| LillyIdleStrategy::new(Instant::now()));
-        if !idle.crossed {
+        // Non-idle clips can leave a different posture from the last idle
+        // endpoint. Re-establish crossed arms after those clips finish.
+        if !idle.crossed || !idle.active {
+            let preparation = resolve(IDLE_CROSS_ARMS_TRANSITION, *LAST_RGBA.lock())?;
+            idle.active = true;
             idle.pending_crossed = Some(true);
-            return resolve(IDLE_CROSS_ARMS_TRANSITION, *LAST_RGBA.lock());
+            return Ok(preparation);
         }
+        let held = resolve_static_idle(IDLE_CROSSED_SOFT_BLINK, *LAST_RGBA.lock(), 100)?;
         super::codex_handoff::crossed_ready();
-        return resolve_static_idle(IDLE_CROSSED_SOFT_BLINK, *LAST_RGBA.lock(), 100);
+        return Ok(held);
     }
     {
         let mut activity = ACTIVITY_GESTURES.lock();

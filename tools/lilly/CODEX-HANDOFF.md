@@ -18,17 +18,24 @@ Other apps retain their usual movable compact tile. A live Codex Blueprint
    the application compositor during flight.
 4. Absolute-time smoothstep motion runs on slot4's existing 60 Hz cadence, even
    with no mouse input or Lilly frame changes. It takes 320–1100 ms depending on
-   distance. The destination follows the applied 256 × 256 cursor plane. Lilly
-   can prepare crossed arms during the delay and flight.
+   distance. The destination follows the applied 256 × 256 cursor plane. The
+   gray-backed tile keeps its original appearance throughout the flight.
 5. At the plane overlap, Spirit stamps the inside portion after the character's
    GPU VFX pass; slot4 draws the outside portion. A 48 px approach margin temporarily raises Spirit's producer
    target to 60 Hz. Both portions use one acknowledged integer pose and identical
-   native alpha/window opacity. Until the first overlap acknowledgement, slot4
-   retains its last complete outside pose. Ordinary Lilly sprite timings remain
-   independent and return to their usual producer cadence after landing.
-6. Once crossed arms are ready, blend into the packed chest stamp over 100 ms
-   and play Wish C, ending in crossed static. The authored stamp omits gray;
-   the procedural arriving tile includes it.
+   native alpha/window opacity. Motion is sampled after GPU completion to avoid
+   aging the tile's position during character rendering. Until the first overlap
+   acknowledgement, slot4 retains its last complete outside pose. Ordinary Lilly
+   sprite frame timings remain independent.
+6. Only after the intact chest pose becomes SURFLIVE does Lilly receive the
+   crossed-arms request. She finishes her current clip and posture transition
+   while the unchanged tile rests on her chest. Once she signals readiness, the
+   packed static Codex frame is shown underneath the tile. Its SURFLIVE
+   acknowledgement starts the 200 ms fade of the complete native tile at the
+   60 Hz producer target, then play the existing
+   Wish C timeline, ending in crossed static. The authored stamp omits gray;
+   the procedural arriving tile includes it. Ordinary producer cadence resumes
+   after the tile fade.
 7. The restore ticket remains after playback. A primary click anywhere in the
    existing radius-150 Lilly/Spirit dock circle restores and focuses the window
    at its original placement. This works during the shrink, delay and flight as
@@ -57,15 +64,10 @@ The existing barrier and explicit GPU-then-CPU stamping contract were introduced
 by `t4ce` in commit `4e8e079098cf8f14e138afa484f87d73a4c26848`, 21 July 2026
 23:33 CEST (`ok`).
 
-Only the 100 ms landing crossfade needs the persistent 256 KiB DMA source
-scratch, written by Spirit's single producer after its previous GPU source
-read has completed. It blends immutable resident character sprites before VFX;
-the native tile fades out in the post-pass as the authored chest stamp fades in.
-Outside the hardware plane, the software sprite needs none of this copying or
-GPU work. The scratch reserves GPU
-VA `[0x3ffc0000,0x40000000)`; the asset loader excludes that interval. It remains
-allocated across cancellations so an in-flight read cannot outlive it. GPU Logger
-pauses the handoff clock.
+The landing fade uses the immutable resident static Codex sprite before VFX
+and fades only the native tile in the post-pass. It needs no character source
+copy, blend, or temporary DMA allocation. Outside the hardware plane, the
+software sprite needs no GPU work. GPU Logger pauses the handoff clock.
 
 Slot4 consumes poses acknowledged by matching CUR_SURFLIVE sequences only during
 overlap. This rejects stale completion and partitions geometry exactly, but does
@@ -128,9 +130,13 @@ python3 tools/testpy/test_ui4_collapse_animation.py
 ```
 
 The handoff harness imports both production modules and checks identity,
-detached settlement, motion without cursor/sprite frames or broker queries,
+detached settlement, motion without sprite changes or broker queries,
 zero application-compositor updates during flight, stale acknowledgements, live destination movement,
-crossed-pose gating, Wish C completion, multiple folded windows and cancellation.
+GPU-retirement motion sampling, visible-landing request gating, unchanged gray
+tile while waiting, display-rate fade over the static Codex frame, unchanged
+Wish C durations, multiple folded windows and cancellation. Sequencer tests also
+cover current-clip completion, preparation after an uncrossed speech clip, and
+queued gesture resumption.
 Geometry tests cover all eight entry directions and every tile pixel. The dock
 harness exercises the production restore input block, including the shared circle
 edge, rejected drags, extra buttons and denied authority.

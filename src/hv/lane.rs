@@ -51,6 +51,14 @@ pub struct LaneProfile {
     pub placement: SpawnPlacement,
 }
 
+/// A soft preference among otherwise eligible, exclusively leased carriers.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum CorePreference {
+    Any,
+    /// Prefer a registered performance core; fall back when none can be leased.
+    PreferPerformance,
+}
+
 #[derive(Clone)]
 struct LaneCandidate {
     slot: u32,
@@ -169,6 +177,13 @@ impl Drop for LaneLease {
 }
 
 pub fn pick_carrier_lane(profile: LaneProfile) -> Result<LaneTarget, LanePickError> {
+    pick_carrier_lane_with_preference(profile, CorePreference::Any)
+}
+
+pub fn pick_carrier_lane_with_preference(
+    profile: LaneProfile,
+    preference: CorePreference,
+) -> Result<LaneTarget, LanePickError> {
     let missing_error = match profile.placement {
         SpawnPlacement::Worker => LanePickError::MissingWorkerLane,
         SpawnPlacement::ReservedVmLane => LanePickError::MissingReservedVmLane,
@@ -180,10 +195,36 @@ pub fn pick_carrier_lane(profile: LaneProfile) -> Result<LaneTarget, LanePickErr
     }
 
     let start = LANE_RR.fetch_add(1, Ordering::Relaxed) as usize;
-    for offset in 0..pool.len() {
-        let candidate = &pool[(start + offset) % pool.len()];
-        if let Some(lease) = try_lease(candidate.slot, profile.role) {
-            return Ok(LaneTarget {
+    let target = match preference {
+        CorePreference::Any => try_pick_from_tier(&pool, profile.role, start, None),
+        CorePreference::PreferPerformance => {
+            try_pick_from_tier(&pool, profile.role, start, Some(true))
+                .or_else(|| try_pick_from_tier(&pool, profile.role, start, Some(false)))
+        }
+    };
+    target.ok_or(LanePickError::Busy)
+}
+
+fn try_pick_from_tier(
+    pool: &[LaneCandidate],
+    role: LaneRole,
+    start: usize,
+    performance: Option<bool>,
+) -> Option<LaneTarget> {
+    let candidates = pool.iter().filter(|candidate| {
+        performance.is_none_or(|preferred| {
+            (candidate.core_kind == crate::workers::CORE_KIND_PERF) == preferred
+        })
+    });
+    let count = candidates.clone().count();
+    if count == 0 {
+        return None;
+    }
+    // Rotate within the tier itself: interleaved E/unknown slots must not
+    // weight one P carrier more heavily than another in the first pass.
+    for candidate in candidates.cycle().skip(start % count).take(count) {
+        if let Some(lease) = try_lease(candidate.slot, role) {
+            return Some(LaneTarget {
                 slot: candidate.slot,
                 core_kind: candidate.core_kind,
                 spawner: candidate.spawner,
@@ -192,7 +233,7 @@ pub fn pick_carrier_lane(profile: LaneProfile) -> Result<LaneTarget, LanePickErr
         }
     }
 
-    Err(LanePickError::Busy)
+    None
 }
 
 pub fn pick_tokio_blocking_lane() -> Result<LaneTarget, LanePickError> {

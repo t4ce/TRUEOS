@@ -127,14 +127,21 @@ pub type GuestWorkProfile = VmLaneProfile;
 pub type GuestWorkTarget = VmLaneTarget;
 
 pub fn select_vm_lane_target(profile: VmLaneProfile) -> Result<VmLaneTarget, VmLanePickError> {
-    let target = crate::hv::lane::pick_carrier_lane(crate::hv::lane::LaneProfile {
+    select_vm_lane_target_with_preference(profile, crate::hv::lane::CorePreference::Any)
+}
+
+pub fn select_vm_lane_target_with_preference(
+    profile: VmLaneProfile,
+    preference: crate::hv::lane::CorePreference,
+) -> Result<VmLaneTarget, VmLanePickError> {
+    let target = crate::hv::lane::pick_carrier_lane_with_preference(crate::hv::lane::LaneProfile {
         role: match profile.role {
             VmLaneRole::VmHull => crate::hv::lane::LaneRole::VmHull,
             VmLaneRole::TokioBlocking => crate::hv::lane::LaneRole::TokioBlocking,
             VmLaneRole::Worker => crate::hv::lane::LaneRole::Worker,
         },
         placement: profile.placement,
-    })
+    }, preference)
     .map_err(map_lane_pick_error)?;
 
     Ok(VmLaneTarget {

@@ -94,7 +94,19 @@ mod spirit {
         }
         pub fn resident_frame(name: &str) -> Option<LillyResidentFrame> {
             Some(LillyResidentFrame {
-                phys: if name == "Static_up/static.png" { 1 } else { 2 },
+                phys: match name {
+                    "Static_up/static.png" => 1,
+                    "Static_up/codex.png" => 2,
+                    _ => {
+                        name.rsplit('/')
+                            .next()?
+                            .strip_prefix("frame_")?
+                            .strip_suffix(".png")?
+                            .parse::<u64>()
+                            .ok()?
+                            + 1
+                    }
+                },
                 gpu: 0,
                 bytes: 256 * 256 * 4,
                 width: 256,
@@ -265,7 +277,11 @@ fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
     assert!(!a::active());
     time(240);
     ui4::advance();
-    assert!(a::needs_crossed());
+    assert!(
+        !a::needs_crossed(),
+        "settlement does not request a posture change"
+    );
+    a::crossed_ready(); // An early/stale ready signal cannot start the fade.
     assert!(
         !ui4::snapshot(1).placement.visible,
         "no compact window during settlement"
@@ -340,17 +356,72 @@ fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
         "await first cursor latch at overlap"
     );
     time(956);
-    spirit::source(11).unwrap();
+    let fresh = spirit::source(11).unwrap();
+    let mut stale_pixels = before.clone();
+    assert!(frame.stamp.unwrap().apply(&mut stale_pixels, layout));
+    assert_eq!(
+        stale_pixels, before,
+        "a stale CPU pass cannot stamp a newer source"
+    );
     a::presented(10);
     assert!(a::visual().is_none(), "stale ack cannot move software half");
+    time(973);
+    let mut invalid = layout;
+    invalid.pitch_bytes = 1023;
+    let mut pixels = before.clone();
+    assert!(!fresh.stamp.unwrap().apply(&mut pixels, invalid));
+    assert_eq!(pixels, before, "invalid layout never stamps");
+    assert!(fresh.stamp.unwrap().apply(&mut pixels, layout));
+    assert_eq!(
+        a::software_visual().unwrap(),
+        last,
+        "CPU pass still waits for display"
+    );
     a::presented(11);
     let overlap = a::software_visual().unwrap();
     assert!(overlap.pose.near_cursor(0));
     assert_eq!(overlap.opacity, 233);
+    assert_eq!(
+        overlap.pose,
+        a::geometry::slide(
+            a::geometry::Point { x: 100, y: 250 },
+            a::geometry::Point { x: 500, y: 300 },
+            973 - 740,
+            320,
+        ),
+        "motion samples GPU retirement rather than the older submission time"
+    );
+    let mut inside_positions = vec![overlap.pose.icon.x];
+    for (seq, t) in [(20, 990), (21, 1006), (22, 1023), (23, 1040)] {
+        time(t);
+        assert!(a::fast_updates());
+        let frame = spirit::source(seq).unwrap();
+        assert_eq!(frame.surface.phys, 1, "Lily keeps her ordinary frame");
+        assert!(frame.stamp.unwrap().apply(&mut before.clone(), layout));
+        a::presented(seq);
+        inside_positions.push(a::visual().unwrap().pose.icon.x);
+        assert!(
+            !a::needs_crossed(),
+            "moving tile does not request a transition"
+        );
+    }
+    assert!(
+        inside_positions.windows(2).all(|p| p[0] < p[1]),
+        "inside motion advances at each display sample without changing Lily's frame"
+    );
     crate::CX.store(600, Ordering::SeqCst);
     time(2000);
-    spirit::source(12).unwrap();
+    let landed = spirit::source(12).unwrap();
+    assert!(landed.stamp.unwrap().apply(&mut before.clone(), layout));
+    assert!(
+        !a::needs_crossed(),
+        "a submitted chest pose is not yet visible"
+    );
     a::presented(12);
+    assert!(
+        a::needs_crossed(),
+        "visible chest landing requests Lily's next boundary"
+    );
     assert_eq!(
         a::visual().unwrap().pose.icon.x,
         713,
@@ -360,16 +431,78 @@ fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
         !a::visual().unwrap().hidden,
         "wait for crossed arms before WishC"
     );
+    let gray = (164 * 256 + 121) * 4;
+    for t in [2100, 2350, 2600] {
+        time(t);
+        let held = spirit::source(31).unwrap();
+        assert_eq!(
+            held.surface.phys, 1,
+            "Lily may finish her current clip and transition"
+        );
+        let mut pixels = before.clone();
+        assert!(held.stamp.unwrap().apply(&mut pixels, layout));
+        assert_eq!(
+            &pixels[gray..gray + 4],
+            &[60, 66, 72, 255],
+            "gray tile keeps its original opacity while waiting on the chest"
+        );
+        a::presented(31);
+    }
     a::crossed_ready();
-    spirit::source(13).unwrap();
+    let fade = spirit::source(13).unwrap();
+    assert_eq!(
+        fade.surface.phys, 2,
+        "static Codex chest is present before fading"
+    );
+    time(2700); // A slow GPU render cannot consume the fade before display.
+    assert!(a::fast_updates());
+    let mut pixels = before.clone();
+    assert!(fade.stamp.unwrap().apply(&mut pixels, layout));
+    assert_eq!(
+        &pixels[gray..gray + 4],
+        &[60, 66, 72, 255],
+        "fade starts intact"
+    );
     a::presented(13);
     assert!(a::software_visual().is_none());
-    time(2100);
+    let mut gray_levels = vec![60];
+    for (seq, t) in (2716..2900).step_by(17).enumerate() {
+        time(t);
+        assert!(a::fast_updates(), "fade retains display-rate updates");
+        let fade = spirit::source(40 + seq as u64).unwrap();
+        assert_eq!(
+            fade.surface.phys, 2,
+            "static Codex stays beneath the entire fade"
+        );
+        let mut pixels = before.clone();
+        assert!(fade.stamp.unwrap().apply(&mut pixels, layout));
+        gray_levels.push(pixels[gray]);
+    }
     assert!(
-        spirit::source(16).unwrap().stamp.is_none(),
-        "authored ring frames use normal VFX without a native stamp"
+        gray_levels.windows(2).all(|p| p[0] > p[1]),
+        "every fade sample advances"
     );
-    time(4240);
+    for t in [2900, 3349] {
+        time(t);
+        let opening = spirit::source(16).unwrap();
+        assert_eq!(
+            opening.surface.phys, 2,
+            "authored opening starts after the tile fade"
+        );
+        assert!(opening.stamp.is_none(), "native tile is completely gone");
+        assert!(!a::fast_updates(), "ordinary cadence resumes after fade");
+    }
+    time(3350);
+    let wish = spirit::source(17).unwrap();
+    assert_eq!(
+        wish.surface.phys, 3,
+        "Wish C advances with its unchanged frame durations"
+    );
+    assert!(wish.stamp.is_none());
+    time(5139);
+    assert_eq!(spirit::source(18).unwrap().surface.phys, 1);
+    assert!(a::active());
+    time(5140);
     spirit::source(14).unwrap();
     a::presented(14);
     assert!(!a::active());
