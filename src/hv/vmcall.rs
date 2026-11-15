@@ -326,6 +326,7 @@ pub const OP_BP_HTTP_REQUEST_START_V1: u32 = 0x250;
 pub const OP_BP_HTTP_REQUEST_HEAD_V1: u32 = 0x251;
 pub const OP_BP_HTTP_REQUEST_READ_V1: u32 = 0x252;
 pub const OP_BP_HTTP_REQUEST_DISCARD_V1: u32 = 0x253;
+pub const OP_BP_HTTP_AUDIO_CLIP_SUBMIT_V1: u32 = trueos_vm::vmcall::OP_BP_HTTP_AUDIO_CLIP_SUBMIT_V1;
 pub const OP_BP_STDIO_IS_TERMINAL_V1: u32 = trueos_vm::vmcall::OP_BP_STDIO_IS_TERMINAL_V1;
 pub const OP_BP_PROCESS_IDENTITY_V1: u32 = trueos_vm::vmcall::OP_BP_PROCESS_IDENTITY_V1;
 pub const OP_BP_FETCH_BYTES_RESULT_LEN: u32 = 0x24; // arg0 is op id, response is signed len/rc
@@ -4215,6 +4216,15 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
             } else {
                 write_response(vm_id, seq, STATUS_OK, op_id as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_HTTP_AUDIO_CLIP_SUBMIT_V1 => {
+            if req_len != 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            } else {
+                let rc = crate::r::services::audio_http::handoff::submit_guest(vm_id, arg0, arg1);
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             }
             DispatchOutcome::Resume
         }

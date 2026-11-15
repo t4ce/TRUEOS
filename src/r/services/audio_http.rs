@@ -1,20 +1,10 @@
-//! Listen-only HTTP playback sink. No hardware, capture, synthesis or exported audio ABI.
+//! Listen-only HTTP playback sink for completed clips. No hardware or capture.
+pub(crate) mod handoff;
 mod sink;
 use sink::Sink;
 use spin::Mutex;
 
 static SINK: Mutex<Sink> = Mutex::new(Sink::new());
-
-/// Feed the sink internally with interleaved stereo 48 kHz PCM. A competing
-/// source succeeds without retaining its samples. Source IDs identify a playback
-/// lifetime; its owner must call `finish` when that lifetime ends.
-pub(crate) fn submit(source: u64, samples: &[i16]) -> usize {
-    SINK.lock().submit(source, samples)
-}
-
-pub(crate) fn finish(source: u64) {
-    SINK.lock().finish(source);
-}
 
 extern crate alloc;
 
@@ -437,10 +427,8 @@ pub async fn audio_http_task() {
             if now >= next_send + Duration::from_millis(100) {
                 next_send = now + Duration::from_millis(SEND_MS as u64);
             }
-            let mut sink = SINK.lock();
-            for _ in 0..SAMPLE_RATE * CHANNELS * SEND_MS / 1000 {
-                pcm_bytes.extend_from_slice(&sink.samples.pop_front().unwrap_or(0).to_le_bytes());
-            }
+            pcm_bytes.resize(SAMPLE_RATE * CHANNELS * 2 * SEND_MS / 1000, 0);
+            SINK.lock().render(&mut pcm_bytes);
         }
         for endpoint in endpoints.iter_mut() {
             prune_idle_sessions(endpoint);

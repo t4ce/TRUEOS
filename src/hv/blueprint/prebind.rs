@@ -53,7 +53,10 @@ pub(crate) fn prebind_import_readiness(name: &str, filesystem_independent: bool)
 }
 
 pub(crate) fn retired_import_error(name: &str) -> Option<&'static str> {
-    if name.starts_with("trueos_cabi_audio_") || name.starts_with("trueos_cabi_hda_") {
+    if name.starts_with("trueos_cabi_audio_") {
+        return Some("retired audio import; kernel audio exports are no longer supported");
+    }
+    if name.starts_with("trueos_cabi_hda_") {
         return Some("retired audio import; kernel audio exports are no longer supported");
     }
     if name.starts_with("ring_core_") {

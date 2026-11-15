@@ -447,6 +447,9 @@ pub const OP_BP_MIO_TCP_SOCKET_CONNECT: u32 = 0x24a;
 pub const OP_BP_MIO_TCP_SOCKET_LISTEN: u32 = 0x24b;
 pub const OP_BP_TIMEZONE_OFFSET_SECONDS: u32 = 0x24c;
 
+/// One complete PCM clip: arg0 guest heap pointer, arg1 byte length.
+pub const OP_BP_HTTP_AUDIO_CLIP_SUBMIT_V1: u32 = 0x259;
+
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_BAD_ARG: u32 = 2;
 pub const COMM_PAGE_BYTES: usize = 160 * 1024;

@@ -1,49 +1,58 @@
-//! Bounded, single-source PCM admission. This module is kernel-internal.
-use alloc::collections::VecDeque;
+//! One complete, bounded PCM clip at a time. Competing clips succeed/discard.
+use alloc::vec::Vec;
 
-// Half a second of stereo 48 kHz PCM. Keep the most recent samples when a
-// producer outruns playback; memory use never depends on the supplied length.
-const CAPACITY: usize = 48_000;
+/// Two minutes of stereo signed 16-bit little-endian PCM at 48 kHz.
+pub(super) const MAX_CLIP_BYTES: usize = 48_000 * 4 * 120;
+
+pub(super) fn validate_size(bytes: usize) -> Result<(), i32> {
+    if bytes == 0 || bytes % 4 != 0 {
+        Err(-22)
+    } else if bytes > MAX_CLIP_BYTES {
+        Err(-27)
+    } else {
+        Ok(())
+    }
+}
 
 pub(super) struct Sink {
-    owner: Option<u64>,
-    pub(super) samples: VecDeque<i16>,
+    clip: Vec<u8>,
+    offset: usize,
 }
 
 impl Sink {
     pub(super) const fn new() -> Self {
         Self {
-            owner: None,
-            samples: VecDeque::new(),
+            clip: Vec::new(),
+            offset: 0,
         }
     }
 
-    pub(super) fn submit(&mut self, source: u64, samples: &[i16]) -> usize {
-        if samples.is_empty() || samples.len() % 2 != 0 {
-            return 0;
+    /// Copy a completed clip once. Nothing is retained from competing sources,
+    /// and the caller can release its allocation as soon as this returns.
+    pub(super) fn submit(&mut self, bytes: &[u8]) -> Result<(), i32> {
+        validate_size(bytes.len())?;
+        if !self.clip.is_empty() {
+            return Ok(());
         }
-        if let Some(owner) = self.owner {
-            if owner != source {
-                return samples.len() / 2;
-            }
-        } else {
-            self.owner = Some(source);
-        }
-        let keep = samples.len().min(CAPACITY);
-        let drop = self
-            .samples
-            .len()
-            .saturating_add(keep)
-            .saturating_sub(CAPACITY);
-        self.samples.drain(..drop);
-        self.samples
-            .extend(samples[samples.len() - keep..].iter().copied());
-        samples.len() / 2
+        let mut clip = Vec::new();
+        clip.try_reserve_exact(bytes.len()).map_err(|_| -12)?;
+        clip.extend_from_slice(bytes);
+        self.clip = clip;
+        self.offset = 0;
+        Ok(())
     }
 
-    pub(super) fn finish(&mut self, source: u64) {
-        if self.owner == Some(source) {
-            self.owner = None;
+    /// Drain complete frames at the HTTP clock's pace. The final sample releases
+    /// ownership automatically; silence fills the rest of this playback block.
+    pub(super) fn render(&mut self, out: &mut [u8]) {
+        assert_eq!(out.len() % 4, 0);
+        out.fill(0);
+        let count = out.len().min(self.clip.len().saturating_sub(self.offset));
+        out[..count].copy_from_slice(&self.clip[self.offset..self.offset + count]);
+        self.offset += count;
+        if self.offset == self.clip.len() {
+            self.clip = Vec::new();
+            self.offset = 0;
         }
     }
 }
@@ -53,55 +62,57 @@ mod tests {
     use super::*;
 
     #[test]
-    fn first_source_wins_and_competitors_succeed_without_being_queued() {
+    fn first_clip_wins_and_competitors_succeed_without_being_queued() {
         let mut sink = Sink::new();
-        assert_eq!(sink.submit(1, &[10, 11]), 1);
-        assert_eq!(sink.submit(2, &[20, 21, 22, 23]), 2);
-        assert_eq!(sink.submit(1, &[12, 13]), 1);
-        assert_eq!(
-            sink.samples.iter().copied().collect::<alloc::vec::Vec<_>>(),
-            [10, 11, 12, 13]
-        );
+        sink.submit(&[1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+        assert_eq!(sink.submit(&[9, 10, 11, 12]), Ok(()));
+        let mut block = [0; 4];
+        sink.render(&mut block);
+        assert_eq!(block, [1, 2, 3, 4]);
+        sink.render(&mut block);
+        assert_eq!(block, [5, 6, 7, 8]);
+        sink.render(&mut block);
+        assert_eq!(block, [0; 4]);
     }
 
     #[test]
-    fn only_owner_can_release_and_the_next_source_can_play() {
+    fn last_sample_releases_ownership_and_caller_memory_is_not_borrowed() {
         let mut sink = Sink::new();
-        sink.submit(10, &[1, 2]);
-        sink.finish(11);
-        sink.submit(11, &[3, 4]);
-        assert_eq!(sink.owner, Some(10));
-        sink.finish(10);
-        sink.submit(11, &[5, 6]);
-        assert_eq!(sink.owner, Some(11));
-        // Preserve the completed source's tail, then play the new source in
-        // sequence. The rejected source's earlier samples never appear.
-        assert_eq!(
-            sink.samples.iter().copied().collect::<alloc::vec::Vec<_>>(),
-            [1, 2, 5, 6]
-        );
+        let mut input = alloc::vec![1, 2, 3, 4];
+        sink.submit(&input).unwrap();
+        input.fill(99);
+        drop(input);
+        let mut block = [0; 8];
+        sink.render(&mut block);
+        assert_eq!(block, [1, 2, 3, 4, 0, 0, 0, 0]);
+        assert!(sink.clip.is_empty());
+        sink.submit(&[5, 6, 7, 8]).unwrap();
+        sink.render(&mut block);
+        assert_eq!(&block[..4], &[5, 6, 7, 8]);
     }
 
     #[test]
-    fn queue_is_bounded_and_drops_whole_stereo_frames() {
+    fn completed_utterance_longer_than_the_old_half_second_buffer_is_lossless() {
         let mut sink = Sink::new();
-        sink.submit(1, &alloc::vec![1; CAPACITY]);
-        sink.submit(1, &[2, 3]);
-        assert_eq!(sink.samples.len(), CAPACITY);
-        assert_eq!(sink.samples.pop_back(), Some(3));
-        assert_eq!(sink.samples.pop_back(), Some(2));
-        sink.submit(1, &alloc::vec![4; CAPACITY * 4]);
-        assert_eq!(sink.samples.len(), CAPACITY);
-        assert!(sink.samples.iter().all(|sample| *sample == 4));
+        let bytes: Vec<u8> = (0..48_000 * 4 * 3).map(|n| (n % 251) as u8).collect();
+        sink.submit(&bytes).unwrap();
+        let mut actual = Vec::new();
+        for _ in 0..300 {
+            let mut block = [0; 1920];
+            sink.render(&mut block);
+            actual.extend_from_slice(&block);
+        }
+        assert_eq!(actual, bytes);
+        assert!(sink.clip.is_empty());
     }
 
     #[test]
-    fn empty_or_partial_frames_cannot_claim_ownership() {
+    fn invalid_or_oversized_clips_never_claim_the_sink() {
         let mut sink = Sink::new();
-        assert_eq!(sink.submit(1, &[]), 0);
-        assert_eq!(sink.submit(1, &[42]), 0);
-        assert_eq!(sink.owner, None);
-        assert_eq!(sink.submit(2, &[1, 2]), 1);
-        assert_eq!(sink.owner, Some(2));
+        assert_eq!(sink.submit(&[]), Err(-22));
+        assert_eq!(sink.submit(&[1, 2]), Err(-22));
+        assert_eq!(validate_size(MAX_CLIP_BYTES), Ok(()));
+        assert_eq!(validate_size(MAX_CLIP_BYTES + 4), Err(-27));
+        assert!(sink.clip.is_empty());
     }
 }

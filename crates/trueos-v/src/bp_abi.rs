@@ -1432,6 +1432,10 @@ unsafe extern "C" {
     ) -> i32;
     pub safe fn trueos_cabi_smtp_password_configured() -> i32;
 
+    /// Complete stereo s16le/48 kHz clip (maximum 120 seconds). Zero means
+    /// copied for HTTP playback or discarded because another clip owns the sink.
+    pub fn trueos_cabi_http_audio_clip_submit_v1(pcm_ptr: *const u8, pcm_bytes: usize) -> i32;
+
     pub fn trueos_cabi_vgpu_open(requested_caps: u64, out_device: *mut u64) -> i32;
     pub fn trueos_cabi_vgpu_scalar_f32_v1(
         device: u64,
