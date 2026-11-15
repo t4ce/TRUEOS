@@ -18,17 +18,33 @@ fn decode(value: u32) -> P {
         _ => P::only(LogLevelSet::from_bits(value as u16)),
     }
 }
-const fn seeded() -> [AtomicU32; LogArea::ALL.len()] {
-    let mut policies = [const { AtomicU32::new(0) }; LogArea::ALL.len()];
+// Area IDs remain stable when a category is retired, so they can have gaps.
+// Size and seed this ID-indexed table by those IDs, not by the live area count.
+const POLICY_SLOTS: usize = {
+    let mut slots = 0;
     let mut index = 0;
-    while index < policies.len() {
-        policies[index] =
-            AtomicU32::new(encode(super::flags::build_area_log_policy(LogArea::ALL[index])));
+    while index < LogArea::ALL.len() {
+        let needed = LogArea::ALL[index].index() as usize + 1;
+        if needed > slots {
+            slots = needed;
+        }
+        index += 1;
+    }
+    slots
+};
+
+const fn seeded() -> [AtomicU32; POLICY_SLOTS] {
+    let mut policies = [const { AtomicU32::new(0) }; POLICY_SLOTS];
+    let mut index = 0;
+    while index < LogArea::ALL.len() {
+        let area = LogArea::ALL[index];
+        policies[area.index() as usize] =
+            AtomicU32::new(encode(super::flags::build_area_log_policy(area)));
         index += 1;
     }
     policies
 }
-static POLICIES: [AtomicU32; LogArea::ALL.len()] = seeded();
+static POLICIES: [AtomicU32; POLICY_SLOTS] = seeded();
 static PROFILE: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) const fn laptop_bringup_policy(area: LogArea) -> P {

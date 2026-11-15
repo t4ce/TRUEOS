@@ -96,7 +96,8 @@ define_started_flags!(
     BP_AUTOSTART_STARTED,
     FACTORY_RAM_PROBE_STARTED,
     LOGTOTCP_STARTED,
-    AUDIO_HTTP_STARTED
+    AUDIO_HTTP_STARTED,
+    HDA_SERVICE_STARTED
 );
 
 #[cfg(feature = "legacy_vm_checkpoint")]
@@ -801,6 +802,27 @@ fn spawn_audio_http(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::services::audio_http::audio_http_task())
 }
 
+fn spawn_hda_service(spawner: Spawner) -> SpawnAttempt {
+    // Wait for the full CPU topology before choosing BSP fallback, so a late
+    // E-core registration cannot accidentally pin the owner to the BSP.
+    if !crate::workers::all_topology_spawners_registered() {
+        return SpawnAttempt::Skipped;
+    }
+    if let Some((_slot, _kind, worker)) =
+        crate::workers::pick_eff_background_spawner_with_slot()
+    {
+        match crate::r::services::hda_service::hda_service_task() {
+            Ok(token) => {
+                worker.spawn(token);
+                SpawnAttempt::Spawned
+            }
+            Err(error) => SpawnAttempt::Failed(error),
+        }
+    } else {
+        spawn_local(spawner, |_| crate::r::services::hda_service::hda_service_task())
+    }
+}
+
 #[inline]
 fn intel_device_gate() -> bool {
     crate::intel::has_claimed_device()
@@ -903,7 +925,7 @@ const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
 // Own the AtomicBool fields in a static array; an interior-mutable temporary
 // cannot be promoted behind a shared slice reference.
-const TASK_COUNT: usize = 61
+const TASK_COUNT: usize = 62
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1263,6 +1285,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
     TaskSpec::enabled("thermal-service", 0, &THERMAL_SERVICE_STARTED, spawn_thermal_service),
+    TaskSpec::enabled("hda-service", 0, &HDA_SERVICE_STARTED, spawn_hda_service),
     TaskSpec::enabled_gated(
         "html_fetch_service",
         crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::BACKGROUND_AP_WORKER_READY,

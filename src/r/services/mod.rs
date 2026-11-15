@@ -7,6 +7,7 @@ pub(crate) mod ide_source_service;
 pub mod gamepad_control_service;
 
 pub mod hid_udp_service;
+pub(crate) mod hda_service;
 pub(crate) mod hull_font_service;
 pub(crate) mod hull_download_service;
 pub(crate) mod hull_image_policy;

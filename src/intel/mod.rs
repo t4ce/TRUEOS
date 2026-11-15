@@ -14,6 +14,7 @@ pub(crate) mod format;
 pub(crate) mod gpgpu;
 mod gpu_device;
 mod gt_state;
+pub(crate) mod hda;
 mod guc;
 pub(crate) mod guc_ctb;
 pub(crate) mod guc_submission;
