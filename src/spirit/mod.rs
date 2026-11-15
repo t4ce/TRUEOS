@@ -27,6 +27,7 @@ mod lilly_cursor;
 mod paper_demo;
 mod codex_drop;
 pub(crate) mod codex_handoff;
+mod codex_render;
 pub(crate) use codex_drop::{introduce_attachments, attachment_intro_input, poll_attachment_intro, cancel_attachment_intro};
 pub(crate) use paper_demo::{GREETING_GRID_HEIGHT_MM, GREETING_GRID_SCALE, GREETING_GRID_WIDTH_MM};
 pub(crate) mod lilly_protocol;
@@ -580,8 +581,31 @@ fn submit_spirit_vfx_frame(
         cancel_pending(lease);
         return Err(SpiritSubmitError::HardwareNotReady);
     };
+    let control = spirit_vfx_control();
+    let Some(first_claim) = crate::r::services::shell3_font_service::claim_first_spirit_producer() else {
+        cancel_pending(lease);
+        return Err(SpiritSubmitError::Busy);
+    };
+    let Some(submission) =
+        crate::intel::gpgpu::submit_spirit_vfx_frame(target, source, control, present_fps)
+    else {
+        crate::r::services::shell3_font_service::cancel_first_spirit_claim(first_claim);
+        cancel_pending(lease);
+        return Err(SpiritSubmitError::HardwareNotReady);
+    };
+    Ok(GpuInflight {
+        lease,
+        submission,
+        source_frame,
+        polls: 0,
+        cpu_required,
+        stamp,
+    })
+}
+
+fn spirit_vfx_control() -> crate::intel::gpgpu::SpiritVfxControl {
     let snapshot = spirit_vfx::gpu_snapshot();
-    let control = crate::intel::gpgpu::SpiritVfxControl {
+    crate::intel::gpgpu::SpiritVfxControl {
         revision: snapshot.revision,
         background_mode: snapshot.background_mode,
         clock_seconds_of_day: snapshot.clock_seconds_of_day,
@@ -602,25 +626,7 @@ fn submit_spirit_vfx_frame(
         shader_parameters: snapshot.shader_parameters,
         fx_color_a: snapshot.fx_color_a,
         fx_color_b: snapshot.fx_color_b,
-    };
-    let Some(first_claim) = crate::r::services::shell3_font_service::claim_first_spirit_producer() else {
-        cancel_pending(lease);
-        return Err(SpiritSubmitError::Busy);
-    };
-    let Some(submission) =
-        crate::intel::gpgpu::submit_spirit_vfx_frame(target, source, control, present_fps)
-    else {
-        crate::r::services::shell3_font_service::cancel_first_spirit_claim(first_claim);
-        cancel_pending(lease);
-        return Err(SpiritSubmitError::HardwareNotReady);
-    };
-    Ok(GpuInflight {
-        lease,
-        submission,
-        polls: 0,
-        cpu_required,
-        stamp,
-    })
+    }
 }
 
 /// The GPU completion is the write-order proof. The CPU bit keeps this back
@@ -631,15 +637,46 @@ fn release_vfx_producers(
 ) -> Result<bool, SpiritSubmitError> {
     let first_retired = release_gpgpu(producing.lease, release)?;
     if producing.cpu_required {
-        if let Some(stamp) = producing.stamp {
-            let stamped = write_cpu(producing.lease, |pixels, layout| stamp.apply(pixels, layout))?;
-            if !stamped {
-                return Err(SpiritSubmitError::InvalidCommand);
-            }
+        let stamped = write_cpu(producing.lease, |pixels, layout| {
+            // Capture the clean character once during the detached settlement.
+            // Subsequent native tile samples need no GPU cursor producer.
+            codex_render::capture(producing.source_frame, pixels, layout)
+                && producing.stamp.is_none_or(|stamp| stamp.apply(pixels, layout))
+        })?;
+        if !stamped {
+            return Err(SpiritSubmitError::InvalidCommand);
         }
         release_cpu(producing.lease)?;
     }
     Ok(first_retired)
+}
+
+/// Compose a native tile sample over the last completed character rendering.
+/// Lily's next GPU job owns separate storage and cannot hold this CPU lease.
+fn submit_codex_cached_frame(
+    id: SpiritFenceId,
+    source_frame: lilly::LillyResidentFrame,
+) -> Result<(SpiritFrameLease, lilly::LillyResidentFrame), SpiritSubmitError> {
+    let lease = acquire_frame_for(id, SpiritBarrierSet::CPU, SpiritFrameProducer::Vfx)?;
+    let result = (|| {
+        let requested = write_cpu(lease, |pixels, layout| {
+            let rendered = codex_render::copy_into(pixels, layout)?;
+            let source = codex_handoff::cached_source(source_frame, lease.fence.sequence, rendered);
+            if let Some(stamp) = source.and_then(|s| s.stamp)
+                && !stamp.apply(pixels, layout)
+            {
+                return None;
+            }
+            Some(source.map_or(source_frame, |s| s.surface))
+        })?
+        .ok_or(SpiritSubmitError::InvalidCommand)?;
+        release_cpu(lease)?;
+        Ok((lease, requested))
+    })();
+    if result.is_err() {
+        cancel_pending(lease);
+    }
+    result
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -983,6 +1020,7 @@ struct Inflight {
 struct GpuInflight {
     lease: SpiritFrameLease,
     submission: crate::intel::gpgpu::SpiritVfxSubmission,
+    source_frame: lilly::LillyResidentFrame,
     polls: u32,
     cpu_required: bool,
     stamp: Option<codex_handoff::Stamp>,
@@ -1317,9 +1355,37 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
     let mut gpu_logger_pause_started: Option<Instant> = None;
     let mut gpu_logger_next_deadline = Instant::now();
     let mut gpu_logger_frames = 0u64;
+    let mut codex_was_active = false;
+    let mut codex_cleanup = false;
     loop {
         let package_now = Instant::now();
         let gpu_logger_snapshot = gpu_logger::active_snapshot();
+        if id == SpiritFenceId::FENCE_0 {
+            let active = codex_handoff::active();
+            if active && !codex_was_active {
+                codex_render::invalidate();
+                codex_cleanup = false;
+            } else if !active && codex_was_active {
+                // Remove the post-pass tile promptly on restore/completion,
+                // even if a character GPU job is still retiring offscreen.
+                codex_cleanup = true;
+            }
+            codex_was_active = active;
+            let staged_pending = codex_render::busy();
+            if let Err(error) = codex_render::poll() {
+                if !stream_aborted {
+                    crate::log_error!(target: "gfx";
+                        "trueos-spirit: Codex character producer failed error={:?} action=retain-last-surflive\n",
+                        error);
+                }
+                stream_aborted = true;
+            }
+            if staged_pending && !codex_render::busy() && !active {
+                // Display the final clean snapshot before returning to the
+                // ordinary direct GPU producer.
+                codex_cleanup = true;
+            }
+        }
         match (gpu_logger_pause_started, gpu_logger_snapshot) {
             (None, Some(snapshot)) => {
                 gpu_logger_pause_started = Some(package_now);
@@ -1350,6 +1416,12 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                 );
             }
             _ => {}
+        }
+        if id == SpiritFenceId::FENCE_0
+            && gpu_logger_snapshot.is_none()
+            && codex_render::ready()
+        {
+            codex_handoff::render_ready();
         }
         if gpu_logger_snapshot.is_none()
             && id == SpiritFenceId::FENCE_0
@@ -1785,14 +1857,20 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     Timer::at(stream_next_deadline).await;
                     continue;
                 }
-                let source_frame = package_active.and_then(|scheduled| {
-                    let elapsed_ms = Instant::now()
-                        .saturating_duration_since(package_started)
-                        .as_millis();
-                    scheduled
-                        .frame_at_elapsed(elapsed_ms)
-                        .map(|part| part.surface)
-                });
+                let source_frame = package_active
+                    .and_then(|scheduled| {
+                        let elapsed_ms = Instant::now()
+                            .saturating_duration_since(package_started)
+                            .as_millis();
+                        scheduled.frame_at_elapsed(elapsed_ms).map(|part| part.surface)
+                    })
+                    .or_else(|| {
+                        // A clip boundary cannot interrupt the native tile.
+                        // Slide over the last Lily frame until her next is ready.
+                        (id == SpiritFenceId::FENCE_0 && codex_handoff::active())
+                            .then(codex_render::current_source)
+                            .flatten()
+                    });
                 let Some(source_frame) = source_frame else {
                     Timer::after(Duration::from_millis(SPIRIT_IDLE_POLL_MS)).await;
                     continue;
@@ -1808,23 +1886,51 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                         return;
                     }
                 }
+                if id == SpiritFenceId::FENCE_0
+                    && codex_render::ready()
+                    && (codex_handoff::active() || codex_cleanup || codex_render::busy())
+                {
+                    match submit_codex_cached_frame(id, source_frame) {
+                        Ok((lease, requested)) => {
+                            codex_cleanup = false;
+                            advance_spirit_deadline(
+                                &mut stream_next_deadline,
+                                &mut stream_cadence_phase,
+                                codex_handoff::fast_updates(),
+                            );
+                            stream_queued_frames = stream_queued_frames.saturating_add(1);
+                            bringup_diag::submitted(id, lease.fence.sequence);
+                            bringup_diag::released(id);
+                            if codex_was_active
+                                && let Err(error) = codex_render::update(
+                                    requested,
+                                    spirit_vfx_control(),
+                                    presentation_rate.estimate_fps(),
+                                )
+                            {
+                                stream_aborted = true;
+                                crate::log_error!(target: "gfx";
+                                    "trueos-spirit: Codex character update failed error={:?} action=retain-last-surflive\n",
+                                    error);
+                            }
+                            continue;
+                        }
+                        Err(error) => {
+                            crate::log_warn!(target: "gfx";
+                                "trueos-spirit: Codex native sample deferred error={:?}\n", error);
+                            Timer::after(Duration::from_millis(SPIRIT_IDLE_POLL_MS)).await;
+                            continue;
+                        }
+                    }
+                }
                 match submit_spirit_vfx_frame(id, presentation_rate.estimate_fps(), source_frame) {
                     Ok(producing) => {
                         let fast_handoff = id == SpiritFenceId::FENCE_0 && codex_handoff::fast_updates();
-                        let period = if fast_handoff {
-                            spirit_frame_period(&mut stream_cadence_phase, 60)
-                        } else {
-                            spirit_vfx_frame_period(&mut stream_cadence_phase)
-                        };
-                        let scheduled = stream_next_deadline + period;
-                        let now = Instant::now();
-                        stream_next_deadline = if now > scheduled {
-                            // A late overlap frame must not add another full
-                            // frame of delay after its GPU/display work.
-                            if fast_handoff { now } else { now + period }
-                        } else {
-                            scheduled
-                        };
+                        advance_spirit_deadline(
+                            &mut stream_next_deadline,
+                            &mut stream_cadence_phase,
+                            fast_handoff,
+                        );
                         stream_queued_frames = stream_queued_frames.saturating_add(1);
                         bringup_diag::submitted(id, producing.lease.fence.sequence);
                         if spirit_should_trace_frame(stream_queued_frames) {
@@ -1995,6 +2101,22 @@ fn finish_rearm(id: SpiritFenceId) {
 
 fn spirit_vfx_frame_period(phase: &mut u64) -> Duration {
     spirit_frame_period(phase, SPIRIT_VFX_TARGET_HZ)
+}
+
+fn advance_spirit_deadline(deadline: &mut Instant, phase: &mut u64, fast_handoff: bool) {
+    let period = if fast_handoff {
+        spirit_frame_period(phase, 60)
+    } else {
+        spirit_vfx_frame_period(phase)
+    };
+    let scheduled = *deadline + period;
+    let now = Instant::now();
+    // Native samples start immediately when late, without another full delay.
+    *deadline = if now > scheduled {
+        if fast_handoff { now } else { now + period }
+    } else {
+        scheduled
+    };
 }
 
 fn spirit_gpu_logger_frame_period(phase: &mut u64) -> Duration {

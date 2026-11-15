@@ -84,9 +84,7 @@ impl Stamp {
             visual.pose = geometry::slide(
                 a.start,
                 Point { x: cx, y: cy },
-                trueos_time::Instant::now()
-                    .as_millis()
-                    .saturating_sub(a.started),
+                a.elapsed(trueos_time::Instant::now().as_millis()),
                 a.duration,
             );
             s.pending = Some((self.sequence, visual));
@@ -100,12 +98,22 @@ struct Arrival {
     key: Key,
     start: Point,
     started: u64,
+    render_ready: bool,
     duration: u64,
     crossed: bool,
     landed: Option<u64>,
     fade_started: Option<u64>,
     opacity: u8,
     entered: bool,
+}
+impl Arrival {
+    fn elapsed(&self, now: u64) -> u64 {
+        if self.render_ready {
+            now.saturating_sub(self.started)
+        } else {
+            0
+        }
+    }
 }
 struct State {
     active: Option<Arrival>,
@@ -144,6 +152,7 @@ pub(crate) fn begin(key: Key, start: Point, opacity: u8) -> bool {
         start,
         // Settlement belongs to this detached sprite, never a compact window.
         started: trueos_time::Instant::now().as_millis().saturating_add(500),
+        render_ready: false,
         duration: (distance / 2).clamp(320, 1100),
         crossed: false,
         landed: None,
@@ -153,6 +162,15 @@ pub(crate) fn begin(key: Key, start: Point, opacity: u8) -> bool {
     });
     state.last_software = None;
     true
+}
+
+/// Start the flight clock once a pristine character frame can support native
+/// cursor samples. Later Lily frame updates never gate the tile's movement.
+pub(super) fn render_ready() {
+    if let Some(a) = STATE.lock().active.as_mut().filter(|a| !a.render_ready) {
+        a.render_ready = true;
+        a.started = a.started.max(trueos_time::Instant::now().as_millis());
+    }
 }
 pub(crate) fn needs_crossed() -> bool {
     // Lily owns the next natural clip boundary, but the request must follow
@@ -209,12 +227,7 @@ pub(crate) fn software_visual() -> Option<Visual> {
     if a.landed.is_some() {
         return s.committed.filter(|v| v.key == a.key && !v.hidden);
     }
-    let pose = geometry::slide(
-        a.start,
-        Point { x: cx, y: cy },
-        now.saturating_sub(a.started),
-        a.duration,
-    );
+    let pose = geometry::slide(a.start, Point { x: cx, y: cy }, a.elapsed(now), a.duration);
     let v = Visual {
         key: a.key,
         pose,
@@ -254,13 +267,8 @@ pub(crate) fn fast_updates() -> bool {
                 .is_none_or(|t| now.saturating_sub(t) < TILE_FADE_MS)
             || a.landed.is_none()
                 && (a.entered
-                    || geometry::slide(
-                        a.start,
-                        Point { x: cx, y: cy },
-                        now.saturating_sub(a.started),
-                        a.duration,
-                    )
-                    .near_cursor(48))
+                    || geometry::slide(a.start, Point { x: cx, y: cy }, a.elapsed(now), a.duration)
+                        .near_cursor(48))
     })
 }
 /// Commit the software half only after the matching cursor source is SURFLIVE.
@@ -274,7 +282,7 @@ pub(crate) fn presented(sequence: u64) {
                     let chest = geometry::slide(a.start, v.pose.cursor, a.duration, a.duration);
                     if a.landed.is_none()
                         && !v.hidden
-                        && now.saturating_sub(a.started) >= a.duration
+                        && a.elapsed(now) >= a.duration
                         && v.pose == chest
                     {
                         a.landed = Some(now);
@@ -306,13 +314,31 @@ pub(super) fn shift_deadlines(paused_ms: u64) {
 
 /// Called by the single normal Spirit producer after its previous GPU read.
 pub(super) fn source(default: LillyResidentFrame, sequence: u64) -> Option<Source> {
+    source_inner(default, sequence, None)
+}
+
+/// Sample the native tile independently of the asynchronously rendered Lily
+/// frame. Only the static Codex source underneath its final fade must match.
+pub(super) fn cached_source(
+    default: LillyResidentFrame,
+    sequence: u64,
+    rendered: LillyResidentFrame,
+) -> Option<Source> {
+    source_inner(default, sequence, Some(rendered))
+}
+
+fn source_inner(
+    default: LillyResidentFrame,
+    sequence: u64,
+    rendered: Option<LillyResidentFrame>,
+) -> Option<Source> {
     let now = trueos_time::Instant::now().as_millis();
     let (_, _, cx, cy, 256, 256) = super::marker_anchor()? else {
         return None;
     };
     let mut s = STATE.lock();
     let a = s.active.as_mut()?;
-    let elapsed = now.saturating_sub(a.started);
+    let elapsed = a.elapsed(now);
     let pose = geometry::slide(a.start, Point { x: cx, y: cy }, elapsed, a.duration);
     let key = a.key;
     let opacity = a.opacity;
@@ -359,6 +385,10 @@ pub(super) fn source(default: LillyResidentFrame, sequence: u64) -> Option<Sourc
         Some(path) => lilly::resident_frame(path)?,
         None => default,
     };
+    // A queued static Codex render is not proof that it is underneath this
+    // tile yet. Keep the complete tile visible until those pixels are copied
+    // into a presented frame. Ordinary movement accepts every Lily state.
+    let revealing = revealing && (wish.is_some() || rendered.is_none_or(|frame| frame == surface));
     let visual = Visual {
         key,
         pose,

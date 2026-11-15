@@ -10,6 +10,8 @@ Other apps retain their usual movable compact tile. A live Codex Blueprint
    Disable its hit testing, movement and input during the initial shrink.
 2. When the existing shrink finishes, remove the compact window from composition.
    The detached sprite owns the 500 ms settlement delay and subsequent flight.
+   That delay also warms a clean character snapshot. If initial GPU preparation
+   takes longer, settlement extends; the flight clock cannot expire unseen.
    No compact-window drag is armed. A stale drag cannot cancel or move it.
 3. Slot4, the existing software cursor plane, draws the complete native gray-backed
    tile using 2,439 precomputed RGBA horizontal runs. The cache is built once;
@@ -20,20 +22,21 @@ Other apps retain their usual movable compact tile. A live Codex Blueprint
    with no mouse input or Lilly frame changes. It takes 320–1100 ms depending on
    distance. The destination follows the applied 256 × 256 cursor plane. The
    gray-backed tile keeps its original appearance throughout the flight.
-5. At the plane overlap, Spirit stamps the inside portion after the character's
-   GPU VFX pass; slot4 draws the outside portion. A 48 px approach margin temporarily raises Spirit's producer
-   target to 60 Hz. Both portions use one acknowledged integer pose and identical
-   native alpha/window opacity. Motion is sampled after GPU completion to avoid
-   aging the tile's position during character rendering. Until the first overlap
-   acknowledgement, slot4 retains its last complete outside pose. Ordinary Lilly
-   sprite frame timings remain independent.
+5. During the handoff, Spirit restores the latest clean character snapshot into
+   its cursor back buffer and stamps the native tile using CPU-only display
+   updates. The moving tile and final fade target 60 Hz. Lilly/VFX render into
+   separate persistent storage at their ordinary producer cadence; pending GPU
+   work cannot hold the tile's next sample. Movement accepts every Lilly frame.
+   At plane overlap, slot4 draws the outside portion using the same acknowledged
+   integer pose and native alpha/window opacity. Until its first acknowledgement,
+   slot4 retains the last complete outside pose.
 6. Only after the intact chest pose becomes SURFLIVE does Lilly receive the
    crossed-arms request. She finishes her current clip and posture transition
    while the unchanged tile rests on her chest. Once she signals readiness, the
    packed static Codex frame is shown underneath the tile. Its SURFLIVE
    acknowledgement starts the 200 ms fade of the complete native tile at the
-   60 Hz producer target, then play the existing
-   Wish C timeline, ending in crossed static. The authored stamp omits gray;
+   60 Hz producer target, followed by the existing Wish C timeline, ending in
+   crossed static. The authored stamp omits gray;
    the procedural arriving tile includes it. Ordinary producer cadence resumes
    after the tile fade.
 7. The restore ticket remains after playback. A primary click anywhere in the
@@ -45,6 +48,7 @@ Other apps retain their usual movable compact tile. A live Codex Blueprint
 
 `src/ui4/codex_handoff.rs` owns only the lifecycle boundary and restore tickets.
 `src/spirit/codex_handoff.rs` owns the sprite motion and Wish C playback.
+`src/spirit/codex_render.rs` owns the separate character GPU target and clean cache.
 `src/ui4/slot4_service.rs` owns software-plane rendering and wake cadence.
 Restoration, close, icon replacement and owner cleanup cancel the ticket and
 sprite together; a late cursor acknowledgement cannot respawn a canceled icon.
@@ -52,21 +56,31 @@ No new buildin, app window, pointer source or Blueprint ABI is introduced.
 
 ## Ownership and presentation
 
-Lilly and Wish C use the configured sprite VFX throughout. The native Codex
-tile is applied afterwards to the completed premultiplied BGRA cursor back
-buffer, through the existing `CPU_AND_GPU` barrier and `write_cpu` API. Ordering
-is GPU completion/release, CPU cache invalidation, alpha-correct stamp, CPU
-flush/release, then cursor eligibility. Ordinary frames keep their GPU-only
-path. A stamp validates its sequence and visual before writing; canceled work
-does not add a logo. The normal background settings are passed through too.
+Lilly and Wish C use the configured sprite VFX throughout. During settlement,
+one direct cursor frame uses the existing `CPU_AND_GPU` barrier: GPU retirement,
+CPU invalidation, pristine snapshot capture, optional tile stamp, CPU release.
+Subsequent cursor frames reserve only the CPU producer bit, restore pristine
+BGRA pixels, stamp the latest native tile pose, then flush/release before arming.
+Restoring clean pixels on every sample prevents trails. Ordinary frames retain
+their GPU-only path. A stamp validates its sequence and visual before writing;
+canceled work does not add a logo.
+
+The asynchronous character producer uses a persistent 256 KiB DMA target at
+the already reserved VA `[0x3ffc0000,0x40000000)`. Only exact GPU retirement
+for that allocation permits invalidation/readback into the clean cache. Pending
+jobs are polled without blocking cursor samples; cancellation and GPU Logger
+takeover do not free or reuse GPU-owned storage. A new arrival invalidates the
+cache generation, so an older completion cannot replace its snapshot. Restore
+submits clean cursor pixels even while a character render is still pending.
 
 The existing barrier and explicit GPU-then-CPU stamping contract were introduced
 by `t4ce` in commit `4e8e079098cf8f14e138afa484f87d73a4c26848`, 21 July 2026
 23:33 CEST (`ok`).
 
 The landing fade uses the immutable resident static Codex sprite before VFX
-and fades only the native tile in the post-pass. It needs no character source
-copy, blend, or temporary DMA allocation. Outside the hardware plane, the
+and fades only the native tile in the post-pass. The static Codex cache identity
+is required only before this fade; movement never waits for a matching sprite.
+It needs no character source blend. Outside the hardware plane, the
 software sprite needs no GPU work. GPU Logger pauses the handoff clock.
 
 Slot4 consumes poses acknowledged by matching CUR_SURFLIVE sequences only during
@@ -121,6 +135,7 @@ the original crop offset a second time. Wish C durations are
 ```sh
 cargo check --release --bin TRUEOS
 python3 tools/testpy/test_codex_handoff.py
+python3 tools/testpy/test_codex_render.py
 python3 tools/testpy/test_spirit_vfx_cpu_stamp.py
 python3 tools/testpy/test_codex_slot4_sprite.py
 python3 tools/testpy/test_ui4_pointer_groups.py
@@ -132,11 +147,14 @@ python3 tools/testpy/test_ui4_collapse_animation.py
 The handoff harness imports both production modules and checks identity,
 detached settlement, motion without sprite changes or broker queries,
 zero application-compositor updates during flight, stale acknowledgements, live destination movement,
-GPU-retirement motion sampling, visible-landing request gating, unchanged gray
+late motion sampling, visible-landing request gating, unchanged gray
 tile while waiting, display-rate fade over the static Codex frame, unchanged
 Wish C durations, multiple folded windows and cancellation. Sequencer tests also
 cover current-clip completion, preparation after an uncrossed speech clip, and
 queued gesture resumption.
+The asynchronous cache regression holds a GPU job pending for 200 ms while
+twelve CPU tile positions advance, checks pristine restoration without trails,
+and rejects mismatched retirement proofs and obsolete cache generations.
 Geometry tests cover all eight entry directions and every tile pixel. The dock
 harness exercises the production restore input block, including the shared circle
 edge, rejected drags, extra buttons and denied authority.

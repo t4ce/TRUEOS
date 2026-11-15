@@ -126,6 +126,16 @@ mod spirit {
     pub fn source(seq: u64) -> Option<codex_handoff::Source> {
         codex_handoff::source(lilly::resident_frame("Static_up/static.png")?, seq)
     }
+    pub fn cached_source(
+        default: lilly::LillyResidentFrame,
+        seq: u64,
+        rendered: lilly::LillyResidentFrame,
+    ) -> Option<codex_handoff::Source> {
+        codex_handoff::cached_source(default, seq, rendered)
+    }
+    pub fn render_ready() {
+        codex_handoff::render_ready();
+    }
 }
 mod ui4 {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -277,6 +287,7 @@ fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
     assert!(!a::active());
     time(240);
     ui4::advance();
+    spirit::render_ready();
     assert!(
         !a::needs_crossed(),
         "settlement does not request a posture change"
@@ -527,6 +538,7 @@ fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
     // Cancel an in-flight submission: its late acknowledgement cannot respawn.
     ui4::queue(4);
     ui4::advance();
+    spirit::render_ready();
     time(6000);
     let canceled_frame = spirit::source(15).unwrap();
     ui4::cancel(4);
@@ -553,4 +565,177 @@ fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
     assert!(!a::active());
     assert!(ui4::folded().is_none());
     assert!(ui4::snapshot(5).placement.visible);
+}
+
+#[test]
+fn cached_tile_moves_over_every_lily_state_and_waits_for_static_pixels_before_fading() {
+    use spirit::codex_handoff as a;
+    use spirit::lilly::resident_frame;
+    CX.store(500, Ordering::SeqCst);
+    CY.store(300, Ordering::SeqCst);
+    time(0);
+    let key = a::Key {
+        owner: ui4::WindowOwner::Other,
+        window: ui4::WindowId(90),
+        icon: ui4::FrameHandle(90),
+    };
+    assert!(a::begin(key, a::geometry::Point { x: 100, y: 250 }, 233));
+    spirit::render_ready();
+    let layout = spirit::SpiritSurfaceLayout {
+        width: 256,
+        height: 256,
+        pitch_bytes: 1024,
+        byte_len: 256 * 256 * 4,
+    };
+    let base: Vec<_> = [20, 30, 40, 255].repeat(256 * 256);
+    let native = resident_frame("Static_up/static.png").unwrap();
+    let codex = resident_frame("Static_up/codex.png").unwrap();
+    let other = resident_frame("Static_up/wish-c/frame_03.png").unwrap();
+    let mut positions = Vec::new();
+    for (i, t) in [700, 716, 733, 750, 766, 783, 800, 816]
+        .into_iter()
+        .enumerate()
+    {
+        time(t);
+        let requested = if i % 2 == 0 { native } else { other };
+        let rendered = if i % 2 == 0 { codex } else { native };
+        let source = spirit::cached_source(requested, 100 + i as u64, rendered).unwrap();
+        assert_eq!(
+            source.surface, requested,
+            "the GPU may independently update Lily"
+        );
+        assert!(source.stamp.unwrap().apply(&mut base.clone(), layout));
+        a::presented(100 + i as u64);
+        let visual = a::visual().unwrap();
+        positions.push(visual.pose.icon.x);
+        assert_eq!(visual.opacity, 233);
+        assert!(!visual.hidden);
+        assert!(
+            !a::needs_crossed(),
+            "the moving knot never waits on Lily's posture"
+        );
+    }
+    assert!(
+        positions.windows(2).all(|p| p[0] < p[1]),
+        "changing cached Lily frames cannot stop the native knot's slide"
+    );
+    time(833);
+    let landing = spirit::cached_source(other, 110, native).unwrap();
+    assert!(landing.stamp.unwrap().apply(&mut base.clone(), layout));
+    assert!(!a::needs_crossed());
+    a::presented(110);
+    assert!(
+        a::needs_crossed(),
+        "only the secure chest landing sends the signal"
+    );
+    a::crossed_ready();
+    let gray = (164 * 256 + 121) * 4;
+    for (seq, t) in [(111, 900), (112, 1100), (113, 1300)] {
+        time(t);
+        let source = spirit::cached_source(native, seq, other).unwrap();
+        assert_eq!(
+            source.surface, codex,
+            "request the authored static Codex frame"
+        );
+        let mut pixels = base.clone();
+        assert!(source.stamp.unwrap().apply(&mut pixels, layout));
+        assert_eq!(&pixels[gray..gray + 4], &[60, 66, 72, 255]);
+        a::presented(seq);
+        assert!(
+            !a::visual().unwrap().hidden,
+            "stale cached character pixels cannot start the fade clock"
+        );
+    }
+    time(1500);
+    let source = spirit::cached_source(native, 114, codex).unwrap();
+    let mut pixels = base.clone();
+    assert!(source.stamp.unwrap().apply(&mut pixels, layout));
+    assert_eq!(&pixels[gray..gray + 4], &[60, 66, 72, 255]);
+    a::presented(114);
+    assert!(a::visual().unwrap().hidden);
+    time(1600);
+    let source = spirit::cached_source(native, 115, codex).unwrap();
+    let mut pixels = base.clone();
+    assert!(source.stamp.unwrap().apply(&mut pixels, layout));
+    assert!(
+        pixels[gray] > base[gray] && pixels[gray] < 60,
+        "the fade progresses from the matched static frame's presentation"
+    );
+    time(1700);
+    assert!(
+        spirit::cached_source(native, 116, codex)
+            .unwrap()
+            .stamp
+            .is_none()
+    );
+    a::cancel(key.owner, key.window);
+    assert!(spirit::cached_source(native, 117, codex).is_none());
+}
+
+#[test]
+fn late_pristine_render_does_not_consume_the_native_flight_clock() {
+    use spirit::codex_handoff as a;
+    CX.store(500, Ordering::SeqCst);
+    CY.store(300, Ordering::SeqCst);
+    time(0);
+    let key = a::Key {
+        owner: ui4::WindowOwner::Other,
+        window: ui4::WindowId(91),
+        icon: ui4::FrameHandle(91),
+    };
+    let start = a::geometry::Point { x: 100, y: 250 };
+    assert!(a::begin(key, start, 233));
+    let native = spirit::lilly::resident_frame("Static_up/static.png").unwrap();
+    for t in [0, 499, 500, 700, 1600] {
+        time(t);
+        assert_eq!(
+            a::software_visual().unwrap().pose.icon,
+            start,
+            "a slow first pristine render must not let the tile's flight expire"
+        );
+        assert!(spirit::source(200).is_none());
+        assert!(!a::needs_crossed());
+    }
+    spirit::render_ready();
+    let layout = spirit::SpiritSurfaceLayout {
+        width: 256,
+        height: 256,
+        pitch_bytes: 1024,
+        byte_len: 256 * 256 * 4,
+    };
+    let base = [20, 30, 40, 255].repeat(256 * 256);
+    let mut positions = Vec::new();
+    for (i, t) in (1600..=1920).step_by(16).enumerate() {
+        time(t);
+        // The worker reports cache readiness every loop; only its first
+        // report may establish the clock, so later frames cannot restart it.
+        spirit::render_ready();
+        if let Some(source) = spirit::cached_source(native, 200 + i as u64, native) {
+            assert!(source.stamp.unwrap().apply(&mut base.clone(), layout));
+            assert!(
+                !a::needs_crossed(),
+                "the chest pose must actually be presented"
+            );
+            a::presented(200 + i as u64);
+        }
+        let visual = a::software_visual().unwrap();
+        positions.push(visual.pose.icon);
+        assert_eq!(
+            a::needs_crossed(),
+            t == 1920,
+            "the delayed flight still sends exactly one secure landing signal"
+        );
+    }
+    assert_eq!(positions.first(), Some(&start));
+    assert!(
+        positions
+            .windows(2)
+            .all(|p| p[0].x < p[1].x && p[0].y < p[1].y),
+        "the native tile retains its directed smooth slide after late warmup"
+    );
+    assert_eq!(
+        positions.last(),
+        Some(&a::geometry::Point { x: 613, y: 456 })
+    );
+    a::cancel(key.owner, key.window);
 }
