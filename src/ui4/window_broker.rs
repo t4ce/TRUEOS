@@ -1056,6 +1056,21 @@ impl WindowBroker {
         Ok(WindowPlane::Primary)
     }
 
+    /// New application windows reserve the top of the current stack once.
+    /// This changes presentation order only; cursor and keyboard selection stay
+    /// with their existing input owner until an explicit selection gesture.
+    fn create_on_top(
+        &mut self,
+        request: WindowCreate,
+        buffering: FrameBuffering,
+        now_ms: u64,
+    ) -> Result<WindowId, WindowBrokerError> {
+        let output = request.output;
+        let id = self.create(request, buffering, now_ms)?;
+        self.focus_window(id, output, now_ms);
+        Ok(id)
+    }
+
     fn create(
         &mut self,
         mut request: WindowCreate,
@@ -1867,13 +1882,28 @@ fn reap_transition_retired_frames() {
 }
 
 pub(crate) fn create_window(request: WindowCreate) -> Result<WindowId, WindowBrokerError> {
+    create_window_with_order(request, false)
+}
+
+/// Blueprint windows open above their launching shell, independent of the
+/// producer's legacy z value. Later publishes never change their stacking order.
+pub(super) fn create_window_on_top(request: WindowCreate) -> Result<WindowId, WindowBrokerError> {
+    create_window_with_order(request, true)
+}
+
+fn create_window_with_order(request: WindowCreate, on_top: bool) -> Result<WindowId, WindowBrokerError> {
     let plan = super::frame_snapshot(request.frame)
         .map_err(|_| WindowBrokerError::InvalidHandle)?
         .plan;
     let now_ms = trueos_time::Instant::now().as_millis();
-    let id = WINDOW_BROKER
-        .lock()
-        .create(request, plan.buffering, now_ms)?;
+    let id = {
+        let mut broker = WINDOW_BROKER.lock();
+        if on_top {
+            broker.create_on_top(request, plan.buffering, now_ms)?
+        } else {
+            broker.create(request, plan.buffering, now_ms)?
+        }
+    };
     if super::cursor_frame_inout::frame_opened(request.owner, request.session, id).is_err() {
         let _ = close_window(request.owner, id);
         return Err(WindowBrokerError::Capacity);
@@ -4379,6 +4409,29 @@ mod tests {
         // Slot0 is physically below Slots1-3, so the lowest frames share it
         // and the highest three retain monotonically ordered hardware planes.
         assert_eq!(assigned, Vec::from([STACK_PLANE_SLOT, STACK_PLANE_SLOT, 1, 2, 3]));
+    }
+
+    #[test]
+    fn blueprint_launch_opens_above_shell_and_preserves_existing_order() {
+        let owner = WindowOwner::KernelApp(4);
+        let mut broker = WindowBroker::new();
+        let session = broker.begin_additional_session(owner).unwrap();
+        let below = broker.create(test_window(owner, session, 1, 0, 20, true),
+            FrameBuffering::Single, 0).unwrap();
+        let shell = broker.create(test_window(owner, session, 2, 0, 90, true),
+            FrameBuffering::Single, 0).unwrap();
+        let launched = broker.create_on_top(test_window(owner, session, 3, 0, 40, true),
+            FrameBuffering::Triple, 0).unwrap();
+        let z = |broker: &WindowBroker, id: WindowId| {
+            let (slot, _) = unpack_handle(id.raw()).unwrap();
+            broker.windows[slot].placement.z
+        };
+        assert!(z(&broker, below) < z(&broker, shell));
+        assert!(z(&broker, shell) < z(&broker, launched));
+        assert!(plane_slot_of(&broker, shell) < plane_slot_of(&broker, launched));
+        // A later user selection can put the shell back above the app.
+        broker.focus_window(shell, OutputId::from_slot(0).unwrap(), 1);
+        assert!(z(&broker, launched) < z(&broker, shell));
     }
 
     #[test]

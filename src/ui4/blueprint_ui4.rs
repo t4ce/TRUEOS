@@ -55,7 +55,7 @@ use super::{
     Ui4CursorStep, Ui4InputEvent, WindowBrokerError, WindowCreate, WindowId, WindowOwner,
     WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer,
     begin_additional_window_session, cancel_frame_buffer, commit_window_frame_refresh,
-    commit_window_frame_replacement, create_frame, create_gpu_full_overwrite_frame, create_window,
+    commit_window_frame_replacement, create_frame, create_gpu_full_overwrite_frame,
     destroy_frame, finish_window_session, finish_window_session_with_request,
     focused_keyboard_state, gpgpu_rgba_surface, mark_frame_buffer_cpu_authored,
     mark_frame_buffer_fully_opaque, publish_frame_buffer, publish_gpgpu_scene_frame_buffer,
@@ -537,6 +537,9 @@ struct BlueprintSceneSurface {
     native_compute: native_compute_api::NativeComputeState,
     placement: WindowPlacement,
     launch_selection: Option<(Ui4CursorSource, u32, u32)>,
+    // The companion shell may become visible after frame creation. Complete
+    // the launch raise once the application has real pixels, never on redraw.
+    raise_on_first_publish: bool,
     skybox: Option<OwnedRgb565Surface>,
     skybox_upload: Option<Rgb565Upload>,
     skybox_kernel_upload: Option<ShaderToyPackageUpload>,
@@ -1230,7 +1233,7 @@ fn open_blueprint_surface_with_cadence_scaled(
     };
     let window = match parent.map_or_else(
         || {
-            create_window(WindowCreate {
+            super::window_broker::create_window_on_top(WindowCreate {
                 owner,
                 session,
                 frame,
@@ -1305,6 +1308,7 @@ fn open_blueprint_surface_with_cadence_scaled(
                 placement,
                 launch_selection: desktop_shell_launch
                     .map(|launch| (launch.source, launch.x, launch.y)),
+                raise_on_first_publish: parent.is_none(),
                 skybox: None,
                 skybox_upload: None,
                 skybox_kernel_upload: None,
@@ -1357,6 +1361,7 @@ fn open_blueprint_surface_with_cadence_scaled(
         native_compute: native_compute_api::NativeComputeState::default(),
         placement,
         launch_selection: desktop_shell_launch.map(|launch| (launch.source, launch.x, launch.y)),
+        raise_on_first_publish: parent.is_none(),
         skybox: None,
         skybox_upload: None,
         skybox_kernel_upload: None,
@@ -4799,8 +4804,17 @@ fn publish_blueprint_frame(
         }
     }
     let launch_selection = surface.launch_selection.take();
+    let raise_on_first_publish = core::mem::replace(&mut surface.raise_on_first_publish, false);
     let launched_window = surface.window;
     drop(surfaces);
+    if raise_on_first_publish && launch_selection.is_none() {
+        // Presentation order only: the terminal keeps its keyboard routing.
+        if let Err(error) = super::window_broker::note_window_focused(owner, launched_window) {
+            crate::log_warn!(target: "ui4/blueprint-frame";
+                "first-publish raise failed owner={:?} window={} error={:?}\n",
+                owner, launched_window.raw(), error);
+        }
+    }
     if let Some((source, x, y)) = launch_selection {
         match super::input_broker::select_window_for_cursor_at(source, owner, launched_window, x, y)
         {

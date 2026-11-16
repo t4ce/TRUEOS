@@ -115,11 +115,19 @@ const MAX_LEASE_PLANE_COUNT:usize=4;
 fn pack_handle(slot:usize,generation:u16)->Result<u32,WindowBrokerError> {Ok((u32::from(generation)<<16)|(slot as u32+1))}
 fn unpack_handle(raw:u32)->Result<(usize,u16),WindowBrokerError> {if raw as u16==0 {Err(WindowBrokerError::InvalidHandle)} else {Ok(((raw as u16-1) as usize,(raw>>16) as u16))}}
 fn next_serial(serial:u64)->u64 {serial+1}
+// Frame allocation is mocked; creation ordering and plane assignment below
+// execute the production broker methods.
+type WindowCreate = WindowRecord;
+type FrameBuffering = ();
 impl WindowBroker {
+    fn create(&mut self, request:WindowCreate, _:FrameBuffering, _:u64)->Result<WindowId,WindowBrokerError> {
+        let slot=self.windows.len();let generation=request.generation;
+        self.windows.push(request);Ok(WindowId(pack_handle(slot,generation)?))
+    }
 '''
     for name in ("lease_index", "release_lease_of", "demote_to_stack", "set_window_plane",
                  "rebalance_application_planes", "rebalance_application_planes_with_mask", "apply_group_plan",
-                 "focus_window", "focus_window_with_mask"):
+                 "focus_window", "focus_window_with_mask", "create_on_top"):
         source += method(name)
     source += "}\n"
     for name in ("CLOSE_TRANSITION_DURATION_MS", "CLOSE_TRANSITION_PUFF_PER_MILLE",
@@ -196,6 +204,17 @@ fn slots(broker:&WindowBroker)->Vec<usize> {broker.windows.iter().map(|w|w.plane
     b.rebalance_application_planes(other,101);
     assert_eq!(&slots(&b)[start..],[0,1,2,3]);
     assert_eq!(b.leases[0].iter().flatten().count(),4,"other output must not clear laptop leases");
+}
+#[test] fn new_blueprint_opens_above_its_shell_despite_legacy_z_and_can_be_covered_again() {
+    let output=OutputId(0);let mut b=broker(output,2);
+    b.windows[0].placement.z=20;b.windows[1].placement.z=90;
+    let mut request=broker(output,1).windows.remove(0);request.placement.z=40;
+    let launched=b.create_on_top(request,(),100).unwrap();
+    assert_eq!(b.windows.iter().map(|w|w.placement.z).collect::<Vec<_>>(),[0,1,2]);
+    assert_eq!(slots(&b),[1,2,3]);
+    b.focus_window(WindowId(1<<16|2),output,101);
+    assert_eq!(b.windows.iter().map(|w|w.placement.z).collect::<Vec<_>>(),[0,2,1]);
+    assert_eq!(launched,WindowId(1<<16|3));
 }
 #[test] fn focus_moves_one_frame_to_extra_carrier_without_reordering_peers() {
     let output=OutputId(0);set_mask(output,0x2f);let mut b=broker(output,5);
