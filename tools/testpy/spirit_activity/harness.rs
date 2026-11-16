@@ -78,6 +78,12 @@ mod spirit {
     pub mod lilly {
         include!("lilly_types.rs");
         pub fn resident_frame_count() -> usize { 490 }
+        pub fn resident_frame(name: &str) -> Option<LillyResidentFrame> {
+            (name == "Static_up/static.png").then_some(LillyResidentFrame {
+                phys: 1000, gpu: 1000, bytes: 256 * 256 * 4,
+                width: 256, height: 256, pitch_bytes: 1024,
+            })
+        }
         pub fn resident_animation(key: &str) -> Option<LillyResidentAnimation> {
             // The real catalog plus the unmodified production animation types
             // and frame helper; only resident GPU surfaces are fake.
@@ -189,7 +195,14 @@ mod tests {
             now(ready_at + offset);
             let held = next();
             assert_eq!(held.animation.key, "idle.crossed.soft_blink");
-            assert_eq!(held.frame_at_elapsed(50), Some(held.animation.frames[0]));
+            let portrait = spirit::lilly::resident_frame("Static_up/static.png").unwrap();
+            for elapsed in [0, 50, 1000] {
+                assert_eq!(held.frame_at_elapsed(elapsed).unwrap().surface, portrait);
+            }
+            assert_ne!(portrait, held.animation.frames[0].surface);
+            // Holding the portrait must not replace the actual blink frames.
+            assert_eq!(held.animation.frame_at_elapsed(0), Some(held.animation.frames[0]));
+            assert_eq!(held.animation.frame_at_elapsed(110), Some(held.animation.frames[1]));
             assert!(spirit::codex_handoff::READY.load(Ordering::Relaxed));
         }
         spirit::codex_handoff::REQUESTED.store(false, Ordering::Relaxed);

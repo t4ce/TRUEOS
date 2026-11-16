@@ -1123,10 +1123,21 @@ fn resolve_static_idle(
             LillyProtocolError::CatalogInvariant
         }
     })?;
+    // The blink clip's opening frame is a distinct eyelid pose. Hold the
+    // authored static portrait between crossed-idle animations instead.
+    let static_frame = if tag == IDLE_CROSSED_SOFT_BLINK {
+        LillyResidentPart {
+            surface: lilly::resident_frame("Static_up/static.png")
+                .ok_or(LillyProtocolError::CatalogInvariant)?,
+            ..animation.frames[0]
+        }
+    } else {
+        animation.frames[0]
+    };
     Ok(LillyScheduledAnimation {
         rgba,
         boundary_ms,
-        static_frame: Some(animation.frames[0]),
+        static_frame: Some(static_frame),
         animation,
     })
 }
