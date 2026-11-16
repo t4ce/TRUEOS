@@ -1,0 +1,14 @@
+
+running 9 tests
+test playback::tests::failed_synthesis_can_drop_the_collected_prefix_without_playing ... ok
+test playback::tests::handoff_errors_are_reported_without_retrying_or_partial_publication ... ok
+test playback::tests::inference_chunks_are_one_ordered_complete_handoff ... ok
+test sink::tests::first_clip_wins_and_competitors_succeed_without_being_queued ... ok
+test pointer_boundaries_copy_lifetime_and_native_vm_paths ... ok
+test sink::tests::last_sample_releases_ownership_and_caller_memory_is_not_borrowed ... ok
+test sink::tests::invalid_or_oversized_clips_never_claim_the_sink ... ok
+test sink::tests::completed_utterance_longer_than_the_old_half_second_buffer_is_lossless ... ok
+test playback::tests::malformed_and_oversize_input_does_not_extend_the_clip ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+

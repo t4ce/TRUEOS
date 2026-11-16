@@ -587,7 +587,9 @@ fn pop_service_lane_request(slot: u32) -> Option<ServiceLaneRequest> {
         .and_then(|queue| queue.lock().pop_front())
 }
 
-fn pick_service_lane_slot() -> Option<(u32, crate::hv::lane::LaneLease)> {
+fn pick_service_lane_slot(
+    preference: crate::hv::lane::CorePreference,
+) -> Option<(u32, crate::hv::lane::LaneLease)> {
     start_service_lanes();
     let slots = crate::workers::background_worker_slots();
     if slots.is_empty() {
@@ -595,13 +597,38 @@ fn pick_service_lane_slot() -> Option<(u32, crate::hv::lane::LaneLease)> {
     }
 
     let start = SERVICE_LANE_RR.fetch_add(1, Ordering::Relaxed) as usize;
+    match preference {
+        crate::hv::lane::CorePreference::Any => {
+            pick_service_lane_from_tier(&slots, start, None)
+        }
+        crate::hv::lane::CorePreference::PreferPerformance => {
+            pick_service_lane_from_tier(&slots, start, Some(true))
+                .or_else(|| pick_service_lane_from_tier(&slots, start, Some(false)))
+        }
+    }
+}
+
+fn pick_service_lane_from_tier(
+    slots: &[u32],
+    start: usize,
+    performance: Option<bool>,
+) -> Option<(u32, crate::hv::lane::LaneLease)> {
+    let candidates = slots.iter().copied().filter(|slot| {
+        performance.is_none_or(|preferred| {
+            (crate::workers::core_kind_for_slot(*slot) == crate::workers::CORE_KIND_PERF)
+                == preferred
+        })
+    });
+    let count = candidates.clone().count();
+    if count == 0 {
+        return None;
+    }
     // A leased lane is not necessarily an executor that can run promptly: a
     // cooperative workload may already have several ready tasks on that AP.
     // Prefer a started executor with no ready work, then retain the original
     // round-robin scan as a capacity fallback when every executor is busy.
     for idle_executor_only in [true, false] {
-        for offset in 0..slots.len() {
-            let slot = slots[(start + offset) % slots.len()];
+        for slot in candidates.clone().cycle().skip(start % count).take(count) {
             if !SERVICE_LANE_STARTED
                 .get(slot as usize)
                 .map(|started| started.load(Ordering::Acquire))
@@ -621,6 +648,7 @@ fn pick_service_lane_slot() -> Option<(u32, crate::hv::lane::LaneLease)> {
 fn submit_service_lane_request(
     entry: BlockingJobEntry,
     log_rejection: bool,
+    preference: crate::hv::lane::CorePreference,
 ) -> Result<u64, BlockingJobEntry> {
     if entry.kill_requested() {
         let id = entry.id;
@@ -640,7 +668,7 @@ fn submit_service_lane_request(
         return Err(entry);
     }
 
-    let Some((slot, lease)) = pick_service_lane_slot() else {
+    let Some((slot, lease)) = pick_service_lane_slot(preference) else {
         if log_rejection {
             crate::log_error!(
                 target: "service";
@@ -743,7 +771,16 @@ fn enqueue_blocking_job(
     purpose: &'static str,
     call: BlockingJobCall,
 ) -> Result<u64, BlockingJobCall> {
-    enqueue_blocking_job_with_rejection_policy(vm_id, purpose, call, true)
+    enqueue_blocking_job_with_preference(vm_id, purpose, call, crate::hv::lane::CorePreference::Any)
+}
+
+fn enqueue_blocking_job_with_preference(
+    vm_id: Option<u8>,
+    purpose: &'static str,
+    call: BlockingJobCall,
+    preference: crate::hv::lane::CorePreference,
+) -> Result<u64, BlockingJobCall> {
+    enqueue_blocking_job_with_rejection_policy(vm_id, purpose, call, true, preference)
 }
 
 fn enqueue_blocking_job_with_rejection_policy(
@@ -751,6 +788,7 @@ fn enqueue_blocking_job_with_rejection_policy(
     purpose: &'static str,
     call: BlockingJobCall,
     log_rejection: bool,
+    preference: crate::hv::lane::CorePreference,
 ) -> Result<u64, BlockingJobCall> {
     let owner = if let Some(vm_id) = vm_id {
         let Some(owner) = lifetime::reserve(vm_id) else {
@@ -777,7 +815,7 @@ fn enqueue_blocking_job_with_rejection_policy(
         call,
         owner,
     };
-    submit_service_lane_request(entry, log_rejection).map_err(|entry| entry.call)
+    submit_service_lane_request(entry, log_rejection, preference).map_err(|entry| entry.call)
 }
 
 pub fn spawn_blocking_job_with_purpose(job: BlockingJobFn, purpose: &'static str) -> i32 {
@@ -794,7 +832,10 @@ pub fn try_spawn_blocking_job_with_purpose(
     job: BlockingJobFn,
     purpose: &'static str,
 ) -> Result<(), BlockingJobFn> {
-    enqueue_blocking_job_with_rejection_policy(None, purpose, BlockingJobCall::Host(job), false)
+    enqueue_blocking_job_with_rejection_policy(
+        None, purpose, BlockingJobCall::Host(job), false,
+        crate::hv::lane::CorePreference::Any,
+    )
         .map(|_| ())
         .map_err(|call| match call {
             BlockingJobCall::Host(job) => job,
@@ -808,10 +849,24 @@ pub unsafe fn submit_guest_service_lane_job_from_raw(
     vtable: usize,
     purpose: &'static str,
 ) -> i32 {
+    unsafe { submit_guest_service_lane_job_from_raw_with_preference(
+        vm_id, data, vtable, purpose, crate::hv::lane::CorePreference::Any,
+    ) }
+}
+
+pub unsafe fn submit_guest_service_lane_job_from_raw_with_preference(
+    vm_id: u8,
+    data: usize,
+    vtable: usize,
+    purpose: &'static str,
+    preference: crate::hv::lane::CorePreference,
+) -> i32 {
     if data == 0 || vtable == 0 {
         return -5;
     }
-    match enqueue_blocking_job(Some(vm_id), purpose, BlockingJobCall::GuestRaw { data, vtable }) {
+    match enqueue_blocking_job_with_preference(
+        Some(vm_id), purpose, BlockingJobCall::GuestRaw { data, vtable }, preference,
+    ) {
         Ok(_) => 0,
         Err(_) => -2,
     }
@@ -837,13 +892,63 @@ pub unsafe fn spawn_guest_blocking_job_from_raw(
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_service_lane_submit_job(job: BlockingJobFn) -> i32 {
+    submit_service_lane_job(job, crate::hv::lane::CorePreference::Any)
+}
+
+fn core_preference_from_raw(value: u32) -> Option<crate::hv::lane::CorePreference> {
+    match value {
+        v::worker_abi::CORE_PREFERENCE_ANY => Some(crate::hv::lane::CorePreference::Any),
+        v::worker_abi::CORE_PREFERENCE_PREFER_PERFORMANCE => {
+            Some(crate::hv::lane::CorePreference::PreferPerformance)
+        }
+        _ => None,
+    }
+}
+
+/// Empty payload preserves legacy service submissions; new clients send one
+/// little-endian preference word. Unknown values fail before taking ownership.
+pub(crate) fn service_lane_preference_from_payload(
+    payload: &[u8],
+) -> Option<crate::hv::lane::CorePreference> {
+    match payload {
+        [] => Some(crate::hv::lane::CorePreference::Any),
+        [a, b, c, d] => core_preference_from_raw(u32::from_le_bytes([*a, *b, *c, *d])),
+        _ => None,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn trueos_service_lane_submit_job_with_preference(
+    job: BlockingJobFn,
+    preference: u32,
+) -> i32 {
+    let Some(preference) = core_preference_from_raw(preference) else {
+        drop(job);
+        return -5;
+    };
+    submit_service_lane_job(job, preference)
+}
+
+fn submit_service_lane_job(job: BlockingJobFn, preference: crate::hv::lane::CorePreference) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let raw = Box::into_raw(job);
         let (data, vtable): (usize, usize) = unsafe { core::mem::transmute(raw) };
-        let (status, rc) = crate::hv::vmcall::guest_call(
+        let preference_word = match preference {
+            crate::hv::lane::CorePreference::Any => v::worker_abi::CORE_PREFERENCE_ANY,
+            crate::hv::lane::CorePreference::PreferPerformance => {
+                v::worker_abi::CORE_PREFERENCE_PREFER_PERFORMANCE
+            }
+        }.to_le_bytes();
+        let payload: &[u8] = if preference == crate::hv::lane::CorePreference::Any {
+            &[]
+        } else {
+            &preference_word
+        };
+        let (status, rc) = crate::hv::vmcall::guest_call_with_payload(
             crate::hv::vmcall::OP_BP_SERVICE_LANE_SUBMIT,
             data as u64,
             vtable as u64,
+            payload,
         );
         let result = if status == crate::hv::vmcall::STATUS_OK {
             rc as i32
@@ -858,17 +963,43 @@ pub extern "Rust" fn trueos_service_lane_submit_job(job: BlockingJobFn) -> i32 {
         }
         result
     } else if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
-        match enqueue_blocking_job(
+        match enqueue_blocking_job_with_preference(
             Some(vm_id),
             "guest-tokio-blocking-job",
             BlockingJobCall::Host(job),
+            preference,
         ) {
             Ok(_) => 0,
             Err(_) => -2,
         }
     } else {
-        spawn_blocking_job_with_purpose(job, "tokio-blocking-job")
+        match enqueue_blocking_job_with_preference(
+            None, "tokio-blocking-job", BlockingJobCall::Host(job), preference,
+        ) {
+            Ok(_) => 0,
+            Err(_) => -2,
+        }
     }
+}
+
+/// Actual logical placement of the caller, distinct from its WLS identity.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn trueos_service_lane_current_placement() -> u64 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, packed) = crate::hv::vmcall::guest_call(
+            crate::hv::vmcall::OP_BP_SERVICE_LANE_PLACEMENT_V1, 0, 0,
+        );
+        return if status == crate::hv::vmcall::STATUS_OK {
+            packed
+        } else {
+            v::worker_abi::PLACEMENT_UNAVAILABLE
+        };
+    }
+    let slot = crate::percpu::current_slot_via_cpuid();
+    if slot >= crate::allcaps::hv::VM_CPU_SLOT_LIMIT {
+        return v::worker_abi::PLACEMENT_UNAVAILABLE;
+    }
+    (slot as u64) | (u64::from(crate::workers::core_kind_for_slot(slot as u32)) << 32)
 }
 
 /// Advisory native capacity, independent of std thread counts and archive names.

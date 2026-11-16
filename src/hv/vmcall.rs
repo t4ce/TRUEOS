@@ -354,6 +354,7 @@ pub const OP_BP_THREAD_CONTROL_V1: u32 = 0x226; // authenticated launch config /
 pub const OP_BP_STOP_CONTROL_V1: u32 = 0x21A; // arg0 register(0)/poll(1) -> rc/requested
 pub const OP_BP_SERVICE_LANE_CAPACITY: u32 = 0x204; // no args -> advisory available native workers
 pub const OP_BP_SERVICE_LANE_CANCELLED: u32 = 0x207; // no args -> closed native-job admission
+pub const OP_BP_SERVICE_LANE_PLACEMENT_V1: u32 = trueos_vm::vmcall::OP_BP_SERVICE_LANE_PLACEMENT_V1;
 pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = OP_BP_SERVICE_LANE_SUBMIT; // compatibility alias
 pub const OP_BP_PLATFORM_WAKE_ONE: u32 = 0x63; // arg0 VM-local wait key -> woke bool
 pub const OP_BP_PLATFORM_WAKE_ALL: u32 = 0x64; // arg0 VM-local wait key -> wake count
@@ -666,6 +667,13 @@ fn handle_vlayer_text_read_vmcall(
 }
 
 pub fn guest_call(op: u32, arg0: u64, arg1: u64) -> (u32, u64) {
+    guest_call_with_payload(op, arg0, arg1, &[])
+}
+
+pub fn guest_call_with_payload(op: u32, arg0: u64, arg1: u64, payload: &[u8]) -> (u32, u64) {
+    if payload.len() > PAYLOAD_CAP {
+        return (STATUS_BAD_ARG, 0);
+    }
     let p = comm_page_guest_va() as *mut CommPage;
     // The Hull has one comm page per VM, shared by all of its vthreads and by
     // both guest-side call paths. Use the transport-private request padding as
@@ -688,9 +696,10 @@ pub fn guest_call(op: u32, arg0: u64, arg1: u64) -> (u32, u64) {
     let unlock = Unlock(lock);
     let seq = GUEST_CABI_SEQ.fetch_add(1, Ordering::Relaxed);
     unsafe {
+        (&mut (*p).payload)[..payload.len()].copy_from_slice(payload);
         core::ptr::write_volatile(&mut (*p).request_arg0, arg0);
         core::ptr::write_volatile(&mut (*p).request_arg1, arg1);
-        core::ptr::write_volatile(&mut (*p).request_len, 0);
+        core::ptr::write_volatile(&mut (*p).request_len, payload.len() as u32);
         core::ptr::write_volatile(&mut (*p).request_seq, seq);
         core::ptr::write_volatile(&mut (*p).request_op, op);
         core::arch::asm!("vmcall", options(nostack, preserves_flags));
@@ -3644,14 +3653,29 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
             DispatchOutcome::Resume
         }
+        OP_BP_SERVICE_LANE_PLACEMENT_V1 => {
+            if arg0 != 0 || arg1 != 0 || req_len != 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            } else {
+                let placement = crate::r::blocking::trueos_service_lane_current_placement();
+                write_response(vm_id, seq, STATUS_OK, placement, 0);
+            }
+            DispatchOutcome::Resume
+        }
         OP_BP_SERVICE_LANE_SUBMIT => {
-            let rc = unsafe {
-                crate::r::blocking::submit_guest_service_lane_job_from_raw(
-                    vm_id,
-                    arg0 as usize,
-                    arg1 as usize,
-                    "vmx-service-lane",
-                )
+            let preference = request_payload(vm_id, req_len)
+                .and_then(crate::r::blocking::service_lane_preference_from_payload);
+            let rc = match preference {
+                Some(preference) => unsafe {
+                    crate::r::blocking::submit_guest_service_lane_job_from_raw_with_preference(
+                        vm_id,
+                        arg0 as usize,
+                        arg1 as usize,
+                        "vmx-service-lane",
+                        preference,
+                    )
+                },
+                None => -5,
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume

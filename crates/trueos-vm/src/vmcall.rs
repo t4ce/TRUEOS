@@ -105,6 +105,8 @@ pub const OP_BP_PLATFORM_WAIT_OBSERVE: u32 = 0x202;
 pub const OP_BP_PLATFORM_WAIT_AFTER: u32 = 0x203;
 pub const OP_BP_SERVICE_LANE_CAPACITY: u32 = 0x204;
 pub const OP_BP_SERVICE_LANE_CANCELLED: u32 = 0x207;
+/// No arguments/payload: logical CPU slot in low 32 bits, core kind in bits 32..39.
+pub const OP_BP_SERVICE_LANE_PLACEMENT_V1: u32 = 0x25a;
 pub const OP_BP_THREAD_SUBMIT: u32 = 0x217;
 pub const OP_BP_THREAD_CONTROL_V1: u32 = 0x226;
 pub const OP_BP_STOP_CONTROL_V1: u32 = 0x21A; // arg0 register(0)/poll(1) -> rc/requested

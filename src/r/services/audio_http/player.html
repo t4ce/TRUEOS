@@ -1,0 +1,113 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TRUEOS Audio</title>
+<style>body{font:1rem system-ui;margin:2rem;max-width:40rem}button{font:inherit;padding:.6rem 1.3rem}label{margin-left:1rem}#status{min-height:1.5em;color:#555}</style>
+</head><body><h1>TRUEOS Audio</h1><p>Listen to completed speech clips.</p>
+<button id="listen" type="button">Listen</button>
+<label>Volume <input id="volume" type="range" min="0" max="1" step=".01" value="1"></label>
+<p id="status" role="status">Ready</p>
+<script>
+class ClipPlayer {
+  constructor(report, volume) {
+    this.report = report;
+    this.context = new (window.AudioContext || window.webkitAudioContext)({latencyHint: 'playback'});
+    this.gain = this.context.createGain();
+    this.gain.gain.value = volume;
+    this.gain.connect(this.context.destination);
+    // Keep the output graph running between utterances, rather than waking it
+    // at the first spoken sample. This source contributes only exact silence.
+    this.silence = this.context.createConstantSource();
+    this.silence.offset.value = 0;
+    this.silence.connect(this.gain);
+    this.silence.start();
+    this.abort = new AbortController();
+    this.source = null;
+    this.lastId = '0';
+  }
+  async get(path) {
+    const response = await fetch(path, {cache: 'no-store', signal: this.abort.signal});
+    if (!response.ok && response.status !== 409) throw new Error('Audio connection lost');
+    return response;
+  }
+  delay(ms) {
+    return new Promise(resolve => {
+      const finish = () => { clearTimeout(timer); this.abort.signal.removeEventListener('abort', finish); resolve(); };
+      const timer = setTimeout(finish, ms);
+      this.abort.signal.addEventListener('abort', finish, {once: true});
+      if (this.abort.signal.aborted) finish();
+    });
+  }
+  async start() {
+    // Resume in the click handler, before fetching or scheduling any speech.
+    await this.context.resume();
+    if (this.abort.signal.aborted) return;
+    const initial = await (await this.get('/audio/status')).json();
+    // Join an active utterance from its beginning; avoid replaying an old one
+    // when the user starts listening after it has already finished.
+    this.lastId = initial.playing ? '0' : initial.clip_id;
+    while (!this.abort.signal.aborted) {
+      this.report('Listening');
+      try {
+        const state = await (await this.get('/audio/status')).json();
+        if (state.clip_id !== '0' && state.clip_id !== this.lastId) {
+          const response = await this.get('/audio/clip.wav?id=' + encodeURIComponent(state.clip_id));
+          if (response.status === 409) { await this.delay(100); continue; }
+          // No part of a clip plays until its entire finite WAV is received and
+          // decoded. A delayed fetch or reconnect cannot move its start point.
+          const buffer = await this.context.decodeAudioData(await response.arrayBuffer());
+          if (this.abort.signal.aborted) return;
+          await this.context.resume();
+          if (this.abort.signal.aborted) return;
+          const source = this.context.createBufferSource();
+          source.buffer = buffer;
+          source.connect(this.gain);
+          this.source = source;
+          const ended = new Promise(resolve => { source.onended = resolve; });
+          source.start(this.context.currentTime + .1, 0);
+          this.lastId = state.clip_id;
+          this.report('Playing');
+          await ended;
+          source.disconnect();
+          if (this.source === source) this.source = null;
+        } else {
+          await this.delay(200);
+        }
+      } catch (error) {
+        if (this.abort.signal.aborted) return;
+        this.report('Reconnecting…');
+        await this.delay(500);
+      }
+    }
+  }
+  stop() {
+    this.abort.abort();
+    if (this.source) this.source.stop();
+    this.silence.stop();
+    this.context.close().catch(() => {});
+  }
+}
+const button = document.getElementById('listen');
+const status = document.getElementById('status');
+const volume = document.getElementById('volume');
+let player = null;
+button.onclick = async () => {
+  if (player) {
+    player.stop(); player = null;
+    button.textContent = 'Listen'; status.textContent = 'Stopped';
+    return;
+  }
+  let current;
+  try {
+    current = new ClipPlayer(text => { if (player === current) status.textContent = text; }, Number(volume.value));
+    player = current; button.textContent = 'Stop'; status.textContent = 'Starting…';
+    await current.start();
+  } catch (error) {
+    if (current) current.stop();
+    if (player === current) {
+      player = null; button.textContent = 'Listen'; status.textContent = 'Could not start audio. Click Listen to retry.';
+    }
+  }
+};
+volume.oninput = () => { if (player) player.gain.gain.value = Number(volume.value); };
+window.addEventListener('pagehide', () => { if (player) player.stop(); });
+</script></body></html>

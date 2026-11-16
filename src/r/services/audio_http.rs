@@ -18,6 +18,7 @@ use crate::r::net::{VNet, ports};
 const PAGE_PATH: &str = "/";
 const LEGACY_PAGE_PATH: &str = "/audio/live";
 const WAV_PATH: &str = "/audio/live.wav";
+const CLIP_PATH: &str = "/audio/clip.wav";
 const STATUS_PATH: &str = "/audio/status";
 const RX_BUF_MAX: usize = 8 * 1024;
 const MAX_STREAM_CLIENTS: usize = 4;
@@ -35,6 +36,12 @@ enum SessionMode {
     ReadingRequest,
     SendingFixed,
     Streaming,
+    SendingClip,
+}
+
+struct ClipTransfer {
+    clip: sink::Clip,
+    offset: usize,
 }
 
 struct AudioHttpSession {
@@ -44,6 +51,7 @@ struct AudioHttpSession {
     pending_bytes: usize,
     sent_bytes: usize,
     deadline: Instant,
+    clip: Option<ClipTransfer>,
 }
 
 struct AudioHttpEndpoint {
@@ -62,6 +70,7 @@ impl AudioHttpSession {
             pending_bytes: 0,
             sent_bytes: 0,
             deadline: Instant::now() + Duration::from_millis(REQUEST_IDLE_TIMEOUT_MS),
+            clip: None,
         }
     }
 
@@ -75,7 +84,7 @@ impl AudioHttpSession {
 
     fn is_timed_out(&self, now: Instant) -> bool {
         match self.mode {
-            SessionMode::ReadingRequest | SessionMode::SendingFixed => now >= self.deadline,
+            SessionMode::ReadingRequest | SessionMode::SendingFixed | SessionMode::SendingClip => now >= self.deadline,
             SessionMode::Streaming => false,
         }
     }
@@ -219,11 +228,7 @@ fn response_with_body(status: &str, content_type: &str, body: &[u8]) -> Vec<u8> 
 fn live_audio_page() -> Vec<u8> {
     response_with_body(
         "HTTP/1.1 200 OK\r\n", "text/html; charset=utf-8",
-        br#"<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TRUEOS Audio</title><style>body{font:1rem system-ui;margin:2rem;max-width:40rem}audio{width:100%}</style>
-</head><body><h1>TRUEOS Audio</h1><p>Listen to the current playback stream.</p>
-<audio controls preload="none" src="/audio/live.wav"></audio></body></html>"#,
+        include_bytes!("audio_http/player.html"),
     )
 }
 
@@ -250,8 +255,13 @@ fn wav_stream_head() -> Vec<u8> {
     head.extend_from_slice(b"Cache-Control: no-store\r\n");
     head.extend_from_slice(b"Connection: close\r\n\r\n");
     // Unbounded PCM stream: browsers play until the connection closes.
+    append_wav_header(&mut head, u32::MAX - 36);
+    head
+}
+
+fn append_wav_header(head: &mut Vec<u8>, bytes: u32) {
     head.extend_from_slice(b"RIFF");
-    head.extend_from_slice(&u32::MAX.to_le_bytes());
+    head.extend_from_slice(&(bytes + 36).to_le_bytes());
     head.extend_from_slice(b"WAVEfmt ");
     head.extend_from_slice(&16u32.to_le_bytes());
     head.extend_from_slice(&1u16.to_le_bytes());
@@ -261,8 +271,62 @@ fn wav_stream_head() -> Vec<u8> {
     head.extend_from_slice(&((CHANNELS * 2) as u16).to_le_bytes());
     head.extend_from_slice(&16u16.to_le_bytes());
     head.extend_from_slice(b"data");
-    head.extend_from_slice(&(u32::MAX - 36).to_le_bytes());
-    head
+    head.extend_from_slice(&bytes.to_le_bytes());
+}
+
+fn clip_request_id(target: &str) -> Option<u64> {
+    let query = target.split_once('?')?.1;
+    let mut id = None;
+    for part in query.split('&') {
+        let (key, value) = part.split_once('=')?;
+        if key == "id" {
+            if id.is_some() { return None; }
+            id = Some(value.parse().ok()?);
+        }
+    }
+    id
+}
+
+fn start_clip_response(vnet: &VNet, session: &mut AudioHttpSession, id: Option<u64>) -> bool {
+    let clip = SINK.lock().snapshot();
+    let Some(clip) = clip.filter(|clip| Some(clip.id) == id) else {
+        let response = response_with_body("HTTP/1.1 409 Conflict\r\n", "text/plain; charset=utf-8", b"clip no longer available\n");
+        return !send_fixed_response(vnet, session, &response);
+    };
+    let mut head = format!("HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nCache-Control: no-store\r\nContent-Length: {}\r\nX-TRUEOS-Clip-Id: {}\r\nConnection: close\r\n\r\n", clip.pcm.len() + 44, clip.id).into_bytes();
+    append_wav_header(&mut head, clip.pcm.len() as u32);
+    if !send_tcp_bytes(vnet, session.handle, &head) {
+        close_session(vnet, session.handle);
+        return true;
+    }
+    session.mode = SessionMode::SendingClip;
+    session.pending_bytes = head.len();
+    session.sent_bytes = 0;
+    session.rx.clear();
+    session.clip = Some(ClipTransfer { clip, offset: 0 });
+    session.refresh_fixed_deadline();
+    false
+}
+
+fn send_clip_tick(vnet: &VNet, session: &mut AudioHttpSession) -> bool {
+    const WINDOW: usize = SAMPLE_RATE * CHANNELS * 2 / 4;
+    let transfer = session.clip.as_mut().expect("clip response owns its PCM");
+    while transfer.offset < transfer.clip.pcm.len() {
+        let room = WINDOW.saturating_sub(session.pending_bytes.saturating_sub(session.sent_bytes));
+        let count = room.min(api::MAX_MSG).min(transfer.clip.pcm.len() - transfer.offset);
+        if count == 0 { break; }
+        let bytes = &transfer.clip.pcm[transfer.offset..transfer.offset + count];
+        if vnet.submit(api::Command::SendTcp { handle: session.handle, data: api::ByteBuf::from_slice_trunc(bytes) }).is_err() {
+            break; // Keep the cursor for bounded backpressure retry.
+        }
+        transfer.offset += count;
+        session.pending_bytes += count;
+    }
+    if transfer.offset == transfer.clip.pcm.len() && session.sent_bytes >= session.pending_bytes {
+        close_session(vnet, session.handle);
+        return true;
+    }
+    false
 }
 
 fn handle_request(vnet: &VNet, session: &mut AudioHttpSession, active_streams: usize) -> bool {
@@ -310,6 +374,13 @@ fn handle_request(vnet: &VNet, session: &mut AudioHttpSession, active_streams: u
             session.sent_bytes = 0;
             false
         }
+        Some(CLIP_PATH) => {
+            if active_streams >= MAX_STREAM_CLIENTS {
+                let response = busy_response();
+                return !send_fixed_response(vnet, session, &response);
+            }
+            start_clip_response(vnet, session, target.and_then(clip_request_id))
+        }
         _ => {
             let response = not_found_response();
             !send_fixed_response(vnet, session, response.as_slice())
@@ -318,9 +389,11 @@ fn handle_request(vnet: &VNet, session: &mut AudioHttpSession, active_streams: u
 }
 
 fn status_response(listeners: usize) -> Vec<u8> {
+    let sink = SINK.lock();
+    let clip_id = sink.snapshot().map_or(0, |clip| clip.id);
     let body = format!(
-        "{{\"listeners\":{},\"capacity\":{}}}\n",
-        listeners, MAX_STREAM_CLIENTS
+        "{{\"listeners\":{},\"capacity\":{},\"clip_id\":\"{}\",\"playing\":{}}}\n",
+        listeners, MAX_STREAM_CLIENTS, clip_id, sink.busy()
     );
     response_with_body(
         "HTTP/1.1 200 OK\r\n",
@@ -346,7 +419,7 @@ fn active_stream_count(endpoint: &AudioHttpEndpoint) -> usize {
     endpoint
         .sessions
         .iter()
-        .filter(|session| session.mode == SessionMode::Streaming)
+        .filter(|session| matches!(session.mode, SessionMode::Streaming | SessionMode::SendingClip))
         .count()
 }
 
@@ -534,7 +607,7 @@ pub async fn audio_http_task() {
                                     endpoint.sessions.remove(idx);
                                 }
                             }
-                            SessionMode::SendingFixed | SessionMode::Streaming => {}
+                            SessionMode::SendingFixed | SessionMode::Streaming | SessionMode::SendingClip => {}
                         }
                     }
                     api::Event::Closed { handle } => {
@@ -561,6 +634,7 @@ pub async fn audio_http_task() {
                             .find(|session| session.handle == handle)
                         {
                             session.sent_bytes = session.sent_bytes.saturating_add(len as usize);
+                            if session.mode == SessionMode::SendingClip { session.refresh_fixed_deadline(); }
                             if session.mode == SessionMode::SendingFixed
                                 && session.sent_bytes >= session.pending_bytes
                             {
@@ -582,6 +656,10 @@ pub async fn audio_http_task() {
                 if due
                     && endpoint.sessions[idx].mode == SessionMode::Streaming
                     && stream_audio_tick(&endpoint.vnet, &mut endpoint.sessions[idx], &pcm_bytes)
+                {
+                    endpoint.sessions.remove(idx);
+                } else if endpoint.sessions[idx].mode == SessionMode::SendingClip
+                    && send_clip_tick(&endpoint.vnet, &mut endpoint.sessions[idx])
                 {
                     endpoint.sessions.remove(idx);
                 } else {
