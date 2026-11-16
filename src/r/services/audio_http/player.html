@@ -63,12 +63,15 @@ class ClipPlayer {
           source.connect(this.gain);
           this.source = source;
           const ended = new Promise(resolve => { source.onended = resolve; });
-          source.start(this.context.currentTime + .1, 0);
-          this.lastId = state.clip_id;
-          this.report('Playing');
-          await ended;
-          source.disconnect();
-          if (this.source === source) this.source = null;
+          try {
+            source.start(this.context.currentTime + .1, 0);
+            this.lastId = state.clip_id;
+            this.report('Playing');
+            await ended;
+          } finally {
+            source.disconnect();
+            if (this.source === source) this.source = null;
+          }
         } else {
           await this.delay(200);
         }
@@ -103,7 +106,7 @@ button.onclick = async () => {
     await current.start();
   } catch (error) {
     if (current) current.stop();
-    if (player === current) {
+    if (!current || player === current) {
       player = null; button.textContent = 'Listen'; status.textContent = 'Could not start audio. Click Listen to retry.';
     }
   }
