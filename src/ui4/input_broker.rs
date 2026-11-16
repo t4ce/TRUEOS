@@ -201,6 +201,8 @@ pub(crate) struct Ui4DockPreview {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(super) struct Ui4DockZone {
+    pub(super) radius_x: u32,
+    pub(super) radius_y: u32,
     pub(super) target: super::WindowDockTarget,
     pub(super) rect: Ui4VisualRect,
 }
@@ -3514,8 +3516,8 @@ fn dock_zone_metrics(
                 scale_reference(reference_width, DOCK_CORNER_MM, DOCK_REFERENCE_WIDTH_MM),
                 scale_reference(reference_height, DOCK_CORNER_MM, DOCK_REFERENCE_HEIGHT_MM),
                 scale_reference(reference_width, DOCK_EDGE_DEPTH_MM, DOCK_REFERENCE_WIDTH_MM),
-                reference_height,
-                reference_width,
+                scale_reference(reference_height, 84, DOCK_REFERENCE_HEIGHT_MM),
+                scale_reference(reference_width, 168, DOCK_REFERENCE_WIDTH_MM),
                 scale_reference(reference_height, DOCK_EDGE_DEPTH_MM, DOCK_REFERENCE_HEIGHT_MM),
             )
         } else {
@@ -3523,8 +3525,8 @@ fn dock_zone_metrics(
                 screen_width / 20,
                 screen_height / 11,
                 screen_width / 40,
-                screen_height / 7,
-                screen_width / 8,
+                screen_height * 7 / 24,
+                screen_width * 7 / 20,
                 screen_height / 24,
             )
         };
@@ -3573,12 +3575,16 @@ fn dock_zones_with_reference(
     let top_x = screen_width.saturating_sub(metrics.top_span) / 2;
     // Separate the bottom actions even when a monitor reports an unusually
     // large physical pixel density. Their centers stay at one and two thirds.
-    let bottom_span = metrics.top_span.min(screen_width / 3);
+    let bottom_span = (metrics.top_span / 2).min(screen_width / 3);
     let collapse_x = (screen_width / 3).saturating_sub(bottom_span / 2);
     let resize_x = ((u64::from(screen_width) * 2 / 3) as u32)
         .saturating_sub(bottom_span / 2);
+    let radius_x = (metrics.corner_width / 4).max(1);
+    let radius_y = (metrics.corner_height / 4).max(1);
     [
         Ui4DockZone {
+            radius_x,
+            radius_y,
             target: WindowDockTarget::TopLeft,
             rect: Ui4VisualRect {
                 x: 0,
@@ -3588,6 +3594,8 @@ fn dock_zones_with_reference(
             },
         },
         Ui4DockZone {
+            radius_x,
+            radius_y,
             target: WindowDockTarget::TopRight,
             rect: Ui4VisualRect {
                 x: right_x,
@@ -3597,6 +3605,8 @@ fn dock_zones_with_reference(
             },
         },
         Ui4DockZone {
+            radius_x,
+            radius_y,
             target: WindowDockTarget::BottomLeft,
             rect: Ui4VisualRect {
                 x: 0,
@@ -3606,6 +3616,8 @@ fn dock_zones_with_reference(
             },
         },
         Ui4DockZone {
+            radius_x,
+            radius_y,
             target: WindowDockTarget::BottomRight,
             rect: Ui4VisualRect {
                 x: right_x,
@@ -3615,6 +3627,8 @@ fn dock_zones_with_reference(
             },
         },
         Ui4DockZone {
+            radius_x,
+            radius_y,
             target: WindowDockTarget::LeftHalf,
             rect: Ui4VisualRect {
                 x: 0,
@@ -3624,6 +3638,8 @@ fn dock_zones_with_reference(
             },
         },
         Ui4DockZone {
+            radius_x,
+            radius_y,
             target: WindowDockTarget::RightHalf,
             rect: Ui4VisualRect {
                 x: screen_width.saturating_sub(metrics.side_depth),
@@ -3633,6 +3649,8 @@ fn dock_zones_with_reference(
             },
         },
         Ui4DockZone {
+            radius_x,
+            radius_y,
             target: WindowDockTarget::Maximize,
             rect: Ui4VisualRect {
                 x: top_x,
@@ -3642,6 +3660,8 @@ fn dock_zones_with_reference(
             },
         },
         Ui4DockZone {
+            radius_x,
+            radius_y,
             target: WindowDockTarget::Collapse,
             rect: Ui4VisualRect {
                 x: collapse_x,
@@ -3651,6 +3671,8 @@ fn dock_zones_with_reference(
             },
         },
         Ui4DockZone {
+            radius_x,
+            radius_y,
             target: WindowDockTarget::GenericResize,
             rect: Ui4VisualRect {
                 x: resize_x,
@@ -3689,6 +3711,8 @@ pub(super) fn dock_zone_contains(zone: Ui4DockZone, x: u32, y: u32) -> bool {
     }
     dock_zone_local_contains(
         zone.target,
+        zone.radius_x,
+        zone.radius_y,
         zone.rect.width,
         zone.rect.height,
         x.saturating_sub(zone.rect.x),
@@ -3707,7 +3731,7 @@ pub(super) fn dock_zone_row_span(zone: Ui4DockZone, row: u32) -> Option<Ui4Visua
     use super::WindowDockTarget;
 
     let contains = |column| {
-        dock_zone_local_contains(zone.target, zone.rect.width, zone.rect.height, column, row)
+        dock_zone_local_contains(zone.target, zone.radius_x, zone.radius_y, zone.rect.width, zone.rect.height, column, row)
     };
     let (first, last) = match zone.target {
         WindowDockTarget::TopLeft | WindowDockTarget::BottomLeft | WindowDockTarget::LeftHalf => {
@@ -3745,7 +3769,7 @@ pub(super) fn dock_zone_column_span(zone: Ui4DockZone, column: u32) -> Option<Ui
     use super::WindowDockTarget;
 
     let contains =
-        |row| dock_zone_local_contains(zone.target, zone.rect.width, zone.rect.height, column, row);
+        |row| dock_zone_local_contains(zone.target, zone.radius_x, zone.radius_y, zone.rect.width, zone.rect.height, column, row);
     let (first, last) = match zone.target {
         WindowDockTarget::TopLeft | WindowDockTarget::TopRight | WindowDockTarget::Maximize => {
             let last = last_true_prefix(zone.rect.height, contains)?;
@@ -3801,77 +3825,36 @@ fn first_true_suffix(extent: u32, mut predicate: impl FnMut(u32) -> bool) -> Opt
     (low < extent).then_some(low)
 }
 
+/// Rounded rectangles extend through the display edge; only inward corners round.
 fn dock_zone_local_contains(
     target: super::WindowDockTarget,
+    radius_x: u32,
+    radius_y: u32,
     width: u32,
     height: u32,
     x: u32,
     y: u32,
 ) -> bool {
-    use super::WindowDockTarget;
-
+    use super::WindowDockTarget::*;
     if width == 0 || height == 0 || x >= width || y >= height {
         return false;
     }
-
-    let width = u64::from(width);
-    let height = u64::from(height);
-    let x = u64::from(x);
-    let y = u64::from(y);
-    match target {
-        WindowDockTarget::TopLeft
-        | WindowDockTarget::TopRight
-        | WindowDockTarget::BottomLeft
-        | WindowDockTarget::BottomRight => {
-            let corner_x =
-                if matches!(target, WindowDockTarget::TopRight | WindowDockTarget::BottomRight) {
-                    width.saturating_sub(1).saturating_sub(x)
-                } else {
-                    x
-                };
-            let corner_y =
-                if matches!(target, WindowDockTarget::BottomLeft | WindowDockTarget::BottomRight) {
-                    height.saturating_sub(1).saturating_sub(y)
-                } else {
-                    y
-                };
-            normalized_ellipse_contains(
-                corner_x.saturating_mul(2).saturating_add(1),
-                width.saturating_mul(2),
-                corner_y.saturating_mul(2).saturating_add(1),
-                height.saturating_mul(2),
-            )
-        }
-        WindowDockTarget::LeftHalf | WindowDockTarget::RightHalf => {
-            let inward_x = if target == WindowDockTarget::RightHalf {
-                width.saturating_sub(1).saturating_sub(x)
-            } else {
-                x
-            };
-            normalized_ellipse_contains(
-                inward_x.saturating_mul(2).saturating_add(1),
-                width.saturating_mul(2),
-                y.saturating_mul(2).saturating_add(1).abs_diff(height),
-                height,
-            )
-        }
-        WindowDockTarget::Collapse | WindowDockTarget::GenericResize | WindowDockTarget::SpiritAccess => normalized_ellipse_contains(
-            x.saturating_mul(2).saturating_add(1).abs_diff(width),
-            width,
-            height
-                .saturating_sub(1)
-                .saturating_sub(y)
-                .saturating_mul(2)
-                .saturating_add(1),
-            height.saturating_mul(2),
-        ),
-        WindowDockTarget::Maximize => normalized_ellipse_contains(
-            x.saturating_mul(2).saturating_add(1).abs_diff(width),
-            width,
-            y.saturating_mul(2).saturating_add(1),
-            height.saturating_mul(2),
-        ),
-    }
+    let rx = radius_x.min(width / 2).max(1);
+    let ry = radius_y.min(height / 2).max(1);
+    let round_left = !matches!(target, TopLeft | BottomLeft | LeftHalf);
+    let round_right = !matches!(target, TopRight | BottomRight | RightHalf);
+    let round_top = !matches!(target, TopLeft | TopRight | Maximize);
+    let round_bottom = !matches!(target, BottomLeft | BottomRight | Collapse | GenericResize | SpiritAccess);
+    let dx = if round_left && x < rx { rx - x } else if round_right && x >= width - rx {
+        x - (width - rx) + 1
+    } else { 0 };
+    let dy = if round_top && y < ry { ry - y } else if round_bottom && y >= height - ry {
+        y - (height - ry) + 1
+    } else { 0 };
+    dx == 0 || dy == 0 || normalized_ellipse_contains(
+        u64::from(dx) * 2 - 1, u64::from(rx) * 2,
+        u64::from(dy) * 2 - 1, u64::from(ry) * 2,
+    )
 }
 
 /// Pixel centers are expressed in doubled coordinates, then compared against
@@ -4241,6 +4224,14 @@ mod tests {
     #[test]
     fn dock_fields_follow_physical_monitor_scale() {
         let zones = dock_zones_with_reference(1_920, 1_080, Some((256, 160)));
+        let dense = dock_zones_with_reference(3_840, 2_160, Some((512, 320)));
+        for (normal, dense) in zones.iter().zip(dense) {
+            assert_eq!(dense.rect.width, normal.rect.width * 2);
+            assert_eq!(dense.rect.height, normal.rect.height * 2);
+            assert_eq!(dense.radius_x, normal.radius_x * 2);
+            assert_eq!(dense.radius_y, normal.radius_y * 2);
+        }
+
         assert_eq!(
             (zones[0].rect.width, zones[0].rect.height),
             (96, 96),
@@ -4248,19 +4239,19 @@ mod tests {
         );
         assert_eq!(
             (zones[4].rect.x, zones[4].rect.y, zones[4].rect.width, zones[4].rect.height,),
-            (0, 460, 48, 160)
+            (0, 372, 48, 336)
         );
         assert_eq!(
             (zones[6].rect.x, zones[6].rect.y, zones[6].rect.width, zones[6].rect.height,),
-            (832, 0, 256, 48)
+            (624, 0, 672, 48)
         );
         assert_eq!(
             (zones[7].rect.x, zones[7].rect.y, zones[7].rect.width, zones[7].rect.height,),
-            (512, 1_032, 256, 48)
+            (472, 1_032, 336, 48)
         );
         assert_eq!(
             (zones[8].rect.x, zones[8].rect.y, zones[8].rect.width, zones[8].rect.height,),
-            (1_152, 1_032, 256, 48)
+            (1_112, 1_032, 336, 48)
         );
     }
 
@@ -4278,8 +4269,8 @@ mod tests {
         assert_eq!(dock_target_at_in_zones(500, 0, &zones), None);
         assert_eq!(dock_target_at_in_zones(960, 200, &zones), None);
         assert_eq!(dock_target_at_in_zones(95, 95, &zones), None);
-        assert_eq!(dock_target_at_in_zones(47, 460, &zones), None);
-        assert_eq!(dock_target_at_in_zones(832, 47, &zones), None);
+        assert_eq!(dock_target_at_in_zones(47, 372, &zones), None);
+        assert_eq!(dock_target_at_in_zones(624, 47, &zones), None);
     }
 
     #[test]
@@ -4356,7 +4347,7 @@ mod tests {
                 metrics.top_span,
                 metrics.top_depth,
             ),
-            (96, 98, 48, 154, 240, 45)
+            (96, 98, 48, 315, 672, 45)
         );
     }
 }

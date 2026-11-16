@@ -1276,54 +1276,22 @@ fn push_dock_zone_mask(
     zone: super::input_broker::Ui4DockZone,
     color: crate::graphics::primitives::Rgba8,
 ) {
-    if zone.rect.height <= zone.rect.width {
-        let mut band: Option<super::Ui4VisualRect> = None;
-        for row in 0..zone.rect.height {
-            let Some(span) = super::input_broker::dock_zone_row_span(zone, row) else {
-                if let Some(finished) = band.take() {
-                    push_visual_rect(rects, finished, color);
-                }
-                continue;
-            };
-            if let Some(current) = band.as_mut()
-                && current.x == span.x
-                && current.width == span.width
-                && current.y.saturating_add(current.height) == span.y
-            {
-                current.height = current.height.saturating_add(span.height);
-                continue;
-            }
-            if let Some(finished) = band.replace(span) {
-                push_visual_rect(rects, finished, color);
-            }
-        }
-        if let Some(finished) = band {
-            push_visual_rect(rects, finished, color);
-        }
-    } else {
-        let mut band: Option<super::Ui4VisualRect> = None;
-        for column in 0..zone.rect.width {
-            let Some(span) = super::input_broker::dock_zone_column_span(zone, column) else {
-                if let Some(finished) = band.take() {
-                    push_visual_rect(rects, finished, color);
-                }
-                continue;
-            };
-            if let Some(current) = band.as_mut()
-                && current.y == span.y
-                && current.height == span.height
-                && current.x.saturating_add(current.width) == span.x
-            {
-                current.width = current.width.saturating_add(span.width);
-                continue;
-            }
-            if let Some(finished) = band.replace(span) {
-                push_visual_rect(rects, finished, color);
-            }
-        }
-        if let Some(finished) = band {
-            push_visual_rect(rects, finished, color);
-        }
+    use super::WindowDockTarget::*;
+    // Each band has uniform alpha, so no per-pixel buffer or upload is needed.
+    let horizontal = !matches!(zone.target, LeftHalf | RightHalf);
+    let extent = if horizontal { zone.rect.height } else { zone.rect.width };
+    for position in 0..extent {
+        let span = if horizontal {
+            super::input_broker::dock_zone_row_span(zone, position)
+        } else {
+            super::input_broker::dock_zone_column_span(zone, position)
+        };
+        let Some(span) = span else { continue };
+        let reverse = matches!(zone.target, BottomLeft | BottomRight | Collapse | GenericResize | RightHalf);
+        let inward = if reverse { extent - 1 - position } else { position };
+        // 191/255 = 75%, 89/255 = 35%, linear in distance from the edge.
+        let alpha = 191 - (102 * u64::from(inward) / u64::from(extent.saturating_sub(1).max(1))) as u8;
+        push_visual_rect(rects, span, crate::graphics::primitives::Rgba8::new(color.r, color.g, color.b, alpha));
     }
 }
 
