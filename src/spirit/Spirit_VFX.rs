@@ -380,6 +380,25 @@ pub(crate) enum SpiritVfxBackgroundEffect {
 }
 
 impl SpiritVfxBackgroundEffect {
+    /// Fixed sizes reviewed in the production preview with aligned LilyDS frames.
+    pub(crate) const fn default_scale(self) -> f32 {
+        match self {
+            Self::EnergyRing => 1.32,
+            Self::MagicCircle => 1.53,
+            Self::NebulaSmoke => 0.77,
+            Self::CyberGrid => 1.02,
+            Self::PortalVortex => 2.32,
+            Self::SpeedLines => 1.20,
+            Self::BokehField => 0.62,
+            Self::WaterRipples => 1.33,
+            Self::PixelBurst => 1.35,
+            Self::MagicTimeCircle => 1.39,
+            Self::SparkLattice => 1.38,
+            Self::Resonance => 1.35,
+            Self::Transparent => 1.0,
+        }
+    }
+
     pub(crate) const fn from_id(id: u8) -> Option<Self> {
         match id {
             0 => Some(Self::Transparent),
@@ -886,7 +905,7 @@ impl SpiritVfxUiConfig {
                 name: String::from(background.effect.ui_name()),
                 params: [
                     background.opacity,
-                    SPIRIT_BACKGROUND_PRESENT_SCALE,
+                    background.effect.default_scale(),
                     background.speed,
                     background.intensity,
                 ],
@@ -1034,9 +1053,6 @@ static MOVE_PORTAL_STARTED_MS: AtomicU64 = AtomicU64::new(0);
 const GLOBAL_AURA_HALF_CYCLE_MS: u64 = 1_000;
 const POWER_MODE_VFX_TRANSITION_MS: u64 = 650;
 const TERMINAL_VFX_TRANSITION_MS: u64 = POWER_MODE_VFX_TRANSITION_MS;
-// Shared knot footprint: 10% larger, retaining the existing exit envelope.
-const CODEX_VFX_SCALE: f32 = 1.54;
-const CODEX_VFX_EXIT_SCALE: f32 = 3.0;
 const CODEX_VFX_OPACITY: f32 = 0.75;
 const CODEX_VFX_INTENSITY_CYCLE_MS: u64 = 7_000;
 const IDLE_VFX_TRANSITION_MS: u64 = 1_000;
@@ -1058,10 +1074,7 @@ const REASONING_VFX_PHASE_PERIOD: f32 = 20.0 * core::f32::consts::PI;
 const GLOBAL_AURA_RADIUS_MIN: f32 = 9.0;
 const GLOBAL_AURA_RADIUS_MAX: f32 = 12.0;
 const GLOBAL_AURA_STRENGTH: f32 = 2.5;
-// Standard backgrounds fill the native 256px sprite canvas: the authored
-// reference radius 0.32 reaches radius 128, without the old 32px margin.
-// Codex knot backgrounds keep their independent scale-1.54 presentation and
-// expansion to 3 before fading; their shader feathers allocation edges.
+// Scale 1 is the shared native 256px preview/runtime canvas.
 const SPIRIT_BACKGROUND_PRESENT_SCALE: f32 =
     crate::intel::gpgpu::SPIRIT_VFX_BACKGROUND_PRESENT_SCALE;
 
@@ -1117,12 +1130,11 @@ impl SpiritVfxTransition {
 }
 
 /// One procedural background is selected in the render contract. Change its
-/// mode only at zero opacity. Knot backgrounds expand first, then fade.
+/// mode only at zero opacity. Background sizes stay fixed through fades.
 struct TerminalBackgroundVfxState {
     current: Option<SpiritVfxBackgroundEffect>,
     requested: Option<SpiritVfxBackgroundEffect>,
     transition: SpiritVfxTransition,
-    expansion: SpiritVfxTransition,
     entered_ms: u64,
 }
 
@@ -1131,7 +1143,6 @@ impl TerminalBackgroundVfxState {
         current: None,
         requested: None,
         transition: SpiritVfxTransition::INACTIVE,
-        expansion: SpiritVfxTransition::INACTIVE,
         entered_ms: 0,
     };
 
@@ -1151,23 +1162,15 @@ impl TerminalBackgroundVfxState {
         if self.current.is_none() {
             self.select_requested(now_ms);
         } else if self.current == self.requested {
-            // Reverse both controls from their current values if work resumes.
-            self.expansion
-                .set_active(false, now_ms, TERMINAL_VFX_TRANSITION_MS);
+            // Reverse opacity continuously if work resumes.
             self.transition
                 .set_active(true, now_ms, TERMINAL_VFX_TRANSITION_MS);
         } else {
             if self.transition.level_at(now_ms) <= 0.0 {
                 self.select_requested(now_ms);
             } else {
-                let expand = self.current.is_some_and(codex_knot_effect);
-                let expansion = self
-                    .expansion
-                    .sample(expand, now_ms, TERMINAL_VFX_TRANSITION_MS);
-                if !expand || expansion >= 1.0 {
-                    self.transition
-                        .set_active(false, now_ms, TERMINAL_VFX_TRANSITION_MS);
-                }
+                self.transition
+                    .set_active(false, now_ms, TERMINAL_VFX_TRANSITION_MS);
             }
         }
         self.current
@@ -1177,7 +1180,6 @@ impl TerminalBackgroundVfxState {
     fn select_requested(&mut self, now_ms: u64) {
         self.current = self.requested;
         self.entered_ms = now_ms;
-        self.expansion = SpiritVfxTransition::INACTIVE;
         self.transition = SpiritVfxTransition::INACTIVE;
         self.transition
             .set_active(self.current.is_some(), now_ms, TERMINAL_VFX_TRANSITION_MS);
@@ -1192,7 +1194,7 @@ impl TerminalBackgroundVfxState {
         if !codex_knot_effect(effect) {
             return (
                 transitioned_background(effect, level, [1.0, 1.0, 2.0]),
-                SPIRIT_BACKGROUND_PRESENT_SCALE,
+                effect.default_scale(),
             );
         }
         let (bg_color_a, bg_color_b) = effect.demo_colors();
@@ -1213,8 +1215,7 @@ impl TerminalBackgroundVfxState {
                 bg_color_a,
                 bg_color_b,
             },
-            CODEX_VFX_SCALE
-                + (CODEX_VFX_EXIT_SCALE - CODEX_VFX_SCALE) * self.expansion.level_at(now_ms),
+            effect.default_scale(),
         )
     }
 }
@@ -1498,7 +1499,7 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     let power_mode_transition = *POWER_MODE_VFX_TRANSITION.lock();
     let power_mode_level = power_mode_transition.level_at(now_ms);
     let power_mode_visible = power_mode_transition.active || power_mode_level > 0.0;
-    let (background, background_phase_override, background_scale) = if power_mode_visible {
+    let (background, background_phase_override, _) = if power_mode_visible {
         (
             power_mode_background(power_mode_level),
             None,
@@ -1540,6 +1541,7 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
             SPIRIT_BACKGROUND_PRESENT_SCALE,
         )
     };
+    let background_scale = background.effect.default_scale();
     let failed_parameters = FAILED_SPRITE_VFX.lock().sample(now_ms);
     let (effect, parameters) = if let Some(normalized) = failed_parameters {
         let mut parameters = [0.0; 4];
@@ -1845,7 +1847,7 @@ mod terminal_background_tests {
             close(background.speed, 3.0);
             close(background.intensity, intensity);
             close(background.opacity, 0.75);
-            close(scale, 1.54);
+            close(scale, 1.38);
         }
     }
 
@@ -1856,49 +1858,41 @@ mod terminal_background_tests {
             let (background, scale) = frame(&mut state, Some(ProgramStatus::Working), now);
             close(background.opacity, opacity);
             close(background.speed, 3.0);
-            close(scale, 1.54);
+            close(scale, 1.38);
         }
     }
 
     #[test]
-    fn expands_then_fades_completely_before_starting_resonance() {
+    fn fades_at_fixed_size_before_starting_resonance() {
         let mut state = working();
         let done = Some(ProgramStatus::Done);
-        for (now, opacity, scale) in [
-            (700, 0.75, 1.54),
-            (1025, 0.75, 2.27),
-            (1350, 0.75, 3.0),
-            (1675, 0.375, 3.0),
-        ] {
-            let (background, actual_scale) = frame(&mut state, done, now);
+        for (now, opacity) in [(700, 0.75), (1025, 0.375)] {
+            let (background, scale) = frame(&mut state, done, now);
             assert_eq!(background.effect, SpiritVfxBackgroundEffect::SparkLattice);
             close(background.opacity, opacity);
-            close(background.speed, 3.0);
-            close(actual_scale, scale);
+            close(scale, 1.38);
         }
-        let (next, scale) = frame(&mut state, done, 2000);
+        let (next, scale) = frame(&mut state, done, 1350);
         assert_eq!(next.effect, SpiritVfxBackgroundEffect::Resonance);
         close(next.opacity, 0.0);
-        close(scale, 1.54);
-        let (settled, _) = frame(&mut state, done, 2650);
+        close(scale, 1.35);
+        let (settled, scale) = frame(&mut state, done, 2000);
         close(settled.opacity, 0.75);
-        close(settled.speed, 1.0);
-        close(settled.intensity, 2.0);
+        close(scale, 1.35);
     }
 
     #[test]
-    fn acknowledgement_expands_and_fades_resonance_before_releasing_the_override() {
+    fn acknowledgement_fades_resonance_at_fixed_size() {
         let mut state = TerminalBackgroundVfxState::INACTIVE;
         frame(&mut state, Some(ProgramStatus::Done), 0);
         frame(&mut state, Some(ProgramStatus::Done), 650);
-        for (now, opacity, scale) in [(700, 0.75, 1.54), (1350, 0.75, 3.0), (1675, 0.375, 3.0)] {
-            let (background, actual_scale) = frame(&mut state, Some(ProgramStatus::Idle), now);
+        for (now, opacity) in [(700, 0.75), (1025, 0.375)] {
+            let (background, scale) = frame(&mut state, Some(ProgramStatus::Idle), now);
             assert_eq!(background.effect, SpiritVfxBackgroundEffect::Resonance);
             close(background.opacity, opacity);
-            close(actual_scale, scale);
+            close(scale, 1.35);
         }
-        assert_eq!(state.sample(Some(ProgramStatus::Idle), 2000), None);
-        assert_eq!(state.sample(None, 2500), None);
+        assert_eq!(state.sample(Some(ProgramStatus::Idle), 1350), None);
     }
 
     #[test]
@@ -1907,27 +1901,25 @@ mod terminal_background_tests {
         frame(&mut state, Some(ProgramStatus::Done), 700);
         let blocked = Some(ProgramStatus::Blocked(ProgramStatusKind::Auth));
         frame(&mut state, blocked, 1000);
-        frame(&mut state, blocked, 1350);
-        let (next, _) = frame(&mut state, blocked, 2000);
+        let (next, _) = frame(&mut state, blocked, 1350);
         assert_eq!(next.effect, SpiritVfxBackgroundEffect::WaterRipples);
         close(next.opacity, 0.0);
     }
 
     #[test]
-    fn resumed_work_reverses_scale_and_opacity_without_a_jump() {
+    fn resumed_work_reverses_opacity_without_changing_size() {
         let mut state = working();
         let working = Some(ProgramStatus::Working);
         let done = Some(ProgramStatus::Done);
         frame(&mut state, done, 700);
-        frame(&mut state, done, 1350);
-        let (outgoing, scale) = frame(&mut state, done, 1675);
-        let (resumed, resumed_scale) = frame(&mut state, working, 1675);
+        let (outgoing, scale) = frame(&mut state, done, 1025);
+        let (resumed, resumed_scale) = frame(&mut state, working, 1025);
         close(outgoing.opacity, resumed.opacity);
         close(scale, resumed_scale);
         let (settled, scale) = frame(&mut state, working, 2325);
         close(settled.opacity, 0.75);
         close(settled.speed, 3.0);
-        close(scale, 1.54);
+        close(scale, 1.38);
         assert_eq!(state.entered_ms, 0);
     }
 
@@ -1940,7 +1932,7 @@ mod terminal_background_tests {
         frame(&mut state, Some(ProgramStatus::Working), 700);
         let (outgoing, scale) = frame(&mut state, Some(ProgramStatus::Working), 1025);
         close(outgoing.opacity, 0.5);
-        close(scale, SPIRIT_BACKGROUND_PRESENT_SCALE);
+        close(scale, 1.33);
         let (next, _) = frame(&mut state, Some(ProgramStatus::Working), 1350);
         assert_eq!(next.effect, SpiritVfxBackgroundEffect::SparkLattice);
         close(next.opacity, 0.0);

@@ -17,7 +17,7 @@
   article { background: #181c26; border: 1px solid #343b4b; border-radius: 12px; overflow: hidden; }
   .stage { height: 256px; position: relative; display: grid; place-items: center; background: var(--stage, #090c13); }
   canvas { width: 256px; height: 256px; display: block; }
-  .sprite { position: absolute; width: 166.4px; height: 166.4px; object-fit: fill; image-rendering: pixelated; pointer-events: none; }
+  .sprite { position: absolute; width: 256px; height: 256px; object-fit: fill; image-rendering: pixelated; pointer-events: none; }
   .caption { padding: 14px 16px 16px; }
   h2 { font-size: 14px; margin: 0 0 6px; font-weight: 600; }
   .caption p { font-size: 12px; }
@@ -53,7 +53,7 @@
     <h2>Shared settings</h2>
     <label class="control"><span>Speed <output id="speed-value"></output></span><input id="speed" type="range" min="0" max="4" step="0.01" value="1"></label>
     <label class="control"><span>Intensity <output id="intensity-value"></output></span><input id="intensity" type="range" min="0.1" max="4" step="0.01" value="2"></label>
-    <label class="control"><span>Background scale <output id="scale-value"></output></span><input id="scale" type="range" min="0.25" max="3" step="0.00390625" value="1.171875"></label>
+    <label class="control"><span>Background scale <output id="scale-value"></output></span><input id="scale" type="range" min="0.25" max="3" step="0.00390625" value="1"></label>
     <label class="control"><span>Opacity <output id="opacity-value"></output></span><input id="opacity" type="range" min="0" max="1" step="0.01" value="1"></label>
     <div class="colors"><label>Color A<input id="color-a" type="color" value="#8d68ff"></label><label>Color B<input id="color-b" type="color" value="#6cf2ff"></label></div>
     <label class="toggle"><input id="show-sprite" type="checkbox" checked> Show Spirit sprite</label>
@@ -63,7 +63,7 @@
     <p style="font-size:12px">All four share the same time and settings. Hide Lilly to inspect the entire knot. Space pauses; arrows tune speed and intensity.</p>
   </aside>
 </main>
-<footer>Native 256 × 256 backgrounds · Lilly scale 0.65 · seven frames / 110 ms<br>
+<footer>Native 256 × 256 backgrounds · Lilly scale 1 · seven frames / 110 ms<br>
 Backgrounds use only pixel coordinates, time, and math. Lilly is a separate image layer with no sprite VFX applied.<br>
 Original studies retained for comparison. Spark lattice and Resonance are selected for Codex's working and unread-ready states.</footer>
 <script id="shader" type="x-shader/x-fragment">__KNOT_SHADER__</script>
@@ -140,7 +140,7 @@ function savePNG() {
     ctx.drawImage(canvas, x, y);
     if ($('show-sprite').checked && frames[sourceFrame].complete) {
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(frames[sourceFrame], x + 44.8, y + 44.8, 166.4, 166.4);
+      ctx.drawImage(frames[sourceFrame], x, y, 256, 256);
     }
     ctx.fillStyle = '#181c26'; ctx.fillRect(x, y + 256, 256, 32);
     ctx.fillStyle = '#e9ecf3'; ctx.font = '13px system-ui'; ctx.fillText(titles[i], x + 12, y + 277);

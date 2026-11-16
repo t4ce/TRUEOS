@@ -84,12 +84,14 @@ enum {
     LILLY_FRAME_PERIOD_MS = 110,
     SPIRIT_TARGET_HZ = 60,
     REPLAY_FIRST_ID = 2,
-    REPLAY_LAST_ID = 11,
+    REPLAY_LAST_ID = 13,
     REPLAY_MODE_COUNT = REPLAY_LAST_ID - REPLAY_FIRST_ID + 1,
-    PANEL_COLUMNS = 5,
+    PANEL_COLUMNS = 4,
     PANEL_ROWS = (REPLAY_MODE_COUNT + PANEL_COLUMNS - 1) / PANEL_COLUMNS,
     PANEL_WIDTH = SPIRIT_SIZE * PANEL_COLUMNS,
     PANEL_HEIGHT = SPIRIT_SIZE * PANEL_ROWS,
+    CELL_HEIGHT = SPIRIT_SIZE + 42,
+    WINDOW_HEIGHT = CELL_HEIGHT * PANEL_ROWS,
 };
 
 typedef enum {
@@ -103,6 +105,8 @@ typedef enum {
     REPLAY_WATER_RIPPLES,
     REPLAY_PIXEL_BURST,
     REPLAY_MAGIC_TIME_CIRCLE,
+    REPLAY_SPARK_LATTICE,
+    REPLAY_RESONANCE,
 } ReplayMode;
 
 typedef struct {
@@ -122,6 +126,8 @@ static const BackgroundPreset BACKGROUND_PRESETS[REPLAY_MODE_COUNT] = {
     {"water-ripples", {0x4F, 0x8D, 0xFF}, {0x6E, 0xFF, 0xE4}},
     {"pixel-burst", {0xB0, 0x6C, 0xFF}, {0x5D, 0xEE, 0xFF}},
     {"magic-time-circle", {0x8D, 0x68, 0xFF}, {0x6C, 0xF2, 0xFF}},
+    {"spark-lattice", {0x8D, 0x68, 0xFF}, {0x6C, 0xF2, 0xFF}},
+    {"resonance", {0x8D, 0x68, 0xFF}, {0x6C, 0xF2, 0xFF}},
 };
 
 typedef struct {
@@ -135,11 +141,41 @@ static const RuntimeControls DEFAULT_RUNTIME_CONTROLS = {
 };
 
 static const float MAGIC_TIME_STATIC_PREVIEW_SECONDS = 10.0f * 3600.0f + 9.0f * 60.0f + 42.0f;
-static const float SPIRIT_BACKGROUND_PRESENT_SCALE = 1.5625f;
+static const float SPIRIT_BACKGROUND_PRESENT_SCALE = 1.0f;
 static const float SPIRIT_LILLY_PRESENT_SCALE = 1.0f;
 static const float AURA_RADIUS_MIN = 9.0f;
 static const float AURA_RADIUS_MAX = 12.0f;
 static const float AURA_HALF_CYCLE_SECONDS = 1.0f;
+
+static const float DEFAULT_BACKGROUND_SCALES[REPLAY_MODE_COUNT] = {
+    1.32f, 1.53f, 0.77f, 1.02f, 2.32f, 1.20f, 0.62f, 1.33f, 1.35f, 1.39f, 1.38f, 1.35f
+};
+static float background_scales[REPLAY_MODE_COUNT];
+static const char *const SCALE_DEFAULTS_PATH = "bld/spirit-vfx-scales.txt";
+
+static void load_scales(void) {
+    for (unsigned i = 0; i < REPLAY_MODE_COUNT; ++i) background_scales[i] = DEFAULT_BACKGROUND_SCALES[i];
+    FILE *file = fopen(SCALE_DEFAULTS_PATH, "r");
+    if (!file) return;
+    unsigned id;
+    float scale;
+    while (fscanf(file, "%u %f", &id, &scale) == 2) {
+        if (id >= REPLAY_FIRST_ID && id <= REPLAY_LAST_ID && isfinite(scale)
+            && scale >= 0.25f && scale <= 3.0f)
+            background_scales[id - REPLAY_FIRST_ID] = scale;
+    }
+    fclose(file);
+}
+
+static void save_scales(void) {
+    FILE *file = fopen(SCALE_DEFAULTS_PATH, "w");
+    if (!file) { perror(SCALE_DEFAULTS_PATH); return; }
+    for (unsigned i = 0; i < REPLAY_MODE_COUNT; ++i)
+        fprintf(file, "%u %.2f\n", i + REPLAY_FIRST_ID, background_scales[i]);
+    if (fclose(file) != 0) { perror(SCALE_DEFAULTS_PATH); return; }
+    printf("Saved per-effect scales to %s\n", SCALE_DEFAULTS_PATH);
+    fflush(stdout);
+}
 
 typedef struct {
     uint32_t width;
@@ -149,7 +185,7 @@ typedef struct {
 
 static const char *const LILLY_ASSET_KEY = "idle.crossed.soft_blink";
 static const char *const LILLY_ASSET_DIRECTORY =
-    "Lilly/Idle/Crossed-Arms/idle-1_frames";
+    "bld/lilly-preview";
 static const char *const BACKGROUND_ARTIFACT =
     "crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/"
     "spirit_vfx_background_rgba8.spv";
@@ -200,24 +236,22 @@ static uint8_t *extract_lilly_rgba(unsigned frame, uint32_t *width_out, uint32_t
     if (frame >= LILLY_FRAME_COUNT) {
         die("fixed Lilly frame index is outside the asset");
     }
-    char command[256];
-    int written =
-        snprintf(command, sizeof(command), "lz4 -dc tools/Lilly.tar.lz4 | tar -xOf - "
-                                           "'%s/frame_%02u.png' 2>/dev/null",
-                 LILLY_ASSET_DIRECTORY, frame + 1);
-    if (written < 0 || (size_t)written >= sizeof(command)) {
-        die("fixed Lilly extraction command overflowed");
+    char path[256];
+    int written = snprintf(path, sizeof(path), "%s/frame_%02u.png",
+                           LILLY_ASSET_DIRECTORY, frame + 1);
+    if (written < 0 || (size_t)written >= sizeof(path)) {
+        die("mapped Lilly path overflowed");
     }
-    FILE *stream = popen(command, "r");
+    FILE *stream = fopen(path, "rb");
     if (stream == NULL) {
-        die("failed to start tar/LZ4 for the fixed Lilly frame");
+        die("mapped Lilly frame missing; run make -C tools/lilly/spirit-vfx-offline assets");
     }
 
     png_image image;
     memset(&image, 0, sizeof(image));
     image.version = PNG_IMAGE_VERSION;
     if (!png_image_begin_read_from_stdio(&image, stream)) {
-        pclose(stream);
+        fclose(stream);
         die("libpng could not read the fixed Lilly frame");
     }
     image.format = PNG_FORMAT_RGBA;
@@ -225,20 +259,20 @@ static uint8_t *extract_lilly_rgba(unsigned frame, uint32_t *width_out, uint32_t
     uint8_t *rgba = malloc(bytes);
     if (rgba == NULL) {
         png_image_free(&image);
-        pclose(stream);
+        fclose(stream);
         die("out of host memory for Lilly RGBA pixels");
     }
     if (!png_image_finish_read(&image, NULL, rgba, 0, NULL)) {
         free(rgba);
         png_image_free(&image);
-        pclose(stream);
+        fclose(stream);
         die("libpng could not decode the fixed Lilly frame");
     }
-    int status = pclose(stream);
+    int status = fclose(stream);
     if (status != 0) {
         free(rgba);
         png_image_free(&image);
-        die("tar/LZ4 failed while extracting the fixed Lilly frame");
+        die("failed to close mapped Lilly frame");
     }
     *width_out = image.width;
     *height_out = image.height;
@@ -397,10 +431,20 @@ static void fill_control(uint32_t control[CONTROL_DWORDS], uint32_t source_width
     const BackgroundPreset *preset = &BACKGROUND_PRESETS[mode_id - REPLAY_FIRST_ID];
     control[3] = mode_id;
     control[4] = float_bits(production_time);
-    control[5] = float_bits(1.0f);
-    control[6] = float_bits(SPIRIT_BACKGROUND_PRESENT_SCALE);
-    control[7] = float_bits(runtime->speed);
-    control[8] = float_bits(runtime->intensity);
+    /* Preview settled runtime states; entry/exit transitions are not replayed.
+       Shared keys adjust speed/intensity relative to their normal defaults. */
+    int knot = mode == REPLAY_SPARK_LATTICE || mode == REPLAY_RESONANCE;
+    float speed = runtime->speed;
+    float intensity = runtime->intensity;
+    if (mode == REPLAY_SPARK_LATTICE) {
+        speed = fminf(speed * 3.0f, 4.0f);
+        float phase = fmodf(production_time, 7.0f) / 7.0f;
+        intensity *= (1.0f + 1.5f * (1.0f - cosf(6.28318530718f * phase))) / 2.0f;
+    }
+    control[5] = float_bits(knot ? 0.75f : 1.0f);
+    control[6] = float_bits(background_scales[mode_id - REPLAY_FIRST_ID]);
+    control[7] = float_bits(speed);
+    control[8] = float_bits(fminf(fmaxf(intensity, 0.1f), 4.0f));
     control[9] =
         pack_control_rgb(preset->color_a[0], preset->color_a[1], preset->color_a[2]);
     control[10] =
@@ -486,6 +530,7 @@ typedef struct {
     XImage *image;
     Atom wm_delete;
     int argb;
+    int dragging;
 } SpiritPanel;
 
 typedef struct {
@@ -529,6 +574,7 @@ static void sleep_until(uint64_t deadline_ns) {
 static SpiritPanel create_panel(void) {
     SpiritPanel panel;
     memset(&panel, 0, sizeof(panel));
+    panel.dragging = -1;
     panel.display = XOpenDisplay(NULL);
     if (panel.display == NULL) {
         die("cannot open X11/Xwayland display");
@@ -551,14 +597,15 @@ static SpiritPanel create_panel(void) {
     }
 
     int x = (DisplayWidth(panel.display, screen) - PANEL_WIDTH) / 2;
-    int y = (DisplayHeight(panel.display, screen) - PANEL_HEIGHT) / 2;
+    int y = (DisplayHeight(panel.display, screen) - WINDOW_HEIGHT) / 2;
     XSetWindowAttributes attributes;
     memset(&attributes, 0, sizeof(attributes));
     attributes.colormap = colormap;
     attributes.border_pixel = 0;
     attributes.background_pixel = 0;
-    attributes.event_mask = ExposureMask | KeyPressMask | StructureNotifyMask;
-    panel.window = XCreateWindow(panel.display, root, x, y, PANEL_WIDTH, PANEL_HEIGHT, 0, depth,
+    attributes.event_mask = ExposureMask | KeyPressMask | StructureNotifyMask
+        | ButtonPressMask | ButtonReleaseMask | PointerMotionMask;
+    panel.window = XCreateWindow(panel.display, root, x, y, PANEL_WIDTH, WINDOW_HEIGHT, 0, depth,
                                  InputOutput, visual,
                                  CWColormap | CWBorderPixel | CWBackPixel | CWEventMask,
                                  &attributes);
@@ -578,9 +625,9 @@ static SpiritPanel create_panel(void) {
     memset(&size_hints, 0, sizeof(size_hints));
     size_hints.flags = PMinSize | PMaxSize;
     size_hints.min_width = PANEL_WIDTH;
-    size_hints.min_height = PANEL_HEIGHT;
+    size_hints.min_height = WINDOW_HEIGHT;
     size_hints.max_width = PANEL_WIDTH;
-    size_hints.max_height = PANEL_HEIGHT;
+    size_hints.max_height = WINDOW_HEIGHT;
     XSetWMNormalHints(panel.display, panel.window, &size_hints);
     XStoreName(panel.display, panel.window, "Spirit Production VFX Preview");
     panel.wm_delete = XInternAtom(panel.display, "WM_DELETE_WINDOW", False);
@@ -588,11 +635,11 @@ static SpiritPanel create_panel(void) {
 
     panel.gc = XCreateGC(panel.display, panel.window, 0, NULL);
     panel.image = XCreateImage(panel.display, visual, (unsigned)depth, ZPixmap, 0, NULL, PANEL_WIDTH,
-                               PANEL_HEIGHT, 32, 0);
+                               WINDOW_HEIGHT, 32, 0);
     if (panel.gc == NULL || panel.image == NULL) {
         die("failed to allocate X11 panel image");
     }
-    panel.image->data = calloc((size_t)panel.image->bytes_per_line, PANEL_HEIGHT);
+    panel.image->data = calloc((size_t)panel.image->bytes_per_line, WINDOW_HEIGHT);
     if (panel.image->data == NULL) {
         die("out of host memory for X11 panel pixels");
     }
@@ -622,6 +669,12 @@ static void print_runtime_controls(const RuntimeControls *runtime) {
     fflush(stdout);
 }
 
+static void slide_scale(unsigned index, int x) {
+    int local_x = x - (int)(index % PANEL_COLUMNS) * SPIRIT_SIZE;
+    float fraction = fminf(1.0f, fmaxf(0.0f, (local_x - 16) / 224.0f));
+    background_scales[index] = roundf((0.25f + fraction * 2.75f) * 100.0f) / 100.0f;
+}
+
 static int panel_process_events(SpiritPanel *panel, RuntimeControls *runtime) {
     while (XPending(panel->display) > 0) {
         XEvent event;
@@ -633,12 +686,29 @@ static int panel_process_events(SpiritPanel *panel, RuntimeControls *runtime) {
             (Atom)event.xclient.data.l[0] == panel->wm_delete) {
             return 0;
         }
+        if (event.type == ButtonPress && event.xbutton.button == Button1) {
+            int row = event.xbutton.y / CELL_HEIGHT;
+            int col = event.xbutton.x / SPIRIT_SIZE;
+            int index = row * PANEL_COLUMNS + col;
+            if (event.xbutton.y % CELL_HEIGHT >= SPIRIT_SIZE && index >= 0 && index < REPLAY_MODE_COUNT) {
+                panel->dragging = index;
+                slide_scale((unsigned)index, event.xbutton.x);
+            }
+        }
+        if (event.type == MotionNotify && panel->dragging >= 0)
+            slide_scale((unsigned)panel->dragging, event.xmotion.x);
+        if (event.type == ButtonRelease && event.xbutton.button == Button1)
+            panel->dragging = -1;
         if (event.type == KeyPress) {
             KeySym key = XLookupKeysym(&event.xkey, 0);
             int changed = 1;
             switch (key) {
             case XK_Escape:
                 return 0;
+            case XK_s:
+            case XK_S:
+                save_scales();
+                break;
             case XK_Left:
                 runtime->speed =
                     step_runtime_control(runtime->speed, -0.01f, 0.0f, 4.0f);
@@ -669,7 +739,7 @@ static int panel_process_events(SpiritPanel *panel, RuntimeControls *runtime) {
 
 static void panel_present(SpiritPanel *panel, const uint32_t *cursor_grid) {
     size_t cell_pixels = (size_t)SPIRIT_SIZE * SPIRIT_SIZE;
-    for (unsigned y = 0; y < PANEL_HEIGHT; ++y) {
+    for (unsigned y = 0; y < WINDOW_HEIGHT; ++y) {
         uint32_t *row = (uint32_t *)(panel->image->data + y * panel->image->bytes_per_line);
         memset(row, 0, (size_t)PANEL_WIDTH * sizeof(*row));
     }
@@ -679,7 +749,7 @@ static void panel_present(SpiritPanel *panel, const uint32_t *cursor_grid) {
         for (unsigned y = 0; y < SPIRIT_SIZE; ++y) {
             uint32_t *row = (uint32_t *)(
                 panel->image->data
-                + ((size_t)cell_y * SPIRIT_SIZE + y) * panel->image->bytes_per_line);
+                + ((size_t)cell_y * CELL_HEIGHT + y) * panel->image->bytes_per_line);
             for (unsigned x = 0; x < SPIRIT_SIZE; ++x) {
                 uint32_t pixel =
                     cursor_grid[(size_t)mode * cell_pixels + (size_t)y * SPIRIT_SIZE + x];
@@ -689,7 +759,20 @@ static void panel_present(SpiritPanel *panel, const uint32_t *cursor_grid) {
         }
     }
     XPutImage(panel->display, panel->window, panel->gc, panel->image, 0, 0, 0, 0, PANEL_WIDTH,
-              PANEL_HEIGHT);
+              WINDOW_HEIGHT);
+    for (unsigned i = 0; i < REPLAY_MODE_COUNT; ++i) {
+        int x = (i % PANEL_COLUMNS) * SPIRIT_SIZE;
+        int y = (i / PANEL_COLUMNS) * CELL_HEIGHT + SPIRIT_SIZE;
+        XSetForeground(panel->display, panel->gc, 0xff20242cUL);
+        XFillRectangle(panel->display, panel->window, panel->gc, x, y, SPIRIT_SIZE, 42);
+        XSetForeground(panel->display, panel->gc, 0xffeeeeeeUL);
+        char label[96];
+        snprintf(label, sizeof(label), "%u %s  %.2fx", i + 1, BACKGROUND_PRESETS[i].name, background_scales[i]);
+        XDrawString(panel->display, panel->window, panel->gc, x + 8, y + 14, label, (int)strlen(label));
+        XDrawLine(panel->display, panel->window, panel->gc, x + 16, y + 29, x + 240, y + 29);
+        int knob = x + 16 + (int)lroundf((background_scales[i] - 0.25f) / 2.75f * 224);
+        XFillRectangle(panel->display, panel->window, panel->gc, knob - 3, y + 23, 7, 13);
+    }
     XFlush(panel->display);
 }
 
@@ -746,13 +829,13 @@ static void run_panel(cl_command_queue queue, cl_kernel background_kernel,
     printf("Spirit VFX panel running; press ESC to close\n");
     printf("  asset:    %s (%u frames, %u ms/frame, loop)\n", LILLY_ASSET_KEY,
            LILLY_FRAME_COUNT, LILLY_FRAME_PERIOD_MS);
-    printf("  grid:     production background IDs 2..11, row-major, five columns\n");
+    printf("  grid:     production background IDs 2..13, row-major, four columns\n");
     printf("  cadence:  shader %u Hz; asset %.3f Hz\n", SPIRIT_TARGET_HZ,
            1000.0 / LILLY_FRAME_PERIOD_MS);
-    printf("  window:   borderless %ux%u ARGB=%d\n", PANEL_WIDTH, PANEL_HEIGHT, panel.argb);
-    printf("  fixed:    production C++ artifacts; opacity 1.00; background scale %.6f; Lilly scale %.2f; global AuraBloom\n",
+    printf("  window:   borderless %ux%u ARGB=%d\n", PANEL_WIDTH, WINDOW_HEIGHT, panel.argb);
+    printf("  fixed:    production C++ artifacts; opacity generic 1.00 / Codex 0.75; background scale %.6f; Lilly scale %.2f; global AuraBloom\n",
            SPIRIT_BACKGROUND_PRESENT_SCALE, SPIRIT_LILLY_PRESENT_SCALE);
-    printf("  keys:     Left/Right = Speed; Down/Up = Intensity; step 0.01\n");
+    printf("  keys:     Drag per-cell scale sliders; S saves defaults; Left/Right = Speed; Down/Up = Intensity\n");
     print_runtime_controls(&runtime);
 
     while (panel_process_events(&panel, &runtime)) {
@@ -787,6 +870,7 @@ static void run_panel(cl_command_queue queue, cl_kernel background_kernel,
 }
 
 int main(int argc, char **argv) {
+    load_scales();
     int panel_mode = 1;
     const char *output_path = "bld/spirit-vfx-grid.png";
     float time_seconds = 1.5f;

@@ -1,9 +1,9 @@
 const SPIRIT_VFX_INITIAL_TRACE_FRAMES: u32 = 30;
 const SPIRIT_VFX_PERIODIC_TRACE_FRAMES: u32 = 60;
 const SPIRIT_VFX_ENCODING_LOG_LIMIT: u32 = 2;
-/// Fill the native 256px cursor: authored radius 0.32 reaches radius 128.
-/// Knot modes retain their independently animated presentation scale.
-pub(crate) const SPIRIT_VFX_BACKGROUND_PRESENT_SCALE: f32 = 1.5625;
+/// Scale 1 maps the authored canvas directly to the native 256px cursor.
+/// Explicit effect transitions may enlarge that canvas.
+pub(crate) const SPIRIT_VFX_BACKGROUND_PRESENT_SCALE: f32 = 1.0;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct SpiritVfxControl {
@@ -487,11 +487,9 @@ fn spirit_vfx_write_control(
             dwords.add(5),
             spirit_vfx_bounded(control.background_opacity, 0.0, 1.0, 0.0).to_bits(),
         );
-        let scale = if matches!(control.background_mode, 12 | 13) {
-            spirit_vfx_bounded(control.background_scale, 0.25, 3.0, 1.4)
-        } else {
-            SPIRIT_VFX_BACKGROUND_PRESENT_SCALE
-        };
+        let scale = spirit_vfx_bounded(
+            control.background_scale, 0.25, 3.0, SPIRIT_VFX_BACKGROUND_PRESENT_SCALE,
+        );
         core::ptr::write_volatile(dwords.add(6), scale.to_bits());
         core::ptr::write_volatile(
             dwords.add(7),

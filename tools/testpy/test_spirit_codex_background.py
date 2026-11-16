@@ -12,6 +12,14 @@ from test_clip_position3_uv_texture import ROOT, item, constant
 VFX = "src/spirit/Spirit_VFX.rs"
 GPU = "src/intel/gpgpu/operations/spirit_vfx.rs"
 source = (ROOT / VFX).read_text()
+# The host preview and runtime must start with identical reviewed footprints.
+preview = (ROOT / "tools/lilly/spirit-vfx-offline/main.c").read_text()
+preview_scales = re.search(r"DEFAULT_BACKGROUND_SCALES\[REPLAY_MODE_COUNT\] = \{(.*?)\}", preview, re.S)[1]
+preview_scales = [float(value) for value in re.findall(r"([0-9]+\.[0-9]+)f", preview_scales)]
+scale_method = re.search(r"pub\(crate\) const fn default_scale.*?\n    }", source, re.S)[0]
+runtime_scales = [float(value) for value in re.findall(r"Self::\w+ => ([0-9]+\.[0-9]+)", scale_method)][:-1]
+assert preview_scales == runtime_scales, (preview_scales, runtime_scales)
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--timeline", type=Path, help="Export production working/ready/acknowledged controls as CSV")
 args = parser.parse_args()
@@ -34,7 +42,7 @@ parts += [implementation(name) for name in (
 )]
 parts += [constant(VFX, name) for name in (
     "ALPHA_BACKGROUND_TRANSITION_CONTROLS", "POWER_MODE_VFX_TRANSITION_MS", "TERMINAL_VFX_TRANSITION_MS",
-    "CODEX_VFX_SCALE", "CODEX_VFX_EXIT_SCALE", "CODEX_VFX_OPACITY", "CODEX_VFX_INTENSITY_CYCLE_MS",
+    "CODEX_VFX_OPACITY", "CODEX_VFX_INTENSITY_CYCLE_MS",
 )]
 parts += [constant(GPU, "SPIRIT_VFX_BACKGROUND_PRESENT_SCALE")]
 parts += ["const SPIRIT_BACKGROUND_PRESENT_SCALE: f32 = SPIRIT_VFX_BACKGROUND_PRESENT_SCALE;"]
@@ -106,20 +114,18 @@ fn knot_ids_and_scale_reach_the_gpu_without_changing_the_existing_abi() {
         fx_color_a: 0, fx_color_b: 0,
     };
     for (id, requested_scale, expected_scale) in [
-        (12, 1.4, 1.4), (12, 1.54, 1.54), (13, 1.54, 1.54), (13, 3.0, 3.0), (12, f32::NAN, 1.4),
-        (12, 50.0, 3.0), (3, 0.5, 1.5625), (11, 0.5, 1.5625),
-        (9, 3.0, SPIRIT_VFX_BACKGROUND_PRESENT_SCALE),
-        (99, 3.0, SPIRIT_VFX_BACKGROUND_PRESENT_SCALE),
+        (3, 1.0, 1.0), (11, 1.0, 1.0), (12, 1.0, 1.0), (13, 1.0, 1.0),
+        (3, f32::NAN, 1.0), (3, 0.0, 0.25), (3, 50.0, 3.0),
+        (12, 1.4, 1.4), (12, 1.54, 1.54), (13, 1.54, 1.54), (13, 3.0, 3.0), (12, f32::NAN, 1.0),
+        (12, 50.0, 3.0), (3, 0.5, 0.5), (11, 0.5, 0.5),
+        (9, 3.0, 3.0),
+        (99, 3.0, 3.0),
     ] {
         control.background_mode = id; control.background_scale = requested_scale;
         spirit_vfx_write_control(buffer, 60, 1024,
             GpgpuRgba8Surface { width: 256, height: 256, pitch_bytes: 1024 }, control, 60);
         assert_eq!(page[3], if id == 99 { 0 } else { id });
         assert_eq!(f32::from_bits(page[6]), expected_scale);
-        if (2..=11).contains(&id) {
-            assert_eq!(0.32 * 256.0 * f32::from_bits(page[6]), 128.0,
-                "reference background ring fills the full 256px cursor canvas");
-        }
         assert_eq!(f32::from_bits(page[13]), 1.0, "native sprite scale is independent of animated background scale");
         assert_eq!(f32::from_bits(page[14]), 0.0, "no legacy half-turn mirror correction");
         assert_eq!(f32::from_bits(page[31]), 0.0, "native bottom row is not feathered away");

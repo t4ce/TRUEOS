@@ -38,14 +38,12 @@ Terminal activity selects **Spark lattice (12)** while Codex is working and
 acknowledgement report releases the ready effect on CLI interaction. Blocked
 input keeps Water ripples. These are transient overrides of the persistent panel.
 
-Spark lattice has fixed speed **3**, opacity **0.75**, and scale **1.54**.
+Spark lattice has fixed speed **3**, opacity **0.75**, and fixed scale **1.38**.
 Intensity follows a smooth cosine cycle **1 → 4 → 1 over seven seconds** of
 wall time, independently of shader speed. Repeated status reports do not restart
-it. Resonance retains its preview speed **1** and intensity **2**, with the same
-scale and opacity. Entry fades opacity over 650 ms without ramping speed.
-On exit, each knot expands from its current scale to **3** over 650 ms, then
-fades opacity to zero over another 650 ms before selecting the next background.
-Resuming the outgoing status reverses its scale and opacity continuously;
+it. Resonance retains its preview speed **1** and intensity **2**, with fixed scale **1.35** and the same opacity. Entry fades opacity over 650 ms without ramping speed.
+On exit, backgrounds fade to zero over 650 ms at their fixed reviewed size.
+Resuming the outgoing status reverses opacity continuously; size stays fixed.
 new requests during exit replace the pending effect without restarting exit.
 
 The fifteen non-clean sprite effects retain their authored algorithms and
@@ -117,7 +115,7 @@ The offline viewers load the published C++ SPIR-V on the host GPU. They contain
 no alternate shader implementation or source-compilation fallback:
 
 ```sh
-make -C tools/spirit-vfx-offline render \
+make -C tools/lilly/spirit-vfx-offline render \
   OUTPUT=bld/spirit-vfx-grid-cpp.png TIME=2.25
 
 make -C tools/spirit-sprite-vfx-offline render \
@@ -146,6 +144,8 @@ Idle mode selects `Magic time circle + Aura bloom` transiently. TRUEOS prefers
 NTP and falls back to the bootloader-provided timestamp; its system timezone is UTC.
 The sprite walker retains smooth 60 Hz animation time in dword 4, while only
 the clock background reads quantized wall time from dword 32.
-Standard backgrounds use `SPIRIT_BACKGROUND_PRESENT_SCALE = 1.5625`, mapping
-the authored `0.32` reference radius to 128 pixels across the full 256-pixel
-cursor surface. The Codex knot modes retain their independent scale and exit envelope.
+Backgrounds use the fixed reviewed per-effect scales in
+`SpiritVfxBackgroundEffect::default_scale`, matching the production preview.
+Scale 1 remains the native authored 256-pixel canvas; each effect's calibrated
+scale determines its visible footprint. Runtime status transitions change opacity,
+never presentation scale.
