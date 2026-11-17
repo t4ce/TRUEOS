@@ -433,7 +433,7 @@ pub(crate) async fn read_range(
     read_range_observed(actor, disk, path, offset, out, |_| {}).await
 }
 
-pub(crate) async fn read_range_observed(
+pub(in crate::r::fs) async fn read_range_observed(
     actor: Actor,
     disk: block::DeviceHandle,
     path: &str,
@@ -596,7 +596,7 @@ async fn filter_index_under_lease(
     Ok((nodes, false))
 }
 
-pub(crate) async fn index_snapshot_limited(
+pub(in crate::r::fs) async fn index_snapshot_limited(
     actor: Actor,
     disk: block::DeviceHandle,
     entry_cap: usize,
@@ -609,7 +609,7 @@ pub(crate) async fn index_snapshot_limited(
         .map(Some)
 }
 
-pub(crate) async fn index_snapshot(
+pub(in crate::r::fs) async fn index_snapshot(
     actor: Actor,
     disk: block::DeviceHandle,
 ) -> Result<Option<Vec<IndexNode>>, block::Error> {

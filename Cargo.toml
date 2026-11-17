@@ -73,6 +73,9 @@ path = "src/main.rs"
 test = false
 bench = false
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(thread_stack_harness)'] }
+
 [features]
 default = ["buildin-apps", "subsystem-usb", "subsystem-igpu", "subsystem-virgl", "trueos_h264_encode_stream", "trueos_task_profile", "odin-native-gpgpu"]
 # Bundle the configured Blueprint apps. Without this feature the same kernel

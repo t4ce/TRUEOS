@@ -4193,7 +4193,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
         };
         diagnostic_stage = "output-completion";
         let geometry_complete = geometry.completed;
-        let mut completed_draws = if geometry_complete {
+        let completed_draws = if geometry_complete {
             geometry_draw_count
         } else {
             0

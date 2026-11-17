@@ -1083,7 +1083,6 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
     let mut request = MOVE_SIGNALS[id.index()]
         .try_take()
         .unwrap_or_else(|| *MOVE_STATES[id.index()].lock());
-    let mut applied_position = SpiritPosition::CENTERED;
     let mut deferred = 0u32;
     let mut lilly_cursor_failures = 0u32;
     if let Err(error) = lilly_cursor::register_once() {
@@ -1140,7 +1139,6 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
             match intel_cursor::spirit_cursor_move(id.0, request.position.cursor_frame()) {
                 Ok((x, y)) => {
                     deferred = 0;
-                    applied_position = request.position;
                     MOVE_APPLIED[id.index()].store(request.sequence, Ordering::Release);
                     if request.sequence != 0
                         && let Some((screen_width, screen_height)) =

@@ -814,7 +814,7 @@ pub async fn assert_private_path(path: &[u8]) -> Result<(), i32> {
         vcabi::trueos_cabi_async_fs_object_start_v1(request.as_ptr(), 24 + path.len())
     })?;
     operation.ready().await?;
-    let length = unsafe { vcabi::trueos_cabi_async_fs_result_len(operation.id) };
+    let length = vcabi::trueos_cabi_async_fs_result_len(operation.id);
     if length != 0 {
         return Err(if length < 0 { length as i32 } else { ERR_IO });
     }
