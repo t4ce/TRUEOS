@@ -1307,7 +1307,7 @@ pub(crate) fn media_tile64_8bpp_offset(byte_x: usize, row_y: usize, tiles_per_ro
 }
 
 #[inline(always)]
-fn media_ytile_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
+pub(super) fn media_ytile_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
     let tile_col = byte_x / MEDIA_YTILE_W;
     let tile_row = row_y / MEDIA_YTILE_H;
     let in_x = byte_x % MEDIA_YTILE_W;

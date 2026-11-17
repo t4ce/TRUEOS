@@ -43,8 +43,8 @@ impl<T> Mutex<T> {
  fn try_lock(&self)->Option<MutexGuard<'_,T>>{self.0.try_lock().ok()}
 }
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]struct Ui4CompositorSubmission{serial:u64}
-#[derive(Clone,Copy,Default,Debug,PartialEq,Eq)]struct Probe{completion_polls:u64}
-#[derive(Clone,Copy,Default,Debug,PartialEq,Eq)]struct GpgpuWorklistSubmitStats{probe:Probe}
+#[derive(Clone,Copy,Default,Debug,PartialEq,Eq)]struct GpgpuSubmissionProbe{completion_polls:u64}
+#[derive(Clone,Copy,Default,Debug,PartialEq,Eq)]struct GpgpuWorklistSubmitStats{probe:GpgpuSubmissionProbe}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]enum Ui4CompositorSubmitError{Busy,InvalidWorklist}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]enum Ui4CompositorCompletion{Pending,Complete(GpgpuWorklistSubmitStats),InvalidSubmission}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]enum Ui4VideoFrameCompletion{Pending,Complete{stats:GpgpuWorklistSubmitStats,release:u64},Failed}
@@ -69,6 +69,7 @@ impl GpgpuNv12Tile64Surface{fn is_valid(self)->bool{self.width>0&&self.height>0}
 #[derive(Clone,Copy)]struct GpgpuAlphaBlendWorklistDesc{src_xy:u32,dst_xy:u32,size:u32,flags:u32}
 fn observe_ui4_pending_h2g_consumption(_: &mut Ui4CompositorPending){OBSERVATIONS.fetch_add(1,Ordering::SeqCst);}
 fn gpgpu_rgba8_release(_:GpgpuRgba8Surface)->u64{RELEASES.fetch_add(1,Ordering::SeqCst);42}
+fn direct_rcs_now_tick()->u64{0}
 '''
 production = '\n'.join([
     function('gpu_ranges_overlap'),

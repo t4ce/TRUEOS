@@ -15,6 +15,85 @@ const AVC_COMPLETION_POLL_DELAY_MS: u64 = 1;
 const AVC_COMPLETION_POLL_TIMEOUT_MS: u64 = 100;
 const AVC_CONTEXT_TEARDOWN_TIMEOUT_US: u64 = 100_000;
 
+// Gen12 MFX status is not context-saved and is replaced by the next picture.
+// Sample it in the same batch, after the codec flush and before completion.
+// Intel media-driver a203cfc: media_driver/agnostic/gen12/hw/mhw_mmio_g12.h
+// and media_softlet/agnostic/common/codec/hal/dec/avc/packet/decode_avc_packet.cpp
+// (ReadMfxStatus / Completed). Keep Intel's mask, including its bit-10 exclusion.
+const AVC_RESULT_ERROR_STATUS_SLOT: u64 = 0x100;
+const AVC_RESULT_MB_COUNT_SLOT: u64 = 0x108;
+const AVC_STATUS_NOT_CAPTURED: u32 = u32::MAX;
+const AVC_DECODE_ERROR_MASK: u32 = 0xFBFF;
+const AVC_MI_STORE_REGISTER_MEM_PPGTT: u32 = (0x24 << 23) | 2;
+
+#[derive(Copy, Clone, Debug)]
+pub(super) struct AvcDecodeHealth {
+    pub captured: bool,
+    pub error_status: u32,
+    pub macroblock_count: u32,
+}
+
+impl AvcDecodeHealth {
+    fn from_raw(enabled: bool, error_status: u32, macroblock_count: u32) -> Self {
+        Self {
+            captured: enabled
+                && error_status != AVC_STATUS_NOT_CAPTURED
+                && macroblock_count != AVC_STATUS_NOT_CAPTURED,
+            error_status,
+            macroblock_count,
+        }
+    }
+
+    pub(super) const fn known_bad(self) -> bool {
+        self.captured && self.error_status & AVC_DECODE_ERROR_MASK != 0
+    }
+
+    // For AVC this register is not a decoded-MB total: low 16 bits count
+    // hardware-concealed MBs and high 16 bits count intra MBs (PRM Vol 2c p55).
+    pub(super) const fn concealed_macroblocks(self) -> u32 {
+        self.macroblock_count & 0xFFFF
+    }
+}
+
+fn avc_decode_status_registers(device_id: u16, ring_base: usize) -> Option<(u32, u32)> {
+    // The enabled desktop media platforms use the Gen12 register layout.
+    // Unknown devices retain playback behavior and report unavailable health;
+    // do not infer their MMIO map solely from the media engine descriptor.
+    if !matches!(device_id, 0x4680 | 0xA780)
+        || !matches!(ring_base, 0x1C0000 | 0x1D0000)
+    {
+        return None;
+    }
+    Some(((ring_base + 0x800) as u32, (ring_base + 0x868) as u32))
+}
+
+fn emit_avc_decode_status(
+    batch: &mut [u32],
+    idx: &mut usize,
+    result_gpu_addr: u64,
+    registers: Option<(u32, u32)>,
+) -> Option<()> {
+    let Some((error_status, macroblock_count)) = registers else {
+        return Some(());
+    };
+    for (register, slot) in [
+        (error_status, AVC_RESULT_ERROR_STATUS_SLOT),
+        (macroblock_count, AVC_RESULT_MB_COUNT_SLOT),
+    ] {
+        let end = idx.checked_add(4)?;
+        let words = batch.get_mut(*idx..end)?;
+        let destination = result_gpu_addr.checked_add(slot)?;
+        words.copy_from_slice(&[
+            AVC_MI_STORE_REGISTER_MEM_PPGTT,
+            register,
+            destination as u32,
+            (destination >> 32) as u32,
+        ]);
+        *idx = end;
+    }
+    Some(())
+}
+
 /// GuC lifecycle completion is asynchronous. Keep the media lane and all
 /// backing owned by the caller until DEREGISTER_CONTEXT_DONE, including when
 /// another UI4 context delays the first bounded scheduler poll.
@@ -261,6 +340,7 @@ pub(super) struct MediaAvcSubmitProof {
     pub output_surface_bytes: usize,
     pub command_dwords: usize,
     pub output_surface_detail: bool,
+    pub decode_health: AvcDecodeHealth,
     pub batch_tail_bytes: usize,
     pub ring_tail_bytes: usize,
     pub kickoff_marker: u32,
@@ -1648,6 +1728,7 @@ fn build_avc_single_idr_batch_skeleton(
     presubmit_marker: u32,
     postsubmit_marker: u32,
     complete_marker: u32,
+    status_registers: Option<(u32, u32)>,
 ) -> Option<usize> {
     if avc_command_dwords.is_empty() {
         return None;
@@ -1737,6 +1818,8 @@ fn build_avc_single_idr_batch_skeleton(
     batch[idx..idx + avc_command_dwords.len()].copy_from_slice(avc_command_dwords);
     idx += avc_command_dwords.len();
 
+    emit_avc_decode_status(batch, &mut idx, result_gpu_addr, status_registers)?;
+
     if !media::emit_store_dword_ppgtt(
         batch,
         &mut idx,
@@ -1783,6 +1866,7 @@ pub(super) async fn submit_avc_single_idr_batch(
     missing_reference_surface_offset_bytes: usize,
     submit_token: u32,
     media_session_generation: Option<u64>,
+    #[cfg(feature = "trueos_avc_sfc_probe")] sfc_picture: Option<super::sfc_shadow::Picture>,
 ) -> Option<MediaAvcSubmitProof> {
     if bitstream_bytes == 0
         || bitstream_bytes > backing.bitstream_bytes
@@ -1826,6 +1910,7 @@ pub(super) async fn submit_avc_single_idr_batch(
     let presubmit_marker = kickoff_marker + 1;
     let postsubmit_marker = kickoff_marker + 2;
     let complete_marker = kickoff_marker + 3;
+    let status_registers = avc_decode_status_registers(dev.device_id, engine.ring_base);
 
     let reset_start = media_backend_now_ticks();
     let session_reset = media_session_generation.is_none() && avc_should_reset_media_engine();
@@ -1842,6 +1927,14 @@ pub(super) async fn submit_avc_single_idr_batch(
         core::ptr::write_bytes(context_virt, 0, backing.context_bytes);
         core::ptr::write_bytes(backing.batch_virt, 0, backing.batch_bytes);
         core::ptr::write_bytes(backing.result_virt, 0, backing.result_bytes);
+        core::ptr::write_volatile(
+            backing.result_virt.add(AVC_RESULT_ERROR_STATUS_SLOT as usize).cast::<u32>(),
+            AVC_STATUS_NOT_CAPTURED,
+        );
+        core::ptr::write_volatile(
+            backing.result_virt.add(AVC_RESULT_MB_COUNT_SLOT as usize).cast::<u32>(),
+            AVC_STATUS_NOT_CAPTURED,
+        );
     }
     let zero_us = media_backend_elapsed_us(zero_start);
 
@@ -1905,6 +1998,19 @@ pub(super) async fn submit_avc_single_idr_batch(
         .saturating_add(scratch_flush_us);
 
     let build_ctx_start = media_backend_now_ticks();
+    #[cfg(feature = "trueos_avc_sfc_probe")]
+    let sfc_probe = sfc_picture
+        .filter(|_| media_session_generation.is_some())
+        .and_then(|picture| {
+            super::sfc_shadow::Probe::prepare(dev, engine, windows, backing, avc_command_dwords, picture)
+        });
+    let ppgtt_pml4_phys = backing.ppgtt_pml4_phys;
+    #[cfg(feature = "trueos_avc_sfc_probe")]
+    let (avc_command_dwords, ppgtt_pml4_phys) = sfc_probe
+        .as_ref()
+        .map(|probe| (probe.commands(), probe.pml4_phys()))
+        .unwrap_or((avc_command_dwords, ppgtt_pml4_phys));
+    let command_dwords = avc_command_dwords.len();
     let batch_tail_bytes = build_avc_single_idr_batch_skeleton(
         backing.batch_virt,
         backing.batch_bytes,
@@ -1920,6 +2026,7 @@ pub(super) async fn submit_avc_single_idr_batch(
         presubmit_marker,
         postsubmit_marker,
         complete_marker,
+        status_registers,
     )?;
 
     let ring_tail_bytes = media::build_ring_batch_start_words(
@@ -1943,7 +2050,7 @@ pub(super) async fn submit_avc_single_idr_batch(
         ring_tail_bytes as u32,
         ring_ctl,
         pphwsp_gpu,
-        backing.ppgtt_pml4_phys,
+        ppgtt_pml4_phys,
         false,
     ) {
         return None;
@@ -1991,6 +2098,8 @@ pub(super) async fn submit_avc_single_idr_batch(
                 teardown.err().map(|error| error.name()).unwrap_or("complete"),
             );
             if !destroyed {
+                #[cfg(feature = "trueos_avc_sfc_probe")]
+                core::mem::forget(sfc_probe);
                 log_avc_submission_failure(dev, engine, windows, backing);
                 media_lane.quarantine();
             }
@@ -2029,6 +2138,8 @@ pub(super) async fn submit_avc_single_idr_batch(
     };
     let poll_us = media_backend_elapsed_us(poll_start);
     if !retired {
+        #[cfg(feature = "trueos_avc_sfc_probe")]
+        core::mem::forget(sfc_probe);
         log_avc_submission_failure(dev, engine, windows, backing);
         crate::log_error!(target: "intel-media";
             "intel/hw_pic-submit: accepted=0 codec=h264 engine={} submission_owner=guc direct_execlist_submit=0 stage=completion reason=timeout guc_serial={} action=quarantine-engine-context\n",
@@ -2039,6 +2150,8 @@ pub(super) async fn submit_avc_single_idr_batch(
         return None;
     }
     if let Err(error) = destroy_avc_context(dev, guc_token).await {
+        #[cfg(feature = "trueos_avc_sfc_probe")]
+        core::mem::forget(sfc_probe);
         log_avc_submission_failure(dev, engine, windows, backing);
         crate::log_error!(target: "intel-media";
             "intel/hw_pic-submit: accepted=0 codec=h264 engine={} submission_owner=guc direct_execlist_submit=0 stage=teardown reason={} guc_serial={} action=quarantine-engine-context\n",
@@ -2048,6 +2161,23 @@ pub(super) async fn submit_avc_single_idr_batch(
         );
         media_lane.quarantine();
         return None;
+    }
+
+    #[cfg(feature = "trueos_avc_sfc_probe")]
+    if let Some(probe) = sfc_probe {
+        let started = media_backend_now_ticks();
+        while !super::sfc_shadow::Probe::lock_released(dev, engine) {
+            if media_backend_elapsed_us(started) >= AVC_CONTEXT_TEARDOWN_TIMEOUT_US {
+                crate::log_error!(target: "intel-media";
+                    "intel/avc-sfc: id={} engine={} fault=sfc-lock-timeout action=quarantine\n",
+                    submit_token, engine.name);
+                core::mem::forget(probe);
+                media_lane.quarantine();
+                return None;
+            }
+            trueos_time::Timer::after_millis(1).await;
+        }
+        probe.compare(submit_token, output_surface_virt, output_surface_bytes);
     }
 
     let post_start = media_backend_now_ticks();
@@ -2063,6 +2193,20 @@ pub(super) async fn submit_avc_single_idr_batch(
         super::dma_flush(output_surface_virt, output_surface_bytes);
     }
     super::dma_flush(backing.result_virt, backing.result_bytes);
+    let decode_health = AvcDecodeHealth::from_raw(
+        status_registers.is_some(),
+        media::read_result_dword(backing.result_virt, AVC_RESULT_ERROR_STATUS_SLOT),
+        media::read_result_dword(backing.result_virt, AVC_RESULT_MB_COUNT_SLOT),
+    );
+    if status_registers.is_some() && !decode_health.captured {
+        crate::log_error!(target: "intel-media";
+            "intel/hw_pic-submit: decode-health unavailable engine={} guc_serial={} error_status=0x{:08X} mb_count=0x{:08X} action=preserve-retirement-classification\n",
+            engine.name,
+            guc_submission.serial,
+            decode_health.error_status,
+            decode_health.macroblock_count,
+        );
+    }
     let (output_surface_detail, output_surface_signature, output_surface_nonzero_samples) =
         if output_surface_probes_enabled {
             let output_surface = unsafe {
@@ -2190,8 +2334,9 @@ pub(super) async fn submit_avc_single_idr_batch(
         coded_height,
         output_surface_pitch,
         output_surface_bytes,
-        command_dwords: avc_command_dwords.len(),
+        command_dwords,
         output_surface_detail,
+        decode_health,
         batch_tail_bytes,
         ring_tail_bytes,
         kickoff_marker,

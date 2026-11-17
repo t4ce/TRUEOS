@@ -191,7 +191,11 @@ pub fn command(owner: u32, command: u32, a: u64, b: u64, input: &[u8], output: &
             0
         }
         7 if input.is_empty() && b <= 1 && !s.closed => {
-            s.session.set_paused(b != 0);
+            let session = s.session;
+            // The conversion scheduler checks texture capacity while holding
+            // its state lock. Release STREAMS before updating that clock.
+            drop(streams);
+            session.set_paused(b != 0);
             0
         }
         5 if input.is_empty() && b == 0 => {
@@ -228,33 +232,43 @@ async fn pause() {
     Timer::after(Duration::from_millis(1)).await;
 }
 
-/// Called in PTS order by the existing conversion lanes. Source release remains
-/// the caller's responsibility, and happens only after this future completes.
-pub async fn convert(id: u32, session: VideoPlaybackSession, source: DecodedNv12Source) -> bool {
+/// A retired conversion remains Writing until the PTS presenter makes it
+/// available. The consumer can never acquire an early converted picture.
+pub(crate) struct ConvertedVideoTexture {
+    id: u32,
+    index: usize,
+    session: VideoPlaybackSession,
+}
+
+pub(crate) async fn convert(
+    id: u32,
+    session: VideoPlaybackSession,
+    source: DecodedNv12Source,
+) -> Option<ConvertedVideoTexture> {
     let (owner, device, needs_storage) = {
         let streams = STREAMS.lock();
         let Some(s) = streams
             .iter()
             .find(|s| s.id == id && s.session == session && !s.closed)
         else {
-            return false;
+            return None;
         };
         if s.width != 0 && (s.width != source.visible_width || s.height != source.visible_height) {
-            return false;
+            return None;
         }
         (s.owner, s.device, s.slots.is_empty())
     };
     let width = source.visible_width;
     let height = source.visible_height;
     if !crate::ui4::video_frame_extent_admitted(width, height) {
-        return false;
+        return None;
     }
     if needs_storage {
         let zeros = vec![0; width as usize * height as usize * 4];
         for _ in 0..RING {
             let texture = loop {
                 if session.is_cancelled() {
-                    return false;
+                    return None;
                 }
                 match vgpu::create_retained_texture(
                     principal(owner),
@@ -266,7 +280,7 @@ pub async fn convert(id: u32, session: VideoPlaybackSession, source: DecodedNv12
                 ) {
                     Ok(t) => break t,
                     Err(vgpu::VgpuError::Busy | vgpu::VgpuError::NotComplete) => pause().await,
-                    Err(_) => return false,
+                    Err(_) => return None,
                 }
             };
             let mut streams = STREAMS.lock();
@@ -285,12 +299,12 @@ pub async fn convert(id: u32, session: VideoPlaybackSession, source: DecodedNv12
     }
     let (index, texture) = loop {
         if session.is_cancelled() {
-            return false;
+            return None;
         }
         let slot = {
             let mut streams = STREAMS.lock();
             let Some(s) = streams.iter_mut().find(|s| s.id == id && !s.closed) else {
-                return false;
+                return None;
             };
             s.slots
                 .iter_mut()
@@ -307,18 +321,38 @@ pub async fn convert(id: u32, session: VideoPlaybackSession, source: DecodedNv12
         pause().await;
     };
     let result = convert_into(owner, device, texture, session, source).await;
+    let converted = ConvertedVideoTexture { id, index, session };
+    if result && !session.is_cancelled() {
+        Some(converted)
+    } else {
+        finish_conversion(converted, false);
+        None
+    }
+}
+
+/// Called by the independent timed presenter, or by cancellation cleanup.
+pub(crate) fn finish_conversion(converted: ConvertedVideoTexture, publish: bool) -> bool {
     let mut streams = STREAMS.lock();
-    let s = streams
+    let Some(s) = streams
         .iter_mut()
-        .find(|s| s.id == id)
-        .expect("producer owns stream until drain");
-    let published = result && !s.closed && !session.is_cancelled();
+        .find(|s| s.id == converted.id && s.session == converted.session)
+    else {
+        return false;
+    };
+    let published = publish && !s.closed && !converted.session.is_cancelled();
+    let Some(slot) = s
+        .slots
+        .get_mut(converted.index)
+        .filter(|slot| slot.state == SlotState::Writing)
+    else {
+        return false;
+    };
     if published {
         s.sequence += 1;
-        s.slots[index].sequence = s.sequence;
-        s.slots[index].state = SlotState::Ready;
+        slot.sequence = s.sequence;
+        slot.state = SlotState::Ready;
     } else {
-        s.slots[index].state = SlotState::Free;
+        slot.state = SlotState::Free;
     }
     published
 }

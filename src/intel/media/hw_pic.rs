@@ -1524,6 +1524,8 @@ async fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         missing_ref_offset,
         job.id,
         job.media_session_generation,
+        #[cfg(feature = "trueos_avc_sfc_probe")]
+        super::sfc_shadow::Picture::for_avc(&plan),
     )
     .await
     else {
@@ -1656,15 +1658,49 @@ async fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         avc.output_surface_nonzero_samples
     );
 
-    let output_status = if avc.retired && avc.output_surface_detail {
+    let decode_error = avc.decode_health.known_bad();
+    hw_pic_info!(
+        "intel/hw_pic-stage: id={} stage=decode-health captured={} error_status=0x{:08X} error_mask=0xFBFF mb_count=0x{:08X} concealed_mbs={} known_bad={}\n",
+        job.id,
+        avc.decode_health.captured as u8,
+        avc.decode_health.error_status,
+        avc.decode_health.macroblock_count,
+        avc.decode_health.concealed_macroblocks(),
+        decode_error as u8,
+    );
+    if decode_error {
+        // A retired batch may still contain a VLD error or concealed picture.
+        // If it was a reference, discard the old DPB too: selecting an older
+        // picture in place of the missing reference silently corrupts followers.
+        if plan.picture.reference_pic {
+            AVC_DPB[decoder_session_slot].lock().reset();
+        }
+        crate::log_error!(target: "intel-media";
+            "intel/hw_pic: decode-error id={} engine={} class={:?} frame_num={} session_slot={} surface_slot={} mfd_error=0x{:08X} concealed_mbs={} action=reject-picture reset_dpb={}\n",
+            job.id,
+            avc.engine_name,
+            plan.slice.class,
+            plan.picture.frame_num,
+            decoder_session_slot,
+            current_slot,
+            avc.decode_health.error_status,
+            avc.decode_health.concealed_macroblocks(),
+            plan.picture.reference_pic as u8,
+        );
+    }
+    let output_status = if decode_error {
+        HwPicStatus::Failed
+    } else if avc.retired && avc.output_surface_detail {
         HwPicStatus::Ready
     } else if avc.retired {
         HwPicStatus::Streamed
     } else {
         HwPicStatus::Failed
     };
-    let output_presentable = avc.retired;
-    let output_error = if avc.retired {
+    let output_presentable = avc.retired && !decode_error;
+    let output_error = if decode_error {
+        -37
+    } else if avc.retired {
         if avc.output_surface_detail { 0 } else { -26 }
     } else {
         -25

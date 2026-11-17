@@ -44,8 +44,9 @@ VM_CONSTANTS = "\n".join(
         "COMM_PAGE_BYTES", "PAYLOAD_CAP", "OP_BP_FETCH_BYTES_START", "STATUS_OK", "STATUS_BAD_ARG",
     ])
 )
-VM_START = VMCALL[VMCALL.index("        OP_BP_FETCH_BYTES_START => {"):
-                  VMCALL.index("        OP_BP_HTTP_REQUEST_START_V1 | OP_BP_HTTP_REQUEST_HEAD_V1")]
+VM_START = VMCALL[VMCALL.index("        OP_BP_FETCH_BYTES_START => {"):]
+# Extract just this arm; unrelated ABI commands may be inserted after it.
+VM_START = VM_START[:VM_START.index("\n        }", VM_START.index("            DispatchOutcome::Resume")) + len("\n        }")]
 VM_DISPATCH = r'''
 fn dispatch_start(vm_id:u8,arg0:u64,req_len:u32)->DispatchOutcome {
     let seq=7;
@@ -125,6 +126,12 @@ impl Drop for FenceGuard {
     fn drop(&mut self) {
         if self.needs_retirement {TRANSPORT.with(|t|t.borrow_mut().dropped_before_fence=true);}
     }
+}
+struct MediaRangeClient;
+impl MediaRangeClient {
+ async fn request(&mut self,target:&FetchTarget,request:&HttpsRequest<'_>,timeout:u32,max_bytes:usize,cancellation:&JsonPostCancellation)->Result<HttpsJsonResponse,String> {
+  request_https_response_once_cancellable(target,request,timeout,max_bytes,Some(cancellation)).await
+ }
 }
 async fn request_https_response_once_cancellable(
     target:&FetchTarget, request:&HttpsRequest<'_>, timeout:u32, max_bytes:usize,

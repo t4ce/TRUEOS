@@ -1814,7 +1814,60 @@ async fn request_https_response_preconnected(
     cancellation: Option<&JsonPostCancellation>,
     connected: Option<vnet::NetHandle>,
 ) -> Result<HttpsJsonResponse, String> {
+    request_https_response_exchange(
+        target, ip, cmds, events, request, tls_config, roots, timeout_ms,
+        max_bytes, cancellation, connected, None,
+    ).await
+}
+
+// Retain only an exact, length-delimited HTTP/1.1 response. Chunked and
+// close-delimited responses still work through the existing parser, but close
+// their connection so trailing bytes cannot become the next range's headers.
+fn media_response_allows_reuse(response: &[u8]) -> bool {
+    let Ok(response) = final_response_bytes(response) else { return false; };
+    let Some(end) = find_http_header_end(response) else { return false; };
+    let headers = &response[..end];
+    if !headers.starts_with(b"HTTP/1.1 ") { return false; }
+    let mut length = None;
+    for line in headers.split(|byte| *byte == b'\n').skip(1) {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.is_empty() { continue; }
+        // Obsolete folding and ambiguous length framing are never eligible
+        // for persistence, even if the ordinary response parser accepts them.
+        if matches!(line.first(), Some(b' ' | b'\t')) { return false; }
+        let Some(colon) = line.iter().position(|byte| *byte == b':') else { return false; };
+        let (name, value) = (&line[..colon], &line[colon + 1..]);
+        if name.eq_ignore_ascii_case(b"transfer-encoding")
+            || name.eq_ignore_ascii_case(b"connection") && header_value_has_token(value, b"close")
+        {
+            return false;
+        }
+        if name.eq_ignore_ascii_case(b"content-length") {
+            if length.is_some() { return false; }
+            let Some(parsed) = core::str::from_utf8(trim_ascii(value)).ok()
+                .and_then(|value| value.parse::<usize>().ok()) else { return false; };
+            length = Some(parsed);
+        }
+    }
+    length.is_some_and(|length| response.len() - end == length)
+}
+
+async fn request_https_response_exchange(
+    target: &FetchTarget,
+    ip: [u8; 4],
+    cmds: &'static Queue<TlsCommand>,
+    events: &'static Queue<TlsEvent>,
+    request: &HttpsRequest<'_>,
+    tls_config: &TlsClientConfig,
+    roots: &TlsRoots,
+    timeout_ms: u32,
+    max_bytes: usize,
+    cancellation: Option<&JsonPostCancellation>,
+    connected: Option<vnet::NetHandle>,
+    mut retained: Option<&mut Option<vnet::NetHandle>>,
+) -> Result<HttpsJsonResponse, String> {
     let started = Instant::now();
+    let event_driven = retained.is_some();
     let mut handshake_ms = connected.map(|_|0);
     let mut first_data_ms = None;
     let request_data = build_http_request(target, request)?;
@@ -1865,8 +1918,15 @@ async fn request_https_response_preconnected(
         if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
             return Err(String::from(HTTPS_REQUEST_CANCELLED));
         }
+        let observed = events.change_generation();
         let drained = events.drain(HTTPS_EVENT_DRAIN_MAX);
         let drained_any = !drained.is_empty();
+        // A server can send its final bytes and close in the same drain. Do
+        // not retain a handle whose terminal event would otherwise be dropped
+        // when the complete Data response returns below.
+        let terminal_in_batch = drained.iter().any(|event| matches!(event,
+            TlsEvent::Closed { .. } | TlsEvent::Error { .. } | TlsEvent::TlsError { .. }
+        ));
         for ev in drained {
             if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
                 return Err(String::from(HTTPS_REQUEST_CANCELLED));
@@ -1927,8 +1987,16 @@ async fn request_https_response_preconnected(
                     match complete_http_response(response.as_slice(), max_bytes) {
                         Ok(Some(parsed)) => {
                             log_download_response(target,ip,request,&response,&parsed,started,handshake_ms,first_data_ms);
-                            let _ = cmds.push(TlsCommand::Close { handle });
-                            return decode_response_content(parsed, max_bytes);
+                            let decoded = decode_response_content(parsed, max_bytes);
+                            if decoded.is_ok() && !terminal_in_batch
+                                && media_response_allows_reuse(&response)
+                                && let Some(retained) = retained.as_deref_mut()
+                            {
+                                *retained = Some(handle);
+                            } else {
+                                let _ = cmds.push(TlsCommand::Close { handle });
+                            }
+                            return decoded;
                         }
                         Ok(None) => {}
                         Err(err) => {
@@ -1983,10 +2051,28 @@ async fn request_https_response_preconnected(
                 response.len()
             ));
         }
-        let sleep = if drained_any {
-            Timer::after(EmbassyDuration::from_micros(0))
-        } else {
-            Timer::after(EmbassyDuration::from_millis(HTTPS_IDLE_SLEEP_MS))
+        // TLS publishes queue changes. Sleeping a fixed 100 ms here delayed
+        // every handshake/data turn on the media path even with bytes ready.
+        let sleep = async {
+            if drained_any {
+                Timer::after(EmbassyDuration::from_micros(0)).await;
+                return;
+            }
+            if !event_driven {
+                Timer::after(EmbassyDuration::from_millis(HTTPS_IDLE_SLEEP_MS)).await;
+                return;
+            }
+            let changed = events.wait_change_after(observed);
+            let timeout = Timer::at(deadline);
+            let mut changed = core::pin::pin!(changed);
+            let mut timeout = core::pin::pin!(timeout);
+            core::future::poll_fn(|cx| {
+                if timeout.as_mut().poll(cx).is_ready() {
+                    Poll::Ready(())
+                } else {
+                    changed.as_mut().poll(cx)
+                }
+            }).await;
         };
         if let Some(cancellation) = cancellation {
             if await_json_post_or_cancel(sleep, cancellation)
@@ -2312,6 +2398,137 @@ pub async fn get_range_bytes_shared(
     request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await
 }
 
+/// One media stream owns one reusable TLS queue pair, DNS cache and optional
+/// same-origin HTTP/1.1 connection. Range validation remains shared with the
+/// one-shot API below; an idle server close gets one fresh-connection retry.
+pub(crate) struct MediaRangeClient {
+    client: HttpsJsonClient,
+    connection: Option<(String, u16, vnet::NetHandle)>,
+    owner_active: bool,
+}
+
+impl MediaRangeClient {
+    pub(crate) fn new() -> Self {
+        Self { client: HttpsJsonClient::new(), connection: None, owner_active: false }
+    }
+
+    pub(crate) async fn close(&mut self) {
+        self.connection = None;
+        if self.owner_active && let Some(queues) = self.client.queues {
+            if !fence_https_owner(queues.cmds).await {
+                self.client.queues = None;
+            }
+        }
+        self.owner_active = false;
+    }
+
+    async fn request(
+        &mut self,
+        target: &FetchTarget,
+        request: &HttpsRequest<'_>,
+        timeout_ms: u32,
+        max_bytes: usize,
+        cancellation: &JsonPostCancellation,
+    ) -> Result<HttpsJsonResponse, String> {
+        let deadline = Instant::now() + EmbassyDuration::from_millis(u64::from(timeout_ms.max(1)));
+        if self.connection.as_ref().is_some_and(|(host, port, _)|
+            !host.eq_ignore_ascii_case(&target.host) || *port != target.port)
+        {
+            self.close().await;
+        }
+        for attempt in 0..2 {
+            if cancellation.is_cancelled() {
+                self.close().await;
+                return Err(String::from(HTTPS_REQUEST_CANCELLED));
+            }
+            let readiness = crate::r::readiness::wait_for(
+                crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
+            );
+            if await_json_post_or_cancel(readiness, cancellation).await.is_err() {
+                self.close().await;
+                return Err(String::from(HTTPS_REQUEST_CANCELLED));
+            }
+            let Some(requested_device) = NetProfile::default().resolve_device_index() else {
+                self.close().await;
+                return Err(String::from("no nic"));
+            };
+            let queues = self.client.queues_for_device(requested_device);
+            let resolve = self.client.resolve_host(queues.device_index, &target.host, timeout_ms.max(1));
+            let ip = match await_json_post_or_cancel(resolve, cancellation).await {
+                Ok(Ok(ip)) => ip,
+                Ok(Err(error)) => { self.close().await; return Err(error); }
+                Err(_) => { self.close().await; return Err(String::from(HTTPS_REQUEST_CANCELLED)); }
+            };
+            let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
+            if remaining == 0 {
+                self.close().await;
+                return Err(String::from("timeout"));
+            }
+            let connected = self.connection.take().map(|(_, _, handle)| handle);
+            let mut retained = None;
+            self.owner_active = true;
+            let result = request_https_response_exchange(
+                target, ip, queues.cmds, queues.events, request,
+                &self.client.tls_config, &self.client.roots,
+                remaining.min(u64::from(u32::MAX)) as u32, max_bytes,
+                Some(cancellation), connected, Some(&mut retained),
+            ).await;
+            if cancellation.is_cancelled() {
+                self.close().await;
+                return Err(String::from(HTTPS_REQUEST_CANCELLED));
+            }
+            if let (Ok(_), Some(handle)) = (&result, retained) {
+                self.connection = Some((target.host.clone(), target.port, handle));
+                return result;
+            }
+            // Fence even successful Connection: close responses. Any later
+            // unscoped TLS error must retire before this owner is reused.
+            if !fence_https_owner(queues.cmds).await {
+                self.client.queues = None;
+            }
+            self.owner_active = false;
+            if result.is_err() && connected.is_some() && attempt == 0 {
+                continue;
+            }
+            return result;
+        }
+        Err(String::from("media reconnect failed"))
+    }
+
+    pub(crate) async fn get_range(
+        &mut self,
+        url: &str,
+        offset: u64,
+        length: usize,
+        timeout_ms: u32,
+        cancellation: &MediaFetchCancellation,
+        user_agent: Option<&str>,
+        referrer: Option<&str>,
+        expected: Option<&MediaRangeIdentity>,
+    ) -> Result<MediaRangeResponse, String> {
+        let result = get_media_range_bytes_using(Some(self), url, offset, length, timeout_ms,
+            cancellation, user_agent, referrer, expected).await;
+        if result.is_err() { self.close().await; }
+        result
+    }
+}
+
+impl Drop for MediaRangeClient {
+    fn drop(&mut self) {
+        // Normal stream shutdown awaits close(). A dropped preparation future
+        // still revokes its retained socket without borrowing caller memory.
+        if self.owner_active && let Some(queues) = self.client.queues
+        {
+            if let Some((_, _, handle)) = self.connection.take() {
+                let _ = queues.cmds.push(TlsCommand::Close { handle });
+            }
+            let _ = queues.cmds.push(TlsCommand::CancelOwner {
+                completion: Arc::new(TlsCancelCompletion::new()),
+            });
+        }
+    }
+}
+
 pub(crate) async fn get_media_bytes_profile_shared(
     url: &str,
     profile: &str,
@@ -2438,6 +2655,21 @@ pub(crate) async fn get_media_range_bytes_shared(
     referrer: Option<&str>,
     expected: Option<&MediaRangeIdentity>,
 ) -> Result<MediaRangeResponse, String> {
+    get_media_range_bytes_using(None, url, offset, length, timeout_ms,
+        cancellation, user_agent, referrer, expected).await
+}
+
+async fn get_media_range_bytes_using(
+    mut client: Option<&mut MediaRangeClient>,
+    url: &str,
+    offset: u64,
+    length: usize,
+    timeout_ms: u32,
+    cancellation: &MediaFetchCancellation,
+    user_agent: Option<&str>,
+    referrer: Option<&str>,
+    expected: Option<&MediaRangeIdentity>,
+) -> Result<MediaRangeResponse, String> {
     if length == 0 || length > 32 * 1024 * 1024 {
         return Err(String::from("media range length outside limit"));
     }
@@ -2450,7 +2682,7 @@ pub(crate) async fn get_media_range_bytes_shared(
         (String::from("User-Agent"), String::from(user_agent.unwrap_or(DEFAULT_USER_AGENT))),
         (String::from("Accept"), String::from("video/mp4,video/*;q=0.9,*/*;q=0.8")),
         (String::from("Accept-Encoding"), String::from("identity")),
-        (String::from("Connection"), String::from("close")),
+        (String::from("Connection"), String::from(if client.is_some() { "keep-alive" } else { "close" })),
         (String::from("Range"), format!("bytes={offset}-{end}")),
     ];
     if let Some(identity) = expected {
@@ -2483,10 +2715,15 @@ pub(crate) async fn get_media_range_bytes_shared(
         if remaining == 0 {
             return Err(String::from("timeout"));
         }
-        let response = request_https_response_once_cancellable(
-            &target, &request, remaining.min(u32::MAX as u64) as u32,
-            length, Some(&cancellation.0),
-        );
+        let response = async {
+            let remaining = remaining.min(u64::from(u32::MAX)) as u32;
+            match client.as_deref_mut() {
+                Some(client) => client.request(&target, &request, remaining, length, &cancellation.0).await,
+                None => request_https_response_once_cancellable(
+                    &target, &request, remaining, length, Some(&cancellation.0),
+                ).await,
+            }
+        };
         let mut response = core::pin::pin!(response);
         let mut timer = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(remaining)));
         let mut expired = false;

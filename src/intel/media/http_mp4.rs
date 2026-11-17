@@ -1,7 +1,14 @@
-//! Demand-driven HTTP MP4 reads. Encoded payload stays on the server until the
-//! decoder needs it; the existing AVC decoder and surface lifetimes are shared.
+//! Bounded HTTP MP4 reads and independent encoded-picture prefetch. Decoder
+//! surfaces and their lifetimes remain owned by the existing playback path.
 use super::*;
-use crate::r::net::https::{MediaFetchCancellation, MediaRangeIdentity};
+use core::sync::atomic::Ordering;
+use crate::r::net::https::{MediaFetchCancellation, MediaRangeClient, MediaRangeIdentity};
+
+#[cfg(not(test))]
+#[path = "http_mp4_buffer.rs"]
+mod buffer;
+#[cfg(not(test))]
+pub(super) use buffer::BufferedHttpMp4Reader;
 
 const INDEX_WINDOW: usize = 64 * 1024;
 const SAMPLE_WINDOW: usize = 1024 * 1024;
@@ -31,16 +38,20 @@ struct HttpSource {
     index: Window,
     samples: Window,
     bytes_fetched: usize,
+    transport: MediaRangeClient,
+    // Set only after preparation, when the independent producer takes over.
+    stop: Option<alloc::sync::Arc<core::sync::atomic::AtomicBool>>,
 }
 impl HttpSource {
     async fn fetch(&mut self, offset: usize, count: usize) -> Result<Vec<u8>, &'static str> {
-        if self.session.is_cancelled() {
+        if self.stopped() {
             return Err("playback cancelled");
         }
         let cancellation = MediaFetchCancellation::new();
         let session = self.session;
+        let stop = self.stop.clone();
         let response = {
-            let fetch = crate::r::net::https::get_media_range_bytes_shared(
+            let fetch = self.transport.get_range(
                 &self.url,
                 offset as u64,
                 count,
@@ -51,7 +62,9 @@ impl HttpSource {
                 self.identity.as_ref(),
             );
             let watch = async {
-                while !session.is_cancelled() {
+                while !session.is_cancelled()
+                    && !stop.as_ref().is_some_and(|stop| stop.load(Ordering::Acquire))
+                {
                     Timer::after_millis(5).await;
                 }
                 cancellation.cancel();
@@ -69,7 +82,7 @@ impl HttpSource {
             })
             .await
         };
-        if session.is_cancelled() {
+        if self.stopped() {
             return Err("playback cancelled");
         }
         let response = response.map_err(|error| {
@@ -84,6 +97,10 @@ impl HttpSource {
         }
         self.bytes_fetched = self.bytes_fetched.saturating_add(response.bytes.len());
         Ok(response.bytes)
+    }
+    fn stopped(&self) -> bool {
+        self.session.is_cancelled()
+            || self.stop.as_ref().is_some_and(|stop| stop.load(Ordering::Acquire))
     }
     async fn read(
         &mut self,
@@ -171,6 +188,10 @@ pub(super) struct HttpMp4Reader {
     boxes: usize,
 }
 impl HttpMp4Reader {
+    pub(super) async fn close(&mut self) {
+        self.source.transport.close().await;
+    }
+
     pub(super) async fn open(
         session: crate::ui4::VideoPlaybackSession,
         url: &str,
@@ -189,60 +210,72 @@ impl HttpMp4Reader {
             index: Window::default(),
             samples: Window::default(),
             bytes_fetched: 0,
+            transport: MediaRangeClient::new(),
+            stop: None,
         };
-        let initial_count = indexed_length.unwrap_or(INDEX_WINDOW).min(INDEX_WINDOW);
-        if initial_count == 0 {
-            return Err("HLS MP4 empty indexed prefix");
-        }
-        let bytes = source.fetch(0, initial_count).await?;
-        source.index = Window { offset: 0, bytes };
-        if let Some(length) = indexed_length {
-            if length > source.len {
-                return Err("HLS MP4 resource shorter than indexed byte ranges");
+        let metadata = async {
+            let initial_count = indexed_length.unwrap_or(INDEX_WINDOW).min(INDEX_WINDOW);
+            if initial_count == 0 {
+                return Err("HLS MP4 empty indexed prefix");
             }
-            source.len = length;
-        }
-        let mut cursor = 0;
-        let mut moov_data = None;
-        for _ in 0..BOX_LIMIT {
-            if cursor == source.len {
-                break;
-            }
-            let b = source.box_at(cursor).await?;
-            if b.typ == *b"moov" {
-                if b.end - b.start > H264_FS_METADATA_CAP_BYTES {
-                    return Err("mp4 metadata exceeds streaming limit");
+            let bytes = source.fetch(0, initial_count).await?;
+            source.index = Window { offset: 0, bytes };
+            if let Some(length) = indexed_length {
+                if length > source.len {
+                    return Err("HLS MP4 resource shorter than indexed byte ranges");
                 }
-                moov_data = Some(source.read(b.start, b.end - b.start, false).await?);
-                break;
+                source.len = length;
             }
-            cursor = b.end; // Skip mdat by its header, including a tail moov.
-        }
-        let data = moov_data.ok_or("mp4 missing moov within box limit")?;
-        let moov = mp4_next_box(&data, 0, data.len()).ok_or("mp4 invalid moov")?;
-        let fragmented = mp4_find_child(&data, moov.payload_start, moov.end, *b"mvex").is_some();
-        let mut track = None;
-        for trak in mp4_collect_children(&data, moov.payload_start, moov.end, *b"trak") {
-            if fragmented {
-                if let Some(info) = mp4_parse_avc_track_info(&data, trak)? {
-                    track = Some(Mp4AvcTrack {
-                        track_id: info.track_id,
-                        timescale: info.timescale,
-                        length_size: info.length_size,
-                        colour: info.colour,
-                        sps: info.sps,
-                        pps: info.pps,
-                        samples: Vec::new(),
-                    });
+            let mut cursor = 0;
+            let mut moov_data = None;
+            for _ in 0..BOX_LIMIT {
+                if cursor == source.len {
                     break;
                 }
-            } else if let Some(found) = mp4_parse_avc_track_with_len(&data, trak, source.len)? {
-                track = Some(found);
-                break;
+                let b = source.box_at(cursor).await?;
+                if b.typ == *b"moov" {
+                    if b.end - b.start > H264_FS_METADATA_CAP_BYTES {
+                        return Err("mp4 metadata exceeds streaming limit");
+                    }
+                    moov_data = Some(source.read(b.start, b.end - b.start, false).await?);
+                    break;
+                }
+                cursor = b.end; // Skip mdat by its header, including a tail moov.
             }
-        }
-        let track = track.ok_or("mp4 has no supported AVC track")?;
-        let trex = mp4_parse_trex_defaults(&data, moov, track.track_id);
+            let data = moov_data.ok_or("mp4 missing moov within box limit")?;
+            let moov = mp4_next_box(&data, 0, data.len()).ok_or("mp4 invalid moov")?;
+            let fragmented = mp4_find_child(&data, moov.payload_start, moov.end, *b"mvex").is_some();
+            let mut track = None;
+            for trak in mp4_collect_children(&data, moov.payload_start, moov.end, *b"trak") {
+                if fragmented {
+                    if let Some(info) = mp4_parse_avc_track_info(&data, trak)? {
+                        track = Some(Mp4AvcTrack {
+                            track_id: info.track_id,
+                            timescale: info.timescale,
+                            length_size: info.length_size,
+                            colour: info.colour,
+                            sps: info.sps,
+                            pps: info.pps,
+                            samples: Vec::new(),
+                        });
+                        break;
+                    }
+                } else if let Some(found) = mp4_parse_avc_track_with_len(&data, trak, source.len)? {
+                    track = Some(found);
+                    break;
+                }
+            }
+            let track = track.ok_or("mp4 has no supported AVC track")?;
+            let trex = mp4_parse_trex_defaults(&data, moov, track.track_id);
+            Ok::<_, &'static str>((track, trex, fragmented))
+        }.await;
+        let (track, trex, fragmented) = match metadata {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                source.transport.close().await;
+                return Err(error);
+            }
+        };
         let mut reader = Self {
             source,
             track,
@@ -254,12 +287,19 @@ impl HttpMp4Reader {
             decode_time: 0,
             boxes: 0,
         };
-        if fragmented {
-            if !reader.next_fragment().await? {
-                return Err("mp4 fragmented video track has no samples");
+        let prepared = async {
+            if fragmented {
+                if !reader.next_fragment().await? {
+                    return Err("mp4 fragmented video track has no samples");
+                }
+            } else {
+                reader.append_timing()?;
             }
-        } else {
-            reader.append_timing()?;
+            Ok(())
+        }.await;
+        if let Err(error) = prepared {
+            reader.source.transport.close().await;
+            return Err(error);
         }
         crate::log_info!(target: "intel-media";
             "video/http: prepared incremental=1 fragmented={} file_bytes={} fetched_bytes={} indexed_pictures={} elapsed_ms={}\n",

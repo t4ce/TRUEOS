@@ -343,6 +343,12 @@ pub(crate) async fn ui4_compositor_service_task() {
 
         let immediate_rescan = runtime.immediate_rescan;
         runtime.immediate_rescan = false;
+        if immediate_rescan && runtime.pending.is_none() {
+            // A broker publication may have arrived during SURFLIVE polling.
+            // Resnapshot now; the ready-work driver below is bounded by the
+            // finite plane count and yields on actual hardware dependencies.
+            continue;
+        }
         let timed_wait_ms = if runtime.pending.is_some() || immediate_rescan {
             Some(PENDING_POLL_PERIOD_MS)
         } else if consecutive_failures != 0 || super::window_transitions_active() {
@@ -734,8 +740,21 @@ fn drive_async_frame(
             .profile
             .submit_ns
             .saturating_add(crate::chronos::monotonic_nanos().saturating_sub(phase_started_ns));
-        pending.active = Some(queued?);
-        return Ok(DriveResult::Pending);
+        let queued = queued?;
+        match crate::intel::poll_ui4_composition(queued) {
+            crate::intel::Ui4AsyncCompositionPoll::Ready => {
+                // Direct RGBA imports have no asynchronous GPU work. Complete
+                // all ready planes in this bounded turn before arming SURF.
+                pending.completed.push(queued);
+            }
+            crate::intel::Ui4AsyncCompositionPoll::Pending => {
+                pending.active = Some(queued);
+                return Ok(DriveResult::Pending);
+            }
+            crate::intel::Ui4AsyncCompositionPoll::Failed => {
+                return Err(Ui4CompositorError::PresentStage("composition-completion"));
+            }
+        }
     }
 
     let submit_result =
@@ -1450,6 +1469,22 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
     runtime.observed_broker_revision = Some(pending.broker_revision);
     PRESENTED_BROKER_REVISION.store(pending.broker_revision, Ordering::Release);
     commit_direct_leases(runtime, pending);
+    for (window, lease) in pending.windows.iter().zip(&pending.leases) {
+        if window.owner == WindowOwner::VIDEO_PLAYER
+            && pending
+                .plans
+                .iter()
+                .any(|plan| plan.changed && target_plane_slot(plan.target) == window.plane.slot())
+        {
+            if let Ok(view) = published_rgba_view(*lease) {
+                super::video_frame::decoded_video_frame_latched(
+                    lease.frame,
+                    lease.buffer_index,
+                    view.gpu_release.map_or(0, |release| release.sequence()),
+                );
+            }
+        }
+    }
     release_leases(&pending.leases);
     let elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(pending.started_ns) / 1_000;
     let direct_planes = pending

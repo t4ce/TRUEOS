@@ -576,11 +576,19 @@ async fn run_mp4_url_playback(
     user_agent: Option<&str>,
     referrer: Option<&str>,
 ) -> Result<H264PlaybackReport, &'static str> {
-    let http = http_mp4::HttpMp4Reader::open(session, url, indexed_length, user_agent, referrer).await?;
+    let mut http =
+        http_mp4::HttpMp4Reader::open(session, url, indexed_length, user_agent, referrer).await?;
     crate::log_info!(target: "intel-media";
         "intel/hw_vid: {} demux accepted=1 container=mp4 codec=avc1 incremental=1\n", log_scope);
 
-    let media_session = h264_reserve_decode_session(session).await?;
+    let media_session = match h264_reserve_decode_session(session).await {
+        Ok(media_session) => media_session,
+        Err(error) => {
+            http.close().await;
+            return Err(error);
+        }
+    };
+    let http = http.into_buffered().await?;
     let media_session_generation = media_session.generation();
     let decode_engine_name = media_session.engine_name();
     let _diagnostics = H264PlaybackGuard::begin();
@@ -2890,7 +2898,7 @@ enum H264NalReader {
 }
 
 struct H264HttpNalReader {
-    http: http_mp4::HttpMp4Reader,
+    http: http_mp4::BufferedHttpMp4Reader,
     memory: Option<H264MemoryNalReader>,
     offset: u64,
     failed: bool,
@@ -3011,37 +3019,6 @@ fn h264_ticks_to_millis(ticks: u64) -> u64 {
 fn h264_ticks_to_micros(ticks: u64) -> u64 {
     let hz = embassy_time_driver::TICK_HZ.max(1);
     ((ticks as u128).saturating_mul(1_000_000) / hz as u128) as u64
-}
-
-async fn h264_wait_until_or_cancelled(
-    session: crate::ui4::VideoPlaybackSession,
-    deadline: EmbassyInstant,
-) {
-    while !session.is_cancelled() && EmbassyInstant::now() < deadline {
-        Timer::at(deadline.min(EmbassyInstant::now() + EmbassyDuration::from_millis(5))).await;
-    }
-}
-
-async fn h264_wait_until_next_frame(
-    session: crate::ui4::VideoPlaybackSession,
-    next_deadline: &mut EmbassyInstant,
-    frame_period: EmbassyDuration,
-    timing: &mut H264PlaybackTiming,
-) {
-    *next_deadline += frame_period;
-    let now = EmbassyInstant::now();
-    if now < *next_deadline {
-        let wait_start = now.as_ticks();
-        h264_wait_until_or_cancelled(session, *next_deadline).await;
-        timing.waited_frames += 1;
-        timing.total_wait_ticks = timing
-            .total_wait_ticks
-            .saturating_add(EmbassyInstant::now().as_ticks().saturating_sub(wait_start));
-    } else {
-        timing.late_frames += 1;
-        let late_ticks = now.saturating_duration_since(*next_deadline).as_ticks();
-        timing.max_late_ticks = timing.max_late_ticks.max(late_ticks);
-    }
 }
 
 async fn h264_i_p_playback_probe_annexb_bytes(
@@ -3508,8 +3485,22 @@ async fn h264_i_p_playback_probe_with_reader(
             crate::intel::hw_pic::release_h264_output_surface(&pending.output);
         }
     }
+    if let H264NalReader::Http(http) = &mut reader {
+        http.http.close().await;
+    }
     let conversion_report = crate::ui4::wait_decoded_nv12_conversion_idle(session).await;
+    // These are publication deadlines. Only the independent latched counter
+    // below establishes that a picture crossed an actual display boundary.
+    playback_timing.waited_frames = conversion_report.presentation_waited_frames;
+    playback_timing.total_wait_ticks = conversion_report.presentation_wait_ticks;
+    playback_timing.late_frames = conversion_report.publication_late_frames;
+    playback_timing.max_late_ticks = conversion_report.max_publication_late_ticks;
     let presented = conversion_report.published;
+    crate::log_info!(target: "intel-media";
+        "intel/hw_vid: presentation-drain published_rgba={} surflive_confirmed={} latch_wait_expirations={} max_latch_observe_late_us={} semantics=publication-is-not-scanout latch_time=observed-upper-bound timing=convert-ahead-then-pts-publication publication_lead_us=2000 vblank_prediction=none outstanding_cap=2 sessions=3\n",
+        conversion_report.published, conversion_report.latched, conversion_report.latch_wait_expirations,
+        h264_ticks_to_micros(conversion_report.max_latch_observe_late_ticks),
+    );
     if first_failure_frame == 0 && conversion_report.first_failure_frame != 0 {
         first_failure_frame = conversion_report.first_failure_frame;
         first_failure_error = conversion_report.first_failure_error;
@@ -3720,16 +3711,13 @@ async fn h264_present_slot(
         H264PresentationSlot::Skipped(timing) => timing,
         H264PresentationSlot::Ready(pending) => pending.timing,
     };
-    h264_wait_for_presentation_time(
-        session,
+    let presentation_ticks = h264_presentation_time(
         playback_start,
         timing,
         base_pts,
         next_fixed_deadline,
         frame_period,
-        playback_timing,
-    )
-    .await;
+    );
     let H264PresentationSlot::Ready(pending) = slot else {
         return None;
     };
@@ -3744,6 +3732,7 @@ async fn h264_present_slot(
         pending.playback_frame,
         pending.stream_idr_index,
         &pending.output,
+        presentation_ticks,
     )
     .await;
     playback_timing.record_present_ticks(
@@ -3752,8 +3741,9 @@ async fn h264_present_slot(
             .as_ticks(),
     );
     if queued {
-        // The conversion worker now owns the decoder-surface pin and releases
-        // it only after its RCS source read has retired.
+        // Conversion/presentation now owns the bounded decoder-surface pin.
+        // It retires after RCS completion and publication, permitting a safe
+        // resize retry while the converted RGBA allocation waits for PTS.
         None
     } else {
         crate::intel::hw_pic::release_h264_output_surface(&pending.output);
@@ -3771,38 +3761,28 @@ async fn h264_present_slot(
     }
 }
 
-async fn h264_wait_for_presentation_time(
-    session: crate::ui4::VideoPlaybackSession,
+/// Compute relative media time without sleeping in the decode producer. The
+/// independent RGBA presenter anchors its clock after first conversion and
+/// waits only once pixels are ready, keeping decode/network/RCS ahead of PTS.
+fn h264_presentation_time(
     playback_start: EmbassyInstant,
     timing: Option<H264SampleTiming>,
     base_pts: i64,
     next_fixed_deadline: &mut EmbassyInstant,
     frame_period: EmbassyDuration,
-    playback_timing: &mut H264PlaybackTiming,
-) {
-    let Some(timing) = timing else {
-        h264_wait_until_next_frame(session, next_fixed_deadline, frame_period, playback_timing)
-            .await;
-        return;
-    };
-    let pts_from_start = timing.pts.saturating_sub(base_pts).max(0) as u64;
-    let target_ticks = (u128::from(pts_from_start))
-        .saturating_mul(u128::from(embassy_time_driver::TICK_HZ))
-        / u128::from(timing.timescale.max(1));
-    let deadline = playback_start + EmbassyDuration::from_ticks(target_ticks as u64);
-    let now = EmbassyInstant::now();
-    if now < deadline {
-        let wait_start = now.as_ticks();
-        h264_wait_until_or_cancelled(session, deadline).await;
-        playback_timing.waited_frames = playback_timing.waited_frames.saturating_add(1);
-        playback_timing.total_wait_ticks = playback_timing
-            .total_wait_ticks
-            .saturating_add(EmbassyInstant::now().as_ticks().saturating_sub(wait_start));
+) -> u64 {
+    if let Some(timing) = timing {
+        crate::ui4::decoded_video_pts_ticks(
+            timing.pts,
+            base_pts,
+            timing.timescale,
+            embassy_time_driver::TICK_HZ,
+        )
     } else {
-        playback_timing.late_frames = playback_timing.late_frames.saturating_add(1);
-        playback_timing.max_late_ticks = playback_timing
-            .max_late_ticks
-            .max(now.saturating_duration_since(deadline).as_ticks());
+        *next_fixed_deadline += frame_period;
+        next_fixed_deadline
+            .saturating_duration_since(playback_start)
+            .as_ticks()
     }
 }
 
@@ -3910,6 +3890,7 @@ async fn h264_queue_probe_output(
     playback_frame: usize,
     stream_idr_index: usize,
     output: &super::hw_pic::HwPicOutput,
+    presentation_ticks: u64,
 ) -> bool {
     if output.error_code != 0 {
         crate::log!(
@@ -3974,7 +3955,7 @@ async fn h264_queue_probe_output(
             );
         }
         let ui4_queued =
-            crate::ui4::enqueue_decoded_nv12_stream_frame(session, source, playback_frame).await;
+            crate::ui4::enqueue_decoded_nv12_stream_frame(session, source, playback_frame, presentation_ticks).await;
         if ui4_queued {
             return true;
         }

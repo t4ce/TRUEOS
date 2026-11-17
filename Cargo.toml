@@ -85,6 +85,8 @@ subsystem-igpu = []
 subsystem-virgl = []
 trueos_h264_encode_stream = ["subsystem-igpu"]
 trueos_h264_encode_probe = ["trueos_h264_encode_stream"]
+# One unpublished Gen12 AVC → SFC RGBA comparison on supported desktop iGPUs.
+trueos_avc_sfc_probe = ["subsystem-igpu"]
 trueos_task_profile = ["trueos-executor/trueos-task-profile"]
 # Enable runtime-generated native compute for odin.son development.
 odin-native-gpgpu = ["subsystem-igpu"]

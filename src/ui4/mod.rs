@@ -51,6 +51,7 @@ pub(crate) mod text_blit;
 mod text_blit_bench;
 pub(crate) mod text_paint;
 mod video_frame;
+mod video_presentation_timing;
 pub(crate) mod window_arc;
 mod window_broker;
 
@@ -155,13 +156,14 @@ pub(crate) use slot4_service::{
     software_cursor_rects as interaction_overlay_rects, ui4_slot4_service_task,
 };
 pub(crate) use video_frame::{
-    DecodedNv12Source, DecodedVideoConversionReport,
-    VIDEO_RGBA_BUFFER_COUNT, VideoPlaybackSession, begin_decoded_nv12_conversion_batch,
-    begin_texture_video_player, enqueue_decoded_nv12_stream_frame, open_shell_decoded_video_player,
-    reserve_shell_decoded_video_player, ui4_video_conversion_service_task,
-    stop_decoded_nv12_stream,
+    DecodedNv12Source, DecodedVideoConversionReport, VIDEO_RGBA_BUFFER_COUNT, VideoPlaybackSession,
+    begin_decoded_nv12_conversion_batch, begin_texture_video_player,
+    enqueue_decoded_nv12_stream_frame, open_shell_decoded_video_player,
+    reserve_shell_decoded_video_player, stop_decoded_nv12_stream,
+    ui4_video_conversion_service_task, ui4_video_presentation_service_task,
     wait_decoded_nv12_conversion_idle,
 };
+pub(crate) use video_presentation_timing::pts_ticks as decoded_video_pts_ticks;
 
 pub(crate) use window_broker::{
     MAX_WINDOW_TITLE_BYTES, Ui4FrameEscapeKeyAction, WindowBrokerError, WindowCreate,

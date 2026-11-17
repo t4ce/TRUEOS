@@ -586,7 +586,7 @@ pub(crate) fn submit_spirit_vfx_frame(
     // consume either initial capture slot. The submit lock serializes
     // admission and the bounded counter update.
     if let Some(evidence) = encoding_evidence {
-        if SPIRIT_VFX_ENCODING_LOGS.fetch_update(
+        if SPIRIT_VFX_ENCODING_LOGS.try_update(
             Ordering::AcqRel, Ordering::Acquire,
             |count| (count < SPIRIT_VFX_ENCODING_LOG_LIMIT).then_some(count + 1),
         ).is_ok() {
@@ -717,7 +717,7 @@ pub(crate) fn poll_spirit_vfx_submission(handle: SpiritVfxSubmission) -> SpiritV
         return SpiritVfxCompletion::Pending;
     }
     if crate::intel::render::tgl_spirit_compute_contract() {
-        if let Ok(retired_index) = SPIRIT_VFX_SAVED_CONTEXT_LOGS.fetch_update(
+        if let Ok(retired_index) = SPIRIT_VFX_SAVED_CONTEXT_LOGS.try_update(
             Ordering::Relaxed, Ordering::Relaxed, |count| (count < 2).then_some(count + 1),
         ) {
             spirit_vfx_log_background_boundary(pending.submitted, handle.tag, "retired");

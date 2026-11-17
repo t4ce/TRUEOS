@@ -361,6 +361,7 @@ pub(crate) struct AvcSliceParams {
     pub slice_alpha_c0_offset_div2: i8,
     pub slice_beta_offset_div2: i8,
     pub slice_qp_delta: i8,
+    pub cabac_init_idc: u8,
     pub direct_spatial_mv_pred: bool,
     pub num_ref_idx_l0_active_minus1: u8,
     pub num_ref_idx_l1_active_minus1: u8,
@@ -1348,6 +1349,7 @@ pub(crate) fn parse_annexb_single_picture_plan(
         slice_alpha_c0_offset_div2: 0,
         slice_beta_offset_div2: 0,
         slice_qp_delta: 0,
+        cabac_init_idc: 0,
         direct_spatial_mv_pred: false,
         num_ref_idx_l0_active_minus1: 0,
         num_ref_idx_l1_active_minus1: 0,
@@ -1388,6 +1390,7 @@ pub(crate) fn parse_annexb_single_picture_plan(
             slice_alpha_c0_offset_div2: slice.slice_alpha_c0_offset_div2,
             slice_beta_offset_div2: slice.slice_beta_offset_div2,
             slice_qp_delta: slice.slice_qp_delta,
+            cabac_init_idc: slice.cabac_init_idc,
             direct_spatial_mv_pred: slice.direct_spatial_mv_pred,
             num_ref_idx_l0_active_minus1: slice.num_ref_idx_l0_active_minus1,
             num_ref_idx_l1_active_minus1: slice.num_ref_idx_l1_active_minus1,
@@ -1563,6 +1566,9 @@ pub(crate) fn validate_long_format_single_picture(
     let mut has_p_slice = false;
     let mut has_b_slice = false;
     for idx in 0..plan.slice_count {
+        if plan.slices[idx].cabac_init_idc > 2 {
+            return Err(AvcCommandStreamBlocker::Milestone(AvcMilestoneBlocker::InvalidSliceRange));
+        }
         if !matches!(plan.slices[idx].class, AvcSliceClass::I | AvcSliceClass::P | AvcSliceClass::B)
             || plan.slices[idx].class != plan.slice.class
         {
@@ -2625,7 +2631,7 @@ pub(crate) const fn mfx_avc_slice_state_params_for_slice(
         slice_alpha_c0_offset_div2: slice.slice_alpha_c0_offset_div2,
         slice_beta_offset_div2: slice.slice_beta_offset_div2,
         slice_quantization_parameter: slice_qp,
-        cabac_init_idc: 0,
+        cabac_init_idc: slice.cabac_init_idc,
         disable_deblocking_filter_indicator: slice.disable_deblocking_filter_idc,
         direct_prediction_type: if matches!(slice.class, AvcSliceClass::B)
             && slice.direct_spatial_mv_pred
@@ -2870,6 +2876,7 @@ struct ParsedSlice {
     slice_alpha_c0_offset_div2: i8,
     slice_beta_offset_div2: i8,
     slice_qp_delta: i8,
+    cabac_init_idc: u8,
     pic_order_cnt_lsb: u16,
     delta_pic_order_cnt_bottom: i32,
     top_field_order_cnt: i32,
@@ -3303,9 +3310,17 @@ fn parse_avc_slice(
             }
         }
     }
-    if pps.entropy_coding_mode && !matches!(class, AvcSliceClass::I | AvcSliceClass::Si) {
-        let _cabac_init_idc = br.read_ue()?;
-    }
+    let cabac_init_idc = if pps.entropy_coding_mode
+        && !matches!(class, AvcSliceClass::I | AvcSliceClass::Si)
+    {
+        let value = br.read_ue()?;
+        if value > 2 {
+            return Err(AvcAnnexBPlanError::UnsupportedSlice);
+        }
+        value as u8
+    } else {
+        0
+    };
     let slice_qp_delta = checked_i8(br.read_se()?, AvcAnnexBPlanError::UnsupportedSlice)?;
     let mut disable_deblocking_filter_idc = 0;
     let mut slice_alpha_c0_offset_div2 = 0;
@@ -3346,6 +3361,7 @@ fn parse_avc_slice(
         slice_alpha_c0_offset_div2,
         slice_beta_offset_div2,
         slice_qp_delta,
+        cabac_init_idc,
         pic_order_cnt_lsb,
         delta_pic_order_cnt_bottom,
         top_field_order_cnt,

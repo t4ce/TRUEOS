@@ -6,6 +6,10 @@ pub(crate) mod h264_cmd;
 pub(crate) mod hw_pic;
 pub(crate) mod hw_vid;
 pub(crate) mod pic_backend;
+#[cfg(feature = "trueos_avc_sfc_probe")]
+mod sfc_cmd;
+#[cfg(feature = "trueos_avc_sfc_probe")]
+mod sfc_shadow;
 // Shared by screenshots and optional AVC streaming.
 pub(crate) mod wd_xyuv8888;
 

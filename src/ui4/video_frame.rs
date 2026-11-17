@@ -38,15 +38,19 @@ const VIDEO_CONVERSION_OUTSTANDING_CAP: usize = crate::intel::gpgpu::UI4_COMPOSI
 const _: () = assert!(VIDEO_RGBA_BUFFER_COUNT >= VIDEO_CONVERSION_OUTSTANDING_CAP + 2);
 const VIDEO_CONVERSION_ERROR_LOG_INTERVAL_TICKS: u64 = trueos_time::TICK_HZ * 10;
 const VIDEO_CONVERSION_PRESENT_ERROR: i32 = -34;
+// A modest broker handoff lead; this is not a vblank prediction. Actual
+// SURFLIVE observation is measured separately from the intended media time.
+const VIDEO_PUBLICATION_LEAD_TICKS: u64 = trueos_time::TICK_HZ / 500;
+const VIDEO_LATCH_WAIT_LIMIT_TICKS: u64 = trueos_time::TICK_HZ / 10;
 const VIDEO_CONVERSION_PROBE_HISTOGRAM_BUCKET_US: u64 = 250;
 const VIDEO_CONVERSION_PROBE_HISTOGRAM_BUCKETS: usize = 128;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecodedNv12Source {
     pub(crate) decode_sequence: u64,
-    /// Decoder DPB slot pinned by the playback owner. The conversion worker
-    /// releases it only after the RCS read has retired (or before submission
-    /// if preparation rejects the source).
+    /// Decoder DPB slot pinned by the playback owner. The timed presenter
+    /// releases it after RCS retirement and publication, retaining resize
+    /// retry capability during the bounded RGBA-ready wait.
     pub(crate) decoder_surface_slot: u8,
     pub(crate) decoder_session_slot: usize,
     pub(crate) gpu: u64,
@@ -154,6 +158,14 @@ pub(crate) struct DecodedVideoConversionReport {
     pub(crate) queued: usize,
     pub(crate) completed: usize,
     pub(crate) published: usize,
+    /// Confirmed compositor/display transactions, distinct from publication.
+    pub(crate) latched: usize,
+    pub(crate) latch_wait_expirations: usize,
+    pub(crate) max_latch_observe_late_ticks: u64,
+    pub(crate) presentation_waited_frames: usize,
+    pub(crate) presentation_wait_ticks: u64,
+    pub(crate) publication_late_frames: usize,
+    pub(crate) max_publication_late_ticks: u64,
     pub(crate) first_failure_frame: usize,
     pub(crate) first_failure_error: i32,
     pub(crate) backpressure_events: usize,
@@ -182,7 +194,47 @@ struct DecodedVideoConversionRequest {
     order: usize,
     playback_frame: usize,
     enqueued_tick: u64,
+    presentation_ticks: u64,
     source: DecodedNv12Source,
+}
+
+struct PreparedVideoWindow {
+    stream: VideoStream,
+    replacement: RetireVideoFrame,
+    placement: WindowPlacement,
+    resize_epoch: u64,
+    write: super::FrameWriteLease,
+    release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
+    layout: NativeViewportLayout,
+    destination_gpu: u64,
+    submit_ms: u64,
+}
+
+enum PreparedVideoFrame {
+    Window(PreparedVideoWindow),
+    Texture(crate::r::services::video_service::ConvertedVideoTexture),
+}
+
+struct ReadyVideoConversion {
+    request: DecodedVideoConversionRequest,
+    outcome: DecodedVideoConversionOutcome,
+    conversion_ticks: u64,
+    ready_tick: u64,
+    presentation_deadline: Option<u64>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct VideoPublication {
+    frame: FrameHandle,
+    buffer_index: u8,
+    producer_release_sequence: u64,
+}
+
+#[derive(Copy, Clone)]
+struct PendingVideoPublication {
+    publication: VideoPublication,
+    published_tick: u64,
+    desired_tick: u64,
 }
 
 #[derive(Copy, Clone, Default)]
@@ -269,10 +321,10 @@ struct DecodedVideoConversionProbeSample {
     rcs: Option<crate::intel::gpgpu::GpgpuSubmissionProbe>,
 }
 
-#[derive(Copy, Clone)]
 struct DecodedVideoConversionOutcome {
     published: bool,
     retry_resize: bool,
+    ready: Option<PreparedVideoFrame>,
     probe: DecodedVideoConversionProbeSample,
 }
 
@@ -281,6 +333,7 @@ impl DecodedVideoConversionProbeSample {
         DecodedVideoConversionOutcome {
             published,
             retry_resize: false,
+            ready: None,
             probe: self,
         }
     }
@@ -617,9 +670,20 @@ struct DecodedVideoConversionState {
     online: bool,
     active: usize,
     queue: VecDeque<DecodedVideoConversionRequest>,
+    ready: Vec<ReadyVideoConversion>,
+    clock: super::video_presentation_timing::PresentationClock,
+    awaiting_latch: Option<PendingVideoPublication>,
+    last_latched: Option<VideoPublication>,
     queued: usize,
     completed: usize,
     published: usize,
+    latched: usize,
+    latch_wait_expirations: usize,
+    max_latch_observe_late_ticks: u64,
+    presentation_waited_frames: usize,
+    presentation_wait_ticks: u64,
+    publication_late_frames: usize,
+    max_publication_late_ticks: u64,
     first_failure_frame: usize,
     first_failure_error: i32,
     backpressure_events: usize,
@@ -638,9 +702,20 @@ impl DecodedVideoConversionState {
             online: false,
             active: 0,
             queue: VecDeque::new(),
+            ready: Vec::new(),
+            clock: super::video_presentation_timing::PresentationClock::new(),
+            awaiting_latch: None,
+            last_latched: None,
             queued: 0,
             completed: 0,
             published: 0,
+            latched: 0,
+            latch_wait_expirations: 0,
+            max_latch_observe_late_ticks: 0,
+            presentation_waited_frames: 0,
+            presentation_wait_ticks: 0,
+            publication_late_frames: 0,
+            max_publication_late_ticks: 0,
             first_failure_frame: 0,
             first_failure_error: 0,
             backpressure_events: 0,
@@ -658,13 +733,27 @@ impl DecodedVideoConversionState {
     }
 
     fn reset_batch(&mut self) -> bool {
-        if self.active != 0 || !self.queue.is_empty() || self.outstanding() != 0 {
+        if self.active != 0
+            || !self.queue.is_empty()
+            || !self.ready.is_empty()
+            || self.outstanding() != 0
+        {
             return false;
         }
         self.generation = self.generation.wrapping_add(1).max(1);
         self.queued = 0;
         self.completed = 0;
         self.published = 0;
+        self.latched = 0;
+        self.latch_wait_expirations = 0;
+        self.max_latch_observe_late_ticks = 0;
+        self.presentation_waited_frames = 0;
+        self.presentation_wait_ticks = 0;
+        self.publication_late_frames = 0;
+        self.max_publication_late_ticks = 0;
+        self.clock = super::video_presentation_timing::PresentationClock::new();
+        self.awaiting_latch = None;
+        self.last_latched = None;
         self.first_failure_frame = 0;
         self.first_failure_error = 0;
         self.backpressure_events = 0;
@@ -683,6 +772,13 @@ impl DecodedVideoConversionState {
             queued: self.queued,
             completed: self.completed,
             published: self.published,
+            latched: self.latched,
+            latch_wait_expirations: self.latch_wait_expirations,
+            max_latch_observe_late_ticks: self.max_latch_observe_late_ticks,
+            presentation_waited_frames: self.presentation_waited_frames,
+            presentation_wait_ticks: self.presentation_wait_ticks,
+            publication_late_frames: self.publication_late_frames,
+            max_publication_late_ticks: self.max_publication_late_ticks,
             first_failure_frame: self.first_failure_frame,
             first_failure_error: self.first_failure_error,
             backpressure_events: self.backpressure_events,
@@ -789,6 +885,10 @@ static VIDEO_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
 static VIDEO_CONVERSION_LAST_ERROR_LOG_TICK: AtomicU64 = AtomicU64::new(0);
 static VIDEO_CONVERSION_NEXT_SESSION: AtomicU64 = AtomicU64::new(0);
+// Exactly one presenter consumes this signal. Conversion lanes retain their
+// independent polling until a multi-waiter work notification exists.
+static VIDEO_PRESENTATION_WAKE: embassy_sync::signal::Signal<crate::wait::EmbassySpinRawMutex, ()> =
+    embassy_sync::signal::Signal::new();
 
 impl VideoPlaybackSession {
     fn state(self) -> &'static VideoPlaybackState {
@@ -802,7 +902,9 @@ impl VideoPlaybackSession {
     }
     pub(crate) fn set_paused(self, paused: bool) {
         if !self.is_cancelled() {
+            self.state().conversion.lock().clock.set_paused(paused, Instant::now().as_ticks());
             self.state().paused.store(paused, Ordering::Release);
+            VIDEO_PRESENTATION_WAKE.signal(());
         }
     }
     pub(crate) async fn wait_until_playing(self) -> bool {
@@ -842,13 +944,17 @@ pub(super) fn decoded_video_window_closed(owner: WindowOwner, window: WindowId) 
             .is_some_and(|stream| stream.window == window)
         {
             state.cancelled.store(true, Ordering::Release);
+            VIDEO_PRESENTATION_WAKE.signal(());
         }
     }
 }
 
 fn decoded_video_conversion_idle(session: VideoPlaybackSession) -> bool {
     let state = session.state().conversion.lock();
-    state.active == 0 && state.queue.is_empty() && state.outstanding() == 0
+    state.active == 0
+        && state.queue.is_empty()
+        && state.ready.is_empty()
+        && state.outstanding() == 0
 }
 
 fn video_conversion_ticks_to_micros(ticks: u64) -> u64 {
@@ -878,6 +984,12 @@ fn log_video_conversion_backpressure(
     report: DecodedVideoConversionReport,
     worker_online: bool,
 ) {
+    if phase == "enqueue" {
+        // A full two-picture ahead queue is ordinary flow control. Preserve
+        // its counters without consuming the error log budget or classifying
+        // every correctly paced stream as a hardware failure.
+        return;
+    }
     if !should_log_video_conversion_error() {
         return;
     }
@@ -904,9 +1016,10 @@ pub(crate) fn begin_decoded_nv12_conversion_batch(session: VideoPlaybackSession)
     let mut state = session.state().conversion.lock();
     let reset = state.reset_batch();
     if reset {
+        state.clock.set_paused(session.state().paused.load(Ordering::Acquire), Instant::now().as_ticks());
         crate::log_info!(
             target: "ui4";
-            "ui4 video-conversion batch generation={} worker=independent-rcs ordered=1 outstanding_cap={} no_drop=1 decoder_surface_release=rcs-completion worker_online={}\n",
+            "ui4 video-conversion batch generation={} worker=independent-rcs presenter=independent-pts ordered=1 outstanding_cap={} no_drop=1 decoder_surface_release=publication-after-rcs-completion worker_online={}\n",
             state.generation,
             VIDEO_CONVERSION_OUTSTANDING_CAP,
             state.online as u8,
@@ -922,6 +1035,7 @@ pub(crate) async fn enqueue_decoded_nv12_stream_frame(
     session: VideoPlaybackSession,
     source: DecodedNv12Source,
     playback_frame: usize,
+    presentation_ticks: u64,
 ) -> bool {
     if !valid_source(source) || session.is_cancelled() {
         return false;
@@ -941,6 +1055,7 @@ pub(crate) async fn enqueue_decoded_nv12_stream_frame(
                     order,
                     playback_frame,
                     enqueued_tick: Instant::now().as_ticks(),
+                    presentation_ticks,
                     source,
                 });
                 state.max_outstanding = state.max_outstanding.max(state.outstanding());
@@ -973,7 +1088,9 @@ pub(crate) async fn wait_decoded_nv12_conversion_idle(
         let (idle, report, worker_online) = {
             let state = session.state().conversion.lock();
             (
-                state.active == 0 && state.queue.is_empty() && state.outstanding() == 0,
+                state.active == 0 && state.queue.is_empty() && state.ready.is_empty()
+                    && state.outstanding() == 0
+                    && (session.is_cancelled() || state.awaiting_latch.is_none()),
                 state.report(),
                 state.online,
             )
@@ -1030,27 +1147,6 @@ fn complete_decoded_video_conversion(
         state.max_conversion_ticks = state.max_conversion_ticks.max(elapsed_ticks);
         state.probe.record(outcome.probe);
     }
-    state.active = state.active.saturating_sub(1);
-}
-
-async fn wait_decoded_video_conversion_turn(request: DecodedVideoConversionRequest) -> bool {
-    let session = request.session;
-    loop {
-        let (same_generation, turn) = {
-            let state = session.state().conversion.lock();
-            (
-                state.generation == request.generation,
-                state.completed.saturating_add(1) == request.order,
-            )
-        };
-        if !same_generation {
-            return false;
-        }
-        if turn {
-            return true;
-        }
-        Timer::after(Duration::from_millis(1)).await;
-    }
 }
 
 #[trueos_executor::task(pool_size = 2)]
@@ -1078,7 +1174,7 @@ pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32, lane: u8
         };
         let started = Instant::now();
         let mut outcome = loop {
-            let outcome = convert_publish_decoded_nv12_stream_frame(request).await;
+            let outcome = convert_prepare_decoded_nv12_stream_frame(request).await;
             if !outcome.retry_resize || request.session.is_cancelled() {
                 break outcome;
             }
@@ -1086,15 +1182,6 @@ pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32, lane: u8
             // supersedes this conversion. A resize never drops a picture or
             // turns an expected stale transaction into a playback failure.
         };
-        // convert_publish returns only before GPU admission or after the
-        // accepted RCS read has retired. Transfer the decoder-surface lifetime
-        // to this worker so playback can overlap VDBOX with conversion without
-        // permitting the DPB slot to be overwritten under an in-flight read.
-        crate::intel::hw_pic::release_h264_output_surface_slot(
-            request.source.decoder_session_slot,
-            request.source.decoder_surface_slot,
-        );
-        let _ordered = wait_decoded_video_conversion_turn(request).await;
         let finished = Instant::now();
         let elapsed_ticks = finished.saturating_duration_since(started).as_ticks();
         outcome.probe.queue_wait_us = video_conversion_ticks_to_micros(
@@ -1103,7 +1190,252 @@ pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32, lane: u8
         outcome.probe.end_to_end_us = video_conversion_ticks_to_micros(
             finished.as_ticks().saturating_sub(request.enqueued_tick),
         );
-        complete_decoded_video_conversion(request, outcome, elapsed_ticks);
+        // RCS is retired. Move the bounded RGBA lease to the presenter instead
+        // of occupying either shared conversion lane while waiting for PTS.
+        // Retain the source pin until publication so a stale resize can retry
+        // the same picture, even if its PTS wait spans a decoder IDR.
+        let mut state = request.session.state().conversion.lock();
+        state.active = state.active.saturating_sub(1);
+        state.ready.push(ReadyVideoConversion {
+            request,
+            outcome,
+            conversion_ticks: elapsed_ticks,
+            ready_tick: finished.as_ticks(),
+            presentation_deadline: None,
+        });
+        VIDEO_PRESENTATION_WAKE.signal(());
+    }
+}
+
+/// Select only the next presentation-ordered ready allocation. Returning None
+/// retains every write/source lease. The caller sleeps until an exact PTS or
+/// latch-expiry deadline, or a state-change signal.
+fn take_ready_video_conversion(
+    conversion: &mut DecodedVideoConversionState,
+    now: u64,
+    next_wake: &mut Option<u64>,
+) -> Option<ReadyVideoConversion> {
+    if conversion.awaiting_latch.is_some_and(|pending| {
+        super::video_presentation_timing::latch_wait_expired(
+            now,
+            pending.published_tick,
+            VIDEO_LATCH_WAIT_LIMIT_TICKS,
+        )
+    }) {
+        // Hidden/occluded windows, missing planes or display loss
+        // must not hold playback or its EOS drain indefinitely.
+        // Expiry is never reported as a confirmed scanout.
+        conversion.awaiting_latch = None;
+        conversion.latch_wait_expirations = conversion.latch_wait_expirations.saturating_add(1);
+    }
+    if let Some(pending) = conversion.awaiting_latch {
+        let expires = pending
+            .published_tick
+            .saturating_add(VIDEO_LATCH_WAIT_LIMIT_TICKS);
+        *next_wake = Some(next_wake.map_or(expires, |next| next.min(expires)));
+    }
+    let expected = conversion.completed.saturating_add(1);
+    let Some(index) = conversion
+        .ready
+        .iter()
+        .position(|ready| ready.request.order == expected)
+    else {
+        return None;
+    };
+    let request = conversion.ready[index].request;
+    if !request.session.is_cancelled() && conversion.ready[index].outcome.ready.is_some() {
+        let prior_pending = conversion.awaiting_latch.is_some();
+        let Some(deadline) = conversion.clock.deadline(
+            now.saturating_add(VIDEO_PUBLICATION_LEAD_TICKS),
+            request.presentation_ticks,
+            prior_pending,
+        ) else {
+            return None;
+        };
+        let publish_at = super::video_presentation_timing::publication_deadline(
+            deadline,
+            VIDEO_PUBLICATION_LEAD_TICKS,
+        );
+        if now < publish_at {
+            *next_wake = Some(next_wake.map_or(publish_at, |next| next.min(publish_at)));
+            return None;
+        }
+        conversion.ready[index].presentation_deadline = Some(deadline);
+        let wait_ticks = publish_at.saturating_sub(conversion.ready[index].ready_tick);
+        if wait_ticks != 0 {
+            conversion.presentation_waited_frames += 1;
+            conversion.presentation_wait_ticks = conversion
+                .presentation_wait_ticks
+                .saturating_add(wait_ticks);
+        }
+        let late_ticks = now.saturating_sub(publish_at);
+        if late_ticks != 0 {
+            conversion.publication_late_frames += 1;
+            conversion.max_publication_late_ticks =
+                conversion.max_publication_late_ticks.max(late_ticks);
+        }
+    }
+    Some(conversion.ready.remove(index))
+}
+
+/// A separate presenter owns all PTS waits. It sleeps without a timer while
+/// idle/paused and never occupies either shared RCS conversion worker.
+#[trueos_executor::task]
+pub(crate) async fn ui4_video_presentation_service_task() {
+    use core::{
+        future::{Future, poll_fn},
+        pin::pin,
+        task::Poll,
+    };
+    loop {
+        let mut next_wake = None;
+        let mut progressed = false;
+        for state in &VIDEO_SESSIONS {
+            let ready = take_ready_video_conversion(
+                &mut state.conversion.lock(),
+                Instant::now().as_ticks(),
+                &mut next_wake,
+            );
+            if let Some(ready) = ready {
+                present_ready_video_conversion(ready);
+                progressed = true;
+            }
+        }
+        if progressed {
+            continue;
+        }
+        if let Some(deadline) = next_wake {
+            let mut changed = pin!(VIDEO_PRESENTATION_WAKE.wait());
+            let mut timer = pin!(Timer::at(Instant::from_ticks(deadline)));
+            poll_fn(|cx| {
+                if changed.as_mut().poll(cx).is_ready() || timer.as_mut().poll(cx).is_ready() {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await;
+        } else {
+            VIDEO_PRESENTATION_WAKE.wait().await;
+        }
+    }
+}
+
+fn discard_prepared_video_frame(prepared: PreparedVideoFrame) {
+    match prepared {
+        PreparedVideoFrame::Window(window) => {
+            let _ = cancel_frame_buffer(window.write);
+            // The staged replacement's guard retires it after the write lease.
+        }
+        PreparedVideoFrame::Texture(texture) => {
+            crate::r::services::video_service::finish_conversion(texture, false);
+        }
+    }
+}
+
+fn present_ready_video_conversion(mut ready: ReadyVideoConversion) {
+    let request = ready.request;
+    let session = request.session;
+    let mut publication = None;
+    if let Some(prepared) = ready.outcome.ready.take() {
+        if session.is_cancelled() {
+            discard_prepared_video_frame(prepared);
+        } else {
+            ready.outcome = match prepared {
+                PreparedVideoFrame::Window(window) => {
+                    publication = Some(VideoPublication {
+                        frame: window.write.frame,
+                        buffer_index: window.write.buffer_index,
+                        producer_release_sequence: window.release.sequence(),
+                    });
+                    publish_prepared_video_window(request, window, ready.outcome.probe)
+                }
+                PreparedVideoFrame::Texture(texture) => ready.outcome.probe.finish(
+                    crate::r::services::video_service::finish_conversion(texture, true),
+                ),
+            };
+        }
+    }
+    if ready.outcome.retry_resize && !session.is_cancelled() {
+        // PTS waits can span a resize. The request still owns its bounded
+        // decoder pin, so retry this exact ordered picture in the new extent.
+        session.state().conversion.lock().queue.push_front(request);
+        return;
+    }
+    if ready.outcome.published
+        && let Some(publication) = publication
+    {
+        let mut conversion = session.state().conversion.lock();
+        // A compositor on another CPU may already have confirmed this buffer
+        // between broker publication and this bookkeeping lock.
+        if conversion.last_latched == Some(publication) {
+            conversion.latched = conversion.latched.saturating_add(1);
+            conversion.max_latch_observe_late_ticks = conversion.max_latch_observe_late_ticks.max(
+                Instant::now().as_ticks().saturating_sub(
+                    ready
+                        .presentation_deadline
+                        .unwrap_or(Instant::now().as_ticks()),
+                ),
+            );
+        } else {
+            conversion.awaiting_latch = Some(PendingVideoPublication {
+                publication,
+                published_tick: Instant::now().as_ticks(),
+                desired_tick: ready
+                    .presentation_deadline
+                    .unwrap_or(Instant::now().as_ticks()),
+            });
+        }
+    }
+    crate::intel::hw_pic::release_h264_output_surface_slot(
+        request.source.decoder_session_slot,
+        request.source.decoder_surface_slot,
+    );
+    ready.outcome.probe.end_to_end_us = video_conversion_ticks_to_micros(
+        Instant::now()
+            .as_ticks()
+            .saturating_sub(request.enqueued_tick),
+    );
+    complete_decoded_video_conversion(request, ready.outcome, ready.conversion_ticks);
+}
+
+/// Called only after an actual compositor display transaction crossed its
+/// SURFLIVE boundary. Frame/buffer identity survives intervening window moves
+/// and resize serial changes; publication alone never increments this count.
+pub(super) fn decoded_video_frame_latched(
+    frame: FrameHandle,
+    buffer_index: u8,
+    producer_release_sequence: u64,
+) {
+    let publication = VideoPublication {
+        frame,
+        buffer_index,
+        producer_release_sequence,
+    };
+    for state in &VIDEO_SESSIONS {
+        let owns_frame = state
+            .stream
+            .lock()
+            .as_ref()
+            .is_some_and(|stream| stream.frame == frame);
+        let mut conversion = state.conversion.lock();
+        let pending = conversion
+            .awaiting_latch
+            .filter(|pending| pending.publication == publication);
+        if owns_frame || pending.is_some() {
+            conversion.last_latched = Some(publication);
+            if let Some(pending) = pending {
+                conversion.awaiting_latch = None;
+                conversion.latched = conversion.latched.saturating_add(1);
+                VIDEO_PRESENTATION_WAKE.signal(());
+                conversion.max_latch_observe_late_ticks =
+                    conversion.max_latch_observe_late_ticks.max(
+                        Instant::now()
+                            .as_ticks()
+                            .saturating_sub(pending.desired_tick),
+                    );
+            }
+        }
     }
 }
 
@@ -1185,7 +1517,8 @@ fn toggle_video_playback_pause(window: WindowId) {
         if !stream.is_some_and(|stream| stream.window == window) {
             continue;
         }
-        let paused = !state.paused.fetch_xor(true, Ordering::AcqRel);
+        let paused = !state.paused.load(Ordering::Acquire);
+        VideoPlaybackSession { slot, generation: state.generation.load(Ordering::Acquire) }.set_paused(paused);
         crate::log_info!(target: "ui4";
             "ui4 video-player playback-toggle slot={} window={} state={} input=space selected-frame=1\n",
             slot + 1,
@@ -1343,10 +1676,10 @@ fn reap_retired_video_frames() {
 
 /// Worker-side conversion of one decoder picture into an exact UI4 RGBA
 /// backbuffer. The caller is the dedicated RCS service, never the VDBOX
-/// playback loop. It returns after the GuC read of NV12 has retired and the
-/// RGBA publication is visible to the broker; display SURFLIVE remains
-/// independently owned by UI4.
-async fn convert_publish_decoded_nv12_stream_frame(
+/// playback loop. It returns after the GuC read of NV12 has retired. The timed
+/// presenter owns its completed RGBA write lease until PTS; display SURFLIVE
+/// remains independently owned by UI4.
+async fn convert_prepare_decoded_nv12_stream_frame(
     request: DecodedVideoConversionRequest,
 ) -> DecodedVideoConversionOutcome {
     let session = request.session;
@@ -1362,11 +1695,10 @@ async fn convert_publish_decoded_nv12_stream_frame(
     }
     let target = session.state().texture_target.load(Ordering::Acquire);
     if target != 0 {
-        if !wait_decoded_video_conversion_turn(request).await {
-            return probe.finish(false);
-        }
-        return probe
-            .finish(crate::r::services::video_service::convert(target, session, source).await);
+        let converted = crate::r::services::video_service::convert(target, session, source).await;
+        let mut outcome = probe.finish(false);
+        outcome.ready = converted.map(PreparedVideoFrame::Texture);
+        return outcome;
     }
     // Shell-driven playback owns the same application window as boot playback;
     // drain its broker queue at frame cadence so move/resize/pan never depends
@@ -1381,7 +1713,7 @@ async fn convert_publish_decoded_nv12_stream_frame(
             video_conversion_ticks_to_micros(bind_layout_started.elapsed().as_ticks());
         return probe.finish(false);
     };
-    let (mut replacement, placement, resize_epoch) = match stage_video_resize(&mut stream) {
+    let (replacement, placement, resize_epoch) = match stage_video_resize(&mut stream) {
         Ok(staged) => staged,
         Err(_) => return probe.finish(false),
     };
@@ -1636,14 +1968,41 @@ async fn convert_publish_decoded_nv12_stream_frame(
     probe.rcs = Some(stats.probe);
     let submit_ms = stats.submit_ms;
 
-    // From this point onward the decoder source is no longer referenced by any
-    // queued GPU command. Publication still follows request order: the second
-    // cooperative lane may finish preparation or observation first, but it
-    // cannot supersede the preceding frame at the broker front-buffer handoff.
-    if !wait_decoded_video_conversion_turn(request).await || session.is_cancelled() {
-        let _ = cancel_frame_buffer(write);
-        return probe.finish(false);
-    }
+    let mut outcome = probe.finish(false);
+    outcome.ready = Some(PreparedVideoFrame::Window(PreparedVideoWindow {
+        stream,
+        replacement,
+        placement,
+        resize_epoch,
+        write,
+        release,
+        layout,
+        destination_gpu: destination.gpu,
+        submit_ms,
+    }));
+    outcome
+}
+
+fn publish_prepared_video_window(
+    request: DecodedVideoConversionRequest,
+    prepared: PreparedVideoWindow,
+    mut probe: DecodedVideoConversionProbeSample,
+) -> DecodedVideoConversionOutcome {
+    let PreparedVideoWindow {
+        stream,
+        mut replacement,
+        placement,
+        resize_epoch,
+        write,
+        release,
+        layout,
+        destination_gpu,
+        submit_ms,
+    } = prepared;
+    let session = request.session;
+    let source = request.source;
+    let playback_frame = request.playback_frame;
+    let reason = "pts-ready-rgba-presentation";
     // Only the completed RGBA allocation crosses into UI4.
     let publish_started = Instant::now();
     let sequence = VIDEO_PUBLISH_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
@@ -1677,7 +2036,7 @@ async fn convert_publish_decoded_nv12_stream_frame(
         }
         Some(Err(error)) => {
             crate::log_warn!(target: "ui4";
-                "ui4 video-frame window publish failed frame={} window={} error={:?} reason={} action=close-stream source_already_released_at=guc-completion\n",
+                "ui4 video-frame window publish failed frame={} window={} error={:?} reason={} action=close-stream source_release=after-publication\n",
                 stream.frame.raw(), stream.window.raw(), error, reason,
             );
             if !session.is_cancelled() {
@@ -1707,7 +2066,7 @@ async fn convert_publish_decoded_nv12_stream_frame(
     );
     if sequence <= 8 || sequence.is_multiple_of(120) {
         crate::log_info!(target: "ui4";
-            "ui4 video-frame published seq={} decode_seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-nv12-to-ui4-rgba8-frame producer_release={} submit_ms={} source=media-ytile-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} media_gpu=0x{:X} target_gpu=0x{:X} rgba_buffers={} rgba_ownership=producer-write+broker-pending+display-live plane_route=slot1-rgba8 decoder_source_release=guc-completion display_release=surflive native_attachment=0 linked_nv12_slots=0 producer_plane_mmio=0 cpu_pixel_copy=0\n",
+            "ui4 video-frame published seq={} decode_seq={} frame={} window={} buffer={} frame_serial={} window_serial={} producer=guc-nv12-to-ui4-rgba8-frame producer_release={} submit_ms={} source=media-ytile-nv12 {}x{} visible={}x{} crop={}x{}@{},{} destination={},{} media_gpu=0x{:X} target_gpu=0x{:X} rgba_buffers={} rgba_ownership=producer-write+broker-pending+display-live plane_route=slot1-rgba8 decoder_source_release=publication-after-guc-completion display_release=surflive native_attachment=0 linked_nv12_slots=0 producer_plane_mmio=0 cpu_pixel_copy=0\n",
             sequence,
             source.decode_sequence,
             stream.frame.raw(),
@@ -1728,7 +2087,7 @@ async fn convert_publish_decoded_nv12_stream_frame(
             layout.destination_x,
             layout.destination_y,
             source.gpu,
-            destination.gpu,
+            destination_gpu,
             VIDEO_RGBA_BUFFER_COUNT,
         );
     }
@@ -1795,6 +2154,7 @@ fn bind_decoded_source_stream(
 
 pub(crate) fn stop_decoded_nv12_stream(session: VideoPlaybackSession, reason: &str) -> bool {
     let reserved = !session.state().cancelled.swap(true, Ordering::AcqRel);
+    VIDEO_PRESENTATION_WAKE.signal(());
     let stream = session.state().stream.lock().take();
     if let Some(stream) = stream {
         let close = finish_window_session_with_request(
@@ -2019,6 +2379,7 @@ impl VideoPlaybackSession {
     pub(crate) fn cancel(self) {
         if self.state().generation.load(Ordering::Acquire) == self.generation {
             self.state().cancelled.store(true, Ordering::Release);
+            VIDEO_PRESENTATION_WAKE.signal(());
         }
     }
 }

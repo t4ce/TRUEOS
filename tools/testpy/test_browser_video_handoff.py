@@ -42,11 +42,18 @@ mod ui4{
 mod workers{pub struct Worker;pub fn pick_background_spawner()->Option<Worker>{Some(Worker)}impl Worker{pub fn spawn<T>(&self,_:T){}}}
 mod shell3{#[derive(Clone)]pub struct MatrixTarget;pub fn matrix_target_print_line(_:&MatrixTarget,_:&str){}}
 mod hv{pub fn with_guest_broker_context<T>(_:u8,f:impl FnOnce()->T)->T{f()}pub fn blueprint_console_target(_:u8)->Option<crate::shell3::MatrixTarget>{None}}
-mod r{pub mod io{pub mod env{pub fn trueosfs_scope_granted()->bool{true}pub fn resolve_fs_path(s:&str,_:bool)->Option<String>{Some(s.into())}}pub mod async_fs_cabi{pub fn owner_for_vm(vm:u8)->u32{0x80000000|vm as u32}}}pub mod path{pub struct FsPath;impl FsPath{pub fn parse(_:&str,_:bool)->Result<(),()>{Ok(())}}}}
+mod r{
+ pub mod fs{pub mod trueosfs{pub mod authorized{
+  #[derive(Clone,Copy)]pub enum Actor{Public,Vm(u8,u64)}
+  pub fn actor_for_vm(vm:u8)->Result<Actor,()>{Ok(Actor::Vm(vm,1))}
+ }}}
+ pub mod io{pub mod env{pub fn trueosfs_scope_granted()->bool{true}pub fn resolve_fs_path(s:&str,_:bool)->Option<String>{Some(s.into())}}pub mod async_fs_cabi{pub fn owner_for_vm(vm:u8)->u32{0x80000000|vm as u32}}}
+ pub mod path{pub struct FsPath;impl FsPath{pub fn parse(_:&str,_:bool)->Result<(),()>{Ok(())}}}
+}
 mod log_os{pub fn blueprint_important_line(line:std::fmt::Arguments<'_>){crate::LOG_LINES.lock().push(line.to_string());}}
 mod intel{pub mod media{pub mod hw_vid{
  pub struct Asset;impl Asset{pub fn visible_extent(&self)->(u32,u32){(1280,720)}}
- pub async fn prepare_trueosfs_ui4_video(_:crate::ui4::VideoPlaybackSession,_:&str)->Result<Asset,&'static str>{Ok(Asset)}
+ pub async fn prepare_trueosfs_ui4_video(_:crate::ui4::VideoPlaybackSession,_:&str,_:crate::r::fs::trueosfs::authorized::Actor)->Result<Asset,&'static str>{Ok(Asset)}
  pub async fn run_prepared_trueosfs_ui4_video(_:crate::ui4::VideoPlaybackSession,_:&str,_:Asset)->Result<(),&'static str>{Ok(())}
  pub async fn run_resolved_ui4_framed_video_playback(_:crate::ui4::VideoPlaybackSession,_:&str)->Result<(),&'static str>{Ok(())}
  pub async fn run_resolved_ui4_framed_video_playback_with_referrer(_:crate::ui4::VideoPlaybackSession,url:&str,referrer:Option<&str>)->Result<(),&'static str>{
@@ -58,7 +65,7 @@ mod service {
 '''
 tail = r'''
 fn browser_prepare_task(_:u32)->Result<(),()>{Ok(())}
-fn playback_task(_:Source,_:Session,_:Option<crate::shell3::MatrixTarget>)->Result<(),()>{Ok(())}
+fn playback_task(_:Source,_:Session,_:Option<crate::shell3::MatrixTarget>,_:crate::r::fs::trueosfs::authorized::Actor)->Result<(),()>{Ok(())}
 #[cfg(test)]mod tests{
  use super::*;use crate::{CANCELLED,STOPPED};
  fn reset(){BROWSERS.lock().clear();NEXT_REQUEST.store(1,Ordering::Relaxed);CANCELLED.store(0,Ordering::SeqCst);STOPPED.store(0,Ordering::SeqCst);*crate::PLAYBACK_FAILURE.lock()=None;crate::PLAYBACK_SOURCES.lock().clear();crate::LOG_LINES.lock().clear();}
@@ -96,7 +103,7 @@ fn playback_task(_:Source,_:Session,_:Option<crate::shell3::MatrixTarget>)->Resu
  #[test]fn native_fetch_or_container_failure_reaches_browser_status_and_keeps_old_frame(){
   for error in ["online media fetch failed","HLS encrypted, fragmented or discontinuous stream unsupported"]{
    reset();let id=request(1);candidate(1,Some(1),2);*crate::PLAYBACK_FAILURE.lock()=Some(error);
-   finish_immediate(playback_body(Source::Browser(browser_source(b"https://cdn.example.test/video.mp4\0https://page.example.test/watch").unwrap()),Session(VideoPlaybackSession(2)),None));
+   finish_immediate(playback_body(Source::Browser(browser_source(b"https://cdn.example.test/video.mp4\0https://page.example.test/watch").unwrap()),Session(VideoPlaybackSession(2)),None,crate::r::fs::trueosfs::authorized::Actor::Public));
    assert_eq!(browser_status(1,id),-2);
    assert_eq!(BROWSERS.lock()[0].pending,None);
    assert_eq!(BROWSERS.lock()[0].active,Some(VideoPlaybackSession(1)));

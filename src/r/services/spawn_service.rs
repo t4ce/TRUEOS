@@ -741,6 +741,10 @@ fn spawn_ui4_video_conversion_service_task(spawner: Spawner) -> SpawnAttempt {
         return SpawnAttempt::Skipped;
     };
     let _ = spawner;
+    match crate::ui4::ui4_video_presentation_service_task() {
+        Ok(token) => worker_spawner.spawn(token),
+        Err(error) => return SpawnAttempt::Failed(error),
+    }
     let mut spawned = 0usize;
     for lane in 0..2u8 {
         match crate::ui4::ui4_video_conversion_service_task(worker_spawner.cpu_slot(), lane) {

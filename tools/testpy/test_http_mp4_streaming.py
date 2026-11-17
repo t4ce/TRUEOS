@@ -17,6 +17,9 @@ access_units = source[source.index("#[derive(Copy, Clone, Debug)]\nstruct H264St
 memory_reader = source[source.index("struct H264MemoryNalReader {"):source.index("/// Fill a requested range completely;")]
 assembler = source[source.index("async fn h264_next_stream_access_unit("):source.index("enum H264NalReader {")]
 http_nals = source[source.index("struct H264HttpNalReader {"):source.index("/// Complete access-unit transactions")]
+# Reader/demux tests exercise the unbuffered parser; the independent producer
+# has its own scheduler/backpressure harness.
+http_nals = http_nals.replace("http_mp4::BufferedHttpMp4Reader", "http_mp4::HttpMp4Reader")
 nal_bits = source[source.index("fn h264_find_start_code("):source.index("/// Encoded Blueprint ingress.")]
 
 head = r'''
@@ -53,6 +56,14 @@ mod r {pub mod net {pub mod https {
   pub final_url:String,pub total_len:u64,pub etag:Option<String>,pub last_modified:Option<String>,
  }
  pub struct MediaRangeResponse {pub bytes:Vec<u8>,pub identity:MediaRangeIdentity}
+ pub struct MediaRangeClient;
+ impl MediaRangeClient {
+  pub fn new()->Self {Self}
+  pub async fn close(&mut self) {}
+  pub async fn get_range(&mut self,url:&str,offset:u64,length:usize,timeout:u32,cancellation:&MediaFetchCancellation,user_agent:Option<&str>,referrer:Option<&str>,expected:Option<&MediaRangeIdentity>)->Result<MediaRangeResponse,String> {
+   get_media_range_bytes_shared(url,offset,length,timeout,cancellation,user_agent,referrer,expected).await
+  }
+ }
  pub struct MediaFetchCancellation;
  impl MediaFetchCancellation {pub fn new()->Self {Self}pub fn cancel(&self){}}
  pub async fn get_media_range_bytes_shared(url:&str,offset:u64,length:usize,_:u32,_:&MediaFetchCancellation,_:Option<&str>,_:Option<&str>,expected:Option<&MediaRangeIdentity>)->Result<MediaRangeResponse,String> {
@@ -294,8 +305,9 @@ tail = r'''
 }
 '''
 
-with tempfile.TemporaryDirectory(prefix="http-mp4-streaming-") as directory:
-    path = Path(directory)
-    (path / "test.rs").write_text(head + demux + access_units + memory_reader + assembler + http_nals + nal_bits + reader_dispatch + tail)
-    subprocess.run(["rustc", "--edition=2024", "--test", str(path / "test.rs"), "-o", str(path / "test")], check=True)
-    subprocess.run([str(path / "test"), "--test-threads=1", "--nocapture"], check=True)
+if __name__ == "__main__":
+    with tempfile.TemporaryDirectory(prefix="http-mp4-streaming-") as directory:
+        path = Path(directory)
+        (path / "test.rs").write_text(head + demux + access_units + memory_reader + assembler + http_nals + nal_bits + reader_dispatch + tail)
+        subprocess.run(["rustc", "--edition=2024", "--test", str(path / "test.rs"), "-o", str(path / "test")], check=True)
+        subprocess.run([str(path / "test"), "--test-threads=1", "--nocapture"], check=True)

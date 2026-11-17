@@ -65,7 +65,7 @@ impl SharedPollState {
     fn start_polling(&self) -> Option<(u8, PollStateBomb<'_, impl FnOnce(&Self) -> u8>)> {
         let value = self
             .state
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
                 if value & WAKING == NONE {
                     Some(POLLING)
                 } else {
@@ -88,7 +88,7 @@ impl SharedPollState {
     ) -> Option<(u8, PollStateBomb<'_, impl FnOnce(&Self) -> u8>)> {
         let value = self
             .state
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
                 let mut next_value = value | to_poll;
                 if value & (WOKEN | POLLING) == NONE {
                     next_value |= WAKING;
@@ -122,7 +122,7 @@ impl SharedPollState {
     ///     So no wrapped waker can touch the inner waker's cell, it's safe to poll again.
     fn stop_polling(&self, to_poll: u8, will_be_woken: bool) -> u8 {
         self.state
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |mut value| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |mut value| {
                 let mut next_value = to_poll;
 
                 value &= NEED_TO_POLL_ALL;
@@ -140,7 +140,7 @@ impl SharedPollState {
     fn stop_waking(&self) -> u8 {
         let value = self
             .state
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
                 let next_value = value & !WAKING | WOKEN;
 
                 if next_value != value {
