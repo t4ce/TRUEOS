@@ -51,16 +51,16 @@ fn heap_bounds(profile: BlueprintVmMemoryProfile) -> (usize, usize, usize) {
 }
 
 #[test]
-fn retired_audio_roles_receive_no_special_budget() {
+fn audio_playback_imports_do_not_override_role_classification() {
     let audio = [hv::blueprint::ElfImport { name: "trueos_cabi_audio_open_playback" }];
-    for archive in ["ttstt.bp", "ttstt", "scope-tui.bp", "aud-player-scope-tui.bp", "player.bp"] {
+    for archive in ["audio-client.bp", "scope-tui.bp", "aud-player-scope-tui.bp", "player.bp"] {
         let class = classify_blueprint_memory(archive, MIB,
             hv::blueprint::ElfAllocStats { alloc_bytes: MIB }, &audio);
         assert!(matches!(class, BlueprintMemoryClass::Unknown));
     }
     let network = [hv::blueprint::ElfImport { name: "trueos_cabi_audio_open_playback" },
         hv::blueprint::ElfImport { name: "trueos_mio_tcp_listener_bind" }];
-    let class = classify_blueprint_memory("ttstt.bp", 133_254_144,
+    let class = classify_blueprint_memory("audio-client.bp", 133_254_144,
         hv::blueprint::ElfAllocStats { alloc_bytes: 132_067_536 }, &network);
     assert!(matches!(class, BlueprintMemoryClass::NetworkServer));
 }

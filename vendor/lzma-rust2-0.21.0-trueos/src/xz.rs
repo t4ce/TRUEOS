@@ -8,7 +8,9 @@ mod writer;
 #[cfg(all(feature = "encoder", feature = "std"))]
 mod writer_mt;
 
-use alloc::{boxed::Box, vec, vec::Vec};
+#[cfg(feature = "std")]
+use alloc::boxed::Box;
+use alloc::{vec, vec::Vec};
 #[cfg(feature = "std")]
 use std::io::{self, Seek, SeekFrom};
 

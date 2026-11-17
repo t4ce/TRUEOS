@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Check the real clip ABI/VM boundary and TTSTT collector together on the host."""
+"""Check the real clip ABI, VM boundary, and sink together on the host."""
 from pathlib import Path
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-BLUEPRINTS = ROOT.parent / 'TRUEOS-Blueprints'
 
 
 def main():
@@ -21,8 +20,6 @@ impl<T> Mutex<T> {
 #[path="@SINK@"] mod sink;
 static SINK:Mutex<sink::Sink>=Mutex::new(sink::Sink::new());
 #[path="@HANDOFF@"] mod handoff;
-#[path="@PLAYBACK@"] mod playback;
-mod ttstt_service { pub type AudioSink=Box<dyn FnMut(&[i16])->Result<(), &'static str>+Send>; }
 static MODE:AtomicU8=AtomicU8::new(0);
 static START:AtomicUsize=AtomicUsize::new(0);
 static END:AtomicUsize=AtomicUsize::new(0);
@@ -72,19 +69,20 @@ fn pointer_boundaries_copy_lifetime_and_native_vm_paths() {
         let mut out=[0;8]; SINK.lock().render(&mut out); assert_eq!(out,bytes.as_slice());
     }
     MODE.store(0,Ordering::SeqCst);
-    // Real TTSTT collector -> actual exported handoff -> owned sink -> HTTP PCM.
-    let speech=playback::Playback::open().unwrap();
-    speech.sink()(&[123,-456]).unwrap();
-    speech.sink()(&[789,-1011]).unwrap();
+    // A clip submitted through the ABI outlives its producer buffer. A second
+    // submission before playback finishes leaves the active clip intact.
     let mut silent=[1;8]; SINK.lock().render(&mut silent); assert_eq!(silent,[0;8]);
-    speech.handoff().unwrap(); drop(speech);
-    let competing=playback::Playback::open().unwrap();
-    competing.sink()(&[9,9]).unwrap(); competing.handoff().unwrap(); drop(competing);
+    {
+        let clip=vec![123u8,0,56,254,21,3,13,252];
+        assert_eq!(unsafe {handoff::trueos_cabi_http_audio_clip_submit_v1(clip.as_ptr(),clip.len())},0);
+    }
+    let competing=[9u8,0,9,0];
+    assert_eq!(unsafe {handoff::trueos_cabi_http_audio_clip_submit_v1(competing.as_ptr(),competing.len())},0);
     let mut out=[0;8]; SINK.lock().render(&mut out);
     assert_eq!(out,[123,0,56,254,21,3,13,252]);
     SINK.lock().render(&mut out); assert_eq!(out,[0;8]);
 }
-'''.replace('@SINK@', str(ROOT / 'src/r/services/audio_http/sink.rs')).replace('@HANDOFF@',str(ROOT / 'src/r/services/audio_http/handoff.rs')).replace('@PLAYBACK@',str(BLUEPRINTS / 'apps/ttstt/src/playback.rs'))
+'''.replace('@SINK@', str(ROOT / 'src/r/services/audio_http/sink.rs')).replace('@HANDOFF@',str(ROOT / 'src/r/services/audio_http/handoff.rs'))
     # Refer to the local VM stub from the otherwise unmodified production module.
     handoff = (ROOT / 'src/r/services/audio_http/handoff.rs').read_text()
     with tempfile.TemporaryDirectory(prefix='trueos-clip-handoff-') as work:

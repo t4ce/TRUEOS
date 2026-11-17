@@ -586,7 +586,7 @@ fn tls_socket_tick_once() -> bool {
                         conn.cancelled = true;
                         conn.closed = true;
                         conn.delivery.clear();
-                        if let Some(handle) = conn.handle {
+                        if conn.handle.is_some() {
                             conn.request_close();
                         }
                     }

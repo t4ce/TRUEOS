@@ -412,17 +412,6 @@ const _: () = {
     assert!(SHADERTOY_PAYLOAD_OFFSET_BYTES.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES));
 };
 
-// Kokoro's quantized dense lane stages one complete admitted projection in a
-// persistent, page-aligned DMA arena.  The six regions deliberately live in
-// one allocation: one PPGTT mapping publishes the complete ABI while the
-// stateful binding table still exposes six independently-bounded surfaces.
-
-
-
-// Its state and three payloads live in the shared batch allocation only while
-// DIRECT_RCS_SUBMIT_LOCK is held; no scanout/GGTT/display address is involved.
-
-
 // A UI4 compute producer may be queued behind the compositor on RCS0. In
 // particular, the first use of each primary swap buffer seeds and composes a
 // full scanout-sized surface, which is deliberately allowed to take much

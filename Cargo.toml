@@ -37,7 +37,6 @@ exclude = [
     # Standalone host tools own their manifests, lockfiles, and patch policy.
     "tools/helio-sprite-atlas-bake",
     "tools/lilly/lily-pack",
-    "tools/kokoro-native-oracle",
     "tools/remoteai",
     "tools/wgpu-video-mesh",
     "tools/trueos-boot",

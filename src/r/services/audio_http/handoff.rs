@@ -8,7 +8,7 @@ fn submit(bytes: &[u8]) -> i32 {
     })
 }
 
-/// VMCALL input is restricted to the calling VM's heap; TTSTT hands off its Vec.
+/// VMCALL input is restricted to PCM in the calling VM's heap.
 /// This avoids large shared-page transfers while the paused caller keeps the
 /// complete input allocation alive until we have copied it.
 pub(crate) fn submit_guest(vm_id: u8, address: u64, bytes: u64) -> i32 {

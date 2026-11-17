@@ -16,7 +16,6 @@ mod scsi;
 mod skhynix;
 
 pub use self::heal_service::XhciBackendSelection;
-pub use self::hid::midi;
 pub use self::lib::*;
 pub use crab_usb as crabusb;
 

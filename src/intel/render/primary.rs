@@ -4239,15 +4239,6 @@ fn submit_resident_scene_capture_inner_for_carrier(
             }
             _ => scratch_output.ok_or("resident-scene-resolve-surface")?,
         };
-        let direct_scanout_output = match frame_output {
-            ResidentSceneFrameOutput::GpuSurface(destination)
-            | ResidentSceneFrameOutput::GpuSurfaceDeferredRelease(destination)
-            | ResidentSceneFrameOutput::DirectGpuSurface(destination)
-            | ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(destination) => {
-                output.gpu == destination.gpu
-            }
-            ResidentSceneFrameOutput::Readback => false,
-        };
         let resolved = geometry_complete && msaa_color.is_none();
         let resolve_finished_ns = crate::chronos::monotonic_nanos();
         let coverage_submits = 0usize;

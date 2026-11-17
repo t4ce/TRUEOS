@@ -101,7 +101,7 @@ Each bar counts building blocks already in the code, not benchmarks. Keypoints 8
 `██████░░░░` **60%** · **Achieved:** Codex CLI runs natively with Spirit tools, and its sign-in opens in Hull ([codex-hull-integration](docs/codex-hull-integration-2026-11-03.json)). **Next:** Codex plugins return once their catalog path is hardened against fragmented RAM ([codex-plugin-disable](docs/codex-plugin-disable-2026-11-03.json)).
 
 ### § Revolutionary human-machine interaction
-`█████░░░░░` **50%** · **Achieved:** the native desktop runs Codex, Edit, Cubes, and Hull on real displays. Lilly shows running, waiting, and review states and moves through the mediated cursor path ([lilly_protocol.rs](src/spirit/lilly_protocol.rs), [lilly_cursor.rs](src/spirit/lilly_cursor.rs)). **Next:** voice in everyday use (TTSTT/Kokoro is an optional build today).
+`█████░░░░░` **50%** · **Achieved:** the native desktop runs Codex, Edit, Cubes, and Hull on real displays. Lilly shows running, waiting, and review states and moves through the mediated cursor path ([lilly_protocol.rs](src/spirit/lilly_protocol.rs), [lilly_cursor.rs](src/spirit/lilly_cursor.rs)). Codex read-aloud uses the Pocket TTS Blueprint.
 
 ### § Tools and documentation to autonomously enable robotics
 `█░░░░░░░░░` **10%** · **Achieved:** a [flight controller simulator](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/flight_controller_sim) Blueprint: `no_std` attitude control with motor outputs, a robotics seed in the catalog. **Next:** a robotics toolkit and docs on top of the Blueprint SDK.

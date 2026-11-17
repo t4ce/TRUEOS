@@ -12,7 +12,6 @@
 use crate::r::io::abi_wire::WireRecord;
 use crate::hv::memory::kernel_va_to_pa;
 use crate::hv::{hvlogf, hvwarnf};
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 use log_os_core::LogLevel;
 
