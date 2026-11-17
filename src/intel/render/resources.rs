@@ -626,14 +626,11 @@ fn prepare_triangle_draw_resources_for_geometry(
     let target_w = u32::try_from(rect_w).ok()?;
     let target_h = u32::try_from(rect_h).ok()?;
     let rt_pitch = u32::try_from(pitch).ok()?;
-    if warm.vertex_len < TRIANGLE_DRAW_VERTICES * TRIANGLE_DRAW_VERTEX_STRIDE {
-        return None;
-    }
     if warm.draw_state_len == 0 {
         return None;
     }
 
-    let vertex_proof = write_triangle_vertices_for_geometry(warm, geometry)?;
+    let vertex_proof = write_triangle_vertex_slice(warm, geometry.label(), &geometry.vertices())?;
 
     unsafe {
         core::ptr::write_bytes(warm.draw_state_virt, 0, warm.draw_state_len);
@@ -665,26 +662,6 @@ fn prepare_triangle_draw_resources_for_geometry(
         target_w,
         target_h,
     })
-}
-
-fn prepare_triangle_draw_resources_for_vertices(
-    warm: RenderWarmState,
-    dst_gpu_addr: u64,
-    pitch: usize,
-    rect_w: usize,
-    rect_h: usize,
-    label: &'static str,
-    triangle: [[f32; 3]; TRIANGLE_DRAW_VERTICES],
-) -> Option<TriangleDrawPrep> {
-    prepare_triangle_draw_resources_for_vertex_slice(
-        warm,
-        dst_gpu_addr,
-        pitch,
-        rect_w,
-        rect_h,
-        label,
-        &triangle,
-    )
 }
 
 fn prepare_triangle_draw_resources_for_vertex_slice(
@@ -3399,25 +3376,6 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
     })
 }
 
-fn write_canonical_triangle_vertices(warm: RenderWarmState) -> Option<TriangleVertexUploadProof> {
-    write_triangle_vertices_for_geometry(warm, VfPrimitiveGeometry::Canonical)
-}
-
-fn write_triangle_vertices_for_geometry(
-    warm: RenderWarmState,
-    geometry: VfPrimitiveGeometry,
-) -> Option<TriangleVertexUploadProof> {
-    write_triangle_vertices(warm, geometry.label(), geometry.vertices())
-}
-
-fn write_triangle_vertices(
-    warm: RenderWarmState,
-    label: &'static str,
-    triangle: [[f32; 3]; TRIANGLE_DRAW_VERTICES],
-) -> Option<TriangleVertexUploadProof> {
-    write_triangle_vertex_slice(warm, label, &triangle)
-}
-
 fn write_triangle_vertex_slice(
     warm: RenderWarmState,
     label: &'static str,
@@ -3652,12 +3610,13 @@ fn prepare_vf_streamout_proof_resources(
     let target_w = u32::try_from(rect_w).ok()?;
     let target_h = u32::try_from(rect_h).ok()?;
     let rt_pitch = u32::try_from(pitch).ok()?;
+    let tri = geometry.vertices();
     let vertex_stride = experiment.vertex_bytes();
-    if warm.vertex_len < TRIANGLE_DRAW_VERTICES * vertex_stride {
+    let vertex_bytes = tri.len() * vertex_stride;
+    if warm.vertex_len < vertex_bytes {
         return None;
     }
 
-    let tri = geometry.vertices();
     let words = unsafe {
         core::slice::from_raw_parts_mut(warm.vertex_virt as *mut u32, warm.vertex_len / 4)
     };
@@ -3798,7 +3757,7 @@ fn prepare_vf_streamout_proof_resources(
         }
     }
 
-    crate::intel::dma_flush(warm.vertex_virt, TRIANGLE_DRAW_VERTICES * vertex_stride);
+    crate::intel::dma_flush(warm.vertex_virt, vertex_bytes);
 
     Some(TriangleDrawPrep {
         vue_capture: false,
@@ -3806,9 +3765,9 @@ fn prepare_vf_streamout_proof_resources(
         voxy_headless: false,
         voxy_figure: false,
         microfont_aa: false,
-        vertex_count: TRIANGLE_DRAW_VERTICES as u32,
+        vertex_count: tri.len() as u32,
         vertex_stride: vertex_stride as u32,
-        vertex_buffer_bytes: u32::try_from(TRIANGLE_DRAW_VERTICES * vertex_stride).ok()?,
+        vertex_buffer_bytes: u32::try_from(vertex_bytes).ok()?,
         vertex_format: TriangleVertexFormat::Float3,
         vertex_gpu_addr: GPU_VA_VERTEX_BASE,
         index_buffer: None,
@@ -3836,7 +3795,7 @@ fn write_vf_streamout_probe_state(warm: RenderWarmState) -> Result<u32, &'static
         return Ok(0);
     }
 
-    let slice_hash_table_offset = VF_STREAMOUT_SLICE_HASH_TABLE_OFFSET;
+    let slice_hash_table_offset = 0x1200usize;
     let end_offset = slice_hash_table_offset
         .checked_add(GFX125_SLICE_HASH_TABLE_BYTES)
         .ok_or("vf-streamout-state-overflow")?;
@@ -3860,55 +3819,6 @@ fn write_vf_streamout_probe_state(warm: RenderWarmState) -> Result<u32, &'static
 
     Ok(slice_hash_table_offset as u32)
 }
-
-fn submit_triangle_to_surface(
-    dev: crate::intel::Dev,
-    warm: RenderWarmState,
-    dst_gpu_addr: u64,
-    pitch: usize,
-    rect_w: usize,
-    rect_h: usize,
-) -> bool {
-    let Some(render_lease) = reserve_warm_render_storage("mi-triangle") else {
-        return false;
-    };
-    unsafe {
-        core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
-    }
-    crate::intel::dma_flush(warm.result_virt, core::mem::size_of::<u32>());
-
-    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
-    let batch =
-        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
-    let Ok(batch_tail_bytes) = encode_rgb_triangle_store_batch(
-        batch,
-        dst_gpu_addr,
-        pitch,
-        rect_w,
-        rect_h,
-        GPU_VA_RESULT_BASE,
-        RCS_EXEC_RESULT_DONE,
-    ) else {
-        crate::log!(
-            "primary-triangle batch build failed size={}x{} pitch=0x{:X}\n",
-            rect_w,
-            rect_h,
-            pitch
-        );
-        return false;
-    };
-    crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
-
-    submit_warm_render_batch(
-        &render_lease,
-        dev,
-        warm,
-        RCS_EXEC_RESULT_DONE,
-        RESULT_SLOT_PRE3D_DWORD,
-        "mi-triangle",
-    )
-}
-
 
 pub(crate) const VOXY_HEADLESS_MAX_STREAM_CAPACITY: usize = ((u32::MAX as usize - 96) / 32) / 3 * 3;
 pub(crate) const VOXY_HEADLESS_VERTEX_STRIDE: usize = 32;

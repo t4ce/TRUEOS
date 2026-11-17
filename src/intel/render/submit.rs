@@ -2474,31 +2474,6 @@ fn masked_bits_update(set_bits: u32, clear_bits: u32) -> u32 {
     set_bits | (update << 16)
 }
 
-fn build_execlist_context_descriptor(context_gpu_addr: u64, ppgtt_enable: bool) -> (u32, u32) {
-    static RCS_SUBMIT_COUNTER: core::sync::atomic::AtomicU32 =
-        core::sync::atomic::AtomicU32::new(0);
-
-    let base = (context_gpu_addr as u32) & 0xFFFF_F000;
-    let desc = base
-        | GEN8_CTX_VALID
-        | CTX_DESC_FORCE_RESTORE
-        | if ppgtt_enable {
-            GEN8_CTX_PPGTT_ENABLE
-        } else {
-            0
-        }
-        | GEN8_CTX_PRIVILEGE
-        | GEN12_CTX_PRIORITY_NORMAL
-        | (INTEL_LEGACY_64B_CONTEXT << GEN8_CTX_ADDRESSING_MODE_SHIFT);
-    let sw_context_id = (((context_gpu_addr >> 12) as u32) & 0x7FF).max(1);
-    let _ = RCS_SUBMIT_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    // Xe_HP / Gfx12.5 descriptor high dword:
-    // bits 39:54 are SW context ID. The Xe execlist path leaves the old
-    // Gen11 SW-counter field out for this layout.
-    let desc_hi = ((context_gpu_addr >> 32) as u32) | (sw_context_id << 7);
-    (desc, desc_hi)
-}
-
 fn build_guc_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
     let base = (context_gpu_addr as u32) & 0xFFFF_F000;
     let descriptor = base
@@ -2515,21 +2490,6 @@ fn rcs_ctx_control_value(inhibit_restore: bool) -> u32 {
         ctl |= CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT;
     }
     ctl
-}
-
-fn execlist_submit_port_push(
-    dev: crate::intel::Dev,
-    context0_lo: u32,
-    context0_hi: u32,
-    context1_lo: u32,
-    context1_hi: u32,
-) {
-    // Gen12 ELSP submission uses the scheduler queue registers plus LOAD.
-    // Fill both entries so slot 1 cannot retain stale descriptor data.
-    crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SQ_LO, context0_lo);
-    crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SQ_HI, context0_hi);
-    crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SQ_LO + 8, context1_lo);
-    crate::intel::mmio_write(dev, RCS_RING_EXECLIST_SQ_HI + 8, context1_hi);
 }
 
 fn log_lrc_ring_image(warm: RenderWarmState, submit_name: &str) {

@@ -1850,7 +1850,7 @@ impl VfPrimitiveGeometry {
         }
     }
 
-    fn vertices(self) -> [[f32; 3]; TRIANGLE_DRAW_VERTICES] {
+    fn vertices(self) -> [[f32; 3]; 3] {
         match self {
             Self::Canonical => [[-0.25, -0.20, 0.0], [0.25, -0.20, 0.0], [0.00, 0.20, 0.0]],
             // Oversized fullscreen-style triangle.  This is intentionally

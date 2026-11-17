@@ -4676,7 +4676,7 @@ const FONT_PS_LAUNCH_REPLAY_CASES: [FontPsLaunchReplayCase; 5] = [
 ];
 
 pub(crate) fn submit_render_font_clip_field_vf_vue_ps_replay_probe(
-    _vertices: [[f32; 3]; TRIANGLE_DRAW_VERTICES],
+    _vertices: [[f32; 3]; 3],
 ) -> Result<RenderJokerResult, &'static str> {
     if PRIMARY_PROBE_IN_FLIGHT
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -4719,7 +4719,10 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_replay_probe(
             TriangleBlendProbeMode::MesaZeroedState,
             case.backend,
             PostDrawSyncVariant::HeavyAll,
-            VF_VUE_REAL_VS_FRONT_END_CONTRACT,
+            TriangleFrontEndContract {
+                label: "vf-vue-clip",
+                ..TRIANGLE_DEFAULT_FRONT_END_CONTRACT
+            },
             case.batch_mode,
             StreamoutProofExperiment::PositionSlot0,
         ) {
@@ -4832,7 +4835,7 @@ const FONT_PS_ADMISSION_PROBE_CASES: [FontPsAdmissionProbeCase; 6] = [
 const FONT_PS_ADMISSION_ACTIVE_CASE: u8 = 6;
 
 pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_probe(
-    _vertices: [[f32; 3]; TRIANGLE_DRAW_VERTICES],
+    _vertices: [[f32; 3]; 3],
 ) -> Result<RenderJokerResult, &'static str> {
     if PRIMARY_PROBE_IN_FLIGHT
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -4868,7 +4871,10 @@ pub(crate) fn submit_render_font_clip_field_vf_vue_ps_admission_probe(
             case.blend_mode,
             case.backend,
             PostDrawSyncVariant::LightPostSyncNoCs,
-            VF_VUE_REAL_VS_FRONT_END_CONTRACT,
+            TriangleFrontEndContract {
+                label: "vf-vue-clip",
+                ..TRIANGLE_DEFAULT_FRONT_END_CONTRACT
+            },
             TriangleBatchMode::VfDraw,
             StreamoutProofExperiment::PrmVueHeaderPositionXywzSlots01,
         ) {
@@ -4960,7 +4966,10 @@ pub(crate) fn submit_render_font_clip_counter_vf_vue_probe()
         TriangleBlendProbeMode::MesaZeroedState,
         BackendProbeMode::PsBindingTableCountZero,
         PostDrawSyncVariant::LightPostSyncNoCs,
-        VF_VUE_REAL_VS_FRONT_END_CONTRACT,
+        TriangleFrontEndContract {
+            label: "vf-vue-clip",
+            ..TRIANGLE_DEFAULT_FRONT_END_CONTRACT
+        },
         TriangleBatchMode::VfScreenSpaceDraw,
         StreamoutProofExperiment::PositionSlot0,
     );
@@ -5015,11 +5024,6 @@ fn submit_render_custom_triangle_probe_locked(
 ) -> Result<RenderJokerResult, &'static str> {
     const LEGACY_PROBE_SIZE: usize = 8;
 
-    let target_size = if submit_name == "font-tessel-3d-once" {
-        FONT_STAMP_BASE_SIZE
-    } else {
-        LEGACY_PROBE_SIZE
-    };
     submit_render_custom_triangle_probe_locked_at_extent(
         vertices,
         indices,
@@ -5035,8 +5039,8 @@ fn submit_render_custom_triangle_probe_locked(
         front_end_contract,
         batch_mode,
         streamout_experiment,
-        target_size,
-        target_size,
+        LEGACY_PROBE_SIZE,
+        LEGACY_PROBE_SIZE,
         None,
     )
 }
@@ -5061,20 +5065,11 @@ fn submit_render_custom_triangle_probe_locked_at_extent(
     readback: Option<&mut Option<FontRenderTargetReadback>>,
 ) -> Result<RenderJokerResult, &'static str> {
     let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-    if PRIMARY_DISABLE_RENDER_BRINGUP && !RENDER_JOKER_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED {
-        crate::log!(
-            "custom-triangle skipped reason=disabled seq={} submit={}\n",
-            probe_seq,
-            submit_name
-        );
-        return Err("disabled");
-    } else if PRIMARY_DISABLE_RENDER_BRINGUP {
-        intel_render_focus_log!(
-            "custom-triangle override primary-disabled seq={} submit={} reason=manual-scratch-probe\n",
-            probe_seq,
-            submit_name
-        );
-    }
+    intel_render_focus_log!(
+        "custom-triangle override primary-disabled seq={} submit={} reason=manual-scratch-probe\n",
+        probe_seq,
+        submit_name
+    );
 
     let Some(dev) = crate::intel::claimed_device() else {
         crate::log!("custom-triangle skipped reason=no-device submit={}\n", submit_name);
@@ -5084,8 +5079,8 @@ fn submit_render_custom_triangle_probe_locked_at_extent(
     let target_row_bytes = target_width
         .checked_mul(core::mem::size_of::<u32>())
         .ok_or("font-target-row-overflow")?;
-    let target_pitch = crate::intel::align_up(target_row_bytes, LINEAR_RENDER_TARGET_PITCH_ALIGN)
-        .ok_or("font-target-pitch-overflow")?;
+    let target_pitch =
+        crate::intel::align_up(target_row_bytes, 64).ok_or("font-target-pitch-overflow")?;
     let target_bytes = target_pitch
         .checked_mul(target_height)
         .ok_or("font-target-bytes-overflow")?;
@@ -5207,6 +5202,7 @@ fn submit_render_artificial_fragment_sentinel_locked()
         reserve_warm_render_storage("artificial-fragment-sentinel").ok_or("render-storage-busy")?;
 
     const SENTINEL_COLOR: u32 = 0xA17F_F00D;
+    const COMPLETION_MARKER: u32 = 0xC0DE_7711;
     unsafe {
         core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
@@ -5226,7 +5222,7 @@ fn submit_render_artificial_fragment_sentinel_locked()
         batch,
         warm,
         GPU_VA_RESULT_BASE,
-        RCS_EXEC_RESULT_MI_PROBE_DONE,
+        COMPLETION_MARKER,
         Some((GPU_VA_STREAMOUT_BASE, SENTINEL_COLOR)),
     )
     .map_err(|_| "batch")?;
@@ -5235,7 +5231,7 @@ fn submit_render_artificial_fragment_sentinel_locked()
         &render_lease,
         dev,
         warm,
-        RCS_EXEC_RESULT_MI_PROBE_DONE,
+        COMPLETION_MARKER,
         RESULT_SLOT_PRE3D_DWORD,
         "artificial-fragment-sentinel",
     );
@@ -5274,16 +5270,11 @@ fn submit_render_joker_probe_locked(
     spec: RenderJokerSpec,
 ) -> Result<RenderJokerResult, &'static str> {
     let probe_seq = PRIMARY_PROBE_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
-    if PRIMARY_DISABLE_RENDER_BRINGUP && !RENDER_JOKER_SUBMIT_WHEN_PRIMARY_RENDER_DISABLED {
-        crate::log!("joker skipped reason=disabled variant={} seq={}\n", spec.variant, probe_seq);
-        return Err("disabled");
-    } else if PRIMARY_DISABLE_RENDER_BRINGUP {
-        intel_render_focus_log!(
-            "joker override primary-disabled variant={} seq={} reason=manual-scratch-probe\n",
-            spec.variant,
-            probe_seq
-        );
-    }
+    intel_render_focus_log!(
+        "joker override primary-disabled variant={} seq={} reason=manual-scratch-probe\n",
+        spec.variant,
+        probe_seq
+    );
 
     let Some(dev) = crate::intel::claimed_device() else {
         crate::log!("joker skipped reason=no-device variant={}\n", spec.variant);
@@ -6899,113 +6890,6 @@ fn submit_triangle_streamout_proof(
     accepted
 }
 
-fn submit_triangle_vs_draw_frontier_to_surface(
-    dev: crate::intel::Dev,
-    warm: RenderWarmState,
-    dst_gpu_addr: u64,
-    pitch: usize,
-    rect_w: usize,
-    rect_h: usize,
-    blend_mode: TriangleBlendProbeMode,
-) -> bool {
-    for contract in VS_DRAW_FRONTIER_CONTRACTS {
-        let completed = submit_triangle_real_vs_draw_probe_to_surface(
-            dev,
-            warm,
-            dst_gpu_addr,
-            pitch,
-            rect_w,
-            rect_h,
-            blend_mode,
-            "vs-draw-frontier",
-            contract,
-        );
-        intel_render_verbose_log!(
-            "primary-vs-draw-frontier-contract variant={} completed={}\n",
-            contract.label,
-            completed as u8,
-        );
-        if completed {
-            return true;
-        }
-    }
-    false
-}
-
-fn submit_triangle_vs_draw_frontier_to_scratch(
-    dev: crate::intel::Dev,
-    warm: RenderWarmState,
-) -> bool {
-    let scratch_pitch = 32 * core::mem::size_of::<u32>();
-    if warm.streamout_len < scratch_pitch * 32 {
-        intel_render_focus_log!(
-            "vs-draw-frontier-scratch skipped reason=streamout-too-small len=0x{:X} required=0x{:X}\n",
-            warm.streamout_len,
-            scratch_pitch * 32,
-        );
-        return false;
-    }
-    let variants = [
-        ("vs-draw-frontier-scratch", VfPrimitiveGeometry::Canonical, None),
-        ("vs-draw-frontier-scratch-ndc-rect", VfPrimitiveGeometry::NdcRect, None),
-        (
-            "vs-draw-frontier-scratch-ndc-rect-trilist",
-            VfPrimitiveGeometry::NdcRect,
-            Some(TriangleBatchMode::Draw),
-        ),
-        ("vs-draw-frontier-scratch-ndc-rect-cw", VfPrimitiveGeometry::NdcRectCw, None),
-        (
-            "vs-draw-frontier-scratch-ndc-rect-cw-trilist",
-            VfPrimitiveGeometry::NdcRectCw,
-            Some(TriangleBatchMode::Draw),
-        ),
-        (
-            "vs-draw-frontier-scratch-screen-rect",
-            VfPrimitiveGeometry::ScreenSpaceRect8x8OrderB,
-            None,
-        ),
-        ("vs-draw-frontier-scratch-ndc-large", VfPrimitiveGeometry::NdcTriangleLarge, None),
-    ];
-    let contracts = [
-        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
-        VS_DRAW_SBE_READ0_CONTRACT,
-        VS_DRAW_FRONTIER_CONTRACTS[2],
-    ];
-    for (submit_name, geometry, batch_mode_override) in variants {
-        for contract in contracts {
-            seed_render_scratch_rt(warm);
-            let completed = submit_triangle_real_vs_draw_probe_to_surface_ext(
-                dev,
-                warm,
-                GPU_VA_STREAMOUT_BASE,
-                scratch_pitch,
-                32,
-                32,
-                TriangleBlendProbeMode::MesaZeroedState,
-                geometry,
-                submit_name,
-                contract,
-                BackendProbeMode::MesaLike,
-                PostDrawSyncVariant::LightPostSyncNoCs,
-                batch_mode_override,
-            );
-            let observed = fragment_boundary_observed();
-            intel_render_focus_log!(
-                "vs-draw-frontier-scratch variant={} geometry={} contract={} completed={} observed={} target=scratch-rt32\n",
-                submit_name,
-                geometry.label(),
-                contract.label,
-                completed as u8,
-                observed as u8,
-            );
-            if observed {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 fn wait_eq(dev: crate::intel::Dev, reg: usize, mask: u32, want: u32, n: usize) -> bool {
     for _ in 0..n {
         if (crate::intel::mmio_read(dev, reg) & mask) == want {
@@ -8123,72 +8007,4 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         record_render_engine_after_nonretired_submit(dev, submit_name);
     }
     completed
-}
-
-fn submit_result_store_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
-    let Some(render_lease) = reserve_warm_render_storage("mi-store-probe") else {
-        return false;
-    };
-    unsafe {
-        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
-        core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
-    }
-    crate::intel::dma_flush(warm.result_virt, warm.result_len);
-
-    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
-    let batch =
-        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
-    let Ok(batch_tail_bytes) =
-        encode_result_store_probe_batch(batch, GPU_VA_RESULT_BASE, RCS_EXEC_RESULT_MI_PROBE_DONE)
-    else {
-        crate::log!("mi-store-probe batch build failed\n");
-        return false;
-    };
-    crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
-    submit_warm_render_batch(
-        &render_lease,
-        dev,
-        warm,
-        RCS_EXEC_RESULT_MI_PROBE_DONE,
-        RESULT_SLOT_PRE3D_DWORD,
-        "mi-store-probe",
-    )
-}
-
-fn submit_3d_no_draw_probe(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
-    let Some(render_lease) = reserve_warm_render_storage("3d-no-draw") else {
-        return false;
-    };
-    unsafe {
-        core::ptr::write_bytes(warm.batch_virt, 0, warm.batch_len);
-        core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
-        core::ptr::write_volatile(warm.result_virt as *mut u32, 0xC0DE_7700);
-        core::ptr::write_volatile((warm.result_virt as *mut u32).add(1), 0xC0DE_7700);
-        core::ptr::write_volatile((warm.result_virt as *mut u32).add(2), 0xC0DE_7700);
-    }
-    crate::intel::dma_flush(warm.result_virt, warm.result_len);
-
-    let total_dwords = warm.batch_len / core::mem::size_of::<u32>();
-    let batch =
-        unsafe { core::slice::from_raw_parts_mut(warm.batch_virt as *mut u32, total_dwords) };
-    let Ok(batch_tail_bytes) = encode_3d_no_draw_probe_batch(
-        batch,
-        warm,
-        GPU_VA_RESULT_BASE + (RESULT_SLOT_POST3D_DWORD as u64) * 4,
-        RCS_EXEC_RESULT_3D_NO_DRAW_DONE,
-        None,
-    ) else {
-        crate::log!("3d-no-draw-probe batch build failed\n");
-        return false;
-    };
-    crate::intel::dma_flush(warm.batch_virt, batch_tail_bytes);
-    submit_warm_render_batch(
-        &render_lease,
-        dev,
-        warm,
-        RCS_EXEC_RESULT_3D_NO_DRAW_DONE,
-        RESULT_SLOT_POST3D_DWORD,
-        "3d-no-draw",
-    )
 }

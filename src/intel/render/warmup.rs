@@ -527,23 +527,6 @@ pub fn warm_state() -> Option<RenderWarmState> {
     *WARM_STATE.lock()
 }
 
-pub fn log_cursor_plane_info(warm: RenderWarmState) {
-    let caps = cursor_plane_caps(warm.device_id);
-    intel_render_verbose_log!(
-        "intel/display: cursor-plane platform={} rev=0x{:02X} max={}x{} pipes={} layout={} regs=A:0x{:X},B:0x{:X},C:0x{:X},D:0x{:X}\n",
-        caps.platform,
-        warm.revision_id,
-        caps.max_width,
-        caps.max_height,
-        caps.pipe_count,
-        caps.layout,
-        CURSOR_A_OFFSET,
-        CURSOR_B_OFFSET,
-        CURSOR_C_OFFSET,
-        CURSOR_D_OFFSET
-    );
-}
-
 pub fn log_sprite_plane_info(warm: RenderWarmState) {
     let caps = sprite_plane_caps(warm.device_id);
     intel_render_verbose_log!(
@@ -927,29 +910,4 @@ fn gfx125_3d_mode_dw3() -> u32 {
     // Keep RHWO disabled for bring-up so the first render proof does not depend
     // on an optimization state that Mesa conditionally toggles later.
     (1 << 15) | (1 << 31)
-}
-
-pub fn forcewake_render_sanity(warm: RenderWarmState) {
-    let dev = crate::intel::Dev {
-        bus: 0,
-        slot: 0,
-        function: 0,
-        device_id: warm.device_id,
-        revision_id: warm.revision_id,
-        mmio: warm.mmio_base as *mut u8,
-        mmio_len: warm.mmio_len,
-    };
-    let before = crate::intel::mmio_read(dev, RCS_RING_IMR);
-    let toggled = before ^ 0x0000_0001;
-    crate::intel::mmio_write(dev, RCS_RING_IMR, toggled);
-    let after = crate::intel::mmio_read(dev, RCS_RING_IMR);
-    crate::intel::mmio_write(dev, RCS_RING_IMR, before);
-    let restored = crate::intel::mmio_read(dev, RCS_RING_IMR);
-    intel_render_verbose_log!(
-        "sanity reg=RCS_IMR before=0x{:08X} wrote=0x{:08X} after=0x{:08X} restored=0x{:08X}\n",
-        before,
-        toggled,
-        after,
-        restored
-    );
 }

@@ -4,7 +4,7 @@
 use super::{
     BackendProbeMode, PostDrawSyncVariant, StreamoutProofExperiment,
     TRIANGLE_DEFAULT_FRONT_END_CONTRACT, TriangleBlendProbeMode, TriangleFrontEndContract,
-    VS_DRAW_FRONTIER_CONTRACTS, VS_DRAW_SBE_READ0_CONTRACT, VfPrimitiveGeometry,
+    VfPrimitiveGeometry,
 };
 
 const RENDER_JOKER_VARIANTS: &[&str] = &[
@@ -1813,21 +1813,35 @@ pub(super) fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
 pub(super) fn render_joker_real_vs_front_end_contract(
     variant: &str,
 ) -> Option<TriangleFrontEndContract> {
-    match variant {
-        "reemit-vs-retire" => Some(TRIANGLE_DEFAULT_FRONT_END_CONTRACT),
-        "reemit-vs-slot0-retire" => Some(VS_DRAW_FRONTIER_CONTRACTS[1]),
-        "reemit-vs-urb2-retire" => Some(VS_DRAW_FRONTIER_CONTRACTS[2]),
-        "reemit-vs-urb2-slot0-retire" => Some(VS_DRAW_FRONTIER_CONTRACTS[3]),
-        "screen-vs-sbe0" => Some(VS_DRAW_SBE_READ0_CONTRACT),
-        "screen-vs-ndc-oa" | "screen-vs-ndc-oa-hz0" => Some(TRIANGLE_DEFAULT_FRONT_END_CONTRACT),
-        "screen-vs-slot0-oa" => Some(VS_DRAW_FRONTIER_CONTRACTS[1]),
-        "screen-vs-urb2-oa" => Some(VS_DRAW_FRONTIER_CONTRACTS[2]),
-        "screen-vs-urb2-slot0-oa" => Some(VS_DRAW_FRONTIER_CONTRACTS[3]),
-        "screen-vs-scratch" | "screen-vs-oa" | "screen-rect-scratch" | "screen-rect-oa-early" => {
-            Some(TRIANGLE_DEFAULT_FRONT_END_CONTRACT)
+    Some(match variant {
+        "reemit-vs-slot0-retire" | "screen-vs-slot0-oa" => TriangleFrontEndContract {
+            label: "slot0-read",
+            sbe_read_offset: 0,
+            ..TRIANGLE_DEFAULT_FRONT_END_CONTRACT
+        },
+        "reemit-vs-urb2-retire" | "screen-vs-urb2-oa" => TriangleFrontEndContract {
+            label: "urb2",
+            vs_urb_output_length_override: Some(2),
+            ..TRIANGLE_DEFAULT_FRONT_END_CONTRACT
+        },
+        "reemit-vs-urb2-slot0-retire" | "screen-vs-urb2-slot0-oa" => TriangleFrontEndContract {
+            label: "urb2-slot0-read",
+            vs_urb_output_length_override: Some(2),
+            sbe_read_offset: 0,
+            ..TRIANGLE_DEFAULT_FRONT_END_CONTRACT
+        },
+        "screen-vs-sbe0" => TriangleFrontEndContract {
+            label: "sbe-read0",
+            sbe_read_offset: 0,
+            sbe_read_length: 0,
+            ..TRIANGLE_DEFAULT_FRONT_END_CONTRACT
+        },
+        "reemit-vs-retire" | "screen-vs-ndc-oa" | "screen-vs-ndc-oa-hz0" | "screen-vs-scratch"
+        | "screen-vs-oa" | "screen-rect-scratch" | "screen-rect-oa-early" => {
+            TRIANGLE_DEFAULT_FRONT_END_CONTRACT
         }
-        _ => None,
-    }
+        _ => return None,
+    })
 }
 
 pub(super) fn render_joker_vf_experiment(variant: &str) -> StreamoutProofExperiment {

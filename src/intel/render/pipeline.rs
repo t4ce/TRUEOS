@@ -6598,6 +6598,7 @@ fn encode_minimal_streamout_proof_batch(
             VFCOMP_STORE_1_FP,
         )?;
     } else {
+        let rgba32_uint = 0x002; // Intel R32G32B32A32_UINT vertex format.
         match streamout_experiment {
             StreamoutProofExperiment::PositionSlot0 => {
                 push_vertex_element_state(
@@ -6605,7 +6606,7 @@ fn encode_minimal_streamout_proof_batch(
                     &mut cursor,
                     0,
                     0,
-                    SURFACE_FORMAT_R32G32B32A32_UINT,
+                    rgba32_uint,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
@@ -6618,7 +6619,7 @@ fn encode_minimal_streamout_proof_batch(
                     &mut cursor,
                     0,
                     0,
-                    SURFACE_FORMAT_R32G32B32A32_UINT,
+                    rgba32_uint,
                     VFCOMP_STORE_0,
                     VFCOMP_STORE_0,
                     VFCOMP_STORE_0,
@@ -6629,7 +6630,7 @@ fn encode_minimal_streamout_proof_batch(
                     &mut cursor,
                     0,
                     0,
-                    SURFACE_FORMAT_R32G32B32A32_UINT,
+                    rgba32_uint,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
@@ -6644,7 +6645,7 @@ fn encode_minimal_streamout_proof_batch(
                     &mut cursor,
                     0,
                     0,
-                    SURFACE_FORMAT_R32G32B32A32_UINT,
+                    rgba32_uint,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
@@ -6655,7 +6656,7 @@ fn encode_minimal_streamout_proof_batch(
                     &mut cursor,
                     0,
                     16,
-                    SURFACE_FORMAT_R32G32B32A32_UINT,
+                    rgba32_uint,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
@@ -6668,7 +6669,7 @@ fn encode_minimal_streamout_proof_batch(
                     &mut cursor,
                     0,
                     16,
-                    SURFACE_FORMAT_R32G32B32A32_UINT,
+                    rgba32_uint,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
@@ -6679,7 +6680,7 @@ fn encode_minimal_streamout_proof_batch(
                     &mut cursor,
                     0,
                     0,
-                    SURFACE_FORMAT_R32G32B32A32_UINT,
+                    rgba32_uint,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
@@ -6784,20 +6785,9 @@ fn encode_minimal_streamout_proof_batch(
         RCS_EXEC_RESULT_DRAW_POST_VS,
     )?;
 
-    log_batch_offset(cursor, "3DSTATE_HS disabled");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_HS)?;
-    for _ in 0..8 {
-        push(batch_dwords, &mut cursor, 0)?;
-    }
-    log_batch_offset(cursor, "3DSTATE_TE disabled");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_TE)?;
-    for _ in 0..4 {
-        push(batch_dwords, &mut cursor, 0)?;
-    }
-    log_batch_offset(cursor, "3DSTATE_DS disabled");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_DS)?;
-    for _ in 0..10 {
-        push(batch_dwords, &mut cursor, 0)?;
+    log_batch_offset(cursor, "3DSTATE_HS/TE/DS disabled");
+    for word in crate::intel::shader::tessellation_stage_packets(None)? {
+        push(batch_dwords, &mut cursor, word)?;
     }
     log_batch_offset(cursor, "3DSTATE_GS disabled");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_GS)?;
@@ -6954,7 +6944,7 @@ fn encode_minimal_streamout_proof_batch(
         warm.device_id,
         batch_dwords,
         &mut cursor,
-        PIPE_CONTROL_POST_DRAW_SYNC_BITS,
+        PIPE_CONTROL_FLUSH_BITS | PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE | PIPE_CONTROL_DEST_GGTT,
         result_gpu_addr + (RESULT_SLOT_POST3D_PIPE_CONTROL_LO_DWORD as u64) * 4,
         post3d_value,
     )?;
