@@ -2929,6 +2929,13 @@ fn archive_has(archive: &str, needle: &str) -> bool {
     archive.contains(needle)
 }
 
+fn blueprint_has_large_image(
+    raw_payload_len: usize,
+    stats: crate::hv::blueprint::ElfAllocStats,
+) -> bool {
+    stats.alloc_bytes > 4 * MIB || raw_payload_len > 8 * MIB
+}
+
 fn classify_blueprint_memory(
     archive: &str,
     raw_payload_len: usize,
@@ -2980,8 +2987,7 @@ fn classify_blueprint_memory(
         || archive_has(archive, "skybox")
         || archive_has(archive, "particle")
         || archive_has(archive, "virgl")
-        || stats.alloc_bytes > 4 * MIB
-        || raw_payload_len > 8 * MIB;
+        || blueprint_has_large_image(raw_payload_len, stats);
     if heavy_graphics_signal {
         return BlueprintMemoryClass::HeavyGraphics;
     }
@@ -3003,9 +3009,29 @@ fn estimate_blueprint_memory_profile(
     imports: &[crate::hv::blueprint::ElfImport<'_>],
 ) -> BlueprintVmMemoryProfile {
     let stats = crate::hv::blueprint::elf_alloc_stats(unpacked).unwrap_or_default();
-    let class = classify_blueprint_memory(archive, module.raw_payload_len, stats, imports);
-    let base_live_mib = ceil_mib(module.raw_payload_len).max(ceil_mib(stats.alloc_bytes));
-    blueprint_memory_profile_for(class, base_live_mib)
+    blueprint_memory_profile_for_image(archive, module.raw_payload_len, stats, imports)
+}
+
+fn blueprint_memory_profile_for_image(
+    archive: &str,
+    raw_payload_len: usize,
+    stats: crate::hv::blueprint::ElfAllocStats,
+    imports: &[crate::hv::blueprint::ElfImport<'_>],
+) -> BlueprintVmMemoryProfile {
+    let class = classify_blueprint_memory(archive, raw_payload_len, stats, imports);
+    let base_live_mib = ceil_mib(raw_payload_len).max(ceil_mib(stats.alloc_bytes));
+    let mut profile = blueprint_memory_profile_for(class, base_live_mib);
+    if blueprint_has_large_image(raw_payload_len, stats) {
+        // A service role does not remove the embedded image or its runtime
+        // copies. Preserve the existing image-derived heap requirements when
+        // listener/client imports select a role before the large-image class.
+        let image =
+            blueprint_memory_profile_for(BlueprintMemoryClass::HeavyGraphics, base_live_mib);
+        profile.heap_lower_mib = profile.heap_lower_mib.max(image.heap_lower_mib);
+        profile.heap_recommended_mib = profile.heap_recommended_mib.max(image.heap_recommended_mib);
+        profile.heap_upper_mib = profile.heap_upper_mib.max(image.heap_upper_mib);
+    }
+    profile
 }
 
 fn blueprint_memory_profile_for(
