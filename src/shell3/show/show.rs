@@ -374,6 +374,7 @@ impl Show {
             return Err("shell3-show-bcs0-allocation-pinned");
         }
 
+        super::presentation_probe::stage(10);
         crate::r::services::shell3_font_service::prepare().await?;
         let requested_extent = show_extent(columns, rows, self.font_scale)?;
         let extent = self
@@ -391,6 +392,7 @@ impl Show {
             surface.width != width || surface.height != height || surface.backend != self.backend
         });
         if recreate_surface {
+            super::presentation_probe::stage(11);
             self.release_surface();
             self.surface =
                 Some(create_surface(width, height, self.backend, self.initial_geometry)?);
@@ -431,16 +433,29 @@ impl Show {
             }
             _ => return Err("shell3-show-backend-not-implemented"),
         };
-        let damage = if recreate_surface {
-            Some(DamageRect::FULL)
-        } else {
-            damage
-        };
-        if let Some(damage) = damage {
-            publish_window_frame(OWNER, surface.window, damage)
-                .map_err(|_| "shell3-show-window-publish")?;
+        if damage.is_none() {
+            crate::log_rate_limited!(
+                target: "service";
+                level: crate::log_os::LogLevel::Important;
+                first: 3;
+                every: 100;
+                "shell3/show: front swap without pixel damage window={} frame={} action=publish-ownership-change\n",
+                surface.window.raw(), surface.frame.raw(),
+            );
         }
-        edit_life::present(surface, lines, edit_life, damage.is_some());
+        let damage = if recreate_surface {
+            DamageRect::FULL
+        } else {
+            // Both painters have published a new frame-pool front, even if
+            // that buffer needed no pixel changes. The broker must publish
+            // the ownership change too: otherwise direct scanout retains the
+            // old front and a double-buffered producer can acquire neither.
+            damage.unwrap_or(DamageRect::FULL)
+        };
+        super::presentation_probe::stage(19);
+        publish_window_frame(OWNER, surface.window, damage)
+            .map_err(|_| "shell3-show-window-publish")?;
+        edit_life::present(surface, lines, edit_life, true);
         Ok(())
     }
 

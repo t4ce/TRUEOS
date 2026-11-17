@@ -34,7 +34,13 @@ macro_rules! log_warn { (target: $target:expr; $($args:tt)*) => {{ let _ = ($tar
 mod percpu {
     pub fn current_slot() -> usize { 4 }
 }
+mod allcaps {
+    pub mod hv { pub const VM_CPU_SLOT_LIMIT: usize = 8; }
+}
 mod r {
+    pub mod input_timing {
+        pub fn now_ms() -> u64 { 0 }
+    }
     pub mod services {
         pub mod shell3_font_service {
             pub fn cell_extent(_: u32) -> Option<(u32, u32)> {
@@ -98,6 +104,8 @@ mod shell3 {
 
     #[path = "@TRUEOS_ROOT@/src/shell3/startup.rs"]
     pub(crate) mod startup;
+    #[path = "@TRUEOS_ROOT@/src/shell3/presentation_probe.rs"]
+    pub(crate) mod presentation_probe;
 
     const DEFAULT_COLUMNS: usize = @DEFAULT_COLUMNS@;
     const DEFAULT_ROWS: usize = @DEFAULT_ROWS@;

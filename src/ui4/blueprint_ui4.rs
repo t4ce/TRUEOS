@@ -4808,12 +4808,11 @@ fn publish_blueprint_frame(
     let launched_window = surface.window;
     drop(surfaces);
     if raise_on_first_publish && launch_selection.is_none() {
-        // Presentation order only: the terminal keeps its keyboard routing.
-        if let Err(error) = super::window_broker::note_window_focused(owner, launched_window) {
-            crate::log_warn!(target: "ui4/blueprint-frame";
-                "first-publish raise failed owner={:?} window={} error={:?}\n",
-                owner, launched_window.raw(), error);
-        }
+        // Narrow rig experiment: keep creation order, but omit the second
+        // stacking change when the application's first frame is published.
+        crate::log_important!(target: "ui4/blueprint-frame";
+            "first-publish raise skipped experiment=hull-zstack owner={:?} window={}\n",
+            owner, launched_window.raw());
     }
     if let Some((source, x, y)) = launch_selection {
         match super::input_broker::select_window_for_cursor_at(source, owner, launched_window, x, y)

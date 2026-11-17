@@ -37,7 +37,9 @@ def production():
         "pub(crate) fn cabi_net_fetch_bytes_result_len_host(",
         "fn response_transport_limit(", "fn decode_chunked(",
     ]:
-        selected.append(item(HTTPS, signature))
+        extracted = item(HTTPS, signature)
+        if extracted not in media.PRODUCTION:
+            selected.append(extracted)
     codes = (ROOT / "src/r/cabi_codes.rs").read_text()
     for name in ["NET_ERR_TIMEOUT", "NET_ERR_RESPONSE_FRAMING", "NET_ERR_BAD_URL", "NET_ERR_HTTP",
                  "FS_ERR_TOO_LARGE", "FS_ERR_BAD_PARAM", "FS_ERR_NOT_FOUND"]:
@@ -47,7 +49,9 @@ def production():
     selected.append(re.search(r"(?m)^pub const OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1:.*;$", constants).group(0)
                     .replace("pub const OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1", "const SDK_BOUNDED_OPCODE"))
     selected.append(re.search(r"(?m)^pub const OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1:.*;$", VM).group(0))
-    selected.append(media.VM_DISPATCH)
+    selected.append("fn dispatch_start(vm_id:u8,arg0:u64,req_len:u32)->DispatchOutcome {\n"
+                    "let seq=7;match OP_BP_FETCH_BYTES_START {\n" +
+                    vm_arm(VM, "OP_BP_FETCH_BYTES_START") + "\n _=>unreachable!(),}}")
     selected.append("fn dispatch_bounded_start(vm_id:u8,arg0:u64,arg1:u64,req_len:u32)->DispatchOutcome {\n"
                     "let seq=8;match OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1 {\n" +
                     vm_arm(VM, "OP_BP_FETCH_BYTES_START_WITH_OPTIONS_V1") + "\n _=>unreachable!(),}}")
@@ -56,6 +60,7 @@ def production():
 
 def stubs():
     source = media.STUBS.replace("extern crate alloc;", "extern crate alloc;\nuse alloc::sync::Arc;")
+    source = re.sub(r"(?m)^const HTTPS_RESPONSE_OVERHEAD_MAX:.*;\n", "", source)
     source = source.replace(
         "mod hv {pub fn current_hull_guest_context_vm_id()",
         "mod hv {pub fn vm_run_generation(vm:u8)->Option<u64> {if vm==1 {crate::GENERATION.with(|v|v.get())}else{Some(22)}} pub fn current_hull_guest_context_vm_id()")
@@ -117,7 +122,9 @@ TESTS = r'''
     #[test]fn options_validate_wide_values_before_integer_narrowing() {
         setup([]);
         assert_eq!(bounded_fetch_options(90_000,128*1024*1024),Some((90_000,128*1024*1024)));
-        for (timeout,max) in [(0,1),(90_001,1),(u64::MAX,1),(1,0),(1,128*1024*1024+1),(1,u64::MAX)] {
+        assert_eq!(bounded_fetch_options(90_000,200*1024*1024),Some((90_000,200*1024*1024)));
+        assert_eq!(bounded_fetch_options(90_000,256*1024*1024),Some((90_000,256*1024*1024)));
+        for (timeout,max) in [(0,1),(90_001,1),(u64::MAX,1),(1,0),(1,256*1024*1024+1),(1,u64::MAX)] {
             assert_eq!(bounded_fetch_options(timeout,max),None);
         }
         for bytes in [&b""[..],&b"\xff"[..],&b"https://x/\r\nInjected:x"[..],&b"https://x/\0"[..],&b"file:///a"[..]] {

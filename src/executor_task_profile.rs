@@ -417,6 +417,9 @@ pub async fn bsp_task_profile_reporter_task(spawner: Spawner) {
     let tsc_hz = crate::r::time::tsc_hz();
     let mut sequence = 0u64;
     let mut previous_ms = Instant::now().as_millis();
+    // Cache AP handles while they register; observing a stuck AP must not
+    // depend on the shell or on any of its UI locks.
+    let mut ap_spawners = alloc::vec::Vec::new();
 
     // Configure the cycle threshold before the first complete reporting window.
     state_mut().slow_poll_cycles =
@@ -428,6 +431,31 @@ pub async fn bsp_task_profile_reporter_task(spawner: Spawner) {
         let heartbeat_gap_ms = now_ms.saturating_sub(previous_ms);
         previous_ms = now_ms;
         sequence = sequence.saturating_add(1);
+
+        if sequence % 5 == 0 {
+            for slot in 1..crate::workers::topology_core_slot_count() {
+                if ap_spawners.iter().any(|(known, _)| *known == slot) {
+                    continue;
+                }
+                if let Some(ap) = crate::workers::spawner_for_slot(slot as u32) {
+                    ap_spawners.push((slot, ap));
+                }
+            }
+            for (slot, ap) in &ap_spawners {
+                let current = ap.current_trueos_executor_task_name();
+                crate::log_info!(target: "boot";
+                    "shell3-regression-ap slot={} now_ms={} ready={} current={} last={}\n",
+                    slot, now_ms, ap.ready_task_count(),
+                    current.map(clean_task_name).unwrap_or("idle"),
+                    ap.last_trueos_executor_task_name().map(clean_task_name).unwrap_or("none"));
+            }
+            for line in crate::shell3::net::stalled_owner_lines() {
+                crate::log_important!(target: "service"; "{}\n", line);
+            }
+            for line in crate::shell3::presentation_probe::lines(now_ms) {
+                crate::log_important!(target: "service"; "{}\n", line);
+            }
+        }
 
         let snapshot = take_snapshot(tsc_hz);
         let busy_us = cycles_to_us(snapshot.total_cycles, tsc_hz);

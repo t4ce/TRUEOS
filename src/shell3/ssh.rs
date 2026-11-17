@@ -359,10 +359,12 @@ impl Session {
                             .read_channel(channel, ChanData::Normal, &mut bytes)?
                     };
                     if count != 0 {
+                        let _trace = super::net::TraceScope::enter(crate::percpu::current_slot() as u32, 9);
                         tty.input(&bytes[..count]);
                         progressed = true;
                     }
                     if !tty.output.is_empty() {
+                        let _trace = super::net::TraceScope::enter(crate::percpu::current_slot() as u32, 10);
                         let count =
                             self.runner
                                 .write_channel(channel, ChanData::Normal, &tty.output)?;

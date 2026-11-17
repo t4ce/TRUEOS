@@ -7,6 +7,7 @@ use crate::net::adapter::{
 };
 use alloc::vec::Vec;
 use core::{future::Future, task::Poll};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use trueos_time::{Duration, Instant, Timer};
 
 const MAX_CONNECTIONS: usize = super::MAX_SHELL3_INSTANCES;
@@ -14,6 +15,61 @@ const WRITE_TIMEOUT_MS: u64 = 30_000;
 const PROTOCOL_PROBE_MS: u64 = 1_000;
 const SSH_PREFIX: &[u8] = b"SSH-";
 const GREETING: &[u8] = b"hello from TrueOS\r\n";
+
+// Passive stage breadcrumbs: a BSP sampler can identify a blocked SSH owner
+// without taking any of the shell, terminal, or network registry locks.
+struct OwnerTrace {
+    stage: AtomicU32,
+    entered_ms: AtomicU64,
+    sequence: AtomicU64,
+}
+static OWNER_TRACE: [OwnerTrace; crate::percpu::CPU_SLOT_LIMIT] =
+    [const { OwnerTrace {
+        stage: AtomicU32::new(0), entered_ms: AtomicU64::new(0),
+        sequence: AtomicU64::new(0),
+    } }; crate::percpu::CPU_SLOT_LIMIT];
+
+pub(super) struct TraceScope {
+    trace: &'static OwnerTrace,
+    previous_stage: u32,
+    previous_entered_ms: u64,
+}
+impl TraceScope {
+    pub(super) fn enter(slot: u32, stage: u32) -> Self {
+        let trace = &OWNER_TRACE[slot as usize];
+        let previous_stage = trace.stage.load(Ordering::Relaxed);
+        let previous_entered_ms = trace.entered_ms.load(Ordering::Relaxed);
+        trace.entered_ms.store(Instant::now().as_millis(), Ordering::Relaxed);
+        trace.sequence.fetch_add(1, Ordering::Relaxed);
+        trace.stage.store(stage, Ordering::Release);
+        Self { trace, previous_stage, previous_entered_ms }
+    }
+}
+impl Drop for TraceScope {
+    fn drop(&mut self) {
+        self.trace.entered_ms.store(self.previous_entered_ms, Ordering::Relaxed);
+        self.trace.stage.store(self.previous_stage, Ordering::Release);
+    }
+}
+
+pub(crate) fn stalled_owner_lines() -> Vec<alloc::string::String> {
+    let now = Instant::now().as_millis();
+    OWNER_TRACE.iter().enumerate().filter_map(|(slot, trace)| {
+        let stage = trace.stage.load(Ordering::Acquire);
+        let entered = trace.entered_ms.load(Ordering::Relaxed);
+        let age = now.saturating_sub(entered);
+        if stage == 0 || age < 2_000 { return None; }
+        let name = match stage {
+            1 => "owner-poll", 2 => "event-drain", 3 => "ssh-input",
+            4 => "terminal-reconcile", 5 => "connection-flush",
+            6 => "ssh-pump", 7 => "shell-create", 8 => "initial-ssh-pump",
+            9 => "terminal-input", 10 => "terminal-channel-output",
+            _ => "unknown",
+        };
+        Some(alloc::format!("shell3-ssh-stall slot={} stage={} stage_id={} age_ms={} sequence={}",
+            slot, name, stage, age, trace.sequence.load(Ordering::Relaxed)))
+    }).collect()
+}
 
 struct PendingTerminal {
     slot: u32,
@@ -61,7 +117,8 @@ impl Connection {
         );
     }
 
-    fn input(&mut self, bytes: &[u8]) {
+    fn input(&mut self, bytes: &[u8], slot: u32) {
+        let _trace = TraceScope::enter(slot, 3);
         if self.rejected || self.greeting { return; }
         if let Some(ssh) = self.ssh.as_mut() {
             ssh.input(bytes);
@@ -92,14 +149,19 @@ impl Connection {
     }
 
     /// False means an immediate close was admitted and the model can be freed.
-    fn flush(&mut self, commands: &NetQueue<NetCommand>, now: Instant) -> bool {
+    fn flush(&mut self, commands: &NetQueue<NetCommand>, now: Instant, slot: u32) -> bool {
+        let _trace = TraceScope::enter(slot, 5);
         self.command_blocked = false;
         if !self.rejected && self.ssh.is_none() && self.pending.as_ref().is_some_and(|pending| now >= pending.until) {
             self.greeting = true;
         }
         if let Some(ssh) = self.ssh.as_mut() {
-            ssh.pump(self.terminal.as_mut());
+            {
+                let _trace = TraceScope::enter(slot, 6);
+                ssh.pump(self.terminal.as_mut());
+            }
             if self.terminal.is_none() && ssh.wants_shell() {
+                let _trace = TraceScope::enter(slot, 7);
                 let pending = self.pending.take().unwrap();
                 let (columns, rows) = ssh.size().expect("SSH shell requires accepted PTY dimensions");
                 self.terminal = Some(Terminal::new_ssh(super::Shell3::new_terminal_sized_reserved(pending.slot, pending.peer_port, columns, rows), ssh.access_account()));
@@ -108,6 +170,7 @@ impl Connection {
                 );
                 // The initial terminal paint is ready even if the peer's
                 // shell request did not ask for an SSH success reply.
+                let _trace = TraceScope::enter(slot, 8);
                 ssh.pump(self.terminal.as_mut());
             }
         }
@@ -260,10 +323,12 @@ impl WorkerTerminals {
     }
 
     pub fn poll(&mut self) {
+        let _trace = TraceScope::enter(self.slot, 1);
         let Some(commands) = COMMANDS.get() else {
             return;
         };
         for event in self.events.drain(64) {
+            let _trace = TraceScope::enter(self.slot, 2);
             match event {
                 WorkerEvent::Accepted(handle, peer_port) => {
                     self.connections.push(Connection::new(handle, self.slot, peer_port, Instant::now()));
@@ -272,7 +337,7 @@ impl WorkerTerminals {
                     if let Some(connection) =
                         self.connections.iter_mut().find(|c| c.handle == handle)
                     {
-                        connection.input(&data);
+                        connection.input(&data, self.slot);
                     }
                 }
                 WorkerEvent::Socket(NetEvent::TcpSent { handle, len }) => {
@@ -293,12 +358,13 @@ impl WorkerTerminals {
         }
         for connection in &mut self.connections {
             if let Some(tty) = connection.terminal.as_mut() {
+                let _trace = TraceScope::enter(self.slot, 4);
                 tty.reconcile_matrix_selection();
             }
         }
         let now = Instant::now();
         self.connections
-            .retain_mut(|connection| connection.flush(commands, now));
+            .retain_mut(|connection| connection.flush(commands, now, self.slot));
     }
 }
 

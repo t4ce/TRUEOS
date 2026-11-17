@@ -55,7 +55,7 @@ static CABI_JSON_POST_CANCELLATIONS: Mutex<BTreeMap<u32, Arc<JsonPostCancellatio
 // The versioned package-fetch entry keeps its budgets independent of the
 // browser/asset defaults. Limits cross the VM boundary as integers, never pointers.
 const BOUNDED_FETCH_TIMEOUT_MAX_MS: u64 = 90_000;
-const BOUNDED_FETCH_BODY_MAX_BYTES: u64 = 128 * 1024 * 1024;
+const BOUNDED_FETCH_BODY_MAX_BYTES: u64 = 256 * 1024 * 1024;
 
 pub(crate) fn bounded_fetch_options(timeout_ms: u64, max_bytes: u64) -> Option<(u32, usize)> {
     if !(1..=BOUNDED_FETCH_TIMEOUT_MAX_MS).contains(&timeout_ms)
@@ -211,7 +211,7 @@ pub(crate) fn cabi_net_fetch_bytes_start_bounded_host(
 }
 
 /// Finite native GET with caller-selected total deadline and decoded-body cap.
-/// The versioned entry accepts at most 90 seconds and 128 MiB.
+/// The versioned entry accepts at most 90 seconds and 256 MiB.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_net_fetch_bytes_start_with_options_v1(
     url_ptr: *const u8, url_len: usize, timeout_ms: u32, max_bytes: u64,

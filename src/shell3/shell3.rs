@@ -58,6 +58,7 @@ mod transition;
 mod tty;
 pub(crate) mod tui;
 mod update;
+pub(crate) mod presentation_probe;
 
 pub mod service;
 #[path = "show/show.rs"]
@@ -864,6 +865,9 @@ impl Shell3 {
 
     /// Publish the current title, status, and prompt strips through UI4.
     pub async fn present(&mut self) -> Result<(), &'static str> {
+        let _probe = presentation_probe::Pass::begin(
+            self.tui_frontend, self.show.window().map_or(0, |window| window.raw()),
+        );
         self.reconcile_matrix_selection();
         self.refresh_title_identity();
         if self.show.is_closing() || (self.show.window().is_some() && self.show.is_closed()) {
@@ -876,6 +880,7 @@ impl Shell3 {
             return Err("shell3-show-wrong-executor");
         }
         if self.font_scale_needed() {
+            presentation_probe::stage(2);
             let scale = self.requested_font_scale();
             let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)
                 .ok_or("shell3-font-physical-size-unavailable")?;
@@ -888,6 +893,7 @@ impl Shell3 {
             );
             self.pending_presentation = None;
             if self.show.resize_needed() {
+                presentation_probe::stage(3);
                 self.resize_ui4_to_current().await?;
             }
             crate::log_info!(target: "service";
@@ -900,6 +906,8 @@ impl Shell3 {
             if (columns, rows) != (self.columns, self.rows_count) { self.set(columns, rows); }
         }
         loop {
+            presentation_probe::stage(4);
+            presentation_probe::snapshot();
             if self.pending_presentation.is_none() {
                 let snapshot = self.capture_update_snapshot();
                 let batch = update::take_updates(
@@ -918,6 +926,7 @@ impl Shell3 {
             let lines = lines.clone();
             let line_refs: Vec<_> = lines.iter().map(|line| line.as_slice()).collect();
             let (columns, rows) = snapshot.size();
+            presentation_probe::stage(5);
             self.show
                 .present(
                     &line_refs,
@@ -929,15 +938,19 @@ impl Shell3 {
                     snapshot.edit_life(),
                 )
                 .await?;
+            presentation_probe::stage(6);
             if let Some(window) = self.show.window() {
+                presentation_probe::window(window.raw());
                 tui::bind_ui4_window(self.tui_frontend, window, self.show.font_scale());
             }
             self.pending_presentation = None;
+            presentation_probe::stage(7);
             if self.capture_update_snapshot() == snapshot {
                 break;
             }
         }
         self.matrix_selection_dirty = false;
+        presentation_probe::stage(8);
         self.reconcile_local_account();
         if let Some(startup) = self.pending_startup.take()
             && !self.show.is_closing()

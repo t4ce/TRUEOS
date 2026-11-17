@@ -82,7 +82,8 @@ mod vcabi {
 
 #[test]
 fn valid_start_preserves_utf8_url_and_both_budget_edges() {
-    for (timeout, limit) in [(1, 1), (90_000, 128 * 1024 * 1024), (25_000, 1024 * 1024)] {
+    for (timeout, limit) in [(1, 1), (90_000, 128 * 1024 * 1024),
+        (90_000, 200 * 1024 * 1024), (90_000, 256 * 1024 * 1024), (25_000, 1024 * 1024)] {
         reset();
         let url = "https://trueos.eu/Größe.bp?q=1".as_bytes();
         assert_eq!(fetch_bytes_with_options(url, timeout, limit), Ok(17));
@@ -98,7 +99,7 @@ fn valid_start_preserves_utf8_url_and_both_budget_edges() {
 #[test]
 fn invalid_start_budgets_are_rejected_before_the_abi_or_a_size_cast() {
     for (timeout, limit) in [(0, 1), (90_001, 1), (u32::MAX, 1),
-        (1, 0), (1, 128 * 1024 * 1024 + 1), (1, usize::MAX)]
+        (1, 0), (1, 256 * 1024 * 1024 + 1), (1, usize::MAX)]
     {
         reset();
         assert_eq!(fetch_bytes_with_options(b"https://trueos.eu/apps", timeout, limit), Err(-4));
@@ -133,7 +134,7 @@ fn exact_binary_body_is_copied_and_the_operation_is_released_once() {
 
 #[test]
 fn invalid_read_arguments_release_without_inspecting_or_allocating_a_body() {
-    for (id, limit) in [(0, 4), (17, 0), (17, 128 * 1024 * 1024 + 1), (17, usize::MAX)] {
+    for (id, limit) in [(0, 4), (17, 0), (17, 256 * 1024 * 1024 + 1), (17, usize::MAX)] {
         reset();
         assert_eq!(fetch_bytes_read_bounded(id, limit), Err(-4));
         boundary(|state| {

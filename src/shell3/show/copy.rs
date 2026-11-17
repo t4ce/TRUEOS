@@ -23,8 +23,25 @@ pub(super) async fn present(
 ) -> Result<Option<crate::ui4::DamageRect>, &'static str> {
     crate::ui4::text_blit::benchmark_once().await?;
     let present_started = crate::ui4::text_blit::stamp();
-    let lease =
-        acquire_frame_buffer(surface.frame).map_err(|_| "shell3-show-copy-destination-busy")?;
+    super::super::presentation_probe::stage(12);
+    let lease = match acquire_frame_buffer(surface.frame) {
+        Ok(lease) => lease,
+        Err(error) => {
+            crate::log_rate_limited!(
+                target: "service";
+                level: crate::log_os::LogLevel::Warn;
+                first: 3;
+                every: 1000;
+                "shell3/show: frame acquire failed ap={} window={} frame={} error={:?} ownership={:?}\n",
+                crate::percpu::current_slot(), surface.window.raw(), surface.frame.raw(),
+                error, crate::ui4::frame_buffer_ownership_probe(surface.frame),
+            );
+            return Err(match error {
+                crate::ui4::FramePoolError::Busy => "shell3-show-copy-destination-busy",
+                _ => "shell3-show-copy-destination-invalid",
+            });
+        }
+    };
     let index = lease.buffer_index as usize;
     let previous = surface.frame_contents[index].clone();
     let current = rendered_lines(lines);
@@ -40,6 +57,7 @@ pub(super) async fn present(
     // selects a face per cell, so paint it directly instead of copying those
     // raster-only tiles over the page. Retain them for returning to the shell.
     let use_raster_caches = surface.hex_region.is_none();
+    super::super::presentation_probe::stage(13);
     let using_pan =
         match super::pan::PanBuffer::prepare(
             pan, budget, area.filter(|_| use_raster_caches), surface.scale, poisoned,
@@ -54,6 +72,7 @@ pub(super) async fn present(
         };
     let mut cached = [false; 2];
     for input in reveals.iter().filter(|_| use_raster_caches) {
+        super::super::presentation_probe::stage(14);
         match super::reveal::StripCache::prepare(
             &mut strips[input.row],
             input,
@@ -100,12 +119,14 @@ pub(super) async fn present(
     // The frame lease is exclusively writable. A required clear is the first
     // operation in the same ordered plan as subsequent GPU glyph work.
     let painted = if terminal_paint {
+        super::super::presentation_probe::stage(15);
         let plan = crate::ui4::text_paint::RgbaPaintPlan::new(
             core::mem::take(&mut glyphs),
             crate::r::services::shell3_font_service::solid_color,
         );
         plan.paint(bcs_surface(view), initial_clear, poisoned).await
     } else {
+        super::super::presentation_probe::stage(15);
         crate::ui4::text_paint::paint_glyph_copies(
             bcs_surface(view),
             core::mem::take(&mut glyphs),
@@ -145,6 +166,7 @@ pub(super) async fn present(
         );
     }
     for input in reveals.iter().filter(|input| cached[input.row]) {
+        super::super::presentation_probe::stage(16);
         if let Err(error) = strips[input.row]
             .as_mut()
             .ok_or("shell3-strip-cache-missing")?
@@ -164,6 +186,7 @@ pub(super) async fn present(
                 .iter()
                 .any(|update| matches!(update.row, super::super::SpecialRows::MatrixRow(_))))
     {
+        super::super::presentation_probe::stage(17);
         if let Err(error) = pan
             .as_mut()
             .ok_or("shell3-pan-missing")?
@@ -179,6 +202,7 @@ pub(super) async fn present(
     if !cpu_paint && !emulator {
         crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
     }
+    super::super::presentation_probe::stage(18);
     if publish_frame_buffer(lease).is_err() {
         let _ = cancel_frame_buffer(lease);
         return Err("shell3-show-frame-publish");
