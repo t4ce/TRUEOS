@@ -23,12 +23,17 @@ static SINK:Mutex<sink::Sink>=Mutex::new(sink::Sink::new());
 static MODE:AtomicU8=AtomicU8::new(0);
 static START:AtomicUsize=AtomicUsize::new(0);
 static END:AtomicUsize=AtomicUsize::new(0);
+static GENERATION:AtomicUsize=AtomicUsize::new(1);
+fn monotonic_millis()->u64 { 0 }
 mod hv {
     pub fn current_hull_guest_context_vm_id()->Option<u8> {
         (super::MODE.load(super::Ordering::SeqCst)==1).then_some(7)
     }
     pub fn current_guest_execution_context_vm_id()->Option<u8> {
         (super::MODE.load(super::Ordering::SeqCst)==2).then_some(7)
+    }
+    pub fn vm_run_generation(vm:u8)->Option<u64> {
+        (vm==7).then(|| super::GENERATION.load(super::Ordering::SeqCst) as u64)
     }
 }
 mod allocators {
@@ -39,15 +44,20 @@ mod allocators {
 }
 mod native_abi {
     pub fn abi_read_bytes<'a>(p:*const u8,n:usize)->Option<&'a[u8]> {
-        if p.is_null() {None} else {Some(unsafe {std::slice::from_raw_parts(p,n)})}
+        if n==0 {Some(&[])} else if p.is_null() {None} else {Some(unsafe {std::slice::from_raw_parts(p,n)})}
     }
 }
 mod trueos_vm { pub mod vmcall {
     pub const OP_BP_HTTP_AUDIO_CLIP_SUBMIT_V1:u32=0x259;
+    pub const OP_BP_HTTP_AUDIO_STREAM_V1:u32=0x25b;
     pub const STATUS_OK:u32=0;
     pub fn call(op:u32,address:u64,bytes:u64)->(u32,u64) {
         assert_eq!(op,OP_BP_HTTP_AUDIO_CLIP_SUBMIT_V1);
         (STATUS_OK,crate::handoff::submit_guest(7,address,bytes) as i64 as u64)
+    }
+    pub fn call_with_payload(op:u32,action:u64,token:u64,bytes:&[u8],_:&mut [u8])->(u32,u64) {
+        assert_eq!(op,OP_BP_HTTP_AUDIO_STREAM_V1);
+        (STATUS_OK,crate::handoff::stream_guest(7,action,token,bytes) as u64)
     }
 } }
 #[test]
@@ -82,6 +92,40 @@ fn pointer_boundaries_copy_lifetime_and_native_vm_paths() {
     assert_eq!(out,[123,0,56,254,21,3,13,252]);
     SINK.lock().render(&mut out); assert_eq!(out,[0;8]);
 }
+#[test]
+fn progressive_handoff_uses_bounded_guest_payload_and_generation() {
+    *SINK.lock()=sink::Sink::new();
+    let mut pcm=vec![1u8,2,3,4,5,6,7,8];
+    let ptr=pcm.as_ptr() as usize;
+    START.store(ptr,Ordering::SeqCst); END.store(ptr+pcm.len(),Ordering::SeqCst);
+    let stream=handoff::trueos_cabi_http_audio_stream_v1;
+    let null=core::ptr::null();
+    MODE.store(1,Ordering::SeqCst);
+    let id=unsafe { stream(0,0,null,0) };
+    assert!(id>0);
+    let id=id as u64;
+    assert_eq!(unsafe {stream(0,0,null,0)},-16);
+    assert_eq!(unsafe {stream(1,id,null,4)},-14);
+    assert_eq!(unsafe {stream(1,id,pcm.as_ptr(),2)},-22);
+    assert_eq!(unsafe {stream(1,id,pcm.as_ptr(),sink::MAX_APPEND_BYTES+4)},-27);
+    assert_eq!(unsafe {stream(1,id,pcm.as_ptr(),12)},-14);
+    assert_eq!(unsafe {stream(1,id,pcm.as_ptr(),8)},0);
+    pcm.fill(0);
+    assert!(SINK.lock().snapshot().is_none());
+    GENERATION.store(2,Ordering::SeqCst);
+    assert_eq!(unsafe {stream(2,id,null,0)},-13);
+    GENERATION.store(1,Ordering::SeqCst);
+    assert_eq!(unsafe {stream(2,id,null,0)},0);
+    let mut output=[0;8];
+    assert_eq!(SINK.lock().render(&mut output).first,Some((id,0)));
+    assert_eq!(output,[1,2,3,4,5,6,7,8]);
+    assert_eq!(SINK.lock().snapshot().unwrap().id,id);
+    let next=unsafe {stream(0,0,null,0)};
+    assert!(next>id as i64);
+    handoff::release_vm(7,1);
+    assert_eq!(unsafe {stream(2,next as u64,null,0)},-2);
+    MODE.store(0,Ordering::SeqCst);
+}
 '''.replace('@SINK@', str(ROOT / 'src/r/services/audio_http/sink.rs')).replace('@HANDOFF@',str(ROOT / 'src/r/services/audio_http/handoff.rs'))
     # Refer to the local VM stub from the otherwise unmodified production module.
     handoff = (ROOT / 'src/r/services/audio_http/handoff.rs').read_text()
@@ -94,7 +138,7 @@ fn pointer_boundaries_copy_lifetime_and_native_vm_paths() {
         binary=directory/'tests'
         subprocess.run(['rustup','run','nightly-2026-07-10','rustc','--edition=2024','--test',str(source),
                         '--cfg','target_os="trueos"','-Aexplicit_builtin_cfgs_in_flags','-o',str(binary)],check=True)
-        subprocess.run([str(binary)],check=True)
+        subprocess.run([str(binary),'--test-threads=1'],check=True)
 
 
 if __name__ == '__main__':

@@ -90,7 +90,7 @@ fn request(path:&str)->(VNet,AudioHttpSession) {
     assert_eq!(s.mode,SessionMode::SendingFixed);
     assert!(net.bytes.borrow().starts_with(b"HTTP/1.1 404"));
     let page=String::from_utf8(live_audio_page()).unwrap();
-    assert!(page.contains("class ClipPlayer"));
+    assert!(page.contains("class LivePlayer"));
     for token in ["getUserMedia", "WebSocket", "microphone", "/audio/send"] { assert!(!page.contains(token)); }
 }
 #[test] fn fragmented_get_waits_and_non_get_cannot_ingest_pcm() {

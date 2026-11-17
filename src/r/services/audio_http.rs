@@ -1,4 +1,4 @@
-//! Listen-only HTTP playback sink for completed clips. No hardware or capture.
+//! Listen-only HTTP playback of completed or progressive PCM.
 pub(crate) mod handoff;
 mod sink;
 use sink::Sink;
@@ -30,6 +30,10 @@ const SEND_MS: usize = 10;
 const POLL_MS: u64 = 5;
 const REQUEST_IDLE_TIMEOUT_MS: u64 = 750;
 const FIXED_SEND_TIMEOUT_MS: u64 = 1_500;
+
+fn monotonic_millis() -> u64 {
+    Instant::now().as_millis()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SessionMode {
@@ -501,7 +505,23 @@ pub async fn audio_http_task() {
                 next_send = now + Duration::from_millis(SEND_MS as u64);
             }
             pcm_bytes.resize(SAMPLE_RATE * CHANNELS * 2 * SEND_MS / 1000, 0);
-            SINK.lock().render(&mut pcm_bytes);
+            let (expired, report) = {
+                let mut sink = SINK.lock();
+                let expired = sink.expire(now.as_millis());
+                (expired, sink.render(&mut pcm_bytes))
+            };
+            if let Some(id) = expired {
+                crate::log!("audio-http: progressive clip={} expired\n", id);
+            }
+            if let Some((id, started_ms)) = report.first {
+                crate::log!(
+                    "audio-http: progressive clip={} first_render_ms={}\n",
+                    id, now.as_millis().saturating_sub(started_ms)
+                );
+            }
+            if let Some((id, count)) = report.underrun {
+                crate::log!("audio-http: progressive clip={} underruns={}\n", id, count);
+            }
         }
         for endpoint in endpoints.iter_mut() {
             prune_idle_sessions(endpoint);

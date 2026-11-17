@@ -4780,6 +4780,9 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     }
 
     teardown_diagnostics::set(vm_id, TeardownStage::Net);
+    crate::r::services::audio_http::handoff::release_vm(
+        vm_id, vm.run_generation.load(Ordering::Acquire),
+    );
     let http_requests_closed = crate::r::net::http_request_cabi::discard_for_vm(
         vm_id, vm.run_generation.load(Ordering::Acquire),
     );

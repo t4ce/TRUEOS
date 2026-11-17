@@ -2,89 +2,153 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>TRUEOS Audio</title>
 <style>body{font:1rem system-ui;margin:2rem;max-width:40rem}button{font:inherit;padding:.6rem 1.3rem}label{margin-left:1rem}#status{min-height:1.5em;color:#555}</style>
-</head><body><h1>TRUEOS Audio</h1><p>Listen to completed speech clips.</p>
+</head><body><h1>TRUEOS Audio</h1>
 <button id="listen" type="button">Listen</button>
 <label>Volume <input id="volume" type="range" min="0" max="1" step=".01" value="1"></label>
 <p id="status" role="status">Ready</p>
 <script>
-class ClipPlayer {
+const SAMPLE_RATE = 48000;
+const FRAME_BYTES = 4;
+const BLOCK_FRAMES = 480;
+const LEAD_SECONDS = .04;
+const QUEUE_SECONDS = .16;
+
+function checkWavHeader(header) {
+  const view = new DataView(header.buffer);
+  const tag = (offset, text) =>
+    [...text].every((character, index) => header[offset + index] === character.charCodeAt(0));
+  if (!tag(0, 'RIFF') || !tag(8, 'WAVE') || !tag(12, 'fmt ') || !tag(36, 'data') ||
+      view.getUint32(16, true) !== 16 || view.getUint16(20, true) !== 1 ||
+      view.getUint16(22, true) !== 2 || view.getUint32(24, true) !== SAMPLE_RATE ||
+      view.getUint32(28, true) !== SAMPLE_RATE * FRAME_BYTES ||
+      view.getUint16(32, true) !== FRAME_BYTES || view.getUint16(34, true) !== 16) {
+    throw new Error('Unexpected audio format');
+  }
+}
+
+class LivePlayer {
   constructor(report, volume) {
     this.report = report;
-    this.context = new (window.AudioContext || window.webkitAudioContext)({latencyHint: 'playback'});
+    this.context = new (window.AudioContext || window.webkitAudioContext)({latencyHint: 'interactive'});
     this.gain = this.context.createGain();
     this.gain.gain.value = volume;
     this.gain.connect(this.context.destination);
-    // Keep the output graph running between utterances, rather than waking it
-    // at the first spoken sample. This source contributes only exact silence.
+    // Keep the device running through silence between replies.
     this.silence = this.context.createConstantSource();
     this.silence.offset.value = 0;
     this.silence.connect(this.gain);
     this.silence.start();
     this.abort = new AbortController();
-    this.source = null;
-    this.lastId = '0';
-  }
-  async get(path) {
-    const response = await fetch(path, {cache: 'no-store', signal: this.abort.signal});
-    if (!response.ok && response.status !== 409) throw new Error('Audio connection lost');
-    return response;
+    this.sources = new Set();
+    this.nextTime = 0;
   }
   delay(ms) {
+    const {signal} = this.abort;
     return new Promise(resolve => {
-      const finish = () => { clearTimeout(timer); this.abort.signal.removeEventListener('abort', finish); resolve(); };
+      const finish = () => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', finish);
+        resolve();
+      };
       const timer = setTimeout(finish, ms);
-      this.abort.signal.addEventListener('abort', finish, {once: true});
-      if (this.abort.signal.aborted) finish();
+      signal.addEventListener('abort', finish, {once: true});
+      if (signal.aborted) finish();
     });
   }
   async start() {
-    // Resume in the click handler, before fetching or scheduling any speech.
     await this.context.resume();
-    if (this.abort.signal.aborted) return;
-    const initial = await (await this.get('/audio/status')).json();
-    // Join an active utterance from its beginning; avoid replaying an old one
-    // when the user starts listening after it has already finished.
-    this.lastId = initial.playing ? '0' : initial.clip_id;
-    while (!this.abort.signal.aborted) {
-      this.report('Listening');
+    const {signal} = this.abort;
+    while (!signal.aborted) {
       try {
-        const state = await (await this.get('/audio/status')).json();
-        if (state.clip_id !== '0' && state.clip_id !== this.lastId) {
-          const response = await this.get('/audio/clip.wav?id=' + encodeURIComponent(state.clip_id));
-          if (response.status === 409) { await this.delay(100); continue; }
-          // No part of a clip plays until its entire finite WAV is received and
-          // decoded. A delayed fetch or reconnect cannot move its start point.
-          const buffer = await this.context.decodeAudioData(await response.arrayBuffer());
-          if (this.abort.signal.aborted) return;
-          await this.context.resume();
-          if (this.abort.signal.aborted) return;
-          const source = this.context.createBufferSource();
-          source.buffer = buffer;
-          source.connect(this.gain);
-          this.source = source;
-          const ended = new Promise(resolve => { source.onended = resolve; });
-          try {
-            source.start(this.context.currentTime + .1, 0);
-            this.lastId = state.clip_id;
-            this.report('Playing');
-            await ended;
-          } finally {
-            source.disconnect();
-            if (this.source === source) this.source = null;
-          }
-        } else {
-          await this.delay(200);
-        }
-      } catch (error) {
-        if (this.abort.signal.aborted) return;
+        const response = await fetch('/audio/live.wav', {cache: 'no-store', signal});
+        if (signal.aborted) return;
+        if (!response.ok || !response.body) throw new Error('Audio connection lost');
+        await this.readStream(response.body.getReader());
+      } catch {
+        // A reset, unexpected WAV header or EOF all need a new live stream.
+      }
+      if (!signal.aborted) {
         this.report('Reconnecting…');
         await this.delay(500);
       }
     }
   }
+  async readStream(reader) {
+    const {signal} = this.abort;
+    const header = new Uint8Array(44);
+    let headerBytes = 0;
+    const block = new Uint8Array(BLOCK_FRAMES * FRAME_BYTES);
+    let blockBytes = 0;
+    try {
+      while (!signal.aborted) {
+        const {value, done} = await reader.read();
+        if (done || signal.aborted) return;
+        let offset = 0;
+        if (headerBytes < header.length) {
+          const count = Math.min(header.length - headerBytes, value.length);
+          header.set(value.subarray(0, count), headerBytes);
+          headerBytes += count;
+          offset = count;
+          if (headerBytes < header.length) continue;
+          checkWavHeader(header);
+          this.report('Listening');
+        }
+        while (offset < value.length && !signal.aborted) {
+          const count = Math.min(block.length - blockBytes, value.length - offset);
+          block.set(value.subarray(offset, offset + count), blockBytes);
+          blockBytes += count;
+          offset += count;
+          if (blockBytes < block.length) continue;
+
+          // Stop reading ahead if the browser has accumulated a burst of PCM.
+          while (!signal.aborted && this.nextTime > this.context.currentTime + QUEUE_SECONDS) {
+            await this.delay(10);
+          }
+          if (signal.aborted) return;
+          this.schedule(block);
+          blockBytes = 0;
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
+  }
+  schedule(block) {
+    const now = this.context.currentTime;
+    if (this.nextTime < now + .004) this.nextTime = now + LEAD_SECONDS;
+    const when = this.nextTime;
+    this.nextTime += BLOCK_FRAMES / SAMPLE_RATE;
+    // The constant source already supplies silent output.
+    if (!block.some(byte => byte !== 0)) return;
+
+    const buffer = this.context.createBuffer(2, BLOCK_FRAMES, SAMPLE_RATE);
+    const view = new DataView(block.buffer);
+    const left = buffer.getChannelData(0);
+    const right = buffer.getChannelData(1);
+    for (let frame = 0; frame < BLOCK_FRAMES; ++frame) {
+      left[frame] = view.getInt16(frame * FRAME_BYTES, true) / 32768;
+      right[frame] = view.getInt16(frame * FRAME_BYTES + 2, true) / 32768;
+    }
+    const source = this.context.createBufferSource();
+    source.buffer = buffer;
+    source.connect(this.gain);
+    source.onended = () => {
+      this.sources.delete(source);
+      source.disconnect();
+    };
+    source.start(when);
+    this.sources.add(source);
+  }
   stop() {
+    if (this.abort.signal.aborted) return;
     this.abort.abort();
-    if (this.source) this.source.stop();
+    for (const source of this.sources) {
+      source.onended = null;
+      source.stop();
+      source.disconnect();
+    }
+    this.sources.clear();
     this.silence.stop();
     this.context.close().catch(() => {});
   }
@@ -101,7 +165,7 @@ button.onclick = async () => {
   }
   let current;
   try {
-    current = new ClipPlayer(text => { if (player === current) status.textContent = text; }, Number(volume.value));
+    current = new LivePlayer(text => { if (player === current) status.textContent = text; }, Number(volume.value));
     player = current; button.textContent = 'Stop'; status.textContent = 'Starting…';
     await current.start();
   } catch (error) {

@@ -451,6 +451,8 @@ pub const OP_BP_TIMEZONE_OFFSET_SECONDS: u32 = 0x24c;
 
 /// One complete PCM clip: arg0 guest heap pointer, arg1 byte length.
 pub const OP_BP_HTTP_AUDIO_CLIP_SUBMIT_V1: u32 = 0x259;
+/// Progressive PCM: arg0 is the action, arg1 is the token, payload is PCM.
+pub const OP_BP_HTTP_AUDIO_STREAM_V1: u32 = 0x25b;
 
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_BAD_ARG: u32 = 2;

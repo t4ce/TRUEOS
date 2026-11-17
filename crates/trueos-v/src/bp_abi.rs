@@ -1436,6 +1436,16 @@ unsafe extern "C" {
     /// copied for HTTP playback or discarded because another clip owns the sink.
     pub fn trueos_cabi_http_audio_clip_submit_v1(pcm_ptr: *const u8, pcm_bytes: usize) -> i32;
 
+    /// Progressive stereo s16le/48 kHz playback. Action 0 begins and returns
+    /// a token. Actions 1 (append), 2 (finish), and 3 (abort) take that token.
+    /// Only append takes PCM. Negative results are errors.
+    pub fn trueos_cabi_http_audio_stream_v1(
+        action: u32,
+        stream: u64,
+        pcm_ptr: *const u8,
+        pcm_bytes: usize,
+    ) -> i64;
+
     pub fn trueos_cabi_vgpu_open(requested_caps: u64, out_device: *mut u64) -> i32;
     pub fn trueos_cabi_vgpu_scalar_f32_v1(
         device: u64,

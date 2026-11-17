@@ -15,24 +15,24 @@ import urllib.parse
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
-STATE = {"id": "0", "started": {}, "tail_sent_ms": {}}
-
-
-def wav(identifier):
-    amplitude = int(identifier)*4096
-    pcm = b''.join(struct.pack('<hh', amplitude if frame<48000 else -amplitude,
-                              -amplitude if frame<48000 else amplitude) for frame in range(96000))
-    return struct.pack('<4sI4s4sIHHIIHH4sI',b'RIFF',len(pcm)+36,b'WAVE',b'fmt ',16,1,2,48000,192000,4,16,b'data',len(pcm))+pcm
+STATE = {"id": "0", "prefix_sent_ms": {}, "tail_sent_ms": {}, "opens": 0}
+WAV_HEAD = struct.pack(
+    '<4sI4s4sIHHIIHH4sI',
+    b'RIFF', 0xffffffff, b'WAVE', b'fmt ', 16, 1, 2, 48000, 192000, 4, 16,
+    b'data', 0xffffffff - 36,
+)
+BLOCK_FRAMES = 480
+SILENCE = bytes(BLOCK_FRAMES * 4)
 
 
 class Handler(BaseHTTPRequestHandler):
-    def log_message(self,*args):
+    def log_message(self, *args):
         pass
 
     def do_GET(self):
         target = urllib.parse.urlsplit(self.path)
         if target.path == '/':
-            body = (ROOT/'src/r/services/audio_http/player.html').read_bytes()
+            body = (ROOT / 'src/r/services/audio_http/player.html').read_bytes()
             content_type = 'text/html'
         elif target.path == '/fixture/publish':
             STATE['id'] = urllib.parse.parse_qs(target.query)['id'][0]
@@ -41,79 +41,186 @@ class Handler(BaseHTTPRequestHandler):
         elif target.path == '/fixture/state':
             body = json.dumps(STATE).encode()
             content_type = 'application/json'
-        elif target.path == '/audio/status':
-            body = json.dumps({'clip_id':STATE['id'],'playing':STATE['id']!='0'}).encode()
-            content_type = 'application/json'
-        elif target.path == '/audio/clip.wav':
-            identifier = urllib.parse.parse_qs(target.query)['id'][0]
-            body = wav(identifier)
-            STATE['started'][identifier] = True
-            self.send_response(200)
-            self.send_header('Content-Type','audio/wav')
-            self.send_header('Content-Length',str(len(body)))
-            self.end_headers()
-            try:
-                split = len(body)//2
-                self.wfile.write(body[:split]);self.wfile.flush()
-                time.sleep(.35)
-                STATE['tail_sent_ms'][identifier] = time.time()*1000
-                self.wfile.write(body[split:]);self.wfile.flush()
-            except (BrokenPipeError,ConnectionResetError):
-                pass
+        elif target.path == '/audio/live.wav':
+            self.live_pcm()
             return
         else:
-            self.send_error(404);return
+            self.send_error(404)
+            return
         self.send_response(200)
-        self.send_header('Content-Type',content_type)
-        self.send_header('Content-Length',str(len(body)))
-        self.end_headers();self.wfile.write(body)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def live_pcm(self):
+        STATE['opens'] += 1
+        self.send_response(200)
+        self.send_header('Content-Type', 'audio/wav')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        try:
+            self.wfile.write(WAV_HEAD[:19])
+            self.wfile.flush()
+            time.sleep(.01)
+            self.wfile.write(WAV_HEAD[19:])
+            self.wfile.flush()
+            previous = '0'
+            while True:
+                spoken = STATE['id']
+                if spoken == previous:
+                    self.wfile.write(SILENCE)
+                    time.sleep(.01)
+                    continue
+
+                previous = spoken
+                amplitude = int(spoken) * 4096
+                block = struct.pack('<hh', amplitude, -amplitude) * BLOCK_FRAMES
+                # Hold the rest of the utterance back while the browser
+                # schedules its prefix. For the stop case hold part of the
+                # first block too, so a complete block arrives after Stop.
+                split = 111 if spoken == '3' else len(block)
+                self.wfile.write(block[:split])
+                self.wfile.flush()
+                STATE['prefix_sent_ms'][spoken] = time.time() * 1000
+                time.sleep(.35)
+                STATE['tail_sent_ms'][spoken] = time.time() * 1000
+                self.wfile.write(block[split:])
+                self.wfile.write(struct.pack('<hh', -amplitude, amplitude) * BLOCK_FRAMES)
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
 
-SCRIPT = r'''
-const assert=require('node:assert/strict');
-const [wsURL,base]=process.argv.slice(2);
-const ws=new WebSocket(wsURL);const pending=new Map();let serial=0;
-ws.onmessage=event=>{const x=JSON.parse(event.data),p=pending.get(x.id);if(!p)return;pending.delete(x.id);x.type==='error'?p.reject(new Error(JSON.stringify(x))):p.resolve(x.result)};
-const ready=new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject});
-const command=(method,params={})=>new Promise((resolve,reject)=>{const id=++serial;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}))});
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+SCRIPT = r"""
+const assert = require('node:assert/strict');
+const [wsURL, base] = process.argv.slice(2);
+const ws = new WebSocket(wsURL);
+const pending = new Map();
+let serial = 0;
+ws.onmessage = event => {
+  const x = JSON.parse(event.data);
+  const p = pending.get(x.id);
+  if (!p) return;
+  pending.delete(x.id);
+  x.type === 'error' ? p.reject(new Error(JSON.stringify(x))) : p.resolve(x.result);
+};
+const ready = new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
+const command = (method, params = {}) => new Promise((resolve, reject) => {
+  const id = ++serial;
+  pending.set(id, {resolve, reject});
+  ws.send(JSON.stringify({id, method, params}));
+});
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 let context;
-(async()=>{
- await ready;
- await command('session.new',{capabilities:{alwaysMatch:{acceptInsecureCerts:true}}});
- ({context}=await command('browsingContext.create',{type:'tab'}));
- await command('browsingContext.navigate',{context,url:base,wait:'complete'});
- async function evaluate(expression){const x=await command('script.evaluate',{expression:'JSON.stringify('+expression+')',target:{context},awaitPromise:true});if(x.type!=='success')throw Error(JSON.stringify(x));return JSON.parse(x.result.value)}
- async function until(test){const end=Date.now()+8000;while(Date.now()<end){const value=await test();if(value)return value;await sleep(30)}throw Error('browser playback timeout')}
- await evaluate(`(()=>{window.starts=[];window.contexts=0;const Original=window.AudioContext;window.AudioContext=function(options){const ctx=new Original(options);window.contexts++;const create=ctx.createBufferSource.bind(ctx);ctx.createBufferSource=()=>{const node=create();const start=node.start.bind(node);node.start=(when,offset)=>{const data=node.buffer.getChannelData(0);window.starts.push({when,offset,at:Date.now(),state:ctx.state,rate:node.buffer.sampleRate,length:data.length,first:data[0],prefixMin:Math.min(...data.slice(0,Math.floor(node.buffer.sampleRate*.9))),prefixMax:Math.max(...data.slice(0,Math.floor(node.buffer.sampleRate*.9))),last:data[data.length-1]});return start(when,offset)};return node};return ctx};document.getElementById('volume').value='0';document.getElementById('listen').click();return true})()`);
- await until(()=>evaluate(`document.getElementById('status').textContent==='Listening'`));
- for(const id of ['1','2']){
-   await fetch(base+'fixture/publish?id='+id);
-   await until(()=>evaluate(`window.starts.length===${id}`));
-   const starts=await evaluate('window.starts'),row=starts[Number(id)-1];
-   const state=await (await fetch(base+'fixture/state')).json();
-   assert.equal(row.offset,0);assert.equal(row.state,'running');
-   assert.equal(row.length/row.rate,2);
-   // Browser PCM-to-float normalization may use 32767 or 32768; tolerate one
-   // s16 step while requiring the entire opening interval to be present.
-   for(const sample of [row.first,row.prefixMin,row.prefixMax]) assert(Math.abs(sample-Number(id)*.125)<1/32767);
-   assert(Math.abs(row.last+Number(id)*.125)<1/32767);
-   assert(row.at>=state.tail_sent_ms[id],'played before the complete WAV arrived');
-   await until(()=>evaluate(`document.getElementById('status').textContent==='Listening'`));
-   await sleep(150);
- }
- assert.equal(await evaluate('window.contexts'),1,'recreated output context between clips');
- await fetch(base+'fixture/publish?id=3');
- await until(async()=> (await (await fetch(base+'fixture/state')).json()).started['3']);
- await evaluate(`(()=>{document.getElementById('listen').click();return true})()`);
- await sleep(500);
- assert.equal(await evaluate('window.starts.length'),2,'stopped download produced stale speech');
- const result={browser:'Firefox',clips:await evaluate('window.starts'),one_output_context:true,stop_during_transfer:'passed'};
- console.log(JSON.stringify(result,null,2));
- await command('browsingContext.close',{context});context=null;
- await command('session.end');ws.close();
-})().catch(async error=>{console.error(error.stack);try{if(context)await command('browsingContext.close',{context});await command('session.end')}catch{}ws.close();process.exitCode=1});
-'''
+
+(async () => {
+  await ready;
+  await command('session.new', {capabilities: {alwaysMatch: {acceptInsecureCerts: true}}});
+  ({context} = await command('browsingContext.create', {type:'tab'}));
+  await command('browsingContext.navigate', {context, url: base, wait: 'complete'});
+  async function evaluate(expression) {
+    const x = await command('script.evaluate', {
+      expression: 'JSON.stringify(' + expression + ')',
+      target: {context},
+      awaitPromise: true,
+    });
+    if (x.type !== 'success') throw Error(JSON.stringify(x));
+    return JSON.parse(x.result.value);
+  }
+  async function until(test) {
+    const end = Date.now() + 8000;
+    while (Date.now() < end) {
+      const result = await test();
+      if (result) return result;
+      await sleep(20);
+    }
+    throw Error('browser playback timeout');
+  }
+  const serverState = async () => (await fetch(base + 'fixture/state')).json();
+  await evaluate(`(() => {
+    window.starts = [];
+    window.contexts = 0;
+    const Original = window.AudioContext;
+    window.AudioContext = function(options) {
+      window.latencyHint = options.latencyHint;
+      const ctx = new Original(options);
+      window.contexts++;
+      const create = ctx.createBufferSource.bind(ctx);
+      ctx.createBufferSource = () => {
+        const node = create();
+        const start = node.start.bind(node);
+        node.start = when => {
+          const left = node.buffer.getChannelData(0);
+          const right = node.buffer.getChannelData(1);
+          window.starts.push({
+            when, clock: ctx.currentTime, at: Date.now(),
+            state: ctx.state, rate: node.buffer.sampleRate,
+            length: left.length, left: left[0], right: right[0], last: left.at(-1),
+          });
+          return start(when);
+        };
+        return node;
+      };
+      return ctx;
+    };
+    document.getElementById('volume').value = '0';
+    document.getElementById('listen').click();
+    return true;
+  })()`);
+  await until(() => evaluate("document.getElementById('status').textContent === 'Listening'"));
+
+  const prefixes = [];
+  for (const id of ['1', '2']) {
+    const amplitude = Number(id) * .125;
+    await fetch(base + 'fixture/publish?id=' + id);
+    const row = await until(() => evaluate(`window.starts.find(row => row.left === ${amplitude}) ?? null`));
+    assert.equal(row.state, 'running');
+    assert.equal(row.length / row.rate, .01);
+    assert.equal(row.left, amplitude);
+    assert.equal(row.last, amplitude);
+    assert.equal(row.right, -amplitude);
+    const state = await until(async () => {
+      const state = await serverState();
+      return state.tail_sent_ms[id] && state;
+    });
+    const startMs = row.at + (row.when - row.clock) * 1000;
+    assert(startMs < state.tail_sent_ms[id], 'speech prefix was not scheduled for playback before tail');
+    prefixes.push({
+      id, schedule_ms_after_prefix: Math.round(row.at - state.prefix_sent_ms[id]),
+      planned_start_ms_after_prefix: Math.round(startMs - state.prefix_sent_ms[id]),
+    });
+    const tail = await until(() => evaluate(`window.starts.find(row => row.left === ${-amplitude}) ?? null`));
+    assert.equal(tail.right, amplitude);
+  }
+  assert.equal(await evaluate('window.contexts'), 1);
+  assert.equal(await evaluate('window.latencyHint'), 'interactive');
+  assert.equal((await serverState()).opens, 1, 'listener reopened between replies');
+
+  const beforeStop = await evaluate('window.starts.length');
+  await fetch(base + 'fixture/publish?id=3');
+  await until(async () => (await serverState()).prefix_sent_ms['3']);
+  await evaluate("(() => { document.getElementById('listen').click(); return true; })()");
+  await sleep(500);
+  assert.equal(await evaluate('window.starts.length'), beforeStop, 'stopped stream produced stale speech');
+  console.log(JSON.stringify({
+    browser: 'Firefox', prefixes, one_live_connection: true, stop_during_transfer: 'passed',
+  }, null, 2));
+  await command('browsingContext.close', {context});
+  context = null;
+  await command('session.end');
+  ws.close();
+})().catch(async error => {
+  console.error(error.stack);
+  try {
+    if (context) await command('browsingContext.close', {context});
+    await command('session.end');
+  } catch {}
+  ws.close();
+  process.exitCode = 1;
+});
+"""
 
 
 def main():

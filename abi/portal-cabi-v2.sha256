@@ -1,3 +1,4 @@
+# Additive progressive HTTP audio stream v1; all 373 existing signatures unchanged.
 # Additive complete-clip HTTP playback handoff v1; all 372 existing signatures unchanged.
 # Intentional retirement of all 17 legacy audio playback/monitor exports; surviving signatures unchanged.
 # Additive UI4 maximum frame extent v1; all 388 existing signatures verified unchanged.
@@ -55,4 +56,4 @@
 # Additive bounded subdocument fetch with host-applied Referer context; all previous signatures verified unchanged.
 # Additive non-consuming final GET URL metadata; all 369 previous signatures verified unchanged.
 # Intentional retirement of the QJS-only mouse stream; every surviving signature verified unchanged.
-fa60219f1e0ccb02bc66d03b838cb5cd3c8fe760d1543593f3bbd634d8cf3e5d
+2db345f9aadad1282f5f1ffedf0d14f41855e20443cb0f342f1984ee07fbb08a
