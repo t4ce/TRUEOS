@@ -15,6 +15,7 @@ const CAPACITY: usize = v::spirit_agents::MAX_AGENTS;
 const SOURCE_CAPACITY: usize = crate::allcaps::hv::VM_ID_LIMIT;
 const MARKER_GAP: i32 = 6;
 const SHUTDOWN_DWELL_MS: u64 = 1_200;
+const GROWTH_STEP_MS: u64 = 5_000;
 const ORBIT_PERIOD_MS: u64 = 24_000;
 
 pub(crate) const ERROR_INVALID: i32 = -3;
@@ -82,6 +83,8 @@ struct Thought {
     agent: AgentEntry,
     label: Arc<str>,
     appearance: Appearance,
+    running_since_ms: Option<u64>,
+    elapsed_running_ms: u64,
     shutdown_at_ms: Option<u64>,
     resting: Option<Point>,
     track_cache: Option<(Geometry, u16, Option<Track>)>,
@@ -92,6 +95,8 @@ impl Thought {
     fn update(&mut self, agent: AgentEntry, now_ms: u64) {
         let appearance = Appearance::from_agent(&agent);
         if appearance != self.appearance {
+            self.elapsed_running_ms = self.running_time_ms(now_ms);
+            self.running_since_ms = (appearance == Appearance::Running).then_some(now_ms);
             self.shutdown_at_ms = (appearance == Appearance::Shutdown)
                 .then(|| now_ms.saturating_add(SHUTDOWN_DWELL_MS));
         }
@@ -100,6 +105,12 @@ impl Thought {
         }
         self.appearance = appearance;
         self.agent = agent;
+    }
+
+    fn running_time_ms(&self, now_ms: u64) -> u64 {
+        self.elapsed_running_ms.saturating_add(
+            self.running_since_ms.map_or(0, |start| now_ms.saturating_sub(start)),
+        )
     }
 
     fn label_for_agent(agent: &AgentEntry) -> Arc<str> {
@@ -261,6 +272,8 @@ impl Thoughts {
                         label: Thought::label_for_agent(&agent),
                         agent,
                         appearance,
+                        running_since_ms: (appearance == Appearance::Running).then_some(now_ms),
+                        elapsed_running_ms: 0,
                         shutdown_at_ms: (appearance == Appearance::Shutdown)
                             .then(|| now_ms.saturating_add(SHUTDOWN_DWELL_MS)),
                         resting: None,
@@ -371,6 +384,7 @@ impl Thoughts {
                 id: thought.agent.id.clone(),
                 label: thought.label.clone(),
                 color: thought.appearance.rgba(),
+                growth_step: thought.running_time_ms(now_ms) / GROWTH_STEP_MS,
                 marker,
                 resting,
                 orbit,
@@ -798,6 +812,7 @@ struct Placement {
     id: String,
     label: Arc<str>,
     color: [u8; 4],
+    growth_step: u64,
     marker: MarkerSize,
     resting: Point,
     orbit: Option<Motion>,
@@ -851,20 +866,20 @@ mod service {
         epoch: u64,
         id: String,
         label: Arc<str>,
-        accent: [u8; 3],
+        palette: microflake::Palette,
+        frame: usize,
         cursor: MouseControlCursor,
         marker: MarkerSize,
         resting: Point,
         orbit: Option<Motion>,
     }
 
-    fn same(cursor: &Cursor, placement: &Placement, accent: [u8; 3]) -> bool {
+    fn same(cursor: &Cursor, placement: &Placement) -> bool {
         cursor.owner == placement.owner
             && cursor.epoch == placement.epoch
             && cursor.id == placement.id
             && cursor.label == placement.label
             && cursor.marker == placement.marker
-            && cursor.accent == accent
     }
 
     fn lilly_accent() -> [u8; 3] {
@@ -876,14 +891,21 @@ mod service {
     }
 
     fn marker_settings<'a>(id: &'a str, accent: [u8; 3]) -> microflake::Settings<'a> {
-        // Hash identity once when the cursor is created. Lifecycle changes
-        // recolor the status underline and leave the agent's motif intact.
+        use microflake::Palette;
         let index = id.bytes().fold(2166136261u32, |hash, byte| {
             (hash ^ u32::from(byte)).wrapping_mul(16777619)
         });
         microflake::Settings {
             motif: AGENT_MOTIF.family(index as usize),
-            palette: microflake::Palette::Spirit { accent },
+            palette: [
+                Palette::Ember,
+                Palette::Lagoon,
+                Palette::Cobalt,
+                Palette::Orchid,
+                Palette::Saffron,
+                Palette::Porcelain,
+                Palette::Spirit { accent },
+            ][(index as usize / 3) % 7],
             seed: id,
             background_alpha: 0,
             ..microflake::Settings::default()
@@ -959,7 +981,7 @@ mod service {
             while index < cursors.len() {
                 if placements
                     .iter()
-                    .any(|placement| same(&cursors[index], placement, accent))
+                    .any(|placement| same(&cursors[index], placement))
                 {
                     index += 1;
                 } else {
@@ -968,16 +990,17 @@ mod service {
                 }
             }
             for placement in &placements {
+                let settings = marker_settings(&placement.id, accent);
+                let frame = placement.growth_step.min(settings.steps.count() as u64 - 1) as usize;
                 let cursor_index = match cursors
                     .iter()
-                    .position(|cursor| same(cursor, placement, accent))
+                    .position(|cursor| same(cursor, placement))
                 {
                     Some(index) => index,
                     None => {
                         let [r, g, b, a] = placement.color;
-                        let settings = marker_settings(&placement.id, accent);
                         let mut tile = [0; microflake::TILE_BYTES];
-                        microflake::render_tile(&settings, settings.steps.count() - 1, &mut tile);
+                        microflake::render_tile(&settings, frame, &mut tile);
                         let Ok(cursor) = motion::request_motif_cursor(
                             PRINCIPAL,
                             "Spirit/agent",
@@ -994,7 +1017,8 @@ mod service {
                                 epoch: placement.epoch,
                                 id: placement.id.clone(),
                                 label: placement.label.clone(),
-                                accent,
+                                palette: settings.palette,
+                                frame,
                                 cursor,
                                 marker: placement.marker,
                                 resting: Point {
@@ -1026,6 +1050,21 @@ mod service {
                     continue;
                 }
                 let cursor = &mut cursors[cursor_index];
+                if cursor.frame != frame || cursor.palette != settings.palette {
+                    let mut tile = [0; microflake::TILE_BYTES];
+                    microflake::render_tile(&settings, frame, &mut tile);
+                    if motion::update_motif_cursor(
+                        PRINCIPAL,
+                        cursor.cursor.handle,
+                        &placement.label,
+                        &tile,
+                    )
+                    .is_ok()
+                    {
+                        cursor.frame = frame;
+                        cursor.palette = settings.palette;
+                    }
+                }
                 let changed =
                     cursor.resting != placement.resting || cursor.orbit != placement.orbit;
                 let result = if let Some(orbit) = placement.orbit {
@@ -1066,7 +1105,7 @@ mod service {
             if suppressed != hidden_count {
                 hidden_count = suppressed;
                 crate::log_info!(target: "gfx";
-                    "trueos-spirit: agent markers visible={} space_deferred={} capacity={} glyph=section owner=spirit presentation=ui4-slot4 input=none\n",
+                    "trueos-spirit: agent markers visible={} space_deferred={} capacity={} glyph=microflake owner=spirit presentation=ui4-slot4 input=none\n",
                     cursors.len(), suppressed, CAPACITY);
             }
             Timer::after(Duration::from_millis(100)).await;
@@ -1132,6 +1171,29 @@ mod tests {
             nickname_cell_width: ((height * 6 + 5) / 11) as u16,
             ..geometry(x, y)
         }
+    }
+
+    #[test]
+    fn motif_growth_counts_running_time_and_freezes_on_stop() {
+        let mut thoughts = Thoughts::new();
+        let layout = geometry(600, 350);
+        let running = agent("runner", AgentLifecycle::Running);
+        thoughts.ingest(OWNER, snapshot(1, vec![running.clone()]), 1_000).unwrap();
+        assert_eq!(thoughts.plan(layout, 5_999)[0].growth_step, 0);
+        assert_eq!(thoughts.plan(layout, 6_000)[0].growth_step, 1);
+
+        let mut waiting = running.clone();
+        waiting.waiting_approval = true;
+        thoughts.ingest(OWNER, snapshot(2, vec![waiting]), 9_000).unwrap();
+        assert_eq!(thoughts.plan(layout, 30_000)[0].growth_step, 1);
+
+        thoughts.ingest(OWNER, snapshot(3, vec![running]), 30_000).unwrap();
+        assert_eq!(thoughts.plan(layout, 31_999)[0].growth_step, 1);
+        assert_eq!(thoughts.plan(layout, 32_000)[0].growth_step, 2);
+
+        let completed = agent("runner", AgentLifecycle::Completed);
+        thoughts.ingest(OWNER, snapshot(4, vec![completed]), 34_000).unwrap();
+        assert_eq!(thoughts.plan(layout, 100_000)[0].growth_step, 2);
     }
 
     #[test]

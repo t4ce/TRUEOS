@@ -660,13 +660,42 @@ pub(crate) fn request_motif_cursor(
     status_color: crate::graphics::primitives::Rgba8,
     text_color: crate::graphics::primitives::Rgba8,
 ) -> Result<MouseControlCursor, MouseControlError> {
-    let glyph = Arc::new(prepare_cursor_text(
+    let glyph = prepare_motif_cursor(text, tile)?;
+    request_prepared_text_cursor(principal, label, glyph, status_color, text_color)
+}
+
+/// Refresh a motif without moving the cursor or interrupting its queued motion.
+pub(crate) fn update_motif_cursor(
+    principal: MouseControlPrincipal,
+    handle: u64,
+    text: &str,
+    tile: &[u8; microflake::TILE_BYTES],
+) -> Result<(), MouseControlError> {
+    let glyph = prepare_motif_cursor(text, tile)?;
+    {
+        let mut station = STATION.lock();
+        let index = station.cursor_index(principal, handle)?;
+        let visual = &mut station.cursors[index].visual;
+        let current = visual.glyph.as_ref().ok_or(MouseControlError::Invalid)?;
+        if current.text != glyph.text || current.width != glyph.width || current.height != glyph.height {
+            return Err(MouseControlError::Invalid);
+        }
+        visual.glyph = Some(glyph);
+    }
+    crate::ui4::notify_cursor_visual_change();
+    Ok(())
+}
+
+fn prepare_motif_cursor(
+    text: &str,
+    tile: &[u8; microflake::TILE_BYTES],
+) -> Result<Arc<MouseControlGlyph>, MouseControlError> {
+    Ok(Arc::new(prepare_cursor_text(
         text,
         crate::ui4::CONTEXT_MENU_FONT_HEIGHT as u16,
         MOTIF_CURSOR_WIDTH,
         Some(tile),
-    )?);
-    request_prepared_text_cursor(principal, label, glyph, status_color, text_color)
+    )?))
 }
 
 fn request_prepared_text_cursor(

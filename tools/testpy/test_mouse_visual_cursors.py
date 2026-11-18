@@ -64,11 +64,14 @@ def main() -> None:
     slot_path = "src/ui4/slot4_service.rs"
     slot = (ROOT / slot_path).read_text()
     render = "use alloc::sync::Arc;\nuse crate::graphics::primitives::Rgba8;\n"
-    render += "type Slot4Rects=alloc::vec::Vec<crate::intel::LiveOverlayRect>;\n"
+    render += "use alloc::vec::Vec; use core::ops::Range;\n"
+    render += "type Slot4Rects=Vec<crate::intel::LiveOverlayRect>;\n"
+    render += item(slot_path, "Slot4Scene") + block(slot, "impl Slot4Scene {") + "\n"
     for name in ("push_cursor_glyph", "push_cursor_text", "push_overlay_rect",
-                 "changed_rect_damage", "overlay_rect_eq", "add_overlay_rect_damage"):
+                 "changed_scene_damage", "changed_rect_damage", "overlay_rect_eq", "add_overlay_rect_damage"):
         render += item(slot_path, name)
-    for name in ("glyph_cursor_centers_and_clips_prepared_runs_on_slot_four",
+    for name in ("moving_glyph_damages_old_and_new_label_bounds",
+                 "glyph_cursor_centers_and_clips_prepared_runs_on_slot_four",
                  "glyph_recolor_only_changes_coverage_modulated_tint",
                  "text_cursor_recolor_keeps_nickname_rects_and_damage_outside_it_unchanged",
                  "creeping_dash_damages_only_its_removed_and_added_pixel_strips"):

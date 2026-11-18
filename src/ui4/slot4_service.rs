@@ -11,6 +11,7 @@
 //! builder in its final composition pass instead of queuing an Intel flip.
 
 use alloc::vec::Vec;
+use core::ops::Range;
 
 use spin::Mutex;
 use trueos_time::{Duration, Instant, with_timeout};
@@ -22,8 +23,6 @@ const DOCK_FIELD_ALPHA: u8 = 84;
 
 type Slot4Rects = Vec<crate::intel::LiveOverlayRect>;
 
-static PRESENTED_RECTS: Mutex<Slot4Rects> = Mutex::new(Slot4Rects::new());
-
 #[derive(Clone, Copy)]
 struct CodexTileRun {
     x: u8,
@@ -33,8 +32,23 @@ struct CodexTileRun {
 }
 static CODEX_TILE_RUNS: Mutex<Option<Vec<CodexTileRun>>> = Mutex::new(None);
 
+/// A glyph cursor is drawn as many rectangles but moves as one visual.
+struct Slot4Scene {
+    rects: Slot4Rects,
+    glyphs: Vec<Range<usize>>,
+}
+
+impl Slot4Scene {
+    const fn new() -> Self {
+        Self {
+            rects: Vec::new(),
+            glyphs: Vec::new(),
+        }
+    }
+}
+
 struct Slot4State {
-    previous_rects: Slot4Rects,
+    previous_scene: Slot4Scene,
     previous_windows: Vec<Slot4WindowStamp>,
     consecutive_present_failures: u64,
     pending: Option<PendingSlot4Present>,
@@ -42,7 +56,7 @@ struct Slot4State {
 
 struct PendingSlot4Present {
     flip: crate::intel::Ui4LiveOverlayFlip,
-    rects: Slot4Rects,
+    scene: Slot4Scene,
     windows: Vec<Slot4WindowStamp>,
 }
 
@@ -58,7 +72,7 @@ struct Slot4WindowStamp {
 impl Slot4State {
     const fn new() -> Self {
         Self {
-            previous_rects: Slot4Rects::new(),
+            previous_scene: Slot4Scene::new(),
             previous_windows: Vec::new(),
             consecutive_present_failures: 0,
             pending: None,
@@ -89,11 +103,11 @@ pub(crate) async fn ui4_slot4_service_task() {
                     state.pending = Some(pending);
                 }
                 crate::intel::Ui4LiveOverlayFlipPoll::Complete => {
-                    commit_presented_slot4(&mut state, pending.rects, pending.windows);
+                    commit_presented_slot4(&mut state, pending.scene, pending.windows);
                     state.consecutive_present_failures = 0;
                 }
                 crate::intel::Ui4LiveOverlayFlipPoll::Failed => {
-                    note_present_failure(&mut state, pending.rects.len());
+                    note_present_failure(&mut state, pending.scene.rects.len());
                     visual_dirty = true;
                     next_present = cadence.next_deadline();
                 }
@@ -104,9 +118,9 @@ pub(crate) async fn ui4_slot4_service_task() {
             // Anchor the next frame to this submission's start. Advancing the
             // cadence after rasterization adds its CPU time to every period.
             next_present = cadence.next_deadline();
-            let rects = software_cursor_rects();
+            let scene = software_cursor_scene();
             let windows = slot4_windows();
-            match queue_slot4(&mut state, &rects, &windows) {
+            match queue_slot4(&state, scene, &windows) {
                 Ok(Some(pending)) => {
                     state.pending = Some(pending);
                     visual_dirty = false;
@@ -115,8 +129,8 @@ pub(crate) async fn ui4_slot4_service_task() {
                     state.consecutive_present_failures = 0;
                     visual_dirty = false;
                 }
-                Err(()) => {
-                    note_present_failure(&mut state, rects.len());
+                Err(rect_count) => {
+                    note_present_failure(&mut state, rect_count);
                     visual_dirty = true;
                 }
             }
@@ -163,16 +177,16 @@ pub(crate) async fn ui4_slot4_service_task() {
 }
 
 fn queue_slot4(
-    state: &mut Slot4State,
-    rects: &Slot4Rects,
+    state: &Slot4State,
+    scene: Slot4Scene,
     windows: &[super::WindowSnapshot],
-) -> Result<Option<PendingSlot4Present>, ()> {
+) -> Result<Option<PendingSlot4Present>, usize> {
     let window_stamps = windows
         .iter()
         .copied()
         .map(slot4_window_stamp)
         .collect::<Vec<_>>();
-    let mut damage = changed_rect_damage(&state.previous_rects, rects);
+    let mut damage = changed_scene_damage(&state.previous_scene, &scene);
     add_changed_window_damage(&mut damage, &state.previous_windows, &window_stamps);
     if damage.is_empty() {
         return Ok(None);
@@ -184,7 +198,7 @@ fn queue_slot4(
             Ok(lease) => leases.push(lease),
             Err(_) => {
                 release_window_leases(&leases);
-                return Err(());
+                return Err(scene.rects.len());
             }
         }
     }
@@ -235,7 +249,7 @@ fn queue_slot4(
         crate::intel::queue_ui4_live_overlay_scene_on_slot_damage_region(
             super::INTERACTION_OVERLAY_PLANE_SLOT,
             &tiles,
-            rects,
+            &scene.rects,
             damage,
             "ui4-slot4-interaction",
         )
@@ -244,17 +258,17 @@ fn queue_slot4(
     // Rasterization is synchronous. Scanout owns the display copy, so producer
     // buffers no longer need to stay pinned while waiting for its SURFLIVE.
     release_window_leases(&leases);
-    let flip = result?;
+    let flip = result.map_err(|_| scene.rects.len())?;
     Ok(Some(PendingSlot4Present {
         flip,
-        rects: rects.clone(),
+        scene,
         windows: window_stamps,
     }))
 }
 
 fn commit_presented_slot4(
     state: &mut Slot4State,
-    rects: Slot4Rects,
+    scene: Slot4Scene,
     windows: Vec<Slot4WindowStamp>,
 ) {
     for window in &windows {
@@ -264,9 +278,8 @@ fn commit_presented_slot4(
             window.revision,
         );
     }
-    state.previous_rects = rects.clone();
+    state.previous_scene = scene;
     state.previous_windows = windows;
-    *PRESENTED_RECTS.lock() = rects;
 }
 
 fn note_present_failure(state: &mut Slot4State, rect_count: usize) {
@@ -281,6 +294,57 @@ fn note_present_failure(state: &mut Slot4State, rect_count: usize) {
             super::INTERACTION_CADENCE_HZ,
         );
     }
+}
+
+fn changed_scene_damage(
+    previous: &Slot4Scene,
+    current: &Slot4Scene,
+) -> crate::intel::CompositionDamageRegion {
+    let mut damage = crate::intel::CompositionDamageRegion::EMPTY;
+    let (mut old_end, mut new_end) = (0, 0);
+    for index in 0..previous.glyphs.len().max(current.glyphs.len()) {
+        let old = previous
+            .glyphs
+            .get(index)
+            .cloned()
+            .unwrap_or(previous.rects.len()..previous.rects.len());
+        let new = current
+            .glyphs
+            .get(index)
+            .cloned()
+            .unwrap_or(current.rects.len()..current.rects.len());
+        damage.add_region(changed_rect_damage(
+            &previous.rects[old_end..old.start],
+            &current.rects[new_end..new.start],
+        ));
+        old_end = old.end;
+        new_end = new.end;
+        let old = &previous.rects[old];
+        let new = &current.rects[new];
+        if old.len() != new.len() || !old.iter().zip(new).all(|(a, b)| overlay_rect_eq(a, b)) {
+            for rects in [old, new] {
+                if let Some(bounds) = rects
+                    .iter()
+                    .map(|rect| {
+                        crate::intel::CompositionDamageRect::new(
+                            rect.x,
+                            rect.y,
+                            rect.width,
+                            rect.height,
+                        )
+                    })
+                    .reduce(crate::intel::CompositionDamageRect::union)
+                {
+                    damage.add(bounds);
+                }
+            }
+        }
+    }
+    damage.add_region(changed_rect_damage(
+        &previous.rects[old_end..],
+        &current.rects[new_end..],
+    ));
+    damage
 }
 
 fn changed_rect_damage(
@@ -434,6 +498,10 @@ fn release_window_leases(leases: &[super::FrameReadLease]) {
 }
 
 pub(crate) fn software_cursor_rects() -> Slot4Rects {
+    software_cursor_scene().rects
+}
+
+fn software_cursor_scene() -> Slot4Scene {
     use crate::graphics::primitives::Rgba8;
 
     let visuals = super::software_cursor_visuals();
@@ -612,11 +680,16 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
         push_codex_tile_runs(&mut rects, visual, runs, screen_w, screen_h);
     }
 
+    let mut glyphs = Vec::new();
     for visual in &visuals {
+        let start = rects.len();
         push_software_cursor_visual(&mut rects, visual, screen_w, screen_h);
+        if visual.glyph.is_some() && rects.len() > start {
+            glyphs.push(start..rects.len());
+        }
     }
 
-    rects
+    Slot4Scene { rects, glyphs }
 }
 
 /// Compile the immutable native tile once. Movement translates short solid
@@ -1598,6 +1671,34 @@ mod tests {
         assert_eq!(
             (rects[1].x, rects[1].y, rects[1].width, rects[1].height),
             (10, 43, 15, 3)
+        );
+    }
+
+    #[test]
+    fn moving_glyph_damages_old_and_new_label_bounds() {
+        let make_scene = |x: u32| {
+            let mut scene = Slot4Scene::new();
+            let color = Rgba8::new(50, 100, 255, 255);
+            scene.rects.push(crate::intel::LiveOverlayRect::new(1, 1, 1, 1, color));
+            let start = scene.rects.len();
+            for y in (10..42).step_by(2) {
+                for dx in (0..64).step_by(2) {
+                    scene.rects.push(crate::intel::LiveOverlayRect::new(x + dx, y, 1, 1, color));
+                }
+            }
+            scene.glyphs.push(start..scene.rects.len());
+            scene
+        };
+        let before = make_scene(100);
+        assert!(changed_scene_damage(&before, &make_scene(100)).is_empty());
+        let after = make_scene(106);
+        let damage = changed_scene_damage(&before, &after);
+        assert_eq!(damage.rects(), &[crate::intel::CompositionDamageRect::new(100, 10, 69, 31)]);
+        let mut without_label = Slot4Scene::new();
+        without_label.rects.push(crate::intel::LiveOverlayRect::new(1, 1, 1, 1, before.rects[0].color));
+        assert_eq!(
+            changed_scene_damage(&before, &without_label).rects(),
+            &[crate::intel::CompositionDamageRect::new(100, 10, 63, 31)],
         );
     }
 

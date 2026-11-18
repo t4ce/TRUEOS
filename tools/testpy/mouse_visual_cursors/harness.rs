@@ -1,5 +1,9 @@
 #![allow(dead_code)]
 extern crate alloc;
+extern crate self as microflake;
+
+pub const TILE_SIZE: usize = 32;
+pub const TILE_BYTES: usize = TILE_SIZE * TILE_SIZE * 4;
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 static VISUAL_WAKES: AtomicUsize = AtomicUsize::new(0);
@@ -17,6 +21,8 @@ pub mod graphics { pub mod primitives {
 } }
 
 pub mod ui4 {
+    pub const CONTEXT_MENU_FONT_WIDTH: usize = microfont::FWIDTH * 2;
+    pub const CONTEXT_MENU_FONT_HEIGHT: usize = microfont::FHEIGHT * 2;
     use crate::*;
     use graphics::primitives::Rgba8;
     pub fn output_dimensions()->Option<(u32,u32)> { Some((320,200)) }
