@@ -1,0 +1,11 @@
+[package]
+name = "microflake"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+libm = { workspace = true }
+
+[dev-dependencies]
+crc32fast = "1.5"
+miniz_oxide = { workspace = true }

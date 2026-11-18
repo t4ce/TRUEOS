@@ -15,7 +15,7 @@ TIME ?= 1.5
 CLOCK ?= 36582
 LILLY_SOURCE ?= $(abspath $(REPO_ROOT)/../Lily/LilyDS)
 
-.PHONY: all assets run panel render panel-background render-background capture-background clean
+.PHONY: all assets run panel render panel-background render-background capture-background benchmark-background clean
 
 all: $(PROGRAM) assets
 
@@ -42,6 +42,9 @@ render-background: $(PROGRAM)
 
 capture-background: $(PROGRAM)
 	cd $(REPO_ROOT) && bld/tools/spirit_vfx_offline --capture-background-grid "$(PREFIX)" "$(TIME)" "$(CLOCK)"
+
+benchmark-background: $(PROGRAM)
+	cd $(REPO_ROOT) && bld/tools/spirit_vfx_offline --benchmark-background
 
 clean:
 	rm -f $(PROGRAM)

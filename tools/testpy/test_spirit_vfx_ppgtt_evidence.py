@@ -82,7 +82,8 @@ source += "\n".join(item(SPIRIT, name) for name in (
     "spirit_vfx_capture_encoding_evidence", "spirit_vfx_log_encoding_evidence",
     "spirit_vfx_ppgtt_evidence", "spirit_vfx_log_mapping_evidence",
     "spirit_vfx_log_background_boundary",
-    "submit_spirit_vfx_frame", "poll_spirit_vfx_submission", "spirit_vfx_trace_frame",
+    "submit_spirit_vfx_frame", "submit_spirit_vfx_frame_inner",
+    "poll_spirit_vfx_submission", "spirit_vfx_trace_frame",
 ))
 source += "\n".join(line for line in (Path(__file__).resolve().parents[2] / SPIRIT).read_text().splitlines() if line.startswith((
     "static SPIRIT_VFX_PENDING:", "static SPIRIT_VFX_NEXT_TAG:",
@@ -136,7 +137,8 @@ std::thread_local! {
     static ADMISSION:std::cell::Cell<Option<(SpiritVfxSubmitted,Option<SpiritVfxEncodingEvidence>)>>=
         const {std::cell::Cell::new(None)};
 }
-fn submit_spirit_vfx_batch(_:GpgpuRgba8Surface,_:GpgpuRgba8Surface,_:SpiritVfxControl,_:u32)
+fn submit_spirit_vfx_batch(_:GpgpuRgba8Surface,_:GpgpuRgba8Surface,_:SpiritVfxControl,_:u32,
+    _:Option<impl FnOnce()->bool>)
     ->Option<(SpiritVfxSubmitted,Option<SpiritVfxEncodingEvidence>)> {
     ADMISSION.with(|admission|admission.take())
 }
@@ -304,9 +306,10 @@ fn map(bytes:&mut [u64],gpu:u64,phys:u64,flags:u64) {
             assert!(logs[0].contains(&format!("observed=0x{value:08X} background_complete={completed}")));
         });
     }
-    for (tgl,background) in [(false,11),(true,0)] {
+    for (tgl,background,first_gpu) in [(false,11,kernel.gpu),(true,0,0xd470000),(true,11,0xd470000)] {
         crate::intel::render::TGL.with(|target|target.set(tgl));
         submitted.background_mode=background;
+        submitted.first_kernel.gpu=first_gpu;
         SLOT_READS.with(|reads|reads.borrow_mut().clear());
         crate::LOGS.with(|logs|logs.borrow_mut().clear());
         spirit_vfx_log_background_boundary(submitted,3,"retired");
@@ -431,6 +434,8 @@ fn encoding_mmio() {
     {
         let _busy=EXECUTION_RCS_SUBMIT_LOCK.lock();
         assert!(submit_spirit_vfx_frame(surface,surface,SpiritVfxControl,60).is_none());
+        assert!(submit_spirit_vfx_frame_inner(surface,surface,SpiritVfxControl,60,
+            Some(|| panic!("busy admission cannot seed a target"))).is_none());
         assert_eq!(SPIRIT_VFX_ENCODING_LOGS.load(Ordering::Acquire),1);
     }
     // An encoder/submission rejection after the first retirement also leaves

@@ -14,7 +14,7 @@ use crate::r::services::mouse_motion_service::{
 };
 
 const LILLY_CURSOR_LABEL: &str = "Spirit/Lilly";
-const LILLY_HUT_COMBO_ID: u32 = 0x4C49_4C59;
+pub(super) const LILLY_HUT_COMBO_ID: u32 = 0x4C49_4C59;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const LILLY_INITIAL_APPROACH_MS: u32 = 420;
 const LILLY_OUTLINE_EDGE_MS: u32 = 240;

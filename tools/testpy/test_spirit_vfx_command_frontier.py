@@ -85,8 +85,11 @@ def harness_source() -> str:
     declarations.append(production.item(constants, "direct_rcs_encode_mocs_index"))
     declarations.extend(production.constant(spirit, name) for name in (
         "SPIRIT_VFX_STATE_COMPUTE_MODE_CMD", "SPIRIT_VFX_FORCE_GPU_NON_COHERENT",
-        "SPIRIT_VFX_TGL_VFE_URB_DW5",
+        "SPIRIT_VFX_TGL_VFE_URB_DW5", "SPIRIT_VFX_SEGMENT_STATE_OFFSET",
+        "SPIRIT_VFX_SEGMENT_STATE_STRIDE",
     ))
+    declarations.append(production.constant("src/intel/gpgpu/operations/spirit_vfx.rs",
+        "SPIRIT_BACKGROUND_SEGMENT_FRAMES"))
     # Follow references so changing any production constant changes the batch
     # under test. Artifact inputs below are separate from command encoding.
     pending = set(re.findall(r"\b[A-Z][A-Z0-9_]+\b", "\n".join(declarations)))
@@ -153,6 +156,9 @@ fn encoded(background:bool)->Vec<u32> {
     encoded_passes(background, true)
 }
 fn encoded_passes(background:bool, has_sprite:bool)->Vec<u32> {
+    encoded_segment(background, has_sprite, 0)
+}
+fn encoded_segment(background:bool, has_sprite:bool, extras: usize)->Vec<u32> {
     let mut batch=vec![0xfeedfaceu32;DIRECT_RCS_BATCH_BYTES/4];
     let mut result=vec![0xfeedfaceu32;DIRECT_RCS_RESULT_BYTES/4];
     let state=DirectRcsState{batch_virt:batch.as_mut_ptr().cast(),
@@ -175,8 +181,12 @@ fn encoded_passes(background:bool, has_sprite:bool)->Vec<u32> {
         width:128,height:128,pitch_bytes:128*4};
     let dst=GpgpuRgba8Surface{gpu:0x06000000,bytes:256*256*4,
         width:256,height:256,pitch_bytes:256*4};
+    let additional: Vec<_> = (1..=extras).map(|index| (
+        SpiritVfxBuffer { gpu: control.gpu + index as u64 * 4096, ..control },
+        GpgpuRgba8Surface { gpu: dst.gpu + index as u64 * dst.bytes as u64, ..dst },
+    )).collect();
     assert!(direct_rcs_encode_spirit_vfx_batch(
-        state, background_upload, has_sprite.then_some((sprite, source)), control, dst,
+        state, background_upload, has_sprite.then_some((sprite, source)), control, dst, &additional,
     ));
     batch
 }
@@ -252,6 +262,36 @@ fn both_variants_stall_before_vfe_and_flush_before_entering_compute() {
                     batch[i]&PIPE_CONTROL_HDC_PIPELINE_FLUSH!=0&&batch[i+1]&required==required));
             }
         }
+    }
+}
+
+#[test]
+fn segment_dispatches_four_independent_frames_with_one_final_post_marker() {
+    for (device, revision) in [(0x4680, 0x0c), (0x9a49, 0x01)] {
+        super::physical(0x8086, device, revision);
+        let batch = encoded_segment(true, false, 3);
+        let offsets = command_offsets(&batch);
+        let walkers: Vec<_> = offsets.iter().copied()
+            .filter(|&index| batch[index] == GPGPU_WALKER_CMD)
+            .collect();
+        assert_eq!(walkers.len(), 4);
+        for (index, &walker) in walkers.iter().enumerate() {
+            let idd = if index == 0 { SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES } else {
+                SPIRIT_VFX_SEGMENT_STATE_OFFSET + (index - 1) * SPIRIT_VFX_SEGMENT_STATE_STRIDE
+            };
+            assert_eq!(batch[walker - 1], idd as u32);
+            let payload = idd + SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES - SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES;
+            assert_eq!(batch[walker + 3], payload as u32);
+            assert_eq!(batch[payload / 4 + 12], 0x090a0000 + index as u32 * 4096);
+            assert_eq!(batch[payload / 4 + 14], 0x06000000 + index as u32 * 256 * 256 * 4);
+        }
+        let retire_marker: Vec<_> = offsets.iter().copied().filter(|&offset|
+            batch[offset] & 0xffff0000 == PIPE_CONTROL_CMD & 0xffff0000
+                && batch[offset + 2] == 0x08200000 + (SPIRIT_VFX_POST_MARKER_SLOT * 4) as u32
+                && batch[offset + 4] == SPIRIT_VFX_POST_MARKER
+        ).collect();
+        assert_eq!(retire_marker.len(), 1);
+        assert!(retire_marker[0] > walkers[3]);
     }
 }
 

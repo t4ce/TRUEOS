@@ -4,19 +4,24 @@ const SPIRIT_VFX_ENCODING_LOG_LIMIT: u32 = 2;
 /// Scale 1 maps the authored canvas directly to the native 256px cursor.
 pub(crate) const SPIRIT_VFX_BACKGROUND_PRESENT_SCALE: f32 = 1.0;
 
+/// Bound the duration and DMA footprint of each rolling playback submission.
+pub(crate) const SPIRIT_BACKGROUND_SEGMENT_FRAMES: usize = 4;
+const SPIRIT_BACKGROUND_CONTROL_REGION: usize =
+    SPIRIT_BACKGROUND_SEGMENT_FRAMES * SPIRIT_VFX_PAGE_BYTES;
 const SPIRIT_BACKGROUND_CAPTURE_PITCH: u32 = SPIRIT_VFX_SIZE * 4;
 const SPIRIT_BACKGROUND_CAPTURE_BYTES: usize =
     (SPIRIT_BACKGROUND_CAPTURE_PITCH * SPIRIT_VFX_SIZE) as usize;
 const SPIRIT_BACKGROUND_CAPTURE_CONTROL_GPU: u64 = 0x0980_0000;
 const SPIRIT_BACKGROUND_CAPTURE_DST_GPU: u64 =
-    SPIRIT_BACKGROUND_CAPTURE_CONTROL_GPU + SPIRIT_VFX_PAGE_BYTES as u64;
+    SPIRIT_BACKGROUND_CAPTURE_CONTROL_GPU + SPIRIT_BACKGROUND_CONTROL_REGION as u64;
 const _: () = {
     assert!(SPIRIT_BACKGROUND_CAPTURE_CONTROL_GPU.is_multiple_of(SPIRIT_VFX_PAGE_BYTES as u64));
     assert!(
         SPIRIT_BACKGROUND_CAPTURE_CONTROL_GPU >= NATIVE_MATRIX_GPU + (2 * NATIVE_MATRIX_STRIDE) as u64
     );
     assert!(
-        SPIRIT_BACKGROUND_CAPTURE_DST_GPU + SPIRIT_BACKGROUND_CAPTURE_BYTES as u64
+        SPIRIT_BACKGROUND_CAPTURE_DST_GPU
+            + (SPIRIT_BACKGROUND_SEGMENT_FRAMES * SPIRIT_BACKGROUND_CAPTURE_BYTES) as u64
             <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
     );
 };
@@ -396,7 +401,9 @@ fn spirit_vfx_log_mapping_evidence(dev: super::Dev, submitted: SpiritVfxSubmitte
 // TEMPORARY companion observation for the TGL inter-walker marker. Read it
 // only on the existing first-two completions or one timeout, never every poll.
 fn spirit_vfx_log_background_boundary(submitted: SpiritVfxSubmitted, tag: u64, phase: &str) {
-    if !crate::intel::render::tgl_spirit_compute_contract() || submitted.background_mode == 0 {
+    if !crate::intel::render::tgl_spirit_compute_contract()
+        || submitted.first_kernel.gpu != SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU
+    {
         return;
     }
     let observed = direct_rcs_read_result_slot(submitted.state, SPIRIT_VFX_BACKGROUND_COMPLETE_SLOT);
@@ -499,7 +506,7 @@ fn spirit_vfx_write_control(
         // Keep the original smooth animation clock for the sprite walker and
         // every non-clock background. A changing-speed background supplies a
         // phase-equivalent coefficient in dword 7, preserving the stable
-        // control ABI. MagicTimeCircle reads its quantized UTC clock from the
+        // control ABI. MagicTimeCircle reads its clock-face phase from the
         // append-only dword 32 instead.
         core::ptr::write_volatile(dwords.add(4), animation_time.to_bits());
         core::ptr::write_volatile(
@@ -578,25 +585,96 @@ fn spirit_vfx_write_control(
     super::dma_flush(control_buffer.virt, control_buffer.bytes);
 }
 
+type SpiritBackgroundControlPage = [u8; SPIRIT_VFX_CONTROL_BYTES];
+
 /// Capture one fixed-size background using the native Spirit Zebin. Output is
 /// the raw tightly packed, premultiplied BGRA8 shader result.
 pub(crate) fn capture_spirit_background(controls: &[u8], output: &mut [u8]) -> Result<(), i32> {
-    if controls.len() != SPIRIT_VFX_CONTROL_BYTES || output.len() != SPIRIT_BACKGROUND_CAPTURE_BYTES {
+    let page: &SpiritBackgroundControlPage = controls.try_into().map_err(|_| -22)?;
+    render_spirit_background_frames(core::slice::from_ref(page), output, true)
+}
+
+/// Bake a single playback frame into an ordinary CPU cache slot.
+pub(crate) fn bake_spirit_background(
+    control: SpiritVfxControl,
+    phase_seconds: f32,
+    output: &mut [u8],
+) -> Result<(), i32> {
+    bake_spirit_background_segment(control, &[phase_seconds], output)
+}
+
+/// Render up to four consecutive BGRA8 samples in one GPU submission. Phase
+/// inputs are shader seconds after speed adjustment. Output is frame-major,
+/// with no gaps between the tightly packed samples.
+pub(crate) fn bake_spirit_background_segment(
+    control: SpiritVfxControl,
+    phase_seconds: &[f32],
+    output: &mut [u8],
+) -> Result<(), i32> {
+    if phase_seconds.is_empty()
+        || phase_seconds.len() > SPIRIT_BACKGROUND_SEGMENT_FRAMES
+        || phase_seconds.iter().any(|phase| !phase.is_finite() || *phase < 0.0)
+    {
         return Err(-22);
     }
-    let control_word = |index: usize| {
-        let offset = index * 4;
-        u32::from_le_bytes(controls[offset..offset + 4].try_into().unwrap())
-    };
-    let effect = control_word(3);
-    if control_word(0) != SPIRIT_VFX_CONTROL_MAGIC
-        || control_word(1) != SPIRIT_VFX_CONTROL_VERSION
-        || !matches!(effect, 2..=13)
-        || control_word(27) != SPIRIT_BACKGROUND_CAPTURE_PITCH
+    let mut words = [0u32; SPIRIT_VFX_CONTROL_DWORDS];
+    words[0] = SPIRIT_VFX_CONTROL_MAGIC;
+    words[1] = SPIRIT_VFX_CONTROL_VERSION;
+    words[3] = control.background_mode;
+    words[5] = spirit_vfx_bounded(control.background_opacity, 0.0, 1.0, 0.0).to_bits();
+    words[6] = spirit_vfx_bounded(
+        control.background_scale, 0.25, 3.0, SPIRIT_VFX_BACKGROUND_PRESENT_SCALE,
+    ).to_bits();
+    words[7] = 1.0f32.to_bits();
+    words[8] = spirit_vfx_bounded(control.background_intensity, 0.1, 4.0, 2.0).to_bits();
+    words[9] = control.background_color_a & 0x00FF_FFFF;
+    words[10] = control.background_color_b & 0x00FF_FFFF;
+    words[11] = spirit_vfx_bounded(control.position_x, -0.35, 0.35, 0.0).to_bits();
+    words[12] = spirit_vfx_bounded(control.position_y, -0.35, 0.35, 0.0).to_bits();
+    words[27] = SPIRIT_BACKGROUND_CAPTURE_PITCH;
+    words[32] = (control.clock_seconds_of_day.min(86_399) as f32).to_bits();
+
+    let mut pages = [[0u8; SPIRIT_VFX_CONTROL_BYTES]; SPIRIT_BACKGROUND_SEGMENT_FRAMES];
+    for (phase, page) in phase_seconds.iter().zip(&mut pages) {
+        words[4] = phase.to_bits();
+        for (dst, word) in page.chunks_exact_mut(4).zip(words) {
+            dst.copy_from_slice(&word.to_le_bytes());
+        }
+    }
+    render_spirit_background_frames(&pages[..phase_seconds.len()], output, false)
+}
+
+fn spirit_background_control_word(page: &SpiritBackgroundControlPage, index: usize) -> u32 {
+    let offset = index * 4;
+    u32::from_le_bytes(page[offset..offset + 4].try_into().unwrap())
+}
+
+fn render_spirit_background_frames(
+    controls: &[SpiritBackgroundControlPage],
+    output: &mut [u8],
+    comparison_capture: bool,
+) -> Result<(), i32> {
+    let count = controls.len();
+    if count == 0
+        || count > SPIRIT_BACKGROUND_SEGMENT_FRAMES
+        || output.len() != count * SPIRIT_BACKGROUND_CAPTURE_BYTES
+    {
+        return Err(-22);
+    }
+    let word = spirit_background_control_word;
+    let effect = word(&controls[0], 3);
+    if !matches!(effect, 2..=13)
+        || controls.iter().any(|page| {
+            word(page, 0) != SPIRIT_VFX_CONTROL_MAGIC
+                || word(page, 1) != SPIRIT_VFX_CONTROL_VERSION
+                || word(page, 3) != effect
+                || word(page, 27) != SPIRIT_BACKGROUND_CAPTURE_PITCH
+        })
     {
         return Err(-22);
     }
 
+    let started = direct_rcs_now_tick();
     let _submission = EXECUTION_RCS_SUBMIT_LOCK.try_lock().ok_or(-16)?;
     if EXECUTION_RCS_DETACHED_TAG.load(Ordering::Acquire) != 0
         || SPIRIT_VFX_PENDING.lock().is_some()
@@ -611,12 +689,14 @@ pub(crate) fn capture_spirit_background(controls: &[u8], output: &mut [u8]) -> R
     let state = execution_rcs_next_job_slot(shared_state).ok_or(-16)?;
     let background = upload_spirit_vfx_background_rgba8_kernel().ok_or(-95)?;
 
-    let bytes = SPIRIT_VFX_PAGE_BYTES + SPIRIT_BACKGROUND_CAPTURE_BYTES;
+    let allocation_bytes = SPIRIT_BACKGROUND_CONTROL_REGION
+        + SPIRIT_BACKGROUND_SEGMENT_FRAMES * SPIRIT_BACKGROUND_CAPTURE_BYTES;
     let control = {
         let mut storage = SPIRIT_BACKGROUND_CAPTURE_STORAGE.lock();
         // Every caller holds the execution submission lock until readback.
         if storage.is_none() {
-            let (phys, virt) = crate::dma::alloc_ppgtt(bytes, SPIRIT_VFX_PAGE_BYTES).ok_or(-12)?;
+            let (phys, virt) = crate::dma::alloc_ppgtt(allocation_bytes, SPIRIT_VFX_PAGE_BYTES)
+                .ok_or(-12)?;
             *storage = Some(SpiritVfxBuffer {
                 phys,
                 virt,
@@ -626,8 +706,8 @@ pub(crate) fn capture_spirit_background(controls: &[u8], output: &mut [u8]) -> R
         }
         storage.as_ref().copied().ok_or(-12)?
     };
-    let dst = GpgpuRgba8Surface::new_bgra(
-        control.phys + SPIRIT_VFX_PAGE_BYTES as u64,
+    let first_target = GpgpuRgba8Surface::new_bgra(
+        control.phys + SPIRIT_BACKGROUND_CONTROL_REGION as u64,
         SPIRIT_BACKGROUND_CAPTURE_DST_GPU,
         SPIRIT_BACKGROUND_CAPTURE_BYTES,
         SPIRIT_VFX_SIZE,
@@ -635,13 +715,34 @@ pub(crate) fn capture_spirit_background(controls: &[u8], output: &mut [u8]) -> R
         SPIRIT_BACKGROUND_CAPTURE_PITCH,
     )
     .ok_or(-5)?;
-    let dst_virt = unsafe { control.virt.add(SPIRIT_VFX_PAGE_BYTES) };
-    unsafe {
-        core::ptr::write_bytes(control.virt, 0, bytes);
-        core::ptr::copy_nonoverlapping(controls.as_ptr(), control.virt, controls.len());
+    let dst_virt = unsafe { control.virt.add(SPIRIT_BACKGROUND_CONTROL_REGION) };
+    let mut frames = [(control, first_target); SPIRIT_BACKGROUND_SEGMENT_FRAMES];
+    for (index, page) in controls.iter().enumerate() {
+        let control_offset = index * SPIRIT_VFX_PAGE_BYTES;
+        let dst_offset = index * SPIRIT_BACKGROUND_CAPTURE_BYTES;
+        let frame_control = SpiritVfxBuffer {
+            phys: control.phys + control_offset as u64,
+            gpu: control.gpu + control_offset as u64,
+            virt: unsafe { control.virt.add(control_offset) },
+            bytes: control.bytes,
+        };
+        let dst = GpgpuRgba8Surface::new_bgra(
+            first_target.phys + dst_offset as u64,
+            first_target.gpu + dst_offset as u64,
+            first_target.bytes,
+            first_target.width,
+            first_target.height,
+            first_target.pitch_bytes,
+        )
+        .ok_or(-5)?;
+        unsafe {
+            core::ptr::copy_nonoverlapping(page.as_ptr(), frame_control.virt, page.len());
+        }
+        super::dma_flush(frame_control.virt, page.len());
+        frames[index] = (frame_control, dst);
     }
-    super::dma_flush(control.virt, bytes);
-
+    unsafe { core::ptr::write_bytes(dst_virt, 0, output.len()) };
+    super::dma_flush(dst_virt, output.len());
     if !direct_rcs_forcewake(dev)
         || !direct_rcs_map_state(dev, shared_state)
         || !direct_rcs_init_ppgtt(shared_state)
@@ -651,12 +752,25 @@ pub(crate) fn capture_spirit_background(controls: &[u8], output: &mut [u8]) -> R
             background.phys,
             background.mapped_bytes,
         )
-        || !direct_rcs_map_ppgtt_kernel(shared_state, control.gpu, control.phys, bytes)
-        || !direct_rcs_encode_spirit_vfx_batch(state, Some(background), None, control, dst)
+        || !direct_rcs_map_ppgtt_kernel(
+            shared_state,
+            control.gpu,
+            control.phys,
+            SPIRIT_BACKGROUND_CONTROL_REGION + output.len(),
+        )
+        || !direct_rcs_encode_spirit_vfx_batch(
+            state,
+            Some(background),
+            None,
+            control,
+            first_target,
+            &frames[1..count],
+        )
     {
         return Err(-5);
     }
 
+    let submitted_at = direct_rcs_now_tick();
     match direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::Execution) {
         DirectRcsSubmissionState::Rejected => return Err(-16),
         DirectRcsSubmissionState::Ambiguous => return Err(-5),
@@ -674,15 +788,32 @@ pub(crate) fn capture_spirit_background(controls: &[u8], output: &mut [u8]) -> R
     {
         return Err(-110);
     }
+    let submit_to_retire_ms = direct_rcs_elapsed_ms_since(submitted_at);
     super::dma_flush(dst_virt, output.len());
     unsafe { core::ptr::copy_nonoverlapping(dst_virt, output.as_mut_ptr(), output.len()) };
-    crate::log_info!(
-        target: "gpgpu";
-        "intel/gpgpu: spirit background capture effect={} frame={} bytes={} walkers=1 retirement=marker-plus-saved-head\n",
-        effect,
-        control_word(2),
-        output.len(),
-    );
+    if comparison_capture {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: spirit background capture effect={} frame={} bytes={} walkers=1 retirement=marker-plus-saved-head\n",
+            effect,
+            word(&controls[0], 2),
+            output.len(),
+        );
+    }
+    if count > 1 {
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: spirit background segment effect={} samples={} walkers={} submissions=1 bytes={} submit_to_retire_ms={} total_ms={} phase_first={:.6} phase_last={:.6}\n",
+            effect,
+            count,
+            count,
+            output.len(),
+            submit_to_retire_ms,
+            direct_rcs_elapsed_ms_since(started),
+            f32::from_bits(word(&controls[0], 4)),
+            f32::from_bits(word(&controls[count - 1], 4)),
+        );
+    }
     Ok(())
 }
 
@@ -692,6 +823,34 @@ pub(crate) fn submit_spirit_vfx_frame(
     control: SpiritVfxControl,
     present_fps: u32,
 ) -> Option<SpiritVfxSubmission> {
+    submit_spirit_vfx_frame_inner(dst, source, control, present_fps, None::<fn() -> bool>)
+}
+
+/// Submit the sprite walker over a cached background. The caller owns the
+/// unarmed destination lease. If admission reaches publication, the callback
+/// seeds that exact destination and makes its writes visible to the GPU
+/// before GuC submission. A false return aborts without publishing the batch.
+/// On a busy execution lane the callback is not called.
+pub(crate) fn submit_spirit_vfx_frame_with_cached_background(
+    dst: GpgpuRgba8Surface,
+    source: GpgpuRgba8Surface,
+    control: SpiritVfxControl,
+    present_fps: u32,
+    copy_background: impl FnOnce() -> bool,
+) -> Option<SpiritVfxSubmission> {
+    if !matches!(control.background_mode, 2..=13) {
+        return None;
+    }
+    submit_spirit_vfx_frame_inner(dst, source, control, present_fps, Some(copy_background))
+}
+
+fn submit_spirit_vfx_frame_inner(
+    dst: GpgpuRgba8Surface,
+    source: GpgpuRgba8Surface,
+    control: SpiritVfxControl,
+    present_fps: u32,
+    copy_background: Option<impl FnOnce() -> bool>,
+) -> Option<SpiritVfxSubmission> {
     let _submit_guard = EXECUTION_RCS_SUBMIT_LOCK.try_lock()?;
     if EXECUTION_RCS_DETACHED_TAG.load(Ordering::Acquire) != 0
         || SPIRIT_VFX_PENDING.lock().is_some()
@@ -699,7 +858,7 @@ pub(crate) fn submit_spirit_vfx_frame(
         return None;
     }
     let (mut submitted, encoding_evidence) =
-        submit_spirit_vfx_batch(dst, source, control, present_fps)?;
+        submit_spirit_vfx_batch(dst, source, control, present_fps, copy_background)?;
     let tag = SPIRIT_VFX_NEXT_TAG
         .fetch_add(1, Ordering::Relaxed)
         .wrapping_add(1)
@@ -728,11 +887,14 @@ pub(crate) fn submit_spirit_vfx_frame(
         timeout_logged: false,
     });
     if submitted.submit_ambiguous || spirit_vfx_trace_frame(submitted.frame) {
-        let walkers = 1 + u32::from(submitted.background_mode != 0);
-        let dependency = if submitted.background_mode == 0 {
-            "none/clean-lilly"
-        } else {
+        let background_walker = submitted.first_kernel.gpu == SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU;
+        let walkers = 1 + u32::from(background_walker);
+        let dependency = if background_walker {
             "hdc-flush+invalidate"
+        } else if submitted.background_mode != 0 {
+            "cpu-seeded-bg"
+        } else {
+            "none/clean-lilly"
         };
         crate::log_info!(
             target: "gpgpu";
@@ -895,6 +1057,7 @@ fn submit_spirit_vfx_batch(
     source: GpgpuRgba8Surface,
     control: SpiritVfxControl,
     present_fps: u32,
+    copy_background: Option<impl FnOnce() -> bool>,
 ) -> Option<(SpiritVfxSubmitted, Option<SpiritVfxEncodingEvidence>)> {
     if !dst.is_valid()
         || dst.width != SPIRIT_VFX_SIZE
@@ -912,7 +1075,7 @@ fn submit_spirit_vfx_batch(
     }
     let started_tick = direct_rcs_now_tick();
     let dev = super::claimed_device()?;
-    let background_upload = if matches!(control.background_mode, 2..=13) {
+    let background_upload = if copy_background.is_none() && matches!(control.background_mode, 2..=13) {
         Some(upload_spirit_vfx_background_rgba8_kernel()?)
     } else {
         None
@@ -958,8 +1121,15 @@ fn submit_spirit_vfx_batch(
             Some((sprite_upload, source)),
             runtime.control,
             dst,
+            &[],
         );
     if !batch_ok {
+        return None;
+    }
+    // The sprite kernel interprets the existing background-mode word as
+    // permission to read the destination. The lease is neither armed nor
+    // submitted while its cached pixels are copied and flushed.
+    if copy_background.is_some_and(|copy| !copy()) {
         return None;
     }
     let encoding_evidence = (SPIRIT_VFX_ENCODING_LOGS.load(Ordering::Acquire)

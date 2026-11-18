@@ -34,10 +34,15 @@ typedef struct _cl_command_queue *cl_command_queue;
 typedef struct _cl_mem *cl_mem;
 typedef struct _cl_program *cl_program;
 typedef struct _cl_kernel *cl_kernel;
+typedef struct _cl_event *cl_event;
 
 #define CL_SUCCESS 0
 #define CL_DEVICE_NOT_FOUND -1
 #define CL_TRUE 1
+#define CL_FALSE 0
+#define CL_QUEUE_PROFILING_ENABLE (1ULL << 1)
+#define CL_PROFILING_COMMAND_START 0x1282
+#define CL_PROFILING_COMMAND_END 0x1283
 #define CL_DEVICE_TYPE_GPU (1ULL << 2)
 #define CL_MEM_READ_WRITE (1ULL << 0)
 #define CL_MEM_READ_ONLY (1ULL << 2)
@@ -71,6 +76,8 @@ extern cl_int clEnqueueReadBuffer(cl_command_queue, cl_mem, cl_uint, size_t, siz
 extern cl_int clEnqueueWriteBuffer(cl_command_queue, cl_mem, cl_uint, size_t, size_t, const void *,
                                    cl_uint, const void *, void *);
 extern cl_int clFinish(cl_command_queue);
+extern cl_int clGetEventProfilingInfo(cl_event, cl_uint, size_t, void *, size_t *);
+extern cl_int clReleaseEvent(cl_event);
 extern cl_int clReleaseMemObject(cl_mem);
 extern cl_int clReleaseKernel(cl_kernel);
 extern cl_int clReleaseProgram(cl_program);
@@ -133,7 +140,11 @@ static const BackgroundPreset BACKGROUND_PRESETS[REPLAY_MODE_COUNT] = {
 typedef struct {
     float speed;
     float intensity;
+    int cached_playback;
+    int paused;
 } RuntimeControls;
+
+enum { PLAYBACK_SPRITE = -1, PLAYBACK_LIVE, PLAYBACK_LOOP, PLAYBACK_SEGMENT };
 
 static const RuntimeControls DEFAULT_RUNTIME_CONTROLS = {
     .speed = 1.0f,
@@ -740,6 +751,14 @@ static int panel_process_events(SpiritPanel *panel, RuntimeControls *runtime) {
             switch (key) {
             case XK_Escape:
                 return 0;
+            case XK_c:
+            case XK_C:
+                if (runtime->cached_playback != PLAYBACK_SPRITE)
+                    runtime->cached_playback = (runtime->cached_playback + 1) % 3;
+                break;
+            case XK_space:
+                runtime->paused = !runtime->paused;
+                break;
             case XK_s:
             case XK_S:
                 save_scales();
@@ -772,7 +791,8 @@ static int panel_process_events(SpiritPanel *panel, RuntimeControls *runtime) {
     return 1;
 }
 
-static void panel_present(SpiritPanel *panel, const uint32_t *cursor_grid) {
+static void panel_present(SpiritPanel *panel, const uint32_t *cursor_grid,
+                          const RuntimeControls *runtime) {
     size_t cell_pixels = (size_t)SPIRIT_SIZE * SPIRIT_SIZE;
     for (unsigned y = 0; y < WINDOW_HEIGHT; ++y) {
         uint32_t *row = (uint32_t *)(panel->image->data + y * panel->image->bytes_per_line);
@@ -788,6 +808,14 @@ static void panel_present(SpiritPanel *panel, const uint32_t *cursor_grid) {
             for (unsigned x = 0; x < SPIRIT_SIZE; ++x) {
                 uint32_t pixel =
                     cursor_grid[(size_t)mode * cell_pixels + (size_t)y * SPIRIT_SIZE + x];
+                if (runtime->cached_playback != -1) {
+                    unsigned inverse_alpha = 255 - (pixel >> 24);
+                    // Use the same dark backdrop regardless of the desktop behind the panel.
+                    pixel = 0xff000000u
+                        | ((((pixel >> 16) & 255) + (32 * inverse_alpha + 127) / 255) << 16)
+                        | ((((pixel >> 8) & 255) + (36 * inverse_alpha + 127) / 255) << 8)
+                        | ((pixel & 255) + (44 * inverse_alpha + 127) / 255);
+                }
                 row[(size_t)cell_x * SPIRIT_SIZE + x] =
                     panel->argb ? pixel : (pixel & 0x00FFFFFFU);
             }
@@ -802,7 +830,10 @@ static void panel_present(SpiritPanel *panel, const uint32_t *cursor_grid) {
         XFillRectangle(panel->display, panel->window, panel->gc, x, y, SPIRIT_SIZE, 42);
         XSetForeground(panel->display, panel->gc, 0xffeeeeeeUL);
         char label[96];
-        snprintf(label, sizeof(label), "%u %s  %.2fx", i + 1, BACKGROUND_PRESETS[i].name, background_scales[i]);
+        const char *mode_label[] = {"  C:live", "  C:loop", "  C:segment"};
+        snprintf(label, sizeof(label), "%u %s  %.2fx%s", i + 1, BACKGROUND_PRESETS[i].name,
+                 background_scales[i], i == 0 && runtime->cached_playback != PLAYBACK_SPRITE
+                     ? mode_label[runtime->cached_playback] : "");
         XDrawString(panel->display, panel->window, panel->gc, x + 8, y + 14, label, (int)strlen(label));
         XDrawLine(panel->display, panel->window, panel->gc, x + 16, y + 29, x + 240, y + 29);
         int knob = x + 16 + (int)lroundf((background_scales[i] - 0.25f) / 2.75f * 224);
@@ -854,14 +885,219 @@ static void dispatch_spirit_frame(cl_command_queue queue, cl_kernel background_k
              "clEnqueueReadBuffer(cursor)");
 }
 
+enum { CACHE_SAMPLES = 16, CACHE_SAMPLE_HZ = 15, SEGMENT_SAMPLES = 4 };
+
+static void composite_samples(const uint32_t *a, const uint32_t *b, uint32_t *dst,
+                              size_t pixels, unsigned blend, unsigned gain) {
+    if (blend == 0 && gain == 256) {
+        memcpy(dst, a, pixels * sizeof(*dst));
+        return;
+    }
+    unsigned alpha_gain[256] = {0};
+    for (unsigned alpha = 1; alpha < 256; ++alpha) {
+        unsigned limit = 255 * 256 / alpha;
+        alpha_gain[alpha] = gain < limit ? gain : limit;
+    }
+    for (size_t i = 0; i < pixels; ++i) {
+        unsigned channels[4];
+        for (unsigned ch = 0; ch < 4; ++ch) {
+            unsigned shift = ch * 8;
+            channels[ch] = (((a[i] >> shift) & 255) * (256 - blend)
+                           + ((b[i] >> shift) & 255) * blend + 128) >> 8;
+        }
+        unsigned pixel_gain = alpha_gain[channels[3]];
+        uint32_t pixel = 0;
+        for (unsigned ch = 0; ch < 4; ++ch)
+            pixel |= ((channels[ch] * pixel_gain + 128) >> 8) << (ch * 8);
+        dst[i] = pixel;
+    }
+}
+
+static void sample_cached_cell(const uint32_t *clip, uint32_t *dst, size_t pixels,
+                               unsigned samples, float phase, unsigned gain) {
+    unsigned first = 0, second = 0, blend = 0;
+    if (samples > 1) {
+        float end = (float)(samples - 1);
+        float turn = fmodf(phase, 2.0f * end);
+        float position = fminf(turn, 2.0f * end - turn);
+        first = (unsigned)position;
+        second = first + 1 < samples ? first + 1 : first;
+        blend = (unsigned)((position - first) * 256.0f);
+    }
+    composite_samples(clip + first * pixels, clip + second * pixels, dst, pixels, blend, gain);
+}
+
+typedef struct {
+    unsigned frames;
+    unsigned waits;
+    unsigned underruns;
+    uint64_t host_ns;
+    uint64_t kernel_ns;
+    uint64_t longest_ns;
+} RenderStats;
+
+static void print_render_stats(const char *path, const RenderStats *stats) {
+    printf("spirit-vfx-%s frames=%u waits=%u underruns=%u host_ms=%.3f kernel_ms=%.3f longest_wait_ms=%.3f\n",
+           path, stats->frames, stats->waits, stats->underruns,
+           stats->host_ns / 1.0e6, stats->kernel_ns / 1.0e6, stats->longest_ns / 1.0e6);
+    fflush(stdout);
+}
+
+/* The in-order queue keeps each control write, walker, and readback together.
+ * Caller-owned host buffers remain live until the single queue drain. */
+static void render_segment(cl_command_queue queue, cl_kernel kernel, cl_mem controls,
+                           cl_mem cursor, uint32_t pages[][CONTROL_DWORDS], uint32_t *out,
+                           unsigned count, RenderStats *stats) {
+    const size_t global[2] = {SPIRIT_SIZE, SPIRIT_SIZE};
+    const size_t local[2] = {16, 1};
+    const size_t pixels = (size_t)SPIRIT_SIZE * SPIRIT_SIZE;
+    cl_event events[SEGMENT_SAMPLES] = {0};
+    uint64_t started = monotonic_nanoseconds();
+    for (unsigned i = 0; i < count; ++i) {
+        check_cl(clEnqueueWriteBuffer(queue, controls, CL_FALSE, 0, sizeof(pages[i]),
+                                     pages[i], 0, NULL, NULL), "segment control");
+        check_cl(clEnqueueNDRangeKernel(queue, kernel, 2, NULL, global, local, 0, NULL,
+                                        &events[i]), "segment walker");
+        check_cl(clEnqueueReadBuffer(queue, cursor, CL_FALSE, 0, pixels * sizeof(*out),
+                                    out + i * pixels, 0, NULL, NULL), "segment readback");
+    }
+    check_cl(clFinish(queue), "segment drain");
+    uint64_t elapsed = monotonic_nanoseconds() - started;
+    stats->frames += count;
+    stats->waits++;
+    stats->host_ns += elapsed;
+    if (elapsed > stats->longest_ns)
+        stats->longest_ns = elapsed;
+    for (unsigned i = 0; i < count; ++i) {
+        cl_ulong start, end;
+        check_cl(clGetEventProfilingInfo(events[i], CL_PROFILING_COMMAND_START, sizeof(start),
+                                        &start, NULL), "segment profile start");
+        check_cl(clGetEventProfilingInfo(events[i], CL_PROFILING_COMMAND_END, sizeof(end),
+                                        &end, NULL), "segment profile end");
+        stats->kernel_ns += end - start;
+        check_cl(clReleaseEvent(events[i]), "segment release event");
+    }
+}
+
+static void bake_pages(uint32_t pages[][CONTROL_DWORDS], const uint32_t *control,
+                       uint64_t first, unsigned count) {
+    for (unsigned i = 0; i < count; ++i) {
+        memcpy(pages[i], control, sizeof(pages[i]));
+        pages[i][4] = float_bits((float)(first + i) / CACHE_SAMPLE_HZ);
+        pages[i][5] = float_bits(1.0f);
+        pages[i][7] = float_bits(1.0f);
+        pages[i][8] = float_bits(2.0f);
+    }
+}
+
+static void benchmark_background(cl_command_queue queue, cl_kernel kernel, cl_mem controls,
+                                  cl_mem cursor) {
+    const size_t pixels = (size_t)SPIRIT_SIZE * SPIRIT_SIZE;
+    const size_t bytes = SEGMENT_SAMPLES * pixels * sizeof(uint32_t);
+    uint32_t *single = malloc(bytes);
+    uint32_t *segment = malloc(bytes);
+    if (single == NULL || segment == NULL)
+        die("out of memory for segment benchmark");
+    RenderStats single_stats = {0}, segment_stats = {0};
+    for (unsigned round = 0; round < 9; ++round) {
+        for (unsigned id = REPLAY_FIRST_ID; id <= REPLAY_LAST_ID; ++id) {
+            if (id == REPLAY_MAGIC_TIME_CIRCLE)
+                continue;
+            uint32_t control[CONTROL_DWORDS], pages[SEGMENT_SAMPLES][CONTROL_DWORDS];
+            fill_control(control, 0, 0, 0, MAGIC_TIME_STATIC_PREVIEW_SECONDS,
+                         (ReplayMode)id, &DEFAULT_RUNTIME_CONTROLS);
+            bake_pages(pages, control, round * SEGMENT_SAMPLES, SEGMENT_SAMPLES);
+            for (unsigned pass = 0; pass < 2; ++pass) {
+                if ((pass + round) % 2 == 0) {
+                    for (unsigned i = 0; i < SEGMENT_SAMPLES; ++i)
+                        render_segment(queue, kernel, controls, cursor, &pages[i],
+                                       single + i * pixels, 1, &single_stats);
+                } else {
+                    render_segment(queue, kernel, controls, cursor, pages, segment,
+                                   SEGMENT_SAMPLES, &segment_stats);
+                }
+            }
+            if (memcmp(single, segment, bytes) != 0)
+                die("batched background differs from individual samples");
+        }
+        if (round == 0) {
+            single_stats = (RenderStats){0};
+            segment_stats = (RenderStats){0};
+        }
+    }
+    print_render_stats("single", &single_stats);
+    print_render_stats("segment", &segment_stats);
+    printf("spirit-vfx-segment-parity bytes=%zu equal=1\n", bytes * 8 * (REPLAY_MODE_COUNT - 1));
+    free(segment);
+    free(single);
+}
+
+typedef struct {
+    uint64_t first;
+    unsigned count;
+    float scale;
+    double phase;
+} RollingCell;
+
+static void play_rolling_cell(cl_command_queue queue, cl_kernel kernel, cl_mem controls,
+                              cl_mem cursor, RollingCell *cell, uint32_t *clip,
+                              uint32_t *out, unsigned mode, const uint32_t *page,
+                              float scale, float elapsed, unsigned gain, RenderStats *stats) {
+    const size_t pixels = (size_t)SPIRIT_SIZE * SPIRIT_SIZE;
+    cell->phase += elapsed * CACHE_SAMPLE_HZ;
+    uint64_t sample = (uint64_t)cell->phase;
+    uint64_t last = cell->count != 0 ? cell->first + cell->count - 1 : 0;
+    int dial = mode == REPLAY_MAGIC_TIME_CIRCLE;
+    if (cell->count == 0 || scale != cell->scale || (!dial && sample >= last)) {
+        unsigned overlap = 0;
+        if (cell->count != 0 && scale == cell->scale) {
+            if (sample == last) {
+                memcpy(clip, clip + (cell->count - 1) * pixels, pixels * sizeof(*clip));
+                overlap = 1;
+            } else if (sample > last) {
+                stats->underruns++;
+            }
+        }
+        cell->first = sample;
+        cell->scale = scale;
+        unsigned count = dial ? 1 : SEGMENT_SAMPLES;
+        cell->count = count + overlap;
+        uint32_t pages[SEGMENT_SAMPLES][CONTROL_DWORDS];
+        bake_pages(pages, page, cell->first + overlap, count);
+        render_segment(queue, kernel, controls, cursor, pages, clip + overlap * pixels,
+                       count, stats);
+    }
+    unsigned index = dial ? 0 : (unsigned)(sample - cell->first);
+    unsigned adjacent = dial ? 0 : index + 1;
+    unsigned blend = dial ? 0 : (unsigned)((cell->phase - (double)sample) * 256.0);
+    composite_samples(clip + index * pixels, clip + adjacent * pixels, out, pixels, blend, gain);
+}
+
 static void run_panel(cl_command_queue queue, cl_kernel background_kernel,
                       cl_kernel sprite_kernel, cl_mem control_buffer,
                       const cl_mem source_buffers[LILLY_FRAME_COUNT], cl_mem cursor_buffer,
                       uint32_t *cursor_grid, const LillyAsset *asset) {
     SpiritPanel panel = create_panel();
     RuntimeControls runtime = DEFAULT_RUNTIME_CONTROLS;
+    runtime.cached_playback = sprite_kernel == NULL ? PLAYBACK_SEGMENT : PLAYBACK_SPRITE;
+    size_t cell_pixels = (size_t)SPIRIT_SIZE * SPIRIT_SIZE;
+    uint32_t *cache = NULL;
+    uint32_t *rolling = NULL;
+    RollingCell segments[REPLAY_MODE_COUNT] = {0};
+    RenderStats segment_stats = {0};
+    float baked_scale[REPLAY_MODE_COUNT] = {0};
+    if (sprite_kernel == NULL) {
+        cache = malloc(REPLAY_MODE_COUNT * CACHE_SAMPLES * cell_pixels * sizeof(*cache));
+        rolling = malloc(REPLAY_MODE_COUNT * (SEGMENT_SAMPLES + 1) * cell_pixels * sizeof(*rolling));
+        if (cache == NULL || rolling == NULL)
+            die("out of memory for background playback");
+    }
     uint64_t started_ns = monotonic_nanoseconds();
+    uint64_t last_ns = started_ns;
     uint64_t next_frame_ns = started_ns;
+    uint64_t next_stats_ns = started_ns + 5000000000ULL;
+    float elapsed_seconds = 0.0f;
+    float playback_samples[REPLAY_MODE_COUNT] = {0};
     uint32_t shader_frame = 0;
 
     printf("Spirit VFX panel running; press ESC to close\n");
@@ -875,47 +1111,108 @@ static void run_panel(cl_command_queue queue, cl_kernel background_kernel,
     printf("  layers:   %s\n", sprite_kernel != NULL
            ? "background with Lilly and AuraBloom" : "background only");
     printf("  keys:     Drag per-cell scale sliders; S saves defaults; Left/Right = Speed; Down/Up = Intensity\n");
+    if (cache != NULL)
+        printf("  playback: C cycles rolling segments / continuous shader / cached loop; Space pauses\n");
     print_runtime_controls(&runtime);
 
     while (panel_process_events(&panel, &runtime)) {
         sleep_until(next_frame_ns);
         uint64_t now_ns = monotonic_nanoseconds();
-        uint64_t elapsed_ms = (now_ns - started_ns) / 1000000ULL;
+        float delta = (float)(now_ns - last_ns) * 1.0e-9f;
+        last_ns = now_ns;
+        if (!runtime.paused)
+            elapsed_seconds += delta;
+        uint64_t elapsed_ms = (uint64_t)(elapsed_seconds * 1000.0f);
         unsigned source_frame =
             (unsigned)((elapsed_ms / LILLY_FRAME_PERIOD_MS) % LILLY_FRAME_COUNT);
-        size_t cell_pixels = (size_t)SPIRIT_SIZE * SPIRIT_SIZE;
         for (unsigned mode_index = 0; mode_index < REPLAY_MODE_COUNT; ++mode_index) {
             ReplayMode mode = (ReplayMode)(mode_index + REPLAY_FIRST_ID);
-            float animation_time = (float)shader_frame * (1.0f / SPIRIT_TARGET_HZ);
+            float animation_time = cache != NULL ? elapsed_seconds
+                : (float)shader_frame * (1.0f / SPIRIT_TARGET_HZ);
             uint32_t control[CONTROL_DWORDS];
             fill_control(control, asset->width, asset->height, animation_time,
-                         utc_seconds_of_day(), mode, &runtime);
+                         cache != NULL ? MAGIC_TIME_STATIC_PREVIEW_SECONDS : utc_seconds_of_day(),
+                         mode, &runtime);
+            if (runtime.cached_playback == PLAYBACK_SEGMENT ||
+                runtime.cached_playback == PLAYBACK_LOOP) {
+                float opacity, intensity;
+                memcpy(&opacity, &control[5], sizeof(opacity));
+                memcpy(&intensity, &control[8], sizeof(intensity));
+                unsigned gain = (unsigned)(opacity * intensity * 128.0f);
+                float speed = mode == REPLAY_SPARK_LATTICE
+                    ? fminf(runtime.speed * 3.0f, 4.0f) : runtime.speed;
+                if (runtime.cached_playback == PLAYBACK_SEGMENT) {
+                    uint32_t *clip = rolling + mode_index * (SEGMENT_SAMPLES + 1) * cell_pixels;
+                    float scale = panel.dragging == (int)mode_index && segments[mode_index].count
+                        ? segments[mode_index].scale : background_scales[mode_index];
+                    control[6] = float_bits(scale);
+                    play_rolling_cell(queue, background_kernel, control_buffer, cursor_buffer,
+                                      &segments[mode_index], clip,
+                                      cursor_grid + mode_index * cell_pixels, mode, control, scale,
+                                      runtime.paused ? 0.0f : delta * speed, gain, &segment_stats);
+                    continue;
+                }
+                unsigned samples = mode == REPLAY_MAGIC_TIME_CIRCLE ? 1 : CACHE_SAMPLES;
+                uint32_t *clip = cache + mode_index * CACHE_SAMPLES * cell_pixels;
+                if (baked_scale[mode_index] == 0.0f ||
+                    (baked_scale[mode_index] != background_scales[mode_index] && panel.dragging < 0)) {
+                    uint32_t bake[CONTROL_DWORDS];
+                    memcpy(bake, control, sizeof(bake));
+                    bake[5] = float_bits(1.0f);
+                    bake[7] = float_bits(1.0f);
+                    bake[8] = float_bits(2.0f);
+                    for (unsigned frame = 0; frame < samples; ++frame) {
+                        bake[4] = float_bits((float)frame / CACHE_SAMPLE_HZ);
+                        dispatch_spirit_frame(queue, background_kernel, NULL, control_buffer,
+                                              NULL, cursor_buffer, bake, clip + frame * cell_pixels);
+                    }
+                    baked_scale[mode_index] = background_scales[mode_index];
+                    playback_samples[mode_index] = 0;
+                } else if (!runtime.paused) {
+                    playback_samples[mode_index] = fmodf(playback_samples[mode_index]
+                        + delta * speed * CACHE_SAMPLE_HZ, 2.0f * (CACHE_SAMPLES - 1));
+                }
+                sample_cached_cell(clip, cursor_grid + mode_index * cell_pixels, cell_pixels,
+                                   samples, playback_samples[mode_index], gain);
+                continue;
+            }
             control[2] = shader_frame;
             dispatch_spirit_frame(
                 queue, background_kernel, sprite_kernel, control_buffer,
                 source_buffers[source_frame], cursor_buffer, control,
                 cursor_grid + (size_t)mode_index * cell_pixels);
         }
-        panel_present(&panel, cursor_grid);
-        shader_frame++;
+        panel_present(&panel, cursor_grid, &runtime);
+        if (!runtime.paused)
+            shader_frame++;
 
         next_frame_ns += 1000000000ULL / SPIRIT_TARGET_HZ;
         uint64_t finished_ns = monotonic_nanoseconds();
+        if (finished_ns >= next_stats_ns) {
+            if (segment_stats.waits != 0)
+                print_render_stats("segment-panel", &segment_stats);
+            segment_stats = (RenderStats){0};
+            next_stats_ns = finished_ns + 5000000000ULL;
+        }
         if (finished_ns > next_frame_ns) {
             next_frame_ns = finished_ns + 1000000000ULL / SPIRIT_TARGET_HZ;
         }
     }
+    free(rolling);
+    free(cache);
     destroy_panel(&panel);
 }
 
 int main(int argc, char **argv) {
     static const char *const usage =
         "usage: spirit_vfx_offline [--panel | --panel-background] | "
+        "--benchmark-background | "
         "--render-grid [output.png] [time_seconds] [clock_seconds_of_day] | "
         "--render-background-grid [output.png] [time_seconds] [clock_seconds_of_day] | "
         "--capture-background-grid PREFIX [time_seconds] [clock_seconds_of_day]";
     int panel_mode = 1;
     int include_sprite = 1;
+    int benchmark = 0;
     const char *output_path = "bld/spirit-vfx-grid.png";
     const char *capture_prefix = NULL;
     char *capture_png = NULL;
@@ -964,6 +1261,10 @@ int main(int argc, char **argv) {
         if (argc > 5) {
             die(usage);
         }
+    } else if (argc == 2 && strcmp(argv[1], "--benchmark-background") == 0) {
+        panel_mode = 0;
+        include_sprite = 0;
+        benchmark = 1;
     } else if (argc > 1) {
         die(usage);
     }
@@ -995,7 +1296,9 @@ int main(int argc, char **argv) {
     cl_context context =
         clCreateContext(context_properties, 1, &device, NULL, NULL, &error);
     check_cl(error, "clCreateContext");
-    cl_command_queue queue = clCreateCommandQueue(context, device, 0, &error);
+    cl_command_queue_properties props = benchmark || (panel_mode && !include_sprite)
+        ? CL_QUEUE_PROFILING_ENABLE : 0;
+    cl_command_queue queue = clCreateCommandQueue(context, device, props, &error);
     check_cl(error, "clCreateCommandQueue");
 
     cl_program background_program =
@@ -1054,7 +1357,9 @@ int main(int argc, char **argv) {
     if (include_sprite) {
         printf("  artifact: sprite=%s\n", SPRITE_ARTIFACT);
     }
-    if (panel_mode) {
+    if (benchmark) {
+        benchmark_background(queue, background_kernel, control_buffer, cursor_buffer);
+    } else if (panel_mode) {
         run_panel(queue, background_kernel, sprite_kernel, control_buffer, source_buffers,
                   cursor_buffer, cursor_grid, &asset);
     } else {

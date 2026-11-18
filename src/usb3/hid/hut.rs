@@ -1267,6 +1267,15 @@ pub fn remove_combo(combo_id: u32) -> bool {
     true
 }
 
+pub(crate) fn combo_color(combo_id: u32) -> Option<u8> {
+    HID_HUT
+        .lock()
+        .combos
+        .iter()
+        .find(|combo| combo.combo_id == combo_id)
+        .map(|combo| combo.color_id)
+}
+
 pub fn combo_color_for_cursor(
     controller_id: u32,
     slot_id: u32,

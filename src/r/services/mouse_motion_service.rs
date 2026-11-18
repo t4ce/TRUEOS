@@ -49,6 +49,13 @@ const MIN_STROKE_MS: u32 = 8;
 const MAX_STROKE_MS: u32 = 30_000;
 // Sampling the resident font does not resize its atlas. Permit physical text
 // sizes beyond the atlas's native em while keeping derived cursor work bounded.
+pub(crate) const MOTIF_CURSOR_GAP: u16 = 4;
+pub(crate) const MOTIF_CURSOR_WIDTH: u16 = microflake::TILE_SIZE as u16;
+pub(crate) const MOTIF_CURSOR_HEIGHT: u16 = {
+    let marker_height = MOTIF_CURSOR_WIDTH + 1; // One row for lifecycle color.
+    let font_height = crate::ui4::CONTEXT_MENU_FONT_HEIGHT as u16;
+    if marker_height > font_height { marker_height } else { font_height }
+};
 const MAX_GLYPH_HEIGHT: u16 = 4096;
 const MAX_CURSOR_TEXT_SCALARS: usize = 128;
 const MAX_CURSOR_TEXT_PIXELS: u32 = 16 * 1024 * 1024;
@@ -71,8 +78,8 @@ pub(crate) struct MouseControlCursor {
     pub(crate) slot_id: u32,
 }
 
-/// Color-free text runs prepared once from the shared microfont service. The
-/// software-cursor plane only translates, clips and recolors these on motion.
+/// Text and optional motif runs prepared when the cursor is registered. The
+/// software-cursor plane translates, clips, and applies cursor tints on motion.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MouseControlGlyph {
     pub(crate) text: Arc<str>,
@@ -90,6 +97,7 @@ pub(crate) struct MouseControlGlyphRun {
     pub(crate) y: u16,
     pub(crate) width: u16,
     pub(crate) coverage: u8,
+    pub(crate) rgb: Option<[u8; 3]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -629,13 +637,45 @@ pub(crate) fn request_text_cursor(
         .cursors
         .iter()
         .filter_map(|cursor| cursor.visual.glyph.as_ref())
-        .find(|glyph| glyph.text.as_ref() == text && glyph.height == height_px
-            && glyph.prefix_width == prefix_width)
+        .find(|glyph| {
+            glyph.text.as_ref() == text
+                && glyph.height == height_px
+                && glyph.prefix_width == prefix_width
+                && glyph.runs.iter().all(|run| run.rgb.is_none())
+        })
         .cloned();
     let glyph = match shared {
         Some(glyph) => glyph,
-        None => Arc::new(prepare_cursor_text(text, height_px, prefix_width)?),
+        None => Arc::new(prepare_cursor_text(text, height_px, prefix_width, None)?),
     };
+    request_prepared_text_cursor(principal, label, glyph, prefix_color, text_color)
+}
+
+/// Replaces the first text cell with an RGBA8 motif while retaining its status tint beneath it.
+pub(crate) fn request_motif_cursor(
+    principal: MouseControlPrincipal,
+    label: &str,
+    text: &str,
+    tile: &[u8; microflake::TILE_BYTES],
+    status_color: crate::graphics::primitives::Rgba8,
+    text_color: crate::graphics::primitives::Rgba8,
+) -> Result<MouseControlCursor, MouseControlError> {
+    let glyph = Arc::new(prepare_cursor_text(
+        text,
+        crate::ui4::CONTEXT_MENU_FONT_HEIGHT as u16,
+        MOTIF_CURSOR_WIDTH,
+        Some(tile),
+    )?);
+    request_prepared_text_cursor(principal, label, glyph, status_color, text_color)
+}
+
+fn request_prepared_text_cursor(
+    principal: MouseControlPrincipal,
+    label: &str,
+    glyph: Arc<MouseControlGlyph>,
+    prefix_color: crate::graphics::primitives::Rgba8,
+    text_color: crate::graphics::primitives::Rgba8,
+) -> Result<MouseControlCursor, MouseControlError> {
     STATION.lock().request(
         principal,
         label,
@@ -911,17 +951,30 @@ fn prepare_cursor_text(
     text: &str,
     height: u16,
     prefix_width: u16,
+    motif: Option<&[u8; microflake::TILE_BYTES]>,
 ) -> Result<MouseControlGlyph, MouseControlError> {
-    let (width, _) = cursor_text_dimensions(text, height)?;
-    let cell_width = (u32::from(height) * 6 + 5) / 11;
+    let (text_width, _) = cursor_text_dimensions(text, height)?;
+    let (width, full_height, cell_width, text_x) = if motif.is_some() {
+        let cell_width = crate::ui4::CONTEXT_MENU_FONT_WIDTH as u16;
+        let nickname_cells = text.chars().count() as u16 - 1;
+        let text_x = prefix_width + if nickname_cells > 0 { MOTIF_CURSOR_GAP } else { 0 };
+        (text_x + nickname_cells * cell_width, MOTIF_CURSOR_HEIGHT, cell_width, text_x)
+    } else {
+        (text_width, height, ((u32::from(height) * 6 + 5) / 11) as u16, 0)
+    };
+    let text_y = (full_height - height) / 2;
     // Paper and Shell3 already warm this immutable R8 alphabet once at boot.
     // Derive only color-free row runs; never rasterize another glyph or atlas.
     let atlas = super::microfont_mask_service::ready_atlas()
         .ok_or(MouseControlError::Unavailable)?;
     let mut runs = AllocVec::new();
-    for (column, character) in text.chars().enumerate() {
+    if let Some(tile) = motif {
+        append_motif_runs(&mut runs, tile);
+    }
+    for (column, character) in text.chars().skip(usize::from(motif.is_some())).enumerate() {
         let mask = atlas.glyph(character).or_else(|| atlas.glyph('?'))
             .ok_or(MouseControlError::Invalid)?;
+        let cell_width = u32::from(cell_width);
         for y in 0..u32::from(height) {
             let mut from = 0;
             let mut coverage = atlas.sample(mask, 0, y, cell_width, u32::from(height));
@@ -934,10 +987,11 @@ fn prepare_cursor_text(
                 if next != coverage || x == cell_width {
                     if coverage != 0 {
                         runs.push(MouseControlGlyphRun {
-                            x: (column as u32 * cell_width + from) as u16,
-                            y: y as u16,
+                            x: text_x + (column as u32 * cell_width + from) as u16,
+                            y: text_y + y as u16,
                             width: (x - from) as u16,
                             coverage,
+                            rgb: None,
                         });
                     }
                     from = x;
@@ -953,9 +1007,50 @@ fn prepare_cursor_text(
         text: Arc::from(text),
         prefix_width,
         width,
-        height,
+        height: full_height,
         runs: Arc::from(runs.into_boxed_slice()),
     })
+}
+
+fn append_motif_runs(
+    runs: &mut AllocVec<MouseControlGlyphRun>,
+    tile: &[u8; microflake::TILE_BYTES],
+) {
+    let size = MOTIF_CURSOR_WIDTH;
+    let top = (MOTIF_CURSOR_HEIGHT - (size + 1)) / 2;
+    let sample = |x: u16, y: u16| {
+        let offset = (usize::from(y) * microflake::TILE_SIZE + usize::from(x)) * 4;
+        [tile[offset], tile[offset + 1], tile[offset + 2], tile[offset + 3]]
+    };
+    for y in 0..size {
+        let mut x = 0;
+        while x < size {
+            let pixel = sample(x, y);
+            let start = x;
+            x += 1;
+            while x < size && sample(x, y) == pixel {
+                x += 1;
+            }
+            let [r, g, b, coverage] = pixel;
+            if coverage != 0 {
+                runs.push(MouseControlGlyphRun {
+                    x: start,
+                    y: top + y,
+                    width: x - start,
+                    coverage,
+                    rgb: Some([r, g, b]),
+                });
+            }
+        }
+    }
+    let underline_width = 5;
+    runs.push(MouseControlGlyphRun {
+        x: (size - underline_width) / 2,
+        y: top + size,
+        width: underline_width,
+        coverage: 255,
+        rgb: None,
+    });
 }
 
 fn apply_button_sets(cursor: &mut CursorRecord, set: u32, clear: u32) {

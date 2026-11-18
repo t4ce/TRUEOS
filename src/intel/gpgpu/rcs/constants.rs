@@ -428,12 +428,12 @@ const RGBA8_SCANOUT_RELEASE_MARKER: u32 = 0xC0DE_D102;
 
 
 
-// Spirit VFX owns one fixed two-artifact/two-walker execution batch. The first
-// walker authors the procedural alpha background and the second source-over
-// composites one immutable resident Lilly RGBA frame into the cursor target.
+// Spirit VFX uses at most two walkers. The background walker authors a
+// procedural layer. The sprite walker composites a resident Lily frame
+// over the current target, which playback can seed from a baked background.
 const SPIRIT_VFX_SIZE: u32 = 256;
 // Dwords 0..31 retain the original preview-v1 layout. Dword 32 is an
-// append-only UTC seconds-of-day extension consumed only by MagicTimeCircle;
+// append-only clock-face phase consumed only by MagicTimeCircle;
 // dword 4 remains smooth animation time for the independent sprite walker.
 const SPIRIT_VFX_CONTROL_DWORDS: usize = 33;
 const SPIRIT_VFX_CONTROL_BYTES: usize = SPIRIT_VFX_CONTROL_DWORDS * 4;

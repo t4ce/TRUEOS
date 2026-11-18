@@ -58,6 +58,20 @@ make -C tools/lilly/spirit-vfx-offline panel-background
 make -C tools/lilly/spirit-vfx-offline capture-background PREFIX=bld/spirit-vfx-preview
 ```
 
+The background panel starts with rolling segments on a common dark backdrop.
+Each segment renders four new samples at 15 samples per shader second. Playback
+interpolates neighboring samples on a forward-moving timeline. Press **C** to
+cycle through rolling segments, continuous shader motion, and the cached loop.
+Press **Space** to pause. The loop plays 16 samples forward and backward over
+two seconds at 1×. The decorative dial stays fixed in all three background
+preview modes.
+
+`make benchmark-background` compares a queue wait per sample with one wait per
+four samples on the same inputs. It prints the count of rendered samples and
+waits, total host elapsed time, total GPU kernel event time, and byte parity.
+The rolling panel also logs its longest batch drain and underruns, counted when
+playback passes the last retained sample before the next batch arrives.
+
 The capture uses the reviewed scales and default controls, with animation time
 1.5 s (frame 90 at 60 Hz) and clock time 10:09:42 UTC. Supply `TIME` and `CLOCK`
 to sample another frame. Both headless background targets use the reviewed

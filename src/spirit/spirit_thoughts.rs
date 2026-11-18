@@ -103,6 +103,7 @@ impl Thought {
     }
 
     fn label_for_agent(agent: &AgentEntry) -> Arc<str> {
+        // Reserve the first grid cell for the motif rendered by the cursor station.
         match agent
             .nickname
             .as_deref()
@@ -289,7 +290,7 @@ impl Thoughts {
         let sizes: [Option<MarkerSize>; CAPACITY] = core::array::from_fn(|index| {
             self.agents
                 .get(index)
-                .and_then(|thought| geometry.marker.for_label(&thought.label))
+                .and_then(|thought| geometry.label_size(&thought.label))
         });
         // Keep each complete label's still-valid resting rectangle. Changing a
         // color never rebuilds the label or reshuffles an unrelated agent.
@@ -404,13 +405,6 @@ impl MarkerSize {
         })
     }
 
-    fn for_label(self, label: &str) -> Option<Self> {
-        Self::new(
-            u32::from(self.width).checked_mul(label.chars().count().try_into().ok()?)?,
-            u32::from(self.height),
-        )
-    }
-
     fn half_width(self) -> i64 {
         i64::from(self.width.div_ceil(2))
     }
@@ -450,9 +444,21 @@ struct Geometry {
     lilly_width: u32,
     lilly_height: u32,
     marker: MarkerSize,
+    nickname_cell_width: u16,
+    nickname_gap: u16,
 }
 
 impl Geometry {
+    fn label_size(self, label: &str) -> Option<MarkerSize> {
+        let nickname_cells = u32::try_from(label.chars().skip(1).count()).ok()?;
+        let nickname_width = nickname_cells.checked_mul(u32::from(self.nickname_cell_width))?;
+        let gap = if nickname_cells > 0 { self.nickname_gap } else { 0 };
+        MarkerSize::new(
+            (u32::from(self.marker.width) + u32::from(gap)).checked_add(nickname_width)?,
+            u32::from(self.marker.height),
+        )
+    }
+
     fn with_marker(self, marker: MarkerSize) -> Self {
         Self { marker, ..self }
     }
@@ -552,9 +558,8 @@ impl Geometry {
             x: i32::try_from(i64::from(self.lilly_x) + i64::from(self.lilly_width) / 2).ok()?,
             y: i32::try_from(i64::from(self.lilly_y) + i64::from(self.lilly_height) / 2).ok()?,
         };
-        // The leading §, rather than the complete text's center, follows the
-        // circle that just circumscribes Lilly. A longer nickname or another
-        // resting agent must not push this path farther away from her.
+        // The leading marker cell follows the circle that circumscribes Lilly.
+        // A longer nickname or another resting agent must not widen that path.
         let rx = f64::from(self.lilly_width) / 2.0;
         let ry = f64::from(self.lilly_height) / 2.0;
         let radius = libm::ceil(libm::sqrt(rx * rx + ry * ry)) as i32;
@@ -810,6 +815,7 @@ mod service {
     use spin::Mutex;
     use trueos_time::{Duration, Instant, Timer};
 
+    const AGENT_MOTIF: microflake::Motif = microflake::Motif::Mix;
     const PRINCIPAL: MouseControlPrincipal = MouseControlPrincipal::KernelApp(0x53);
     static THOUGHTS: Mutex<Thoughts> = Mutex::new(Thoughts::new());
 
@@ -845,18 +851,43 @@ mod service {
         epoch: u64,
         id: String,
         label: Arc<str>,
+        accent: [u8; 3],
         cursor: MouseControlCursor,
         marker: MarkerSize,
         resting: Point,
         orbit: Option<Motion>,
     }
 
-    fn same(cursor: &Cursor, placement: &Placement) -> bool {
+    fn same(cursor: &Cursor, placement: &Placement, accent: [u8; 3]) -> bool {
         cursor.owner == placement.owner
             && cursor.epoch == placement.epoch
             && cursor.id == placement.id
             && cursor.label == placement.label
             && cursor.marker == placement.marker
+            && cursor.accent == accent
+    }
+
+    fn lilly_accent() -> [u8; 3] {
+        let color = crate::usb2::hid::hut::combo_color(super::super::lilly_cursor::LILLY_HUT_COMBO_ID)
+            .map(v::vinput::InputComboColor::from_index)
+            .unwrap_or_default();
+        let [r, g, b, _] = color.rgba();
+        [r, g, b]
+    }
+
+    fn marker_settings<'a>(id: &'a str, accent: [u8; 3]) -> microflake::Settings<'a> {
+        // Hash identity once when the cursor is created. Lifecycle changes
+        // recolor the status underline and leave the agent's motif intact.
+        let index = id.bytes().fold(2166136261u32, |hash, byte| {
+            (hash ^ u32::from(byte)).wrapping_mul(16777619)
+        });
+        microflake::Settings {
+            motif: AGENT_MOTIF.family(index as usize),
+            palette: microflake::Palette::Spirit { accent },
+            seed: id,
+            background_alpha: 0,
+            ..microflake::Settings::default()
+        }
     }
 
     fn teleport(point: Point) -> MouseControlCommand {
@@ -898,17 +929,8 @@ mod service {
         loop {
             prune_dead_owners();
             let now_ms = Instant::now().as_millis();
-            // Use Paper's physical-size grid cell, not an independent pixel
-            // size. Missing display metrics or atlas readiness defer glyphs;
-            // the next tick retries after the normal shared-font warmup.
-            let marker = crate::r::services::shell3_font_service::grid_cell_extent(
-                super::super::paper_demo::GREETING_GRID_SCALE,
-            )
-            .and_then(|(width, height)| MarkerSize::new(width, height));
-            let placements = if let (
-                Some(marker),
-                Some((screen_width, screen_height, lilly_x, lilly_y, lilly_width, lilly_height)),
-            ) = (marker, super::super::marker_anchor())
+            let placements = if let Some((screen_width, screen_height, lilly_x, lilly_y, lilly_width, lilly_height)) =
+                super::super::marker_anchor()
             {
                 THOUGHTS.lock().plan(
                     Geometry {
@@ -918,7 +940,12 @@ mod service {
                         lilly_y,
                         lilly_width,
                         lilly_height,
-                        marker,
+                        marker: MarkerSize {
+                            width: motion::MOTIF_CURSOR_WIDTH,
+                            height: motion::MOTIF_CURSOR_HEIGHT,
+                        },
+                        nickname_cell_width: crate::ui4::CONTEXT_MENU_FONT_WIDTH as u16,
+                        nickname_gap: motion::MOTIF_CURSOR_GAP,
                     },
                     now_ms,
                 )
@@ -926,12 +953,13 @@ mod service {
                 Vec::new()
             };
 
+            let accent = lilly_accent();
             // Capability release happens outside the ingress/model lock.
             let mut index = 0;
             while index < cursors.len() {
                 if placements
                     .iter()
-                    .any(|placement| same(&cursors[index], placement))
+                    .any(|placement| same(&cursors[index], placement, accent))
                 {
                     index += 1;
                 } else {
@@ -940,16 +968,21 @@ mod service {
                 }
             }
             for placement in &placements {
-                let cursor_index = match cursors.iter().position(|cursor| same(cursor, placement)) {
+                let cursor_index = match cursors
+                    .iter()
+                    .position(|cursor| same(cursor, placement, accent))
+                {
                     Some(index) => index,
                     None => {
                         let [r, g, b, a] = placement.color;
-                        let Ok(cursor) = motion::request_text_cursor(
+                        let settings = marker_settings(&placement.id, accent);
+                        let mut tile = [0; microflake::TILE_BYTES];
+                        microflake::render_tile(&settings, settings.steps.count() - 1, &mut tile);
+                        let Ok(cursor) = motion::request_motif_cursor(
                             PRINCIPAL,
                             "Spirit/agent",
                             &placement.label,
-                            placement.marker.height,
-                            1,
+                            &tile,
                             Rgba8::new(r, g, b, a),
                             Rgba8::new(0, 0, 0, 255),
                         ) else {
@@ -961,6 +994,7 @@ mod service {
                                 epoch: placement.epoch,
                                 id: placement.id.clone(),
                                 label: placement.label.clone(),
+                                accent,
                                 cursor,
                                 marker: placement.marker,
                                 resting: Point {
@@ -1086,6 +1120,8 @@ mod tests {
             lilly_width: 256,
             lilly_height: 256,
             marker: MarkerSize::new(16, 16).unwrap(),
+            nickname_cell_width: 16,
+            nickname_gap: 0,
         }
     }
 
@@ -1093,8 +1129,22 @@ mod tests {
         Geometry {
             // This is Shell3's content-cell aspect ratio, not a square proxy.
             marker: MarkerSize::new((height * 6 + 5) / 11, height).unwrap(),
+            nickname_cell_width: ((height * 6 + 5) / 11) as u16,
             ..geometry(x, y)
         }
+    }
+
+    #[test]
+    fn native_marker_layout_reserves_menu_text_only_when_named() {
+        let geometry = Geometry {
+            marker: MarkerSize::new(32, 33).unwrap(),
+            nickname_cell_width: 12,
+            nickname_gap: 4,
+            ..geometry(0, 0)
+        };
+        assert_eq!(geometry.label_size("§"), MarkerSize::new(32, 33));
+        assert_eq!(geometry.label_size("§Ada"), MarkerSize::new(72, 33));
+        assert_eq!(geometry.label_size("§莉"), MarkerSize::new(48, 33));
     }
 
     fn point_for(placement: &Placement, now_ms: u64) -> Point {

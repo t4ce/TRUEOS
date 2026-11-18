@@ -11,6 +11,7 @@ license-file = "LICENSE"
 [workspace]
 resolver = "3"
 members = [
+    "crates/microflake",
     "crates/trueos-crypto",
     "crates/trueos-credential-store",
     "crates/trueos-executor",
@@ -97,6 +98,7 @@ odin-native-gpgpu = ["subsystem-igpu"]
 legacy_vm_checkpoint = []
 
 [dependencies]
+microflake = { path = "crates/microflake" }
 trueos-terminal = { path = "crates/trueos-terminal" }
 # Experimental upstream paging API; see tools/docs/x86_64-next.md.
 # Keep the effective features explicit; do not follow changing upstream defaults.

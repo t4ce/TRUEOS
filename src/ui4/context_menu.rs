@@ -21,6 +21,9 @@ pub(super) const MENU_OFFSET_PX: u32 = 14;
 pub(super) const MENU_WIDTH_PX: u32 = super::input_broker::CONTEXT_MENU_WIDTH_PX;
 pub(super) const MENU_BORDER_PX: u32 = 2;
 pub(super) const MENU_ROW_HEIGHT_PX: u32 = super::input_broker::CONTEXT_MENU_ROW_HEIGHT_PX;
+const CONTEXT_MENU_FONT_SCALE: usize = 2;
+pub(crate) const CONTEXT_MENU_FONT_WIDTH: usize = microfont::FWIDTH * CONTEXT_MENU_FONT_SCALE;
+pub(crate) const CONTEXT_MENU_FONT_HEIGHT: usize = microfont::FHEIGHT * CONTEXT_MENU_FONT_SCALE;
 pub(super) const MENU_TEXT_INSET_PX: u32 = 10;
 pub(super) const MENU_RENDER_LABEL_CHARS: usize = 20;
 

@@ -1059,6 +1059,9 @@ const TERMINAL_VFX_TRANSITION_MS: u64 = POWER_MODE_VFX_TRANSITION_MS;
 const CODEX_VFX_OPACITY: f32 = 0.75;
 const CODEX_VFX_INTENSITY_CYCLE_MS: u64 = 7_000;
 const IDLE_VFX_TRANSITION_MS: u64 = 1_000;
+/// Decorative dial phase used by the preview. The live background does not
+/// sample wall time. A separate clock layer can own timekeeping.
+pub(super) const SPIRIT_DECORATIVE_CLOCK_SECONDS: u32 = 10 * 3_600 + 9 * 60 + 42;
 const REASONING_VFX_TRANSITION_MS: u64 = 2_000;
 const REASONING_VFX_FRAME_SECONDS: f32 = 1.0 / 30.0;
 const REASONING_VFX_SPEED_CENTER: f32 = 2.0;
@@ -1577,9 +1580,7 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     SpiritVfxGpuSnapshot {
         revision,
         background_mode: background.effect.artifact_mode().unwrap_or(0),
-        clock_seconds_of_day: crate::chronos::best_effort_unix_time_seconds()
-            .map(|seconds| (seconds % 86_400) as u32)
-            .unwrap_or(0),
+        clock_seconds_of_day: SPIRIT_DECORATIVE_CLOCK_SECONDS,
         background_phase_override,
         background_scale,
         opacity: background.opacity,

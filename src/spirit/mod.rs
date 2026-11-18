@@ -28,6 +28,7 @@ mod paper_demo;
 mod codex_drop;
 pub(crate) mod codex_handoff;
 mod codex_render;
+mod background_cache;
 pub(crate) use codex_drop::{introduce_attachments, attachment_intro_input, poll_attachment_intro, cancel_attachment_intro};
 pub(crate) use paper_demo::{GREETING_GRID_HEIGHT_MM, GREETING_GRID_SCALE, GREETING_GRID_WIDTH_MM};
 pub(crate) mod lilly_protocol;
@@ -503,6 +504,26 @@ fn gpgpu_bgra_target(
     .ok_or(SpiritSubmitError::HardwareNotReady)
 }
 
+/// Seed the hidden VFX target before the GPU begins. This write is an input
+/// to the GPU producer. The optional post-GPU CPU stamp keeps its own barrier.
+fn seed_background(lease: SpiritFrameLease, sample: &background_cache::Sample) -> bool {
+    let access = {
+        let mailbox = MAILBOXES[lease.fence.id.index()].lock();
+        let Ok(frame) = matching_pending(&mailbox, lease) else {
+            return false;
+        };
+        if frame.producer != SpiritFrameProducer::Vfx
+            || require_unreleased(frame, SpiritBarrierSet::GPU).is_err()
+        {
+            return false;
+        }
+        frame.lease.surface
+    };
+    // The VFX worker owns this hidden lease until submission returns.
+    let dst = unsafe { core::slice::from_raw_parts_mut(access.virt, access.byte_len) };
+    sample.copy_into(dst, lease.layout()) && intel_cursor::spirit_cursor_flush_cpu(access).is_ok()
+}
+
 /// Publish all CPU writes and release the CPU producer bit.
 pub(crate) fn release_cpu(lease: SpiritFrameLease) -> Result<(), SpiritSubmitError> {
     {
@@ -581,17 +602,33 @@ fn submit_spirit_vfx_frame(
         cancel_pending(lease);
         return Err(SpiritSubmitError::HardwareNotReady);
     };
-    let control = spirit_vfx_control();
+    let mut control = spirit_vfx_control();
     let Some(first_claim) = crate::r::services::shell3_font_service::claim_first_spirit_producer() else {
         cancel_pending(lease);
         return Err(SpiritSubmitError::Busy);
     };
-    let Some(submission) =
-        crate::intel::gpgpu::submit_spirit_vfx_frame(target, source, control, present_fps)
-    else {
+    let background = background_cache::select(control, Instant::now().as_millis());
+    let submission = match background {
+        background_cache::Selection::Cached(sample) => {
+            crate::intel::gpgpu::submit_spirit_vfx_frame_with_cached_background(
+                target, source, control, present_fps, || seed_background(lease, &sample),
+            )
+        }
+        background_cache::Selection::Clean | background_cache::Selection::Procedural => {
+            if matches!(background, background_cache::Selection::Clean) {
+                control.background_mode = 0;
+            }
+            crate::intel::gpgpu::submit_spirit_vfx_frame(target, source, control, present_fps)
+        }
+    };
+    let Some(submission) = submission else {
         crate::r::services::shell3_font_service::cancel_first_spirit_claim(first_claim);
         cancel_pending(lease);
-        return Err(SpiritSubmitError::HardwareNotReady);
+        return Err(if background_cache::baking() {
+            SpiritSubmitError::Busy
+        } else {
+            SpiritSubmitError::HardwareNotReady
+        });
     };
     Ok(GpuInflight {
         lease,
@@ -1545,6 +1582,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                         if active.frame.producer == SpiritFrameProducer::Vfx {
                             presentation_rate.observe_surflive(Instant::now());
                             codex_handoff::presented(active.frame.lease.fence.sequence);
+                            background_cache::start();
                         }
                         if !boot_move_queued {
                             boot_move_queued = true;
@@ -1946,6 +1984,10 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                             );
                         }
                         gpu_inflight = Some(producing);
+                        continue;
+                    }
+                    Err(SpiritSubmitError::Busy) if background_cache::baking() => {
+                        Timer::after(Duration::from_millis(SPIRIT_GPU_POLL_MS)).await;
                         continue;
                     }
                     Err(error) => {

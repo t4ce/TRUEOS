@@ -76,12 +76,23 @@ fn direct_rcs_push_spirit_vfx_dependency(batch: &mut [u32], cursor: &mut usize) 
         && direct_rcs_push_pipe_control(batch, cursor, PIPE_CONTROL_INVALIDATE_BITS)
 }
 
+// Keep the first background and the sprite state at their existing offsets.
+// Extra film frames each own non-overlapping state with the first layout.
+const SPIRIT_VFX_SEGMENT_STATE_OFFSET: usize = 0x6800;
+const SPIRIT_VFX_SEGMENT_STATE_STRIDE: usize = 0x400;
+const _: () = assert!(
+    SPIRIT_VFX_SEGMENT_STATE_OFFSET
+        + (SPIRIT_BACKGROUND_SEGMENT_FRAMES - 1) * SPIRIT_VFX_SEGMENT_STATE_STRIDE
+        <= DIRECT_RCS_BATCH_BYTES
+);
+
 fn direct_rcs_encode_spirit_vfx_batch(
     state: DirectRcsState,
     background_upload: Option<UploadedKernelArtifact>,
     sprite: Option<(UploadedKernelArtifact, GpgpuRgba8Surface)>,
     control: SpiritVfxBuffer,
     dst: GpgpuRgba8Surface,
+    extra_backgrounds: &[(SpiritVfxBuffer, GpgpuRgba8Surface)],
 ) -> bool {
     let background_valid = match background_upload {
         Some(upload) => {
@@ -106,6 +117,13 @@ fn direct_rcs_encode_spirit_vfx_batch(
     };
     if !background_valid
         || !sprite_valid
+        || extra_backgrounds.len() >= SPIRIT_BACKGROUND_SEGMENT_FRAMES
+        || (!extra_backgrounds.is_empty() && (background_upload.is_none() || sprite.is_some()))
+        || extra_backgrounds.iter().any(|(_, target)| {
+            target.width != SPIRIT_VFX_SIZE
+                || target.height != SPIRIT_VFX_SIZE
+                || target.pitch_bytes < SPIRIT_VFX_SIZE * 4
+        })
         || dst.width != SPIRIT_VFX_SIZE
         || dst.height != SPIRIT_VFX_SIZE
         || dst.pitch_bytes < SPIRIT_VFX_SIZE * 4
@@ -119,35 +137,46 @@ fn direct_rcs_encode_spirit_vfx_batch(
     }
 
     if background_upload.is_some() {
-        let background_state_ok = direct_rcs_write_interface_descriptor_at(
-            state,
-            SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES,
-            SPIRIT_VFX_BACKGROUND_BINDING_TABLE_OFFSET_BYTES,
-            SPIRIT_VFX_BACKGROUND_TEXT_OFFSET_BYTES,
-            2,
-            2,
-        ) && direct_rcs_write_spirit_vfx_binding(
-            state,
-            SPIRIT_VFX_BACKGROUND_BINDING_TABLE_OFFSET_BYTES,
-            0,
-            SPIRIT_VFX_BACKGROUND_CONTROL_SURFACE_OFFSET_BYTES,
-            control.gpu,
-            control.bytes,
-        ) && direct_rcs_write_spirit_vfx_binding(
-            state,
-            SPIRIT_VFX_BACKGROUND_BINDING_TABLE_OFFSET_BYTES,
-            1,
-            SPIRIT_VFX_BACKGROUND_DST_SURFACE_OFFSET_BYTES,
-            dst.gpu,
-            dst.bytes,
-        ) && direct_rcs_write_spirit_vfx_payload(
-            state,
-            SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES,
-            SPIRIT_VFX_BACKGROUND_CROSS_THREAD_BYTES,
-            &[control.gpu, dst.gpu],
-        );
-        if !background_state_ok {
-            return false;
+        for (index, (frame_control, frame_target)) in core::iter::once((control, dst))
+            .chain(extra_backgrounds.iter().copied())
+            .enumerate()
+        {
+            let offset = if index == 0 {
+                0
+            } else {
+                SPIRIT_VFX_SEGMENT_STATE_OFFSET - SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES
+                    + (index - 1) * SPIRIT_VFX_SEGMENT_STATE_STRIDE
+            };
+            let background_state_ok = direct_rcs_write_interface_descriptor_at(
+                state,
+                SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES + offset,
+                SPIRIT_VFX_BACKGROUND_BINDING_TABLE_OFFSET_BYTES + offset,
+                SPIRIT_VFX_BACKGROUND_TEXT_OFFSET_BYTES,
+                2,
+                2,
+            ) && direct_rcs_write_spirit_vfx_binding(
+                state,
+                SPIRIT_VFX_BACKGROUND_BINDING_TABLE_OFFSET_BYTES + offset,
+                0,
+                SPIRIT_VFX_BACKGROUND_CONTROL_SURFACE_OFFSET_BYTES + offset,
+                frame_control.gpu,
+                frame_control.bytes,
+            ) && direct_rcs_write_spirit_vfx_binding(
+                state,
+                SPIRIT_VFX_BACKGROUND_BINDING_TABLE_OFFSET_BYTES + offset,
+                1,
+                SPIRIT_VFX_BACKGROUND_DST_SURFACE_OFFSET_BYTES + offset,
+                frame_target.gpu,
+                frame_target.bytes,
+            ) && direct_rcs_write_spirit_vfx_payload(
+                state,
+                SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES + offset,
+                SPIRIT_VFX_BACKGROUND_CROSS_THREAD_BYTES,
+                &[frame_control.gpu, frame_target.gpu],
+            );
+            if !background_state_ok {
+                return false;
+            }
         }
     }
 
@@ -294,6 +323,23 @@ fn direct_rcs_encode_spirit_vfx_batch(
                 SPIRIT_VFX_BACKGROUND_COMPLETE_MARKER,
             );
         }
+    }
+
+    for index in 0..extra_backgrounds.len() {
+        let idd_offset = SPIRIT_VFX_SEGMENT_STATE_OFFSET + index * SPIRIT_VFX_SEGMENT_STATE_STRIDE;
+        let payload_offset = idd_offset
+            + (SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES - SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES);
+        ok &= direct_rcs_push_spirit_vfx_dependency(batch, &mut cursor);
+        ok &= direct_rcs_push_spirit_vfx_idd_load(batch, &mut cursor, idd_offset);
+        ok &= direct_rcs_push_gpgpu_walker_2d(
+            batch,
+            &mut cursor,
+            payload_offset,
+            SPIRIT_VFX_BACKGROUND_INDIRECT_BYTES,
+            16,
+            SPIRIT_VFX_SIZE,
+            GPGPU_WALKER_SIMD16_MASK,
+        );
     }
 
     if sprite.is_some() {

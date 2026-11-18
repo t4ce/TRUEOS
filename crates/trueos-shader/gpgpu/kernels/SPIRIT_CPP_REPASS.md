@@ -24,10 +24,9 @@ The nine original background IDs retain their large-form ideas:
 - pixel burst gains smaller counter-phase chips.
 
 Background ID 11, `Magic time circle`, retains the segmented Magic circle
-grammar but turns it into a UTC clock face. Twelve broad hour sectors, sixty
-smaller minute sectors, and one thin outer seconds sector consume integer
-seconds-of-day through the existing time dword. HH, MM, and SS are quantized
-before pixel math, so the seconds sector changes exactly once per second.
+grammar. The shader takes a dial pose through the clock dword so the headless
+capture can still compare explicit hour, minute, and second positions. Live
+Spirit uses the fixed decorative pose 10:09:42.
 
 Background IDs 12 and 13 append the procedural knot studies selected from
 `tools/lilly/spirit-knot-vfx-offline/knot.frag`. Their shared geometry lives in
@@ -140,10 +139,24 @@ cpp spirit clean
 and their authored palettes into the existing Spirit control panel. `clean`
 restores transparent background plus `Original / clean`.
 
-Idle mode selects `Magic time circle + Aura bloom` transiently. TRUEOS prefers
-NTP and falls back to the bootloader-provided timestamp; its system timezone is UTC.
-The sprite walker retains smooth 60 Hz animation time in dword 4, while only
-the clock background reads quantized wall time from dword 32.
+Idle mode selects the decorative `Magic time circle` behind Lily and retains
+its single frame. For animated effects the background worker renders up to
+four 256×256 frames in one GuC submission. It keeps at most nine samples ready
+for the active effect, at 15 samples per wall-clock second. Shader time
+continues forward at the selected speed. Playback interpolates adjacent
+samples across batch boundaries and holds the last image if a batch is late.
+
+The original finite loop cache is available through `USE_ROLLING_SEGMENTS`
+in `src/spirit/background_cache.rs`. The Ubuntu background panel can switch
+between rolling segments, continuous shaders, and cached loops with **C**.
+
+Both playback paths use premultiplied BGRA8 and apply live opacity and
+approximate intensity during the copy to the hidden cursor buffer. The
+existing sprite walker composites Lily and still uses the same retirement
+and display latch checks. A rolling batch shares the GPU execution lane with
+the sprite pass. The `spirit background segment` marker records samples,
+submissions, and GPU retirement time. The `background segment playback`
+marker reports selected samples and underruns in five-second windows.
 Backgrounds use the fixed reviewed per-effect scales in
 `SpiritVfxBackgroundEffect::default_scale`, matching the production preview.
 Scale 1 remains the native authored 256-pixel canvas; each effect's calibrated

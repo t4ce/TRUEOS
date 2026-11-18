@@ -19,6 +19,7 @@ mod codex_prompt;
 pub(crate) use collapse::{CollapseError, MAX_COLLAPSE_IMAGE_SIZE, enable_window_collapse};
 mod compositor_service;
 mod context_menu;
+pub(crate) use context_menu::{CONTEXT_MENU_FONT_HEIGHT, CONTEXT_MENU_FONT_WIDTH};
 mod cursor_frame_inout;
 mod damage;
 mod display_metrics;
