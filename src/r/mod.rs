@@ -11,6 +11,7 @@ pub(crate) mod input_timing;
 pub(crate) mod progress_probe;
 pub mod kernel_task_domain;
 pub mod keyboard;
+pub(crate) mod lilyvfx_cabi;
 pub mod lz4;
 pub mod media_cabi;
 pub(crate) mod matrix_cabi;

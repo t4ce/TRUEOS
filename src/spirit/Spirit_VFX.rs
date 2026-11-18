@@ -1051,6 +1051,9 @@ static MOVE_PORTAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 static MOVE_PORTAL_STARTED_MS: AtomicU64 = AtomicU64::new(0);
 
 const GLOBAL_AURA_HALF_CYCLE_MS: u64 = 1_000;
+// Keep Spirit's sprite clean while calibrating the background renderer.
+const SPIRIT_AURA_BLOOM_ENABLED: bool = false;
+const SPIRIT_FAILURE_FLASH_ENABLED: bool = false;
 const POWER_MODE_VFX_TRANSITION_MS: u64 = 650;
 const TERMINAL_VFX_TRANSITION_MS: u64 = POWER_MODE_VFX_TRANSITION_MS;
 const CODEX_VFX_OPACITY: f32 = 0.75;
@@ -1408,12 +1411,12 @@ pub(crate) fn play_failed_vfx() {
             (failed_vfx::MAX_DURATION_MS - failed_vfx::MIN_DURATION_MS + 1) as usize,
         ) as u64;
     let now_ms = Instant::now().as_millis();
-    FAILED_SPRITE_VFX
-        .lock()
-        .start(now_ms, duration_ms);
+    if SPIRIT_FAILURE_FLASH_ENABLED {
+        FAILED_SPRITE_VFX.lock().start(now_ms, duration_ms);
+    }
     if let Err(error) = super::lilly_protocol::schedule_failed_reaction(now_ms, duration_ms) {
         crate::log_warn!(target: "spirit";
-            "trueos-spirit: failed gesture unavailable error={:?}; VFX remains active\n",
+            "trueos-spirit: failed gesture unavailable error={:?}\n",
             error,
         );
     }
@@ -1559,8 +1562,10 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
             );
         }
         (SpiritVfxEffect::HitFlash, parameters)
-    } else {
+    } else if SPIRIT_AURA_BLOOM_ENABLED {
         (SpiritVfxEffect::AuraBloom, global_aura_parameters(now_ms))
+    } else {
+        (SpiritVfxEffect::OriginalClean, [0.0; 4])
     };
     let (fx_color_a, fx_color_b) = effect.demo_colors();
     let sprite_shader = SpiritVfxSpriteShader {

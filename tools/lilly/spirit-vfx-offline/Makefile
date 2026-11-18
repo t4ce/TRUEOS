@@ -9,10 +9,13 @@ PROGRAM := $(BUILD_DIR)/spirit_vfx_offline
 BACKGROUND_ARTIFACT := $(REPO_ROOT)/crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_background_rgba8.spv
 SPRITE_ARTIFACT := $(REPO_ROOT)/crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/spirit_vfx_sprite_rgba8.spv
 OUTPUT ?= bld/spirit-vfx-grid.png
+BACKGROUND_OUTPUT ?= bld/spirit-vfx-background-grid.png
+PREFIX ?= bld/spirit-vfx-preview
 TIME ?= 1.5
+CLOCK ?= 36582
 LILLY_SOURCE ?= $(abspath $(REPO_ROOT)/../Lily/LilyDS)
 
-.PHONY: all assets run panel render clean
+.PHONY: all assets run panel render panel-background render-background capture-background clean
 
 all: $(PROGRAM) assets
 
@@ -30,6 +33,15 @@ panel: $(PROGRAM) assets
 
 render: $(PROGRAM) assets
 	cd $(REPO_ROOT) && bld/tools/spirit_vfx_offline --render-grid $(OUTPUT) $(TIME)
+
+panel-background: $(PROGRAM)
+	cd $(REPO_ROOT) && bld/tools/spirit_vfx_offline --panel-background
+
+render-background: $(PROGRAM)
+	cd $(REPO_ROOT) && bld/tools/spirit_vfx_offline --render-background-grid "$(BACKGROUND_OUTPUT)" "$(TIME)" "$(CLOCK)"
+
+capture-background: $(PROGRAM)
+	cd $(REPO_ROOT) && bld/tools/spirit_vfx_offline --capture-background-grid "$(PREFIX)" "$(TIME)" "$(CLOCK)"
 
 clean:
 	rm -f $(PROGRAM)

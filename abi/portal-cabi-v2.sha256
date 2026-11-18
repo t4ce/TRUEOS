@@ -56,4 +56,4 @@
 # Additive bounded subdocument fetch with host-applied Referer context; all previous signatures verified unchanged.
 # Additive non-consuming final GET URL metadata; all 369 previous signatures verified unchanged.
 # Intentional retirement of the QJS-only mouse stream; every surviving signature verified unchanged.
-2db345f9aadad1282f5f1ffedf0d14f41855e20443cb0f342f1984ee07fbb08a
+8382548b4c294a41ae611ed9c0b32aa33ecdb763f90687d90410deec977ccbdd

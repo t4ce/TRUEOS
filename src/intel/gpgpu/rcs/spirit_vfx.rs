@@ -79,9 +79,8 @@ fn direct_rcs_push_spirit_vfx_dependency(batch: &mut [u32], cursor: &mut usize) 
 fn direct_rcs_encode_spirit_vfx_batch(
     state: DirectRcsState,
     background_upload: Option<UploadedKernelArtifact>,
-    sprite_upload: UploadedKernelArtifact,
+    sprite: Option<(UploadedKernelArtifact, GpgpuRgba8Surface)>,
     control: SpiritVfxBuffer,
-    source: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
 ) -> bool {
     let background_valid = match background_upload {
@@ -93,11 +92,20 @@ fn direct_rcs_encode_spirit_vfx_batch(
         }
         None => true,
     };
+    let sprite_valid = sprite.is_none_or(|(upload, _)| {
+        upload.bin_sha256 == SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN_SHA256
+            && upload.gpu == SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU
+            && upload.bytes == SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN.len()
+            && upload.address_space == GpgpuArtifactAddressSpace::CallerPpgtt
+    });
+    let Some(instruction_base) = background_upload
+        .or(sprite.map(|(upload, _)| upload))
+        .map(|upload| upload.gpu)
+    else {
+        return false;
+    };
     if !background_valid
-        || sprite_upload.bin_sha256 != SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN_SHA256
-        || sprite_upload.gpu != SPIRIT_VFX_SPRITE_RGBA8_ADLS_GPU
-        || sprite_upload.bytes != SPIRIT_VFX_SPRITE_RGBA8_ADLS_BIN.len()
-        || sprite_upload.address_space != GpgpuArtifactAddressSpace::CallerPpgtt
+        || !sprite_valid
         || dst.width != SPIRIT_VFX_SIZE
         || dst.height != SPIRIT_VFX_SIZE
         || dst.pitch_bytes < SPIRIT_VFX_SIZE * 4
@@ -110,35 +118,15 @@ fn direct_rcs_encode_spirit_vfx_batch(
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 
-    let background_descriptor_ok = background_upload.is_none()
-        || direct_rcs_write_interface_descriptor_at(
+    if background_upload.is_some() {
+        let background_state_ok = direct_rcs_write_interface_descriptor_at(
             state,
             SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES,
             SPIRIT_VFX_BACKGROUND_BINDING_TABLE_OFFSET_BYTES,
             SPIRIT_VFX_BACKGROUND_TEXT_OFFSET_BYTES,
             2,
             2,
-        );
-    let sprite_text_offset = if background_upload.is_some() {
-        SPIRIT_VFX_SPRITE_TEXT_OFFSET_BYTES
-    } else {
-        SPIRIT_VFX_BACKGROUND_TEXT_OFFSET_BYTES
-    };
-    let descriptors_ok = background_descriptor_ok
-        && direct_rcs_write_interface_descriptor_at(
-            state,
-            SPIRIT_VFX_SPRITE_IDD_OFFSET_BYTES,
-            SPIRIT_VFX_SPRITE_BINDING_TABLE_OFFSET_BYTES,
-            sprite_text_offset,
-            3,
-            3,
-        );
-    if !descriptors_ok {
-        return false;
-    }
-
-    let background_bindings_ok = background_upload.is_none()
-        || (direct_rcs_write_spirit_vfx_binding(
+        ) && direct_rcs_write_spirit_vfx_binding(
             state,
             SPIRIT_VFX_BACKGROUND_BINDING_TABLE_OFFSET_BYTES,
             0,
@@ -152,48 +140,60 @@ fn direct_rcs_encode_spirit_vfx_batch(
             SPIRIT_VFX_BACKGROUND_DST_SURFACE_OFFSET_BYTES,
             dst.gpu,
             dst.bytes,
-        ));
-    let bindings_ok = background_bindings_ok
-        && direct_rcs_write_spirit_vfx_binding(
+        ) && direct_rcs_write_spirit_vfx_payload(
+            state,
+            SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES,
+            SPIRIT_VFX_BACKGROUND_CROSS_THREAD_BYTES,
+            &[control.gpu, dst.gpu],
+        );
+        if !background_state_ok {
+            return false;
+        }
+    }
+
+    if let Some((_, source)) = sprite {
+        let sprite_text_offset = if background_upload.is_some() {
+            SPIRIT_VFX_SPRITE_TEXT_OFFSET_BYTES
+        } else {
+            SPIRIT_VFX_BACKGROUND_TEXT_OFFSET_BYTES
+        };
+        let sprite_state_ok = direct_rcs_write_interface_descriptor_at(
+            state,
+            SPIRIT_VFX_SPRITE_IDD_OFFSET_BYTES,
+            SPIRIT_VFX_SPRITE_BINDING_TABLE_OFFSET_BYTES,
+            sprite_text_offset,
+            3,
+            3,
+        ) && direct_rcs_write_spirit_vfx_binding(
             state,
             SPIRIT_VFX_SPRITE_BINDING_TABLE_OFFSET_BYTES,
             0,
             SPIRIT_VFX_SPRITE_SRC_SURFACE_OFFSET_BYTES,
             source.gpu,
             source.bytes,
-        )
-        && direct_rcs_write_spirit_vfx_binding(
+        ) && direct_rcs_write_spirit_vfx_binding(
             state,
             SPIRIT_VFX_SPRITE_BINDING_TABLE_OFFSET_BYTES,
             1,
             SPIRIT_VFX_SPRITE_CONTROL_SURFACE_OFFSET_BYTES,
             control.gpu,
             control.bytes,
-        )
-        && direct_rcs_write_spirit_vfx_binding(
+        ) && direct_rcs_write_spirit_vfx_binding(
             state,
             SPIRIT_VFX_SPRITE_BINDING_TABLE_OFFSET_BYTES,
             2,
             SPIRIT_VFX_SPRITE_DST_SURFACE_OFFSET_BYTES,
             dst.gpu,
             dst.bytes,
-        );
-    let background_payload_ok = background_upload.is_none()
-        || direct_rcs_write_spirit_vfx_payload(
-            state,
-            SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES,
-            SPIRIT_VFX_BACKGROUND_CROSS_THREAD_BYTES,
-            &[control.gpu, dst.gpu],
-        );
-    let payloads_ok = background_payload_ok
-        && direct_rcs_write_spirit_vfx_payload(
+        ) && direct_rcs_write_spirit_vfx_payload(
             state,
             SPIRIT_VFX_SPRITE_PAYLOAD_OFFSET_BYTES,
             SPIRIT_VFX_SPRITE_CROSS_THREAD_BYTES,
             &[source.gpu, control.gpu, dst.gpu],
         );
-    if !bindings_ok || !payloads_ok {
-        return false;
+        if !sprite_state_ok {
+            return false;
+        }
     }
 
     let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
@@ -226,9 +226,6 @@ fn direct_rcs_encode_spirit_vfx_batch(
         ok &= direct_rcs_push(batch, &mut cursor, SPIRIT_VFX_STATE_COMPUTE_MODE_CMD);
         ok &= direct_rcs_push(batch, &mut cursor, SPIRIT_VFX_FORCE_GPU_NON_COHERENT);
     }
-    let instruction_base = background_upload
-        .map(|upload| upload.gpu)
-        .unwrap_or(sprite_upload.gpu);
     ok &= direct_rcs_push_state_base_address(
         batch,
         &mut cursor,
@@ -281,8 +278,10 @@ fn direct_rcs_encode_spirit_vfx_batch(
             SPIRIT_VFX_SIZE,
             GPGPU_WALKER_SIMD16_MASK,
         );
-        ok &= direct_rcs_push_spirit_vfx_dependency(batch, &mut cursor);
-        if tgl_compute_contract {
+        if sprite.is_some() {
+            ok &= direct_rcs_push_spirit_vfx_dependency(batch, &mut cursor);
+        }
+        if sprite.is_some() && tgl_compute_contract {
             // TEMPORARY bring-up observation, not a validated workaround.
             // A separate post-sync QWord distinguishes background fence completion
             // from sprite dispatch. The extra ordering can itself change
@@ -297,17 +296,22 @@ fn direct_rcs_encode_spirit_vfx_batch(
         }
     }
 
-    ok &=
-        direct_rcs_push_spirit_vfx_idd_load(batch, &mut cursor, SPIRIT_VFX_SPRITE_IDD_OFFSET_BYTES);
-    ok &= direct_rcs_push_gpgpu_walker_2d(
-        batch,
-        &mut cursor,
-        SPIRIT_VFX_SPRITE_PAYLOAD_OFFSET_BYTES,
-        SPIRIT_VFX_SPRITE_INDIRECT_BYTES,
-        16,
-        SPIRIT_VFX_SIZE,
-        GPGPU_WALKER_SIMD16_MASK,
-    );
+    if sprite.is_some() {
+        ok &= direct_rcs_push_spirit_vfx_idd_load(
+            batch,
+            &mut cursor,
+            SPIRIT_VFX_SPRITE_IDD_OFFSET_BYTES,
+        );
+        ok &= direct_rcs_push_gpgpu_walker_2d(
+            batch,
+            &mut cursor,
+            SPIRIT_VFX_SPRITE_PAYLOAD_OFFSET_BYTES,
+            SPIRIT_VFX_SPRITE_INDIRECT_BYTES,
+            16,
+            SPIRIT_VFX_SIZE,
+            GPGPU_WALKER_SIMD16_MASK,
+        );
+    }
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);

@@ -1108,6 +1108,13 @@ unsafe extern "C" {
         code: *const u8, code_len: usize, input: *const u32, n: u32,
         saturate: u32, rounds: u32, output: *mut u32,
     ) -> i32;
+    /// Render one background with the production Spirit kernel into a private
+    /// 256×256 target. Controls are 33 little-endian u32 words, and the output
+    /// is 262144 bytes of top-down premultiplied BGRA8. Use the output only
+    /// on zero return. A negative errno reports failure.
+    pub fn trueos_cabi_lilyvfx_background_v1(
+        controls: *const u8, controls_len: usize, output: *mut u8, output_len: usize,
+    ) -> i32;
     /// Opt-in per-launch experiment: 0 single, 1 foreground isolated, 2 spread;
     /// background_cap is 1..=4. Configure before admission; positive errno on failure.
     pub safe fn trueos_cabi_thread_configure_placement_v1(mode: u32, background_cap: u32) -> i32;

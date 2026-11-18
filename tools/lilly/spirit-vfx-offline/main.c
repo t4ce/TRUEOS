@@ -141,7 +141,6 @@ static const RuntimeControls DEFAULT_RUNTIME_CONTROLS = {
 };
 
 static const float MAGIC_TIME_STATIC_PREVIEW_SECONDS = 10.0f * 3600.0f + 9.0f * 60.0f + 42.0f;
-static const float SPIRIT_BACKGROUND_PRESENT_SCALE = 1.0f;
 static const float SPIRIT_LILLY_PRESENT_SCALE = 1.0f;
 static const float AURA_RADIUS_MIN = 9.0f;
 static const float AURA_RADIUS_MAX = 12.0f;
@@ -153,8 +152,11 @@ static const float DEFAULT_BACKGROUND_SCALES[REPLAY_MODE_COUNT] = {
 static float background_scales[REPLAY_MODE_COUNT];
 static const char *const SCALE_DEFAULTS_PATH = "bld/spirit-vfx-scales.txt";
 
-static void load_scales(void) {
-    for (unsigned i = 0; i < REPLAY_MODE_COUNT; ++i) background_scales[i] = DEFAULT_BACKGROUND_SCALES[i];
+static void load_scales(int use_overrides) {
+    memcpy(background_scales, DEFAULT_BACKGROUND_SCALES, sizeof(background_scales));
+    if (!use_overrides) {
+        return;
+    }
     FILE *file = fopen(SCALE_DEFAULTS_PATH, "r");
     if (!file) return;
     unsigned id;
@@ -451,25 +453,22 @@ static void fill_control(uint32_t control[CONTROL_DWORDS], uint32_t source_width
         pack_control_rgb(preset->color_b[0], preset->color_b[1], preset->color_b[2]);
     control[11] = float_bits(0.0f);
     control[12] = float_bits(0.0f);
-    control[13] = float_bits(SPIRIT_LILLY_PRESENT_SCALE);
-    control[14] = float_bits(0.0f);
-    control[15] = float_bits(0.02f);
-    control[16] = 0; /* nearest / pixel crisp */
-    /* Live Spirit owns one unconditional AuraBloom sprite layer. */
-    control[17] = 1;
-    control[18] = float_bits(aura_radius(production_time));
-    control[19] = float_bits(2.5f);
-    control[20] = float_bits(0.0f);
-    control[21] = float_bits(0.0f);
-    control[22] = pack_control_rgb(0x8D, 0x6C, 0xFF);
-    control[23] = pack_control_rgb(0x5E, 0xE7, 0xFF);
-    control[24] = source_width;
-    control[25] = source_height;
-    control[26] = source_width * 4;
+    if (source_width != 0) {
+        control[13] = float_bits(SPIRIT_LILLY_PRESENT_SCALE);
+        control[15] = float_bits(0.02f);
+        /* Match the regular composite preview's AuraBloom sprite layer. */
+        control[17] = 1;
+        control[18] = float_bits(aura_radius(production_time));
+        control[19] = float_bits(2.5f);
+        control[22] = pack_control_rgb(0x8D, 0x6C, 0xFF);
+        control[23] = pack_control_rgb(0x5E, 0xE7, 0xFF);
+        control[24] = source_width;
+        control[25] = source_height;
+        control[26] = source_width * 4;
+        control[28] = 1;
+    }
     control[27] = SPIRIT_SIZE * 4;
-    control[28] = 1;
     control[30] = 60;
-    control[31] = float_bits(0.0f);
     control[32] = float_bits(fminf(fmaxf(clock_time_seconds, 0.0f), 86399.0f));
 }
 
@@ -521,6 +520,42 @@ static void write_grid_png(const char *path, const uint32_t *cursor_grid) {
         die("libpng failed to write the Spirit preview");
     }
     free(straight_rgba);
+}
+
+static char *capture_path(const char *prefix, const char *suffix) {
+    size_t size = strlen(prefix) + strlen(suffix) + 1;
+    char *path = malloc(size);
+    if (path == NULL) {
+        die("out of host memory for capture path");
+    }
+    snprintf(path, size, "%s%s", prefix, suffix);
+    return path;
+}
+
+static void write_capture_file(const char *prefix, const char *suffix, const void *data,
+                               size_t size) {
+    char *path = capture_path(prefix, suffix);
+    FILE *file = fopen(path, "wb");
+    if (file == NULL) {
+        perror(path);
+        exit(EXIT_FAILURE);
+    }
+    size_t written = fwrite(data, 1, size, file);
+    if (fclose(file) != 0 || written != size) {
+        fprintf(stderr, "spirit-vfx-offline: could not write %s\n", path);
+        exit(EXIT_FAILURE);
+    }
+    printf("  capture:  %s\n", path);
+    free(path);
+}
+
+static void encode_control_le(uint8_t bytes[CONTROL_DWORDS * 4],
+                              const uint32_t control[CONTROL_DWORDS]) {
+    for (unsigned word = 0; word < CONTROL_DWORDS; ++word) {
+        for (unsigned byte = 0; byte < 4; ++byte) {
+            bytes[word * 4 + byte] = (uint8_t)(control[word] >> (byte * 8));
+        }
+    }
 }
 
 typedef struct {
@@ -799,8 +834,6 @@ static void dispatch_spirit_frame(cl_command_queue queue, cl_kernel background_k
     check_cl(clEnqueueWriteBuffer(queue, control_buffer, CL_TRUE, 0,
                                   CONTROL_DWORDS * sizeof(uint32_t), control, 0, NULL, NULL),
              "clEnqueueWriteBuffer(control)");
-    check_cl(clSetKernelArg(sprite_kernel, 0, sizeof(source_buffer), &source_buffer),
-             "clSetKernelArg(sprite.source)");
     const size_t global[2] = {SPIRIT_SIZE, SPIRIT_SIZE};
     const size_t local[2] = {16, 1};
     if (control[3] != 0) {
@@ -808,8 +841,13 @@ static void dispatch_spirit_frame(cl_command_queue queue, cl_kernel background_k
             clEnqueueNDRangeKernel(queue, background_kernel, 2, NULL, global, local, 0, NULL, NULL),
             "clEnqueueNDRangeKernel(background)");
     }
-    check_cl(clEnqueueNDRangeKernel(queue, sprite_kernel, 2, NULL, global, local, 0, NULL, NULL),
-             "clEnqueueNDRangeKernel(sprite)");
+    if (sprite_kernel != NULL) {
+        check_cl(clSetKernelArg(sprite_kernel, 0, sizeof(source_buffer), &source_buffer),
+                 "clSetKernelArg(sprite.source)");
+        check_cl(
+            clEnqueueNDRangeKernel(queue, sprite_kernel, 2, NULL, global, local, 0, NULL, NULL),
+            "clEnqueueNDRangeKernel(sprite)");
+    }
     size_t cursor_bytes = (size_t)SPIRIT_SIZE * SPIRIT_SIZE * sizeof(uint32_t);
     check_cl(clEnqueueReadBuffer(queue, cursor_buffer, CL_TRUE, 0, cursor_bytes, cursor_bgra, 0,
                                  NULL, NULL),
@@ -827,14 +865,15 @@ static void run_panel(cl_command_queue queue, cl_kernel background_kernel,
     uint32_t shader_frame = 0;
 
     printf("Spirit VFX panel running; press ESC to close\n");
-    printf("  asset:    %s (%u frames, %u ms/frame, loop)\n", LILLY_ASSET_KEY,
-           LILLY_FRAME_COUNT, LILLY_FRAME_PERIOD_MS);
+    if (sprite_kernel != NULL) {
+        printf("  asset:    %s (%u frames, %u ms/frame, loop)\n", LILLY_ASSET_KEY,
+               LILLY_FRAME_COUNT, LILLY_FRAME_PERIOD_MS);
+    }
     printf("  grid:     production background IDs 2..13, row-major, four columns\n");
-    printf("  cadence:  shader %u Hz; asset %.3f Hz\n", SPIRIT_TARGET_HZ,
-           1000.0 / LILLY_FRAME_PERIOD_MS);
+    printf("  cadence:  shader %u Hz\n", SPIRIT_TARGET_HZ);
     printf("  window:   borderless %ux%u ARGB=%d\n", PANEL_WIDTH, WINDOW_HEIGHT, panel.argb);
-    printf("  fixed:    production C++ artifacts; opacity generic 1.00 / Codex 0.75; background scale %.6f; Lilly scale %.2f; global AuraBloom\n",
-           SPIRIT_BACKGROUND_PRESENT_SCALE, SPIRIT_LILLY_PRESENT_SCALE);
+    printf("  layers:   %s\n", sprite_kernel != NULL
+           ? "background with Lilly and AuraBloom" : "background only");
     printf("  keys:     Drag per-cell scale sliders; S saves defaults; Left/Right = Speed; Down/Up = Intensity\n");
     print_runtime_controls(&runtime);
 
@@ -870,18 +909,42 @@ static void run_panel(cl_command_queue queue, cl_kernel background_kernel,
 }
 
 int main(int argc, char **argv) {
-    load_scales();
+    static const char *const usage =
+        "usage: spirit_vfx_offline [--panel | --panel-background] | "
+        "--render-grid [output.png] [time_seconds] [clock_seconds_of_day] | "
+        "--render-background-grid [output.png] [time_seconds] [clock_seconds_of_day] | "
+        "--capture-background-grid PREFIX [time_seconds] [clock_seconds_of_day]";
     int panel_mode = 1;
+    int include_sprite = 1;
     const char *output_path = "bld/spirit-vfx-grid.png";
+    const char *capture_prefix = NULL;
+    char *capture_png = NULL;
     float time_seconds = 1.5f;
     float magic_time_seconds = MAGIC_TIME_STATIC_PREVIEW_SECONDS;
-    if (argc > 1 && strcmp(argv[1], "--panel") == 0) {
+    if (argc > 1 && (strcmp(argv[1], "--panel") == 0 ||
+                     strcmp(argv[1], "--panel-background") == 0)) {
         if (argc > 2) {
-            die("usage: spirit_vfx_offline [--panel]");
+            die(usage);
         }
-    } else if (argc > 1 && strcmp(argv[1], "--render-grid") == 0) {
+        include_sprite = strcmp(argv[1], "--panel") == 0;
+    } else if (argc > 1 && (strcmp(argv[1], "--render-grid") == 0 ||
+                            strcmp(argv[1], "--render-background-grid") == 0 ||
+                            strcmp(argv[1], "--capture-background-grid") == 0)) {
         panel_mode = 0;
-        output_path = argc > 2 ? argv[2] : output_path;
+        include_sprite = strcmp(argv[1], "--render-grid") == 0;
+        if (!include_sprite) {
+            output_path = "bld/spirit-vfx-background-grid.png";
+        }
+        if (strcmp(argv[1], "--capture-background-grid") == 0) {
+            if (argc < 3 || argv[2][0] == '\0') {
+                die(usage);
+            }
+            capture_prefix = argv[2];
+            capture_png = capture_path(capture_prefix, ".png");
+            output_path = capture_png;
+        } else if (argc > 2) {
+            output_path = argv[2];
+        }
         if (argc > 3) {
             char *end = NULL;
             time_seconds = strtof(argv[3], &end);
@@ -899,15 +962,17 @@ int main(int argc, char **argv) {
             }
         }
         if (argc > 5) {
-            die("usage: spirit_vfx_offline --render-grid "
-                "[output.png] [time_seconds] [clock_seconds_of_day]");
+            die(usage);
         }
     } else if (argc > 1) {
-        die("usage: spirit_vfx_offline [--panel] | "
-            "--render-grid [output.png] [time_seconds] [clock_seconds_of_day]");
+        die(usage);
     }
 
-    LillyAsset asset = extract_lilly_asset();
+    load_scales(panel_mode || include_sprite);
+    LillyAsset asset = {0};
+    if (include_sprite) {
+        asset = extract_lilly_asset();
+    }
 
     cl_platform_id platform = choose_platform();
     cl_device_id device = NULL;
@@ -935,20 +1000,14 @@ int main(int argc, char **argv) {
 
     cl_program background_program =
         build_program(context, device, BACKGROUND_ARTIFACT);
-    cl_program sprite_program =
-        build_program(context, device, SPRITE_ARTIFACT);
     cl_kernel background_kernel =
         clCreateKernel(background_program, "spirit_vfx_background_rgba8", &error);
     check_cl(error, "clCreateKernel(background)");
-    cl_kernel sprite_kernel =
-        clCreateKernel(sprite_program, "spirit_vfx_sprite_rgba8", &error);
-    check_cl(error, "clCreateKernel(sprite)");
 
     RuntimeControls runtime = DEFAULT_RUNTIME_CONTROLS;
     uint32_t control[CONTROL_DWORDS];
     fill_control(control, asset.width, asset.height, time_seconds, magic_time_seconds,
                  REPLAY_ENERGY_RING, &runtime);
-    size_t source_bytes = (size_t)asset.width * asset.height * 4;
     size_t cursor_bytes = (size_t)SPIRIT_SIZE * SPIRIT_SIZE * sizeof(uint32_t);
     uint32_t *cursor_grid = calloc(REPLAY_MODE_COUNT, cursor_bytes);
     if (cursor_grid == NULL) {
@@ -959,13 +1018,6 @@ int main(int argc, char **argv) {
         clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(control), control,
                        &error);
     check_cl(error, "clCreateBuffer(control)");
-    cl_mem source_buffers[LILLY_FRAME_COUNT];
-    for (unsigned frame = 0; frame < LILLY_FRAME_COUNT; ++frame) {
-        source_buffers[frame] =
-            clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, source_bytes,
-                           asset.rgba[frame], &error);
-        check_cl(error, "clCreateBuffer(source frame)");
-    }
     cl_mem cursor_buffer =
         clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, cursor_bytes, cursor_grid,
                        &error);
@@ -975,41 +1027,69 @@ int main(int argc, char **argv) {
              "clSetKernelArg(background.control)");
     check_cl(clSetKernelArg(background_kernel, 1, sizeof(cursor_buffer), &cursor_buffer),
              "clSetKernelArg(background.dst)");
-    check_cl(clSetKernelArg(sprite_kernel, 1, sizeof(control_buffer), &control_buffer),
-             "clSetKernelArg(sprite.control)");
-    check_cl(clSetKernelArg(sprite_kernel, 2, sizeof(cursor_buffer), &cursor_buffer),
-             "clSetKernelArg(sprite.dst)");
+
+    cl_program sprite_program = NULL;
+    cl_kernel sprite_kernel = NULL;
+    cl_mem source_buffers[LILLY_FRAME_COUNT] = {0};
+    if (include_sprite) {
+        sprite_program = build_program(context, device, SPRITE_ARTIFACT);
+        sprite_kernel = clCreateKernel(sprite_program, "spirit_vfx_sprite_rgba8", &error);
+        check_cl(error, "clCreateKernel(sprite)");
+        check_cl(clSetKernelArg(sprite_kernel, 1, sizeof(control_buffer), &control_buffer),
+                 "clSetKernelArg(sprite.control)");
+        check_cl(clSetKernelArg(sprite_kernel, 2, sizeof(cursor_buffer), &cursor_buffer),
+                 "clSetKernelArg(sprite.dst)");
+        size_t source_bytes = (size_t)asset.width * asset.height * 4;
+        for (unsigned frame = 0; frame < LILLY_FRAME_COUNT; ++frame) {
+            source_buffers[frame] =
+                clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, source_bytes,
+                               asset.rgba[frame], &error);
+            check_cl(error, "clCreateBuffer(source frame)");
+        }
+    }
 
     printf("  platform: %s\n", platform_name);
     printf("  device:   %s\n", device_name);
     printf("  artifact: background=%s\n", BACKGROUND_ARTIFACT);
-    printf("  artifact: sprite=%s\n", SPRITE_ARTIFACT);
+    if (include_sprite) {
+        printf("  artifact: sprite=%s\n", SPRITE_ARTIFACT);
+    }
     if (panel_mode) {
         run_panel(queue, background_kernel, sprite_kernel, control_buffer, source_buffers,
                   cursor_buffer, cursor_grid, &asset);
     } else {
         size_t cell_pixels = (size_t)SPIRIT_SIZE * SPIRIT_SIZE;
+        uint8_t control_pages[REPLAY_MODE_COUNT][CONTROL_DWORDS * 4];
         for (unsigned mode_index = 0; mode_index < REPLAY_MODE_COUNT; ++mode_index) {
             ReplayMode mode = (ReplayMode)(mode_index + REPLAY_FIRST_ID);
             fill_control(control, asset.width, asset.height, time_seconds,
                          magic_time_seconds, mode, &runtime);
+            if (capture_prefix != NULL) {
+                encode_control_le(control_pages[mode_index], control);
+            }
             dispatch_spirit_frame(
                 queue, background_kernel, sprite_kernel, control_buffer, source_buffers[0],
                 cursor_buffer, control, cursor_grid + (size_t)mode_index * cell_pixels);
         }
         check_cl(clFinish(queue), "clFinish");
         write_grid_png(output_path, cursor_grid);
+        if (capture_prefix != NULL) {
+            write_capture_file(capture_prefix, ".controls", control_pages, sizeof(control_pages));
+            write_capture_file(capture_prefix, ".bgra", cursor_grid, REPLAY_MODE_COUNT * cursor_bytes);
+        }
         printf("Spirit production VFX preview complete\n");
-        printf("  asset:    %s/frame_01.png (%ux%u RGBA8)\n", LILLY_ASSET_DIRECTORY,
-               asset.width, asset.height);
+        if (include_sprite) {
+            printf("  asset:    %s/frame_01.png (%ux%u RGBA8)\n", LILLY_ASSET_DIRECTORY,
+                   asset.width, asset.height);
+        }
         printf("  grid:     ");
         for (unsigned mode = 0; mode < REPLAY_MODE_COUNT; ++mode) {
             printf("%s%s", mode == 0 ? "" : " | ",
                    mode_name((ReplayMode)(mode + REPLAY_FIRST_ID)));
         }
         printf("\n");
-        printf(
-            "  dispatch: ten 256x256 cells, local 16x1, production GPU artifacts\n");
+        printf("  dispatch: %u 256x256 cells, local 16x1, %s\n", REPLAY_MODE_COUNT,
+               include_sprite ? "background and sprite" : "background only");
         unsigned clock_seconds = (unsigned)magic_time_seconds;
         printf("  time:     %.3f s (frame %u at 60 Hz)\n", time_seconds,
                (unsigned)lroundf(time_seconds * 60.0f));
@@ -1019,17 +1099,20 @@ int main(int argc, char **argv) {
     }
 
     clReleaseMemObject(cursor_buffer);
-    for (unsigned frame = 0; frame < LILLY_FRAME_COUNT; ++frame) {
-        clReleaseMemObject(source_buffers[frame]);
+    if (include_sprite) {
+        for (unsigned frame = 0; frame < LILLY_FRAME_COUNT; ++frame) {
+            clReleaseMemObject(source_buffers[frame]);
+        }
+        clReleaseKernel(sprite_kernel);
+        clReleaseProgram(sprite_program);
+        free_lilly_asset(&asset);
     }
     clReleaseMemObject(control_buffer);
-    clReleaseKernel(sprite_kernel);
     clReleaseKernel(background_kernel);
-    clReleaseProgram(sprite_program);
     clReleaseProgram(background_program);
     clReleaseCommandQueue(queue);
     clReleaseContext(context);
     free(cursor_grid);
-    free_lilly_asset(&asset);
+    free(capture_png);
     return EXIT_SUCCESS;
 }

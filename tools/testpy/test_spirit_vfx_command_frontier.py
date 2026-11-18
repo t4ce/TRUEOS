@@ -150,6 +150,9 @@ fn align_up(value:usize,alignment:usize)->Option<usize> {
     value.checked_add(alignment-1).map(|rounded|rounded&!(alignment-1))
 }
 fn encoded(background:bool)->Vec<u32> {
+    encoded_passes(background, true)
+}
+fn encoded_passes(background:bool, has_sprite:bool)->Vec<u32> {
     let mut batch=vec![0xfeedfaceu32;DIRECT_RCS_BATCH_BYTES/4];
     let mut result=vec![0xfeedfaceu32;DIRECT_RCS_RESULT_BYTES/4];
     let state=DirectRcsState{batch_virt:batch.as_mut_ptr().cast(),
@@ -172,7 +175,9 @@ fn encoded(background:bool)->Vec<u32> {
         width:128,height:128,pitch_bytes:128*4};
     let dst=GpgpuRgba8Surface{gpu:0x06000000,bytes:256*256*4,
         width:256,height:256,pitch_bytes:256*4};
-    assert!(direct_rcs_encode_spirit_vfx_batch(state,background_upload,sprite,control,source,dst));
+    assert!(direct_rcs_encode_spirit_vfx_batch(
+        state, background_upload, has_sprite.then_some((sprite, source)), control, dst,
+    ));
     batch
 }
 fn command_offsets(batch:&[u32])->Vec<usize> {
@@ -247,6 +252,31 @@ fn both_variants_stall_before_vfe_and_flush_before_entering_compute() {
                     batch[i]&PIPE_CONTROL_HDC_PIPELINE_FLUSH!=0&&batch[i+1]&required==required));
             }
         }
+    }
+}
+
+#[test]
+fn headless_capture_dispatches_one_background_walker_and_flushes_before_retirement() {
+    for (device, revision) in [(0x4680, 0x0c), (0x9a49, 0x01)] {
+        super::physical(0x8086, device, revision);
+        let batch = encoded_passes(true, false);
+        let offsets = command_offsets(&batch);
+        let walkers: Vec<_> = offsets.iter().copied()
+            .filter(|&index| batch[index] == GPGPU_WALKER_CMD)
+            .collect();
+        assert_eq!(walkers.len(), 1);
+        let walker = walkers[0];
+        assert_eq!(batch[walker - 1], SPIRIT_VFX_BACKGROUND_IDD_OFFSET_BYTES as u32);
+        assert_eq!(batch[walker + 3], SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES as u32);
+        let end = offsets.iter().position(|&index| index == walker).unwrap();
+        let after_walker = &offsets[end + 1..];
+        assert_eq!(after_walker.len(), 4);
+        assert_eq!(batch[after_walker[0]], MEDIA_STATE_FLUSH_CMD);
+        assert_eq!(batch[after_walker[1] + 1], PIPE_CONTROL_FLUSH_BITS);
+        assert_eq!(batch[after_walker[2] + 4], SPIRIT_VFX_POST_MARKER);
+        assert_eq!(batch[after_walker[3]], MI_BATCH_BUFFER_END);
+        let sprite_idd = SPIRIT_VFX_SPRITE_IDD_OFFSET_BYTES / 4;
+        assert!(batch[sprite_idd..sprite_idd + 8].iter().all(|&value| value == 0));
     }
 }
 

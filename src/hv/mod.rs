@@ -2840,6 +2840,7 @@ fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError>
     if crate::r::blocking::close_guest_jobs(vm_id) != 0 {
         return Err(EjectError::VmBusy);
     }
+    crate::r::lilyvfx_cabi::discard_guest(vm_id);
     let (_, vgpu_quarantined, _) = crate::gpu::vgpu::release_hull_guest(vm_id);
     if vgpu_quarantined != 0 || !crate::gpu::vgpu::hull_guest_storage_reusable(vm_id) {
         hvwarnf(format_args!(
@@ -4771,6 +4772,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     }
 
     teardown_diagnostics::set(vm_id, TeardownStage::Vgpu);
+    crate::r::lilyvfx_cabi::discard_guest(vm_id);
     let (vgpu_released, vgpu_quarantined, vgpu_epoch) = crate::gpu::vgpu::release_hull_guest(vm_id);
     if vgpu_released != 0 || vgpu_quarantined != 0 {
         hvlogf(format_args!(

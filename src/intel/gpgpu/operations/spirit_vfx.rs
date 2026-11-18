@@ -2,8 +2,27 @@ const SPIRIT_VFX_INITIAL_TRACE_FRAMES: u32 = 30;
 const SPIRIT_VFX_PERIODIC_TRACE_FRAMES: u32 = 60;
 const SPIRIT_VFX_ENCODING_LOG_LIMIT: u32 = 2;
 /// Scale 1 maps the authored canvas directly to the native 256px cursor.
-/// Explicit effect transitions may enlarge that canvas.
 pub(crate) const SPIRIT_VFX_BACKGROUND_PRESENT_SCALE: f32 = 1.0;
+
+const SPIRIT_BACKGROUND_CAPTURE_PITCH: u32 = SPIRIT_VFX_SIZE * 4;
+const SPIRIT_BACKGROUND_CAPTURE_BYTES: usize =
+    (SPIRIT_BACKGROUND_CAPTURE_PITCH * SPIRIT_VFX_SIZE) as usize;
+const SPIRIT_BACKGROUND_CAPTURE_CONTROL_GPU: u64 = 0x0980_0000;
+const SPIRIT_BACKGROUND_CAPTURE_DST_GPU: u64 =
+    SPIRIT_BACKGROUND_CAPTURE_CONTROL_GPU + SPIRIT_VFX_PAGE_BYTES as u64;
+const _: () = {
+    assert!(SPIRIT_BACKGROUND_CAPTURE_CONTROL_GPU.is_multiple_of(SPIRIT_VFX_PAGE_BYTES as u64));
+    assert!(
+        SPIRIT_BACKGROUND_CAPTURE_CONTROL_GPU >= NATIVE_MATRIX_GPU + (2 * NATIVE_MATRIX_STRIDE) as u64
+    );
+    assert!(
+        SPIRIT_BACKGROUND_CAPTURE_DST_GPU + SPIRIT_BACKGROUND_CAPTURE_BYTES as u64
+            <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
+    );
+};
+// One fixed storage allocation covers all captures. If retirement cannot be
+// proven, the execution lane is quarantined and these pages remain pinned.
+static SPIRIT_BACKGROUND_CAPTURE_STORAGE: Mutex<Option<SpiritVfxBuffer>> = Mutex::new(None);
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct SpiritVfxControl {
@@ -559,6 +578,114 @@ fn spirit_vfx_write_control(
     super::dma_flush(control_buffer.virt, control_buffer.bytes);
 }
 
+/// Capture one fixed-size background using the native Spirit Zebin. Output is
+/// the raw tightly packed, premultiplied BGRA8 shader result.
+pub(crate) fn capture_spirit_background(controls: &[u8], output: &mut [u8]) -> Result<(), i32> {
+    if controls.len() != SPIRIT_VFX_CONTROL_BYTES || output.len() != SPIRIT_BACKGROUND_CAPTURE_BYTES {
+        return Err(-22);
+    }
+    let control_word = |index: usize| {
+        let offset = index * 4;
+        u32::from_le_bytes(controls[offset..offset + 4].try_into().unwrap())
+    };
+    let effect = control_word(3);
+    if control_word(0) != SPIRIT_VFX_CONTROL_MAGIC
+        || control_word(1) != SPIRIT_VFX_CONTROL_VERSION
+        || !matches!(effect, 2..=13)
+        || control_word(27) != SPIRIT_BACKGROUND_CAPTURE_PITCH
+    {
+        return Err(-22);
+    }
+
+    let _submission = EXECUTION_RCS_SUBMIT_LOCK.try_lock().ok_or(-16)?;
+    if EXECUTION_RCS_DETACHED_TAG.load(Ordering::Acquire) != 0
+        || SPIRIT_VFX_PENDING.lock().is_some()
+    {
+        return Err(-16);
+    }
+    if execution_rcs_context_is_quarantined() {
+        return Err(-5);
+    }
+    let dev = super::claimed_device().ok_or(-19)?;
+    let shared_state = execution_rcs_state_once(dev).ok_or(-19)?;
+    let state = execution_rcs_next_job_slot(shared_state).ok_or(-16)?;
+    let background = upload_spirit_vfx_background_rgba8_kernel().ok_or(-95)?;
+
+    let bytes = SPIRIT_VFX_PAGE_BYTES + SPIRIT_BACKGROUND_CAPTURE_BYTES;
+    let control = {
+        let mut storage = SPIRIT_BACKGROUND_CAPTURE_STORAGE.lock();
+        // Every caller holds the execution submission lock until readback.
+        if storage.is_none() {
+            let (phys, virt) = crate::dma::alloc_ppgtt(bytes, SPIRIT_VFX_PAGE_BYTES).ok_or(-12)?;
+            *storage = Some(SpiritVfxBuffer {
+                phys,
+                virt,
+                gpu: SPIRIT_BACKGROUND_CAPTURE_CONTROL_GPU,
+                bytes: SPIRIT_VFX_PAGE_BYTES,
+            });
+        }
+        storage.as_ref().copied().ok_or(-12)?
+    };
+    let dst = GpgpuRgba8Surface::new_bgra(
+        control.phys + SPIRIT_VFX_PAGE_BYTES as u64,
+        SPIRIT_BACKGROUND_CAPTURE_DST_GPU,
+        SPIRIT_BACKGROUND_CAPTURE_BYTES,
+        SPIRIT_VFX_SIZE,
+        SPIRIT_VFX_SIZE,
+        SPIRIT_BACKGROUND_CAPTURE_PITCH,
+    )
+    .ok_or(-5)?;
+    let dst_virt = unsafe { control.virt.add(SPIRIT_VFX_PAGE_BYTES) };
+    unsafe {
+        core::ptr::write_bytes(control.virt, 0, bytes);
+        core::ptr::copy_nonoverlapping(controls.as_ptr(), control.virt, controls.len());
+    }
+    super::dma_flush(control.virt, bytes);
+
+    if !direct_rcs_forcewake(dev)
+        || !direct_rcs_map_state(dev, shared_state)
+        || !direct_rcs_init_ppgtt(shared_state)
+        || !direct_rcs_map_ppgtt_kernel(
+            shared_state,
+            background.gpu,
+            background.phys,
+            background.mapped_bytes,
+        )
+        || !direct_rcs_map_ppgtt_kernel(shared_state, control.gpu, control.phys, bytes)
+        || !direct_rcs_encode_spirit_vfx_batch(state, Some(background), None, control, dst)
+    {
+        return Err(-5);
+    }
+
+    match direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::Execution) {
+        DirectRcsSubmissionState::Rejected => return Err(-16),
+        DirectRcsSubmissionState::Ambiguous => return Err(-5),
+        DirectRcsSubmissionState::Submitted => {}
+    }
+    // This poll checks both the post-sync marker and the saved GuC context
+    // HEAD. Timeout quarantines the lane and retains the pending submission.
+    if direct_rcs_poll_result_slot_timeout_ms_on_lane(
+        state,
+        SPIRIT_VFX_POST_MARKER_SLOT,
+        SPIRIT_VFX_POST_MARKER,
+        SPIRIT_VFX_COMPLETION_TIMEOUT_MS,
+        DirectRcsLane::Execution,
+    ) != SPIRIT_VFX_POST_MARKER
+    {
+        return Err(-110);
+    }
+    super::dma_flush(dst_virt, output.len());
+    unsafe { core::ptr::copy_nonoverlapping(dst_virt, output.as_mut_ptr(), output.len()) };
+    crate::log_info!(
+        target: "gpgpu";
+        "intel/gpgpu: spirit background capture effect={} frame={} bytes={} walkers=1 retirement=marker-plus-saved-head\n",
+        effect,
+        control_word(2),
+        output.len(),
+    );
+    Ok(())
+}
+
 pub(crate) fn submit_spirit_vfx_frame(
     dst: GpgpuRgba8Surface,
     source: GpgpuRgba8Surface,
@@ -828,9 +955,8 @@ fn submit_spirit_vfx_batch(
         && direct_rcs_encode_spirit_vfx_batch(
             state,
             background_upload,
-            sprite_upload,
+            Some((sprite_upload, source)),
             runtime.control,
-            source,
             dst,
         );
     if !batch_ok {

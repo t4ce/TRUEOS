@@ -495,10 +495,13 @@ pub fn prepare_for_vm(vm_id: u8, reset_transport: bool) -> bool {
     let Some(p) = host_ptr(vm_id) else {
         return false;
     };
-    unsafe {
-        if reset_transport {
+    if reset_transport {
+        crate::r::lilyvfx_cabi::discard_guest(vm_id);
+        unsafe {
             core::ptr::write_bytes(p as *mut u8, 0, core::mem::size_of::<CommPage>());
         }
+    }
+    unsafe {
         core::ptr::write_volatile(
             &mut (*p).response_pad,
             COMM_PAGE_VM_ID_MAGIC | vm_id.saturating_add(1) as u32,
@@ -2287,6 +2290,33 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        trueos_vm::vmcall::OP_BP_LILYVFX_BACKGROUND_V1 => {
+            use crate::r::lilyvfx_cabi::{self, CHUNK_BYTES, CONTROL_BYTES};
+
+            const _: () = assert!(CHUNK_BYTES <= PAYLOAD_CAP);
+            let Some(page) = host_ptr(vm_id) else {
+                return DispatchOutcome::Resume;
+            };
+            let result = match (arg0, arg1, req_len as usize) {
+                (0, 0, CONTROL_BYTES) => {
+                    // The first image chunk overwrites the request on success.
+                    let mut controls = [0u8; CONTROL_BYTES];
+                    controls.copy_from_slice(unsafe { &(&(*page).payload)[..CONTROL_BYTES] });
+                    let head = unsafe { &mut (&mut (*page).payload)[..CHUNK_BYTES] };
+                    lilyvfx_cabi::capture_guest(vm_id, &controls, head)
+                }
+                (1, ticket, 0) => {
+                    let tail = unsafe { &mut (&mut (*page).payload)[..CHUNK_BYTES] };
+                    lilyvfx_cabi::finish_guest(vm_id, ticket, tail).map(|()| 0)
+                }
+                _ => Err(-22),
+            };
+            match result {
+                Ok(data) => write_response(vm_id, seq, STATUS_OK, data, CHUNK_BYTES as u32),
+                Err(error) => write_response(vm_id, seq, STATUS_OK, error as i64 as u64, 0),
+            }
             DispatchOutcome::Resume
         }
         OP_BP_MATRIX_COMPUTE_V1 => {

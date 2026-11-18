@@ -50,12 +50,45 @@ make -C tools/lilly/spirit-vfx-offline render TIME=2.25
 bld/tools/spirit_vfx_offline --render-grid bld/magic-time-43.png 1.5 36583
 ```
 
+The background panel and one-shot capture render only the background kernel.
+They do not load LilyDS or the sprite kernel:
+
+```sh
+make -C tools/lilly/spirit-vfx-offline panel-background
+make -C tools/lilly/spirit-vfx-offline capture-background PREFIX=bld/spirit-vfx-preview
+```
+
+The capture uses the reviewed scales and default controls, with animation time
+1.5 s (frame 90 at 60 Hz) and clock time 10:09:42 UTC. Supply `TIME` and `CLOCK`
+to sample another frame. Both headless background targets use the reviewed
+scales even if the interactive panel has saved local overrides.
+
+| Output | Contents |
+| --- | --- |
+| `PREFIX.controls` | 12 consecutive 33-dword little-endian control pages for IDs 2 through 13 |
+| `PREFIX.bgra` | 12 consecutive 256×256 cells in the same order, copied directly as premultiplied BGRA8, top-down, 1024 bytes per row |
+| `PREFIX.png` | The same cells in a 4×3 grid, with straight RGBA and transparency |
+
+Pass the control pages to the on-demand `lilyvfx` Blueprint in
+`TRUEOS-Blueprints/apps/lilyvfx`. The native capture runs one background
+walker per effect on the TRUEOS execution lane with a private render target.
+It copies the pixels only after GPU retirement. The comparator composites both
+sides against the same backdrop and reports raw per-channel differences
+including alpha.
+
+```sh
+python3 tools/lilly/spirit-vfx-offline/compare_backgrounds.py \
+  bld/spirit-vfx-preview.bgra renderer.bgra \
+  --output bld/spirit-vfx-comparison.png
+```
+
 The host dependencies are an OpenCL ICD loader/runtime with SPIR-V IL support,
-`libpng`, Python 3 with Pillow, X11, and Xrender. The program carries the small subset of
-OpenCL declarations it needs, so OpenCL development headers are not required.
+`libpng`, X11, and Xrender. Asset preparation and the comparison script use
+Python 3 with Pillow.
 
 Each numbered cell has its own scale slider below the untouched 256×256 stage.
 Drag to adjust from 0.25 to 3.00 in 0.01 steps. Press **S** to save all twelve
-values to `bld/spirit-vfx-scales.txt` (shader ID followed by scale). The panel
-and PNG renderer reload that file at startup. The built-in values match the reviewed runtime defaults; additional slider changes
-remain preview overrides until reviewed. Runtime transitions fade opacity at fixed size.
+values to `bld/spirit-vfx-scales.txt` (shader ID followed by scale). The panels
+and composite PNG renderer reload that file at startup. The built-in values
+match the reviewed runtime defaults. Slider changes apply to the preview
+until reviewed. Runtime transitions fade opacity at fixed size.
