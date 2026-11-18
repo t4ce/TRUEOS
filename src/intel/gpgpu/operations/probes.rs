@@ -69,6 +69,14 @@ pub(crate) fn submit_solid_composite_worklist_rgba8_probe_now() -> bool {
         );
         return false;
     };
+    let Some(desc) = rect_worklist_desc_buffer_once() else {
+        return false;
+    };
+    let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
+    let _submit_guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(upload) = upload_alpha_blend_worklist_rgba8_kernel() else {
+        return false;
+    };
     let Some(state) = direct_rcs_state_once(dev) else {
         crate::log_info!(
             target: "gpgpu";
@@ -105,18 +113,30 @@ pub(crate) fn submit_solid_composite_worklist_rgba8_probe_now() -> bool {
             color_rgba: 0xFF10_2030,
         },
     ];
+    let Some(descriptors) = lower_solid_rects(surface, &rects) else {
+        return false;
+    };
+    if descriptors.len() != rects.len() {
+        return false;
+    }
     let start_tick = direct_rcs_now_tick();
-    let submitted = fill_solid_rects_rgba8_result(surface, rects.as_slice());
+    let params = stage_solid_rect_worklist(desc, surface, &descriptors);
+    let submitted = submit_solid_rect_worklist_locked(
+        dev, state, upload, surface, desc, params, false, RectDispatchProbe::Disabled,
+    );
     let submit_ms = direct_rcs_elapsed_ms_since(start_tick);
+    if submitted != GpgpuSubmissionOutcome::Complete {
+        crate::log_info!(target: "gpgpu";
+            "intel/gpgpu: solid-composite-worklist-rgba8 failed outcome={:?} submit_ms={}\n",
+            submitted, submit_ms);
+        return false;
+    }
     let pre_marker = direct_rcs_read_result_slot(state, RECT_WORKLIST_PRE_MARKER_SLOT);
     let post_marker = direct_rcs_read_result_slot(state, RECT_WORKLIST_POST_MARKER_SLOT);
     let row0 = direct_rcs_read_worklist_probe_span(state, 0, 0);
     let row1 = direct_rcs_read_worklist_probe_span(state, 1, 8);
     let row2 = direct_rcs_read_worklist_probe_span(state, 2, 8);
-    let ok = submitted.outcome == GpgpuSubmissionOutcome::Complete
-        && submitted.stats.descs == rects.len()
-        && submitted.stats.submits == 1
-        && pre_marker == ALPHA_BLEND_WORKLIST_PRE_MARKER
+    let ok = pre_marker == ALPHA_BLEND_WORKLIST_PRE_MARKER
         && post_marker == ALPHA_BLEND_WORKLIST_POST_MARKER
         && row0 == [0xFFCC_8844; 4]
         && row1 == [0xFF10_2030; 4]
@@ -125,7 +145,7 @@ pub(crate) fn submit_solid_composite_worklist_rgba8_probe_now() -> bool {
     crate::log_info!(
         target: "gpgpu";
         "intel/gpgpu: solid-composite-worklist-rgba8 forcewake=1 ggtt=1 ppgtt=1 kernel_ppgtt=1 dst_ppgtt=1 desc_ppgtt=1 batch=1 submitted={} ok={} submit_ms={} descs=2 walkers={} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} dst_gpu=0x{:X} row0=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row1=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row2=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] artifact={} mode=source-free-solid\n",
-        (submitted.outcome == GpgpuSubmissionOutcome::Complete) as u8,
+        1,
         ok as u8,
         submit_ms,
         rect_worklist_walker_count(2),

@@ -73,6 +73,7 @@ def harness_source() -> str:
         "direct_rcs_write_buffer_surface_state_with_mocs_index",
     ))
     declarations.extend(production.item(spirit, name) for name in (
+        "spirit_background_local_x",
         "direct_rcs_write_spirit_vfx_binding", "direct_rcs_write_spirit_vfx_payload",
         "direct_rcs_push_spirit_vfx_idd_load", "direct_rcs_push_spirit_vfx_dependency",
         "direct_rcs_encode_spirit_vfx_batch",
@@ -336,7 +337,7 @@ fn sprite_only_keeps_one_walker_and_uses_sprite_instruction_base() {
 #[test]
 fn tgl_contract_changes_only_entry_compute_mode_vfe_and_background_observation() {
     for background in [false,true] {
-        super::physical(0x8086,0x4680,12);let legacy=encoded(background);
+        super::physical(0x8086,0xa780,4);let legacy=encoded(background);
         let legacy_offsets=command_offsets(&legacy);
         let sba=*legacy_offsets.iter().find(|&&i|legacy[i]==STATE_BASE_ADDRESS_CMD).unwrap();
         super::physical(0x8086,0x9a49,1);let tgl=encoded(background);
@@ -523,7 +524,7 @@ fn tgl_vfe_allocation_covers_each_real_walker_payload_within_32kib() {
 #[test]
 fn desktop_and_other_physical_targets_preserve_complete_legacy_batch_bytes() {
     for background in [false,true] {
-        super::physical(0x8086,0x4680,12);let legacy=encoded(background);
+        super::physical(0x8086,0xa780,4);let legacy=encoded(background);
         // The larger knot artifact moved the sprite instruction window from
         // D450000 to D470000. Normalize only that reviewed relocation before
         // comparing every byte with the pre-TGL encoder snapshot.
@@ -541,11 +542,45 @@ fn desktop_and_other_physical_targets_preserve_complete_legacy_batch_bytes() {
         let hash=normalized.iter().flat_map(|dw|dw.to_le_bytes()).fold(0xcbf29ce484222325u64,
             |h,b|(h^u64::from(b)).wrapping_mul(0x100000001b3));
         assert_eq!(hash,if background {0x8429439a404d7777}else{0xee095d261120bd81});
-        for (vendor,device,revision) in [(0x8086,0x4680,12),(0x8086,0xa780,4),
+        for (vendor,device,revision) in [(0x8086,0x4680,11),(0x8086,0xa780,4),
             (0x8086,0x9a49,0),(0x8086,0x9a49,2),(0x1234,0x9a49,1)] {
             super::physical(vendor,device,revision);
             assert_eq!(encoded(background),legacy);
         }
+    }
+}
+
+#[test]
+fn adls_rev12_covers_every_background_pixel_with_lower_lanes() {
+    for (has_background, has_sprite, extras) in [
+        (false, true, 0), (true, false, 0), (true, true, 0), (true, false, 3),
+    ] {
+        super::physical(0x8086, 0xa780, 4);
+        let legacy = encoded_segment(has_background, has_sprite, extras);
+        super::physical(0x8086, 0x4680, 12);
+        let native = encoded_segment(has_background, has_sprite, extras);
+        let mut normalized = native.clone();
+        for walker in command_offsets(&native).into_iter().filter(|&i| native[i] == GPGPU_WALKER_CMD) {
+            let payload_offset = native[walker + 3] as usize;
+            if payload_offset == SPIRIT_VFX_SPRITE_PAYLOAD_OFFSET_BYTES {
+                continue;
+            }
+            let payload = payload_offset / 4;
+            assert_eq!(native[walker + 4] >> 30, GPGPU_WALKER_SIMD16_SELECT);
+            assert_eq!(native[payload + 3], 8);
+            assert_eq!(native[payload + 8], 8);
+            assert_eq!(native[walker + 7] * native[payload + 3], 256);
+            assert_eq!(native[walker + 10], 256);
+            assert_eq!(native[walker + 13], 0xff);
+            let local_id = payload + SPIRIT_VFX_BACKGROUND_CROSS_THREAD_BYTES / 4;
+            assert_eq!(&native[local_id..local_id + 4], &[0x10000,0x30002,0x50004,0x70006]);
+            assert_eq!(&native[local_id + 4..local_id + 24], &[0; 20]);
+            for word in [payload + 3, payload + 8, walker + 7, walker + 13] {
+                normalized[word] = legacy[word];
+            }
+            normalized[local_id + 4..local_id + 8].copy_from_slice(&legacy[local_id + 4..local_id + 8]);
+        }
+        assert_eq!(normalized, legacy, "the background group width is the only change");
     }
 }
 

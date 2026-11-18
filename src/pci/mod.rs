@@ -10,6 +10,8 @@ pub mod pciids;
 pub mod vrng;
 pub use pci::*;
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 // EXPERIMENTAL TGL bring-up lane.
 //
 // The i7-1185G7 test laptop exposes Tiger Lake-LP GT2 as 8086:9A49 rev01.
@@ -32,6 +34,56 @@ const EXP_TGL_DEVICE_ID: u16 = 0x9A49;
 const EXP_TGL_REVISION_ID: u8 = 0x01;
 const EXP_ADLS_DEVICE_ID: u16 = 0x4680;
 const EXP_ADLS_REVISION_ID: u8 = 0x0C;
+static EXP_TGL_9A49_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+const TGL_DETECTION_LIMIT: usize = 10;
+const TGL_DETECTION_WINDOW_TICKS: u64 = 60 * embassy_time_driver::TICK_HZ;
+
+struct TglDetectionRate {
+    recent: [Option<u64>; TGL_DETECTION_LIMIT],
+    next: usize,
+    last_warning: Option<u64>,
+}
+
+impl TglDetectionRate {
+    const fn new() -> Self {
+        Self {
+            recent: [None; TGL_DETECTION_LIMIT],
+            next: 0,
+            last_warning: None,
+        }
+    }
+
+    fn record(&mut self, now: u64) -> bool {
+        let within_minute = |then| now.saturating_sub(then) < TGL_DETECTION_WINDOW_TICKS;
+        // The next slot holds the oldest of the last ten calls, if present.
+        let excessive = self.recent[self.next].is_some_and(within_minute);
+        self.recent[self.next] = Some(now);
+        self.next = (self.next + 1) % self.recent.len();
+        if excessive && !self.last_warning.is_some_and(within_minute) {
+            self.last_warning = Some(now);
+            return true;
+        }
+        false
+    }
+}
+
+fn detect_experimental_tgl_9a49() -> Option<PciDevice> {
+    static RATE: spin::Mutex<TglDetectionRate> = spin::Mutex::new(TglDetectionRate::new());
+    let excessive = RATE.lock().record(embassy_time_driver::now());
+    if excessive {
+        crate::log_important!(target: "global";
+            "pci: abnormal Tiger Lake GT2 hardware detection: detect_experimental_tgl_9a49 called more than {} times in 60 seconds. This should run once at boot; use the cached experimental_tgl_9a49_active result.\n",
+            TGL_DETECTION_LIMIT,
+        );
+    }
+    pci::with_devices(|devices| {
+        devices
+            .iter()
+            .find(|dev| dev.vendor == EXP_TGL_VENDOR_ID && dev.device == EXP_TGL_DEVICE_ID)
+            .copied()
+    })
+}
 
 #[inline]
 fn exp_tgl_9a49_at_bdf(bus: u8, slot: u8, function: u8) -> bool {
@@ -39,16 +91,10 @@ fn exp_tgl_9a49_at_bdf(bus: u8, slot: u8, function: u8) -> bool {
     (identity as u16) == EXP_TGL_VENDOR_ID && ((identity >> 16) as u16) == EXP_TGL_DEVICE_ID
 }
 
-/// True only while the physical Tiger Lake GT2 compatibility target is present.
-///
-/// The enumerated inventory is deliberately aliased to ADL-S below, so probe the
-/// raw config dword at each published BDF instead of trusting the exported ID.
+/// Whether boot enumeration found the physical Tiger Lake GT2 target. Font
+/// sizing and other hot paths share the result of the pre-alias inventory.
 pub(crate) fn experimental_tgl_9a49_active() -> bool {
-    pci::with_devices(|devices| {
-        devices
-            .iter()
-            .any(|dev| exp_tgl_9a49_at_bdf(dev.bus, dev.slot, dev.function))
-    })
+    EXP_TGL_9A49_ACTIVE.load(Ordering::Acquire)
 }
 
 /// Enumerate the physical inventory, then alias only the Tiger Lake GT2 test
@@ -60,21 +106,12 @@ pub(crate) fn experimental_tgl_9a49_active() -> bool {
 pub fn enumerate_impl() {
     pci::enumerate_impl();
 
-    let mut alias = None;
-    pci::with_devices(|devices| {
-        if let Some(raw) = devices
-            .iter()
-            .find(|dev| dev.vendor == EXP_TGL_VENDOR_ID && dev.device == EXP_TGL_DEVICE_ID)
-        {
-            let mut exposed = *raw;
-            exposed.device = EXP_ADLS_DEVICE_ID;
-            exposed.device_id = EXP_ADLS_DEVICE_ID;
-            alias = Some((exposed, raw.bus, raw.slot, raw.function));
-        }
-    });
-
-    if let Some((exposed, bus, slot, function)) = alias {
+    let raw = detect_experimental_tgl_9a49();
+    if let Some(mut exposed) = raw {
+        let (bus, slot, function) = (exposed.bus, exposed.slot, exposed.function);
         let raw_revision = pci::config_read_u8(bus, slot, function, 0x08);
+        exposed.device = EXP_ADLS_DEVICE_ID;
+        exposed.device_id = EXP_ADLS_DEVICE_ID;
         pci::publish_discovered_device(exposed);
         crate::log!(
             "pci/exp-tgl-alias: {:02X}:{:02X}.{} physical={:04X}:{:04X} rev=0x{:02X} exposed={:04X}:{:04X} rev=0x{:02X} purpose=full-xelp-adls-compatibility-probe\n",
@@ -89,6 +126,7 @@ pub fn enumerate_impl() {
             EXP_ADLS_REVISION_ID,
         );
     }
+    EXP_TGL_9A49_ACTIVE.store(raw.is_some(), Ordering::Release);
 }
 
 /// Preserve ordinary config semantics except for the exact generated-artifact

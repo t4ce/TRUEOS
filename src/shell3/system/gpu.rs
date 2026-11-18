@@ -6,6 +6,7 @@ use crate::gpu::vgpu::{self as gpu, KernelClient};
 fn usage(io: &Output) {
     Output::line(io, "gpu status");
     Output::line(io, "gpu test broker|abi|guc|compute|blit|font-r8|all");
+    Output::line(io, "gpu test compute-dispatch (offscreen rectangle benchmark)");
     Output::line(io, "gpu material pbr|base|normal|uv|solid");
     Output::line(io, "gpu depth on|off (Picasso diagnostic)");
     Output::line(io, "gpu cull on|off (Picasso diagnostic)");
@@ -65,6 +66,7 @@ pub(super) fn execute(io: &Output, rest: &str) {
                 test if test.eq_ignore_ascii_case("abi") => test_abi(io),
                 test if test.eq_ignore_ascii_case("guc") => test_guc(io),
                 test if test.eq_ignore_ascii_case("compute") => test_compute(io),
+                test if test.eq_ignore_ascii_case("compute-dispatch") => test_compute_dispatch(io),
                 test if test.eq_ignore_ascii_case("blit") => test_blit(io),
                 test if test.eq_ignore_ascii_case("font-r8") => test_font_r8(io),
                 test if test.eq_ignore_ascii_case("all") => {
@@ -445,6 +447,43 @@ fn test_compute(io: &Output) -> bool {
     dispatch && timeline
 }
 
+fn test_compute_dispatch(io: &Output) -> bool {
+    let report = match crate::intel::gpgpu::probe_rectangle_dispatch() {
+        Ok(report) => report,
+        Err(error) => {
+            io.line(&format!("gpu compute-dispatch error={error}"));
+            return false;
+        }
+    };
+    io.line(&format!(
+        "gpu compute-dispatch: physical=8086:{:04X} rev={:02X} effective=8086:{:04X} timestamp_hz={}",
+        report.physical_device, report.physical_revision, report.effective_device, report.timestamp_hz,
+    ));
+    io.line(&format!("Artifact SHA-256 {}", report.artifact_sha256));
+    io.line("Calibration passed and pixels match the reference.");
+    io.line(&format!(
+        "Dispatched SIMD lanes  empty={} strips={} merged={}",
+        report.empty_lanes, report.strips_lanes, report.merged_lanes,
+    ));
+    io.line(&format!("Timing over {} pairs at {} rows", report.pairs, report.rows));
+    io.line(&format!(
+        "Strips  GPU p50={} p95={} ticks   host p50={} p95={} us",
+        report.strips_gpu_p50_ticks,
+        report.strips_gpu_p95_ticks,
+        report.strips_host_p50_us,
+        report.strips_host_p95_us,
+    ));
+    io.line(&format!(
+        "Merged  GPU p50={} p95={} ticks   host p50={} p95={} us",
+        report.merged_gpu_p50_ticks,
+        report.merged_gpu_p95_ticks,
+        report.merged_host_p50_us,
+        report.merged_host_p95_us,
+    ));
+    io.line("Host times cover descriptor preparation through retirement for each supplied rectangle list.");
+    true
+}
+
 fn test_blit(io: &Output) -> bool {
     let before = gpu::kernel_timeline(KernelClient::Vcpy).unwrap_or_default();
     let probe = crate::intel::submit_guc_bcs0_fast_copy_probe_now();
@@ -533,6 +572,7 @@ const ACTIONS: &[&str] = &[
     "test blit",
     "test font-r8",
     "test all",
+    "test compute-dispatch",
     "material pbr",
     "material base",
     "material normal",

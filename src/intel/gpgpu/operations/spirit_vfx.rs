@@ -794,20 +794,22 @@ fn render_spirit_background_frames(
     if comparison_capture {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: spirit background capture effect={} frame={} bytes={} walkers=1 retirement=marker-plus-saved-head\n",
+            "intel/gpgpu: spirit background capture effect={} frame={} bytes={} walkers=1 local_x={} retirement=marker-plus-saved-head\n",
             effect,
             word(&controls[0], 2),
             output.len(),
+            spirit_background_local_x(),
         );
     }
     if count > 1 {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: spirit background segment effect={} samples={} walkers={} submissions=1 bytes={} submit_to_retire_ms={} total_ms={} phase_first={:.6} phase_last={:.6}\n",
+            "intel/gpgpu: spirit background segment effect={} samples={} walkers={} submissions=1 bytes={} local_x={} submit_to_retire_ms={} total_ms={} phase_first={:.6} phase_last={:.6}\n",
             effect,
             count,
             count,
             output.len(),
+            spirit_background_local_x(),
             submit_to_retire_ms,
             direct_rcs_elapsed_ms_since(started),
             f32::from_bits(word(&controls[0], 4)),

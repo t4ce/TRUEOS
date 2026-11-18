@@ -13,6 +13,10 @@ use serde_json::Value;
 use spin::Mutex;
 use trueos_time::{Duration, Timer};
 
+use crate::usb2::hid::{
+    HID_CURSOR_EVENT_FLAG_ANIMATED, HID_CURSOR_EVENT_FLAG_STATION, HID_CURSOR_EVENT_FLAG_TELEPORT,
+};
+
 pub const MOUSE_CONTROL_OPCODE_TELEPORT: u8 = 1;
 pub const MOUSE_CONTROL_OPCODE_STROKE: u8 = 2;
 pub const MOUSE_CONTROL_OPCODE_BUTTONS: u8 = 3;
@@ -27,9 +31,6 @@ pub const MOUSE_CONTROL_EASING_FAST_LINEAR: u8 = 1;
 pub const MOUSE_CONTROL_EASING_NATURAL: u8 = 2;
 
 pub const MOUSE_CONTROL_FLAG_CLEAR_QUEUE: u8 = 1 << 0;
-const MOUSE_CONTROL_EVENT_FLAG_STATION: u32 = 1 << 16;
-const MOUSE_CONTROL_EVENT_FLAG_TELEPORT: u32 = 1 << 17;
-const MOUSE_CONTROL_EVENT_FLAG_ANIMATED: u32 = 1 << 18;
 /// A mediated cursor which contributes presentation, never application input.
 /// Keep this on every queued HID event so retirement cannot make stale motion
 /// interactive after its station record has gone away.
@@ -507,7 +508,7 @@ impl MouseControlStation {
                                     cursor.y,
                                     cursor.buttons_down,
                                     command.wheel,
-                                    cursor_event_flags(cursor, MOUSE_CONTROL_EVENT_FLAG_STATION),
+                                    cursor_event_flags(cursor, HID_CURSOR_EVENT_FLAG_STATION),
                                 );
                             }
                             break;
@@ -524,8 +525,8 @@ impl MouseControlStation {
                                 command.wheel,
                                 cursor_event_flags(
                                     cursor,
-                                    MOUSE_CONTROL_EVENT_FLAG_STATION
-                                        | MOUSE_CONTROL_EVENT_FLAG_TELEPORT,
+                                    HID_CURSOR_EVENT_FLAG_STATION
+                                        | HID_CURSOR_EVENT_FLAG_TELEPORT,
                                 ),
                             );
                         }
@@ -536,7 +537,7 @@ impl MouseControlStation {
                                 cursor.y,
                                 cursor.buttons_down,
                                 command.wheel,
-                                cursor_event_flags(cursor, MOUSE_CONTROL_EVENT_FLAG_STATION),
+                                cursor_event_flags(cursor, HID_CURSOR_EVENT_FLAG_STATION),
                             );
                         }
                         _ => {}
@@ -568,7 +569,7 @@ impl MouseControlStation {
                     0,
                     cursor_event_flags(
                         cursor,
-                        MOUSE_CONTROL_EVENT_FLAG_STATION | MOUSE_CONTROL_EVENT_FLAG_ANIMATED,
+                        HID_CURSOR_EVENT_FLAG_STATION | HID_CURSOR_EVENT_FLAG_ANIMATED,
                     ),
                 );
             }
@@ -896,7 +897,7 @@ pub(crate) fn submit_remote_report(
         cursor.capability.slot_id,
         f64::from(x) / f64::from(width.saturating_sub(1).max(1)),
         f64::from(y) / f64::from(height.saturating_sub(1).max(1)),
-        buttons, wheel, cursor_event_flags(cursor, MOUSE_CONTROL_EVENT_FLAG_STATION), relative, true,
+        buttons, wheel, cursor_event_flags(cursor, HID_CURSOR_EVENT_FLAG_STATION), relative, true,
     );
     Ok(())
 }
@@ -1366,8 +1367,12 @@ mod visual_cursor_tests {
         assert_eq!((station.cursors[0].x, station.cursors[0].y), (50, 30));
         station.tick(100);
         assert_eq!((station.cursors[0].x, station.cursors[0].y), (100, 60));
-        for flags in [MOUSE_CONTROL_EVENT_FLAG_STATION, MOUSE_CONTROL_EVENT_FLAG_TELEPORT, MOUSE_CONTROL_EVENT_FLAG_ANIMATED] {
-            assert_ne!(cursor_event_flags(&station.cursors[0], flags) & MOUSE_CONTROL_EVENT_FLAG_VISUAL_ONLY, 0);
+        let lifecycle_flags = crate::usb2::hid::HID_CURSOR_EVENT_FLAG_POINTER_GROUP_RETIRED
+            | crate::usb2::hid::HID_CURSOR_EVENT_FLAG_DEVICE_LOST;
+        for motion in [0, HID_CURSOR_EVENT_FLAG_TELEPORT, HID_CURSOR_EVENT_FLAG_ANIMATED] {
+            let flags = cursor_event_flags(&station.cursors[0], HID_CURSOR_EVENT_FLAG_STATION | motion);
+            assert_ne!(flags & MOUSE_CONTROL_EVENT_FLAG_VISUAL_ONLY, 0);
+            assert_eq!(flags & lifecycle_flags, 0, "UI4 must route motion as movement");
         }
         assert_eq!(station.cursors[0].buttons_down, 0);
         assert!(station.cursors[0].active.is_none());

@@ -24,11 +24,15 @@ const HID_KIND_MOUSE: u8 = crate::r::cursor::HID_KIND_MOUSE;
 const HID_KIND_TABLET: u8 = crate::r::cursor::HID_KIND_TABLET;
 const HID_KIND_VIRTUAL_CURSOR: u8 = crate::r::cursor::HID_KIND_VIRTUAL_CURSOR;
 const CURSOR_EVENT_RING_CAP: usize = crate::allcaps::input::HID_CURSOR_EVENT_RING_CAP;
-pub const HID_CURSOR_EVENT_FLAG_DEVICE_LOST: u32 = 1 << 31;
-/// A station-owned software-cursor visual, without input-device enrollment.
-pub(crate) const HID_CURSOR_EVENT_FLAG_VISUAL_ONLY: u32 = 1 << 19;
+// Motion and lifecycle reports share the same flags field in the HID ring.
+pub(crate) const HID_CURSOR_EVENT_FLAG_STATION: u32 = 1 << 16;
+pub(crate) const HID_CURSOR_EVENT_FLAG_TELEPORT: u32 = 1 << 17;
 /// Retire only a persona's cursor presentation; its physical device is alive.
 pub(crate) const HID_CURSOR_EVENT_FLAG_POINTER_GROUP_RETIRED: u32 = 1 << 18;
+/// A station-owned software-cursor visual, without input-device enrollment.
+pub(crate) const HID_CURSOR_EVENT_FLAG_VISUAL_ONLY: u32 = 1 << 19;
+pub(crate) const HID_CURSOR_EVENT_FLAG_ANIMATED: u32 = 1 << 20;
+pub const HID_CURSOR_EVENT_FLAG_DEVICE_LOST: u32 = 1 << 31;
 
 const ZERO_CURSOR_EVENT: TrueosHidCursorEvent = TrueosHidCursorEvent {
     t_ms: 0,

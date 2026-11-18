@@ -2,6 +2,20 @@ const SPIRIT_VFX_STATE_COMPUTE_MODE_CMD: u32 = 0x6105_0000;
 const SPIRIT_VFX_FORCE_GPU_NON_COHERENT: u32 = (0b11 << 19) | (0b10 << 3);
 const SPIRIT_VFX_TGL_VFE_URB_DW5: u32 = 1024 << 16;
 
+fn spirit_background_local_x() -> u32 {
+    // On the ADL-S comparison rig every incorrect background pixel landed
+    // in lanes 8–15. Use two half-filled groups in place of each full SIMD16
+    // group on that stepping. Keep the shader's compiled SIMD16 layout.
+    if let Some(dev) = crate::intel::claimed_device() {
+        let identity = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0);
+        let revision = crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 8) as u8;
+        if identity == 0x4680_8086 && revision == 0x0c {
+            return 8;
+        }
+    }
+    16
+}
+
 fn direct_rcs_write_spirit_vfx_binding(
     state: DirectRcsState,
     binding_table_offset: usize,
@@ -27,6 +41,7 @@ fn direct_rcs_write_spirit_vfx_payload(
     state: DirectRcsState,
     payload_offset: usize,
     cross_thread_bytes: usize,
+    local_x: u32,
     pointers: &[u64],
 ) -> bool {
     let indirect_bytes = cross_thread_bytes + SPIRIT_VFX_PER_THREAD_BYTES;
@@ -37,10 +52,10 @@ fn direct_rcs_write_spirit_vfx_payload(
         let payload = state.batch_virt.add(payload_offset);
         core::ptr::write_bytes(payload, 0, indirect_bytes);
         let dwords = payload as *mut u32;
-        core::ptr::write_volatile(dwords.add(3), 16);
+        core::ptr::write_volatile(dwords.add(3), local_x);
         core::ptr::write_volatile(dwords.add(4), 1);
         core::ptr::write_volatile(dwords.add(5), 1);
-        core::ptr::write_volatile(dwords.add(8), 16);
+        core::ptr::write_volatile(dwords.add(8), local_x);
         core::ptr::write_volatile(dwords.add(9), 1);
         core::ptr::write_volatile(dwords.add(10), 1);
         for (index, pointer) in pointers.iter().copied().enumerate() {
@@ -50,10 +65,8 @@ fn direct_rcs_write_spirit_vfx_payload(
         }
 
         let local_ids = payload.add(cross_thread_bytes) as *mut u16;
-        for lane in 0..16usize {
+        for lane in 0..local_x as usize {
             core::ptr::write_volatile(local_ids.add(lane), lane as u16);
-            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
-            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
         }
     }
     true
@@ -136,6 +149,12 @@ fn direct_rcs_encode_spirit_vfx_batch(
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 
+    let background_local_x = if background_upload.is_some() {
+        spirit_background_local_x()
+    } else {
+        16
+    };
+    let background_mask = (1u32 << background_local_x) - 1;
     if background_upload.is_some() {
         for (index, (frame_control, frame_target)) in core::iter::once((control, dst))
             .chain(extra_backgrounds.iter().copied())
@@ -172,6 +191,7 @@ fn direct_rcs_encode_spirit_vfx_batch(
                 state,
                 SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES + offset,
                 SPIRIT_VFX_BACKGROUND_CROSS_THREAD_BYTES,
+                background_local_x,
                 &[frame_control.gpu, frame_target.gpu],
             );
             if !background_state_ok {
@@ -218,6 +238,7 @@ fn direct_rcs_encode_spirit_vfx_batch(
             state,
             SPIRIT_VFX_SPRITE_PAYLOAD_OFFSET_BYTES,
             SPIRIT_VFX_SPRITE_CROSS_THREAD_BYTES,
+            16,
             &[source.gpu, control.gpu, dst.gpu],
         );
         if !sprite_state_ok {
@@ -303,9 +324,9 @@ fn direct_rcs_encode_spirit_vfx_batch(
             &mut cursor,
             SPIRIT_VFX_BACKGROUND_PAYLOAD_OFFSET_BYTES,
             SPIRIT_VFX_BACKGROUND_INDIRECT_BYTES,
-            16,
+            SPIRIT_VFX_SIZE / background_local_x,
             SPIRIT_VFX_SIZE,
-            GPGPU_WALKER_SIMD16_MASK,
+            background_mask,
         );
         if sprite.is_some() {
             ok &= direct_rcs_push_spirit_vfx_dependency(batch, &mut cursor);
@@ -336,9 +357,9 @@ fn direct_rcs_encode_spirit_vfx_batch(
             &mut cursor,
             payload_offset,
             SPIRIT_VFX_BACKGROUND_INDIRECT_BYTES,
-            16,
+            SPIRIT_VFX_SIZE / background_local_x,
             SPIRIT_VFX_SIZE,
-            GPGPU_WALKER_SIMD16_MASK,
+            background_mask,
         );
     }
 

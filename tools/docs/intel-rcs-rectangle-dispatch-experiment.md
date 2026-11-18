@@ -1,11 +1,11 @@
 # Intel RCS rectangle dispatch experiment
 
-Test whether merging adjacent solid rectangles reduces the work dispatched on
-RCS0 and saves time for an identical RGBA8 result. Add a manual Shell3
-`gpu test compute-dispatch` command using the offscreen solid-rectangle path
-behind `gpu test compute`. Start with one workload and the existing kernel
-artifact. [Shell3 compute test](../../src/shell3/system/gpu.rs#L427),
-[solid-rectangle path](../../src/intel/gpgpu/operations/solid_rects.rs#L29)
+The opt-in Shell3 diagnostic tests whether merging adjacent solid rectangles
+reduces RCS0 dispatch work and saves time for an identical RGBA8 result. In
+an idle rig session, open ADM → `gpu`, press `m`, and choose
+**test compute-dispatch**. The diagnostic uses the existing offscreen
+solid-rectangle kernel. [Shell3 diagnostic](../../src/shell3/system/gpu.rs#L450),
+[diagnostic implementation](../../src/intel/gpgpu/operations/rectangle_dispatch.rs)
 
 ## Workload and expected output
 
@@ -28,13 +28,14 @@ path. Swap the backing buffers assigned to A and B between repetitions.
 
 ## Counter and timing checks
 
-1. Record the physical PCI device ID and revision, effective driver profile,
-   and kernel artifact hash. Admit only a device and stepping with verified
-   access to the RCS counter and a working solid-rectangle kernel. Treat an
-   unadmitted target as unsupported before encoding register access. The
-   Tiger Lake reference defines `0x2290` and `0x2294` as the two halves of a
-   64-bit count of enabled lanes at dispatch. Writes to the low half reset
-   the counter. [Intel register reference, p. 272](https://cdrdv2-public.intel.com/703046/intel-gfx-prm-osrc-tgl-vol-02-c-command-reference-registers-part-1.pdf#page=298)
+1. The command admits physical `8086:4680` revision `0x0C` with a matching
+   effective identity and an admitted solid-rectangle kernel. It reports
+   both PCI identities and the uploaded artifact hash. The Tiger Lake
+   reference describes the two halves at `0x2290` and `0x2294` as a 64-bit
+   active-lane count. Mesa uses the same Gen12 counter with engine-relative
+   register operands. Calibration checks the count on the rig's Alder Lake
+   stepping. [Intel register reference, p. 272](https://cdrdv2-public.intel.com/703046/intel-gfx-prm-osrc-tgl-vol-02-c-command-reference-registers-part-1.pdf#page=298),
+   [Mesa register addressing](https://chromium.googlesource.com/external/gitlab.freedesktop.org/mesa/mesa/+/7c634b2375af2c145c185666841364c533bafc2d/src/intel/common/mi_builder.h#133)
 2. Take ordered, read-only register snapshots before and after the walker
    in the same batch. Use the Picasso register-to-memory snapshot pattern
    and an owned result mapping. Keep the full counter width and dedicate
@@ -43,20 +44,20 @@ path. Swap the backing buffers assigned to A and B between repetitions.
    Require the existing completion marker and saved-HEAD retirement proof
    before reading results. [Snapshot pattern](../../src/intel/render/primary.rs#L2435),
    [existing worklist submission](../../src/intel/gpgpu/operations/worklists.rs#L1)
-3. Calibrate on a quiet engine. A batch that skips the walker should add
-   zero lanes, and a single full-mask group should add sixteen. Verify
-   the A/B counts, then repeat with a known compute workload on another
-   GuC context. Confirm the other context ran between the snapshots before
-   using that trial as evidence of attribution across a context switch.
-   A timeout or incorrect delta fails calibration. Preserve the existing
-   quarantine behavior for an accepted submission with ambiguous retirement.
-4. Measure timing in separate timestamp-only trials. Bracket the walker
-   with the existing GPU timestamp packet, and measure host elapsed time
-   from before descriptor preparation through retirement as well. Warm up
-   both variants, alternate AB and BA, and report median and p95 GPU ticks
-   and host times over repeated pairs. Increase the band height equally
-   for both variants if the small case falls below timestamp resolution.
-   [GPU timestamp writer](../../src/intel/gpgpu/rcs/commands.rs#L58)
+3. Calibration requires deltas of `0`, `16`, and `256` for the empty,
+   merged, and strip workloads. A missing snapshot, wrong delta, pixel
+   mismatch, or timeout fails the command. An ambiguous retirement uses
+   the normal system-lane quarantine and retains its backing. Attribution
+   under a forced GuC context switch is a separate validation step that
+   requires evidence of an intervening dispatch between snapshots.
+4. Timing trials use only GPU timestamps and a separate CS stall before
+   each post-sync timestamp write for Alder Lake. The command warms both
+   variants, alternates AB and BA, swaps backing buffers, and reports
+   median and p95 over 24 pairs. The band grows to 32 rows if the warm-up
+   hits timestamp resolution at four rows. Host timings start before
+   descriptor preparation and end when retirement is proven.
+   [GPU timestamp writer](../../src/intel/gpgpu/rcs/commands.rs#L58),
+   [Mesa post-sync ordering workaround](https://chromium.googlesource.com/external/gitlab.freedesktop.org/mesa/mesa/+/7c634b2375af2c145c185666841364c533bafc2d/src/intel/vulkan/genX_cmd_buffer.c#3089)
 
 ## Runtime decision
 
@@ -68,6 +69,7 @@ looking for merges. Start with consecutive, opaque, same-color solid
 rectangles whose union exactly covers a rectangle. Require pixel parity and
 no regression in p95 host time for the low-merge workload.
 
-The rebuild and deployment checkpoint is after the opt-in command passes
-host-side packet, slot layout, and pixel-reference checks. The physical run
-then establishes counter attribution, output parity, and timing on the rig.
+Run `python3 tools/testpy/test_rectangle_dispatch.py` for the host packet,
+snapshot, and pixel-reference checks. Run the physical diagnostic after
+deploying a kernel with the command to establish the rig's lane counts,
+output parity, and timing.

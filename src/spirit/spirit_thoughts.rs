@@ -15,7 +15,7 @@ const CAPACITY: usize = v::spirit_agents::MAX_AGENTS;
 const SOURCE_CAPACITY: usize = crate::allcaps::hv::VM_ID_LIMIT;
 const MARKER_GAP: i32 = 6;
 const SHUTDOWN_DWELL_MS: u64 = 1_200;
-const GROWTH_STEP_MS: u64 = 5_000;
+const GROWTH_STEP_MS: u64 = 1_000;
 const ORBIT_PERIOD_MS: u64 = 24_000;
 
 pub(crate) const ERROR_INVALID: i32 = -3;
@@ -1179,21 +1179,65 @@ mod tests {
         let layout = geometry(600, 350);
         let running = agent("runner", AgentLifecycle::Running);
         thoughts.ingest(OWNER, snapshot(1, vec![running.clone()]), 1_000).unwrap();
-        assert_eq!(thoughts.plan(layout, 5_999)[0].growth_step, 0);
-        assert_eq!(thoughts.plan(layout, 6_000)[0].growth_step, 1);
+        assert_eq!(thoughts.plan(layout, 1_999)[0].growth_step, 0);
+        assert_eq!(thoughts.plan(layout, 2_000)[0].growth_step, 1);
 
         let mut waiting = running.clone();
         waiting.waiting_approval = true;
-        thoughts.ingest(OWNER, snapshot(2, vec![waiting]), 9_000).unwrap();
+        thoughts.ingest(OWNER, snapshot(2, vec![waiting]), 2_600).unwrap();
         assert_eq!(thoughts.plan(layout, 30_000)[0].growth_step, 1);
 
         thoughts.ingest(OWNER, snapshot(3, vec![running]), 30_000).unwrap();
-        assert_eq!(thoughts.plan(layout, 31_999)[0].growth_step, 1);
-        assert_eq!(thoughts.plan(layout, 32_000)[0].growth_step, 2);
+        assert_eq!(thoughts.plan(layout, 30_399)[0].growth_step, 1);
+        assert_eq!(thoughts.plan(layout, 30_400)[0].growth_step, 2);
 
         let completed = agent("runner", AgentLifecycle::Completed);
-        thoughts.ingest(OWNER, snapshot(4, vec![completed]), 34_000).unwrap();
+        thoughts.ingest(OWNER, snapshot(4, vec![completed]), 30_800).unwrap();
         assert_eq!(thoughts.plan(layout, 100_000)[0].growth_step, 2);
+    }
+
+    #[test]
+    fn ten_then_sixteen_agents_keep_growing_on_visible_orbits() {
+        let layout = Geometry {
+            marker: MarkerSize::new(32, 33).unwrap(),
+            nickname_cell_width: 12,
+            nickname_gap: 4,
+            ..geometry(700, 400)
+        };
+        let entries = |count, lifecycle| {
+            (0..count)
+                .map(|index| named_agent(&format!("synthetic-{index}"), &format!("Probe {index:02}"), lifecycle))
+                .collect()
+        };
+        let mut thoughts = Thoughts::new();
+        thoughts.ingest(OWNER, snapshot(1, entries(10, AgentLifecycle::Running)), 0).unwrap();
+        for now in [0, 5_000, 10_000, 20_000, 25_000] {
+            let plan = thoughts.plan(layout, now);
+            assert_eq!(plan.len(), 10);
+            assert!(plan.iter().all(|marker| marker.orbit.is_some() && marker.growth_step == now / GROWTH_STEP_MS));
+            check_layout(&plan, layout, now);
+            check_programs(&plan, layout, now);
+        }
+        thoughts.ingest(OWNER, snapshot(2, entries(16, AgentLifecycle::Running)), 26_000).unwrap();
+        for now in [26_000, 31_000, 46_000, 51_000] {
+            let plan = thoughts.plan(layout, now);
+            assert_eq!(plan.len(), 16);
+            for (index, marker) in plan.iter().enumerate() {
+                let start = if index < 10 { 0 } else { 26_000 };
+                assert_eq!(marker.growth_step, (now - start) / GROWTH_STEP_MS);
+                assert!(marker.orbit.is_some());
+            }
+            check_layout(&plan, layout, now);
+            check_programs(&plan, layout, now);
+        }
+        thoughts.ingest(OWNER, snapshot(3, entries(16, AgentLifecycle::Completed)), 52_000).unwrap();
+        let plan = thoughts.plan(layout, 120_000);
+        assert_eq!(plan.len(), 16);
+        for (index, marker) in plan.iter().enumerate() {
+            assert!(marker.orbit.is_none());
+            assert_eq!(marker.growth_step, if index < 10 { 52 } else { 26 });
+        }
+        check_layout(&plan, layout, 120_000);
     }
 
     #[test]

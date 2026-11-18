@@ -1,9 +1,5 @@
 #![allow(dead_code)]
 extern crate alloc;
-extern crate self as microflake;
-
-pub const TILE_SIZE: usize = 32;
-pub const TILE_BYTES: usize = TILE_SIZE * TILE_SIZE * 4;
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 static VISUAL_WAKES: AtomicUsize = AtomicUsize::new(0);
@@ -13,6 +9,8 @@ static HID_WRITES: AtomicUsize = AtomicUsize::new(0);
 
 #[macro_export]
 macro_rules! log_info { ($($tt:tt)*) => {} }
+#[macro_export]
+macro_rules! log_warn { ($($tt:tt)*) => {} }
 
 pub mod graphics { pub mod primitives {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -21,28 +19,63 @@ pub mod graphics { pub mod primitives {
 } }
 
 pub mod ui4 {
-    pub const CONTEXT_MENU_FONT_WIDTH: usize = microfont::FWIDTH * 2;
-    pub const CONTEXT_MENU_FONT_HEIGHT: usize = microfont::FHEIGHT * 2;
     use crate::*;
     use graphics::primitives::Rgba8;
+    pub const CONTEXT_MENU_FONT_WIDTH: usize = microfont::FWIDTH * 2;
+    pub const CONTEXT_MENU_FONT_HEIGHT: usize = microfont::FHEIGHT * 2;
     pub fn output_dimensions()->Option<(u32,u32)> { Some((320,200)) }
     pub fn physical_extent_pixels(_:u32,_:u32)->Option<(u32,u32)> { Some((64,64)) }
     pub fn notify_cursor_visual_change() { VISUAL_WAKES.fetch_add(1, Ordering::Relaxed); }
     #[derive(Clone, Copy, Eq, PartialEq)]
     pub struct Ui4CursorSource { pub controller_id:u32,pub slot_id:u32,pub ep_target:u32,pub hid_kind:u8 }
+    impl Ui4CursorSource {
+        fn from_event(event: usb2::hid::TrueosHidCursorEvent) -> Self {
+            Self {
+                controller_id: event.controller_id, slot_id: event.slot_id,
+                ep_target: event.ep_target, hid_kind: event.hid_kind,
+            }
+        }
+    }
     #[derive(Clone, Copy)]
     pub struct WindowTarget { owner:u8, window:u32 }
     impl WindowTarget { fn cursor_frame_key(self)->Self {self} }
     #[derive(Clone, Copy)]
-    struct CursorRoute { source:Ui4CursorSource, visual_only:bool, color:Rgba8, selection_serial:u64 }
-    impl CursorRoute { fn color(&self)->Rgba8 { self.color } }
-    impl CursorRoute { fn clear_frame_interaction(&mut self) {} }
-    struct InputBroker { cursors:heapless::Vec<CursorRoute,64>, selection_serial:u64 }
+    struct CursorRoute {
+        source: Ui4CursorSource,
+        x: u32,
+        y: u32,
+        visual_only: bool,
+        visible_after_motion: bool,
+        selection_serial: u64,
+        combo_id: u32,
+        human_pointer_group: bool,
+        keyboard_source: Option<Ui4CursorSource>,
+        remote_input_authority: Option<()>,
+        buttons_down: u32,
+        absorb_select: bool,
+    }
+    impl CursorRoute {
+        fn new(source: Ui4CursorSource, x: u32, y: u32, buttons_down: u32) -> Self {
+            Self {
+                source, x, y, buttons_down, visual_only: false, visible_after_motion: false,
+                selection_serial: 0, combo_id: 0, human_pointer_group: false,
+                keyboard_source: None, remote_input_authority: None, absorb_select: false,
+            }
+        }
+        fn color(&self) -> Rgba8 { Rgba8::new(0, 0, 0, 255) }
+        fn clear_frame_interaction(&mut self) {}
+        fn clear_window_interaction(&mut self) {}
+    }
+    #[derive(Clone, Copy)]
+    struct QuadResize { source: Ui4CursorSource }
+    struct InputBroker {
+        cursors: heapless::Vec<CursorRoute, 64>,
+        selection_serial: u64,
+        quad_resize: Option<QuadResize>,
+    }
     impl InputBroker {
-        fn new()->Self {Self {cursors:heapless::Vec::new(),selection_serial:0}}
-        fn cursor_index(&mut self,source:Ui4CursorSource,_:u32,_:u32)->usize {
-            self.cursors.push(CursorRoute {source,visual_only:false,color:Rgba8::new(0,0,0,255),selection_serial:0}).ok();
-            self.cursors.len()-1
+        fn new() -> Self {
+            Self { cursors: heapless::Vec::new(), selection_serial: 0, quad_resize: None }
         }
     }
     fn cursor_hut_metadata(_:Ui4CursorSource)->(u32,bool) {(0,true)}
@@ -53,28 +86,44 @@ pub mod ui4 {
         pub fn select_frame(_:Option<WindowTarget>,_:Ui4CursorSource,_:Rgba8)->SelectionChange {
             panic!("visual-only route reached frame selection")
         }
+        pub fn cursor_retired(_: Ui4CursorSource) {}
+        pub fn retarget_source(_: Ui4CursorSource, _: Ui4CursorSource) {
+            panic!("visual-only route reached pointer group retargeting")
+        }
     }
     // This fixture tests visual routing; real grant policy has its own host suite.
     pub mod spirit_access {
         pub fn cursor_target_allowed(_:super::Ui4CursorSource,_:super::WindowTarget)->bool {true}
+        pub fn cursor_is_human(_: super::Ui4CursorSource) -> bool { false }
+        pub fn cursor_remote_authority(_: super::Ui4CursorSource) -> Option<()> { None }
     }
     pub mod context_menu {pub fn dismiss_for_source(_:super::Ui4CursorSource) {}}
     pub mod window_broker {pub fn note_window_focused(_:u8,_:u32)->Result<(),()> {Ok(())}}
     pub mod codex_handoff {pub fn parked(_:u8,_:u32)->bool{false}}
-    mod routing { use super::*; include!("routing.rs"); }
+    mod routing {
+        use super::*;
+        include!("routing.rs");
+        #[cfg(test)]
+        include!("moving_markers.rs");
+    }
 }
 
 pub mod usb2 { pub mod hid {
     use crate::*;
-    pub const HID_CURSOR_EVENT_FLAG_VISUAL_ONLY:u32=1<<19;
     const HID_KIND_VIRTUAL_CURSOR:u8=0;
     const HID_KIND_MOUSE:u8=1;
     pub static LAST_REMOTE: std::sync::Mutex<Option<(u8,u8,u16,u16,f64,f64)>> = std::sync::Mutex::new(None);
+    static CURSOR_EVENTS: std::sync::Mutex<alloc::vec::Vec<TrueosHidCursorEvent>> =
+        std::sync::Mutex::new(alloc::vec::Vec::new());
     fn now_ms_u32()->u32 {0}
     fn clamp01(value:f64)->f64 {value.clamp(0.0,1.0)}
     fn push_cursor_event(event:TrueosHidCursorEvent) {
         HID_WRITES.fetch_add(1,Ordering::Relaxed);
         *LAST_REMOTE.lock().unwrap() = Some((event.hid_kind,event.reserved0,event.reserved1,event.reserved2,event.x,event.y));
+        CURSOR_EVENTS.lock().unwrap().push(event);
+    }
+    pub fn take_cursor_events() -> alloc::vec::Vec<TrueosHidCursorEvent> {
+        core::mem::take(&mut *CURSOR_EVENTS.lock().unwrap())
     }
     fn notify_cursor_event_ready() {}
     pub fn retire_virtual_cursor(_:u32) {}

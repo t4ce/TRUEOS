@@ -1,3 +1,20 @@
+#[derive(Clone, Copy)]
+enum RectDispatchProbe {
+    Disabled,
+    Counter { skip_walker: bool },
+    Timing,
+}
+
+// Each sample occupies two DWORDs in this worklist's result page.
+const RECT_DISPATCH_BEFORE_SLOT: usize = 16;
+const RECT_DISPATCH_AFTER_SLOT: usize = RECT_DISPATCH_BEFORE_SLOT + 2;
+const _: () = {
+    assert!(RECT_DISPATCH_BEFORE_SLOT.is_multiple_of(2));
+    assert!(RECT_DISPATCH_BEFORE_SLOT > RECT_WORKLIST_PRE_MARKER_SLOT);
+    assert!(RECT_DISPATCH_BEFORE_SLOT > RECT_WORKLIST_POST_MARKER_SLOT);
+    assert!((RECT_DISPATCH_AFTER_SLOT + 2) * core::mem::size_of::<u32>() <= DIRECT_RCS_RESULT_BYTES);
+};
+
 fn direct_rcs_encode_alpha_blend_worklist_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
@@ -5,6 +22,26 @@ fn direct_rcs_encode_alpha_blend_worklist_batch(
     src_bytes: usize,
     dst_bytes: usize,
     desc_bytes: usize,
+) -> bool {
+    direct_rcs_encode_alpha_blend_worklist_batch_with_probe(
+        state,
+        upload,
+        params,
+        src_bytes,
+        dst_bytes,
+        desc_bytes,
+        RectDispatchProbe::Disabled,
+    )
+}
+
+fn direct_rcs_encode_alpha_blend_worklist_batch_with_probe(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    params: AlphaBlendWorklistRgba8Params,
+    src_bytes: usize,
+    dst_bytes: usize,
+    desc_bytes: usize,
+    probe: RectDispatchProbe,
 ) -> bool {
     let desc_count = params.desc_count as usize;
     let walker_count = rect_worklist_walker_count(desc_count);
@@ -20,6 +57,13 @@ fn direct_rcs_encode_alpha_blend_worklist_batch(
     unsafe {
         core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+        if matches!(probe, RectDispatchProbe::Counter { .. }) {
+            core::ptr::write_bytes(
+                state.result_virt.add(RECT_DISPATCH_BEFORE_SLOT * core::mem::size_of::<u32>()),
+                0xFF,
+                2 * core::mem::size_of::<u64>(),
+            );
+        }
     }
     if !direct_rcs_write_rect_worklist_interface_descriptor_at(
         state,
@@ -65,11 +109,9 @@ fn direct_rcs_encode_alpha_blend_worklist_batch(
         ALPHA_BLEND_WORKLIST_PRE_MARKER,
         ALPHA_BLEND_WORKLIST_POST_MARKER,
         true,
+        probe,
     )
 }
-
-
-
 
 fn direct_rcs_encode_rect_worklist_command_stream(
     state: DirectRcsState,
@@ -79,6 +121,7 @@ fn direct_rcs_encode_rect_worklist_command_stream(
     pre_marker: u32,
     post_marker: u32,
     one_group_per_descriptor: bool,
+    probe: RectDispatchProbe,
 ) -> bool {
     let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
     let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
@@ -118,6 +161,18 @@ fn direct_rcs_encode_rect_worklist_command_stream(
     ok &= direct_rcs_push(batch, &mut cursor, RECT_WORKLIST_IDD_OFFSET_BYTES as u32);
     ok &=
         direct_rcs_push_store_marker(batch, &mut cursor, RECT_WORKLIST_PRE_MARKER_SLOT, pre_marker);
+    ok &= direct_rcs_push_rect_dispatch_sample(
+        batch,
+        &mut cursor,
+        state.gpu_va.result,
+        RECT_DISPATCH_BEFORE_SLOT,
+        probe,
+    );
+    let walker_count = if matches!(probe, RectDispatchProbe::Counter { skip_walker: true }) {
+        0
+    } else {
+        walker_count
+    };
     for walker in 0..walker_count {
         let desc_base = walker.saturating_mul(RECT_WORKLIST_DESCS_PER_WALKER);
         let local_count = desc_count
@@ -143,6 +198,13 @@ fn direct_rcs_encode_rect_worklist_command_stream(
     }
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
+    ok &= direct_rcs_push_rect_dispatch_sample(
+        batch,
+        &mut cursor,
+        state.gpu_va.result,
+        RECT_DISPATCH_AFTER_SLOT,
+        probe,
+    );
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
     ok &= direct_rcs_push_store_marker(
         batch,
@@ -160,6 +222,57 @@ fn direct_rcs_encode_rect_worklist_command_stream(
     super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
     super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
     true
+}
+
+fn direct_rcs_push_rect_dispatch_sample(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    result_gpu: u64,
+    slot: usize,
+    probe: RectDispatchProbe,
+) -> bool {
+    match probe {
+        RectDispatchProbe::Disabled => true,
+        RectDispatchProbe::Timing => {
+            // Wa_1607156449: in GPGPU mode, issue a separate CS stall
+            // before each PIPE_CONTROL with a post-sync operation.
+            direct_rcs_push_pipe_control_full(batch, cursor, 0, PIPE_CONTROL_CS_STALL)
+                && direct_rcs_push_pipe_control_timestamp_at(batch, cursor, result_gpu, slot)
+        }
+        RectDispatchProbe::Counter { .. } => {
+            const TS_GPGPU_THREADS_DISPATCHED_LO: u32 = 0x2290;
+            const TS_GPGPU_THREADS_DISPATCHED_HI: u32 = 0x2294;
+            const MI_STORE_REGISTER_MEM_CS_MMIO: u32 = (0x24 << 23) | (1 << 19) | 2;
+            const PIPE_CONTROL_STALL_AT_SCOREBOARD: u32 = 1 << 1;
+
+            // Order each snapshot against the walker, as for Picasso's RCS
+            // pipeline statistics. Match Mesa's Gfx11+ SRM addressing with
+            // an engine-relative register operand and a PPGTT destination.
+            if !direct_rcs_push_pipe_control_full(
+                batch,
+                cursor,
+                0,
+                PIPE_CONTROL_CS_STALL | PIPE_CONTROL_STALL_AT_SCOREBOARD,
+            ) {
+                return false;
+            }
+            let mut destination = result_gpu + (slot * core::mem::size_of::<u32>()) as u64;
+            for register in [TS_GPGPU_THREADS_DISPATCHED_LO, TS_GPGPU_THREADS_DISPATCHED_HI] {
+                for word in [
+                    MI_STORE_REGISTER_MEM_CS_MMIO,
+                    register - RCS_RING_BASE as u32,
+                    destination as u32,
+                    (destination >> 32) as u32,
+                ] {
+                    if !direct_rcs_push(batch, cursor, word) {
+                        return false;
+                    }
+                }
+                destination += core::mem::size_of::<u32>() as u64;
+            }
+            true
+        }
+    }
 }
 
 fn direct_rcs_push_gpgpu_dispatch_prologue(

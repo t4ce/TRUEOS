@@ -26,6 +26,33 @@ fn lower_solid_rects(
     Some(descriptors)
 }
 
+fn stage_solid_rect_worklist(
+    buffer: GpgpuRectWorklistDescBuffer,
+    dst: GpgpuRgba8Surface,
+    descriptors: &[GpgpuAlphaBlendWorklistDesc],
+) -> AlphaBlendWorklistRgba8Params {
+    // Callers own the descriptor lock and have ruled out a quarantined request.
+    unsafe {
+        core::ptr::write_bytes(buffer.virt, 0, buffer.bytes);
+        let out = buffer.virt.cast::<GpgpuAlphaBlendWorklistDesc>();
+        for (index, descriptor) in descriptors.iter().copied().enumerate() {
+            core::ptr::write_volatile(out.add(index), descriptor);
+        }
+    }
+    super::dma_flush(buffer.virt, buffer.bytes);
+    // SOLID descriptors do not logically dereference the source. Bind the
+    // destination at both slots so speculation stays inside its allocation.
+    AlphaBlendWorklistRgba8Params {
+        src_gpu: dst.gpu,
+        dst_gpu: dst.gpu,
+        desc_gpu: buffer.gpu,
+        src_pitch_bytes: dst.pitch_bytes,
+        dst_pitch_bytes: dst.pitch_bytes,
+        desc_base: 0,
+        desc_count: descriptors.len() as u32,
+    }
+}
+
 fn solid_rects_rgba8_result_mode(
     dst: GpgpuRgba8Surface,
     rects: &[GpgpuSolidRect],
@@ -52,27 +79,7 @@ fn solid_rects_rgba8_result_mode(
         if direct_rcs_context_is_quarantined() {
             return GpgpuWorklistSubmitResult { stats, outcome };
         }
-        unsafe {
-            core::ptr::write_bytes(desc_buffer.virt, 0, desc_buffer.bytes);
-            let out = desc_buffer.virt as *mut GpgpuAlphaBlendWorklistDesc;
-            for (index, descriptor) in chunk.iter().copied().enumerate() {
-                core::ptr::write_volatile(out.add(index), descriptor);
-            }
-        }
-        super::dma_flush(desc_buffer.virt, desc_buffer.bytes);
-
-        // SOLID descriptors do not logically dereference the source. Bind the
-        // already-mapped destination at both surface slots so even compiler
-        // speculation remains inside a valid, identically cached allocation.
-        let params = AlphaBlendWorklistRgba8Params {
-            src_gpu: dst.gpu,
-            dst_gpu: dst.gpu,
-            desc_gpu: desc_buffer.gpu,
-            src_pitch_bytes: dst.pitch_bytes,
-            dst_pitch_bytes: dst.pitch_bytes,
-            desc_base: 0,
-            desc_count: chunk.len() as u32,
-        };
+        let params = stage_solid_rect_worklist(desc_buffer, dst, chunk);
         let submit_started = direct_rcs_now_tick();
         outcome = submit_solid_rect_worklist(dst, desc_buffer, params, direct_scanout);
         if outcome != GpgpuSubmissionOutcome::Complete {

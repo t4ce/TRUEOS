@@ -17,7 +17,29 @@ fn submit_solid_rect_worklist(
     let Some(state) = direct_rcs_state_once(dev) else {
         return GpgpuSubmissionOutcome::Unavailable;
     };
+    submit_solid_rect_worklist_locked(
+        dev,
+        state,
+        upload,
+        dst,
+        desc,
+        params,
+        direct_scanout,
+        RectDispatchProbe::Disabled,
+    )
+}
 
+// Caller holds the SystemService submission lock through result readback.
+fn submit_solid_rect_worklist_locked(
+    dev: super::Dev,
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    dst: GpgpuRgba8Surface,
+    desc: GpgpuRectWorklistDescBuffer,
+    params: AlphaBlendWorklistRgba8Params,
+    direct_scanout: bool,
+    probe: RectDispatchProbe,
+) -> GpgpuSubmissionOutcome {
     let forcewake_ok = direct_rcs_forcewake(dev);
     let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
     let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
@@ -28,8 +50,8 @@ fn submit_solid_rect_worklist(
     let desc_ppgtt_ok =
         dst_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
     let batch_ok = desc_ppgtt_ok
-        && direct_rcs_encode_alpha_blend_worklist_batch(
-            state, upload, params, dst.bytes, dst.bytes, desc.bytes,
+        && direct_rcs_encode_alpha_blend_worklist_batch_with_probe(
+            state, upload, params, dst.bytes, dst.bytes, desc.bytes, probe,
         );
     let submission = if batch_ok {
         direct_rcs_submit_batch_state(dev, state)

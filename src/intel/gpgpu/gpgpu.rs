@@ -47,6 +47,7 @@ include!("operations/ui4.rs");
 include!("operations/surfaces.rs");
 include!("operations/spirit_vfx.rs");
 include!("operations/probes.rs");
+include!("operations/rectangle_dispatch.rs");
 include!("operations/submission_2d.rs");
 include!("operations/effects.rs");
 include!("operations/cpp_demo.rs");
