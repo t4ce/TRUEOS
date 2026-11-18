@@ -41,7 +41,8 @@ def production():
         if extracted not in media.PRODUCTION:
             selected.append(extracted)
     codes = (ROOT / "src/r/cabi_codes.rs").read_text()
-    for name in ["NET_ERR_TIMEOUT", "NET_ERR_RESPONSE_FRAMING", "NET_ERR_BAD_URL", "NET_ERR_HTTP",
+    for name in ["NET_ERR_TIMEOUT", "NET_ERR_TIMEOUT_DNS", "NET_ERR_TLS",
+                 "NET_ERR_RESPONSE_FRAMING", "NET_ERR_BAD_URL", "NET_ERR_HTTP",
                  "FS_ERR_TOO_LARGE", "FS_ERR_BAD_PARAM", "FS_ERR_NOT_FOUND"]:
         selected.append(re.search(r"(?m)^pub const " + name + r":.*;$", codes).group(0))
     selected.append(media.VM_CONSTANTS)
@@ -206,10 +207,12 @@ TESTS = r'''
         GENERATION.with(|g|g.set(Some(8)));settle();
         assert_eq!(cabi_net_fetch_bytes_result_len_host(id),-8);assert!(CABI_JSON_POST_CANCELLATIONS.lock().is_empty());
     }
-    #[test]fn body_caps_allocation_and_framing_have_distinct_error_codes() {
+    #[test]fn bounded_fetch_failures_have_distinct_error_codes() {
         setup([]);
         for (message,expected) in [("timeout during readiness",NET_ERR_TIMEOUT),("too large chunked body",FS_ERR_TOO_LARGE),
-            ("too large response framing received=9",NET_ERR_RESPONSE_FRAMING),("response allocation failed",-5),("http status 404",NET_ERR_HTTP)] {
+            ("too large response framing received=9",NET_ERR_RESPONSE_FRAMING),("response allocation failed",-5),
+            ("dns Timeout",NET_ERR_TIMEOUT_DNS),("dns NoAnswer",NET_ERR_TIMEOUT_DNS),
+            ("tls InvalidCertificate",NET_ERR_TLS),("http status 404",NET_ERR_HTTP)] {
             assert_eq!(bounded_fetch_error_code(message),expected);
         }
     }

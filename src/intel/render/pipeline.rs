@@ -2156,7 +2156,7 @@ fn validate_triangle_native_draw_contract(
 ) -> Result<(), &'static str> {
     let [camera, instances, compacted] = native.vs_storage_bindings;
     let instance_count =
-        instances.byte_len / trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN as u32;
+        instances.byte_len / trueos_helio::churn::GpuInstanceData::BYTE_LEN as u32;
     let compacted_count = compacted.byte_len / core::mem::size_of::<u32>() as u32;
     let mut expected_instancing = [
         TriangleVfInstancingState {
@@ -2206,7 +2206,7 @@ fn validate_triangle_native_draw_contract(
         && native.vf_sgvs_2_dw2 == 2
         && native.vf_component_packing == [0xa7, 0, 0, 0];
     let pos_normal = draw.vertex_format == TriangleVertexFormat::PosNormal
-        && draw.vertex_stride == trueos_helio_artifact::churn_forward::VERTEX_STRIDE
+        && draw.vertex_stride == trueos_helio::churn_forward::VERTEX_STRIDE
         && draw.sampled_texture.is_none()
         && native.vertex_element_count == 3
         && native.vf_sgvs_dw1 == 0xE002_4002
@@ -2246,9 +2246,9 @@ fn validate_triangle_native_draw_contract(
         || camera.gpu_addr == 0
         || instances.gpu_addr == 0
         || compacted.gpu_addr == 0
-        || camera.byte_len != trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN as u32
+        || camera.byte_len != trueos_helio::churn::GpuCameraUniforms::BYTE_LEN as u32
         || instances.byte_len == 0
-        || instances.byte_len % trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN as u32 != 0
+        || instances.byte_len % trueos_helio::churn::GpuInstanceData::BYTE_LEN as u32 != 0
         || compacted.byte_len == 0
         || compacted.byte_len % core::mem::size_of::<u32>() as u32 != 0
         || instance_count != compacted_count
@@ -2299,11 +2299,11 @@ mod retained_native_matrix_draw_contract_tests {
             vs_storage_bindings: [
                 TriangleStorageBufferBinding {
                     gpu_addr: CAMERA_GPU,
-                    byte_len: trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN as u32,
+                    byte_len: trueos_helio::churn::GpuCameraUniforms::BYTE_LEN as u32,
                 },
                 TriangleStorageBufferBinding {
                     gpu_addr: INSTANCES_GPU,
-                    byte_len: ROWS * trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN as u32,
+                    byte_len: ROWS * trueos_helio::churn::GpuInstanceData::BYTE_LEN as u32,
                 },
                 TriangleStorageBufferBinding {
                     gpu_addr: COMPACTED_GPU,
@@ -2331,8 +2331,8 @@ mod retained_native_matrix_draw_contract_tests {
             voxy_figure: false,
             microfont_aa: false,
             vertex_count: 108,
-            vertex_stride: trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
-            vertex_buffer_bytes: 108 * trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
+            vertex_stride: trueos_helio::churn_forward::VERTEX_STRIDE,
+            vertex_buffer_bytes: 108 * trueos_helio::churn_forward::VERTEX_STRIDE,
             vertex_format: TriangleVertexFormat::PosNormal,
             vertex_gpu_addr: 0x2400_0000,
             index_buffer: Some(TriangleIndexBufferPrep {
@@ -2359,8 +2359,8 @@ mod retained_native_matrix_draw_contract_tests {
     fn gpu_authored_rows_feed_the_native_indexed_indirect_contract() {
         let native = native_contract();
         let draw = native_draw(native);
-        assert_eq!(trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN, 208);
-        assert_eq!(trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN, 20);
+        assert_eq!(trueos_helio::churn::GpuInstanceData::BYTE_LEN, 208);
+        assert_eq!(trueos_helio::DrawIndexedIndirectArgs::BYTE_LEN, 20);
         assert_eq!(draw.indirect_args_gpu_addr, Some(INDIRECT_GPU));
         assert_eq!(draw.native.unwrap().vs_storage_bindings, native.vs_storage_bindings);
         assert_eq!(

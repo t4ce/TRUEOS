@@ -131,9 +131,13 @@ Full HD rasters through the same frame slot.
 
 The `--capture --raster-test` staging mode drives the capture pipeline
 from an internal Full HD raster generator with a per-frame pixel marker.
-It identifies itself separately over USB and camera mode rejects it. The
-hardware test firmware enumerated, but did not report a frozen raster.
-The live receiver firmware was restored afterward.
+It identifies itself separately over USB and camera mode rejects it.
+On the first hardware build, Gowin reported the release input as undriven
+and optimized away its command FIFO. Moving the instance below the explicit
+net declarations preserved the release circuitry. The revised hardware
+test verified two distinct frozen frames, checked six indexed pixel
+packets with CRC32 on each, and confirmed that stale and repeated release
+commands leave the current frame intact.
 
 The FPGA returns 15 DDR bursts per request with a packet index and a CRC32
 over the 480 pixel bytes. The simulator verified the final packet's addresses,
@@ -156,6 +160,12 @@ verified the FPGA's asserted/deasserted/asserted sequence. The DDC and TMDS
 measurements still need a responding source before a camera frame can be
 validated.
 
+After the Z7 was reset and fitted with a fully charged battery, an HPD
+cycle still produced no DDC transitions or TMDS lock. On dock revision
+4071f, HDMI pin 18 feeds the `5V_DVI` rail without a direct FPGA sense
+pin. The FPGA's HPD status reports its local output and cannot confirm
+that the camera is powered or sees hot-plug at the connector.
+
 An early DDR-to-USB test verified the first 13,488 packets (6,474,240 bytes)
 before Linux lost the USB device while restoring configuration after a
 reset. The buffered test image failed USB enumeration. A later run with
@@ -169,6 +179,12 @@ FPGA by its USB bus and physical port if Linux assigns a new device address.
 The deterministic DDR test resumes at the first unverified packet after
 reconnection. Camera readout starts the frame over so a reconnect cannot
 join pixels from two captures.
+
+The first retry now clears the bulk endpoint toggles before resorting to
+a USB device reset. A comparison on one board, with 1,036,800 verified
+bytes per run, took 7.68 s with endpoint recovery first and 13.88 s with
+an immediate device reset. The two runs recovered zero and three
+disconnects respectively.
 
 A raw RGBA8 Full HD stream at 29.97 fps would need 248.58 MB/s. SOFT_USB's
 480 Mb/s line rate permits individual full-resolution snapshots and a

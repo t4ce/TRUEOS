@@ -97,6 +97,7 @@ impl InteractionCadence {
     }
 }
 
+pub(crate) use chroma_color::benchmark_chroma_dsb;
 pub(crate) use color_picker::ui4_color_picker_service_task;
 pub(crate) use chromaservice::{notify_chroma_pipe_route_changed, ui4_chroma_service_task};
 pub(crate) use edit_life::ui4_edit_life_service_task;
@@ -264,12 +265,6 @@ pub(crate) const RGB_OVERLAY_PLANE_SLOT_3: usize = 3;
 /// kernel color picker; neither participates in an application composition
 /// surface.
 pub(crate) const INTERACTION_OVERLAY_PLANE_SLOT: usize = 4;
-// Compatibility aliases for the parked linked-NV12 display-plane experiment.
-// Normal UI4 video is converted by the GuC into an ordinary streaming RGBA
-// Frame on slot 1; decoder planes are never assigned to either of these roles.
-pub(crate) const NV12_UV_PLANE_SLOT: usize = RGB_OVERLAY_PLANE_SLOT_2;
-pub(crate) const NV12_Y_PLANE_SLOT: usize = RGB_OVERLAY_PLANE_SLOT_3;
-
 /// Stable logical display identity. Routing to pipe A-D is display-driver state.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 #[repr(transparent)]
@@ -702,8 +697,8 @@ const _: () = {
     ));
     assert!(PRIMARY_PLANE_SLOT == 0);
     assert!(ALPHA_OVERLAY_PLANE_SLOT == 1);
-    assert!(NV12_UV_PLANE_SLOT == 2);
-    assert!(NV12_Y_PLANE_SLOT == 3);
+    assert!(RGB_OVERLAY_PLANE_SLOT_2 == 2);
+    assert!(RGB_OVERLAY_PLANE_SLOT_3 == 3);
     assert!(INTERACTION_OVERLAY_PLANE_SLOT == 4);
     let transparent = PremultipliedRgba8::TRANSPARENT;
     assert!(transparent.r == 0 && transparent.g == 0 && transparent.b == 0 && transparent.a == 0);

@@ -47,8 +47,7 @@ def main():
                 item(pipeline, 'retained_native_matrix_draw_contract_tests')]
     adapters = '''#![allow(dead_code)]
 #[derive(Copy,Clone,Debug,Eq,PartialEq)] enum ChurnHardwareAdmission { ValidatedProduction }
-extern crate self as trueos_helio_runtime;
-extern crate self as trueos_helio_artifact;
+extern crate self as trueos_helio;
 pub struct DrawIndexedIndirectArgs; impl DrawIndexedIndirectArgs {pub const BYTE_LEN:usize=20;}
 pub mod churn {
   pub struct GpuInstanceData; impl GpuInstanceData {pub const BYTE_LEN:usize=208;}

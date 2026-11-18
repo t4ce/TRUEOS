@@ -62,11 +62,13 @@ def main():
         rtl = replace(rtl, "    usb_rgba8_source source (", """    wire pattern_valid, camera_valid, camera_request, release_request;
     wire [7:0] pattern_byte, camera_byte;
     wire [14:0] camera_packet;
+    wire [1:0] camera_batch;
     assign frame_valid = pattern_valid || camera_valid;
     assign frame_byte = camera_valid ? camera_byte : pattern_byte;
     usb_rgba8_source #(.CAMERA_READOUT(1)) source (""")
         rtl = replace(rtl, "        .valid(frame_valid), .data(frame_byte)",
                       """        .camera_request(camera_request), .camera_packet(camera_packet),
+        .camera_batch(camera_batch),
         .release_request(release_request),
         .valid(pattern_valid), .data(pattern_byte)""")
         rtl = replace(rtl, ".frame_sequence(15'd0)", ".frame_sequence(usb_sequence)")
@@ -245,6 +247,7 @@ def main():
     usb_ddr_frame_reply readout (
         .clk(PHY_CLKOUT), .reset(RESET | usb_busreset | !usb_ddr_reset_sync[1]),
         .frozen(capture_status_sync[3]), .request(camera_request), .packet(camera_packet),
+        .batch(camera_batch),
         .read_valid(usb_read_valid), .read_ready(usb_read_ready), .read_index(usb_read_index),
         .reply_valid(usb_reply_valid), .reply_ready(usb_reply_ready),
         .reply_index(usb_reply_index), .reply_data(usb_reply_data),
@@ -252,6 +255,18 @@ def main():
     );
 
 """ + rtl[end:]
+        # Gowin can bind an implicit scalar at a module port before it
+        # encounters the later declaration. Keep the consumers after the
+        # explicit command, sequence and data nets.
+        store_start = rtl.index("    rgba8_frame_store frame_store (")
+        store_end = rtl.index("    (* async_reg", store_start)
+        store = rtl[store_start:store_end]
+        rtl = rtl[:store_start] + rtl[store_end:]
+        source_start = rtl.index("    usb_rgba8_source #(")
+        source_end = rtl.index("    );", source_start) + len("    );\n")
+        source = rtl[source_start:source_end]
+        rtl = rtl[:source_start] + rtl[source_end:]
+        rtl = replace(rtl, "    usb_fifo usb_fifo", store + source + "    usb_fifo usb_fifo")
         if args.readout_test:
             rtl = replace(rtl, "ALLOW_RELEASE = 1", "ALLOW_RELEASE = 0")
             rtl = replace(rtl, """        .capture_valid(token_out_valid), .capture_ready(token_out_ready),

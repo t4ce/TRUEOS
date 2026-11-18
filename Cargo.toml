@@ -18,8 +18,7 @@ members = [
     "crates/trueos-executor/embassy-time",
     "crates/trueos-executor/trueos-executor-macros",
     "crates/trueos-fs",
-    "crates/trueos-helio-artifact",
-    "crates/trueos-helio-runtime",
+    "crates/trueos-helio",
     "crates/trueos-io",
     "crates/trueos-path",
     "crates/trueos-runtime",
@@ -164,8 +163,7 @@ v = { path = "crates/trueos-v" }
 trueos-vm = { path = "crates/trueos-vm" }
 trueos-locale = { path = "crates/trueos-locale", default-features = false }
 trueos-lily-pack = { path = "crates/trueos-lily-pack" }
-trueos-helio-artifact = { path = "crates/trueos-helio-artifact" }
-trueos-helio-runtime = { path = "crates/trueos-helio-runtime" }
+trueos-helio = { path = "crates/trueos-helio" }
 serde = { workspace = true, features = ["alloc", "derive"] }
 serde_json = { workspace = true, features = ["alloc"] }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }

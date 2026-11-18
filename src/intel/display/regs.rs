@@ -26,7 +26,6 @@ pub(in crate::intel) const ICL_PWR_WELL_CTL_DDI1: usize = 0x45450;
 pub(in crate::intel) const ICL_PWR_WELL_CTL_DDI2: usize = 0x45454;
 pub(in crate::intel) const ICL_PWR_WELL_CTL_DDI4: usize = 0x4545C;
 pub(in crate::intel) const SKL_FUSE_STATUS: usize = 0x42000;
-pub(in crate::intel) const CUR_SURFLIVE_A: usize = 0x700AC;
 pub(in crate::intel) const PIPE_FRMCOUNT_A: usize = 0x70040;
 pub(in crate::intel) const PIPE_MMIO_STRIDE: usize = 0x1000;
 pub(in crate::intel) const PIPECONF_STATE: u32 = 1 << 30;
@@ -95,11 +94,8 @@ pub(in crate::intel) const PLANE_CTL_YUV420_Y_PLANE: u32 = 1 << 19;
 pub(in crate::intel) const PLANE_CTL_KEY_ENABLE_MASK: u32 = 0x03 << 21;
 pub(in crate::intel) const PLANE_CTL_TILED_MASK: u32 = 0x07 << 10;
 pub(in crate::intel) const PLANE_CTL_ROTATE_MASK: u32 = 0x03;
-pub(in crate::intel) const PLANE_CTL_FORMAT_NV12: u32 = 1 << 24;
 pub(in crate::intel) const PLANE_CTL_FORMAT_XRGB_8888: u32 = 4 << 24;
 pub(in crate::intel) const PLANE_CTL_TILED_LINEAR: u32 = 0 << 10;
-pub(in crate::intel) const PLANE_CTL_TILED_Y: u32 = 4 << 10;
-pub(in crate::intel) const PLANE_CTL_TILED_YF: u32 = 5 << 10;
 pub(in crate::intel) const PLANE_KEYMSK_ALPHA_ENABLE: u32 = 1 << 31;
 pub(in crate::intel) const PLANE_KEYMAX_ALPHA_MASK: u32 = 0xFF << 24;
 pub(in crate::intel) const PLANE_COLOR_ALPHA_MASK: u32 = 0x03 << 4;
@@ -112,22 +108,7 @@ pub(in crate::intel) const PLANE_COLOR_PLANE_CSC_ENABLE: u32 = 1 << 21;
 pub(in crate::intel) const PLANE_COLOR_INPUT_CSC_ENABLE: u32 = 1 << 20;
 pub(in crate::intel) const PLANE_COLOR_CSC_MODE_MASK: u32 = 0x07 << 17;
 pub(in crate::intel) const PLANE_COLOR_CSC_MODE_BYPASS: u32 = 0x00 << 17;
-pub(in crate::intel) const PLANE_COLOR_CSC_MODE_YUV601_TO_RGB601: u32 = 0x01 << 17;
-pub(in crate::intel) const PLANE_COLOR_CSC_MODE_YUV709_TO_RGB709: u32 = 0x02 << 17;
-pub(in crate::intel) const PLANE_COLOR_CSC_MODE_YUV2020_TO_RGB2020: u32 = 0x03 << 17;
 pub(in crate::intel) const PLANE_COLOR_PLANE_GAMMA_DISABLE: u32 = 1 << 13;
-pub(in crate::intel) const PLANE_CUS_ENABLE: u32 = 1 << 31;
-pub(in crate::intel) const PLANE_CUS_Y_PLANE: u32 = 1 << 30;
-pub(in crate::intel) const PLANE_CUS_HPHASE_SIGN_NEGATIVE: u32 = 1 << 19;
-pub(in crate::intel) const PLANE_CUS_HPHASE_MASK: u32 = 0x03 << 16;
-pub(in crate::intel) const PLANE_CUS_HPHASE_0: u32 = 0 << 16;
-pub(in crate::intel) const PLANE_CUS_HPHASE_0_25: u32 = 1 << 16;
-pub(in crate::intel) const PLANE_CUS_HPHASE_0_5: u32 = 2 << 16;
-pub(in crate::intel) const PLANE_CUS_VPHASE_SIGN_NEGATIVE: u32 = 1 << 15;
-pub(in crate::intel) const PLANE_CUS_VPHASE_MASK: u32 = 0x03 << 12;
-pub(in crate::intel) const PLANE_CUS_VPHASE_0: u32 = 0 << 12;
-pub(in crate::intel) const PLANE_CUS_VPHASE_0_25: u32 = 1 << 12;
-pub(in crate::intel) const PLANE_CUS_VPHASE_0_5: u32 = 2 << 12;
 pub(in crate::intel) const PLANE_WM_ENABLE: u32 = 1 << 31;
 // At 2560-wide RGBA8, the linear-plane fetch model consumes 21 512-byte
 // blocks per scanline. Eight scanlines select 168 blocks; the PRM watermark
@@ -300,14 +281,6 @@ pub(in crate::intel) const PIPES: [PipeInfo; 4] = [
         pipe_src_off: PIPE_D_SRC,
     },
 ];
-
-pub(in crate::intel) fn plane_buf_cfg_for_pipe_slot(
-    dev: crate::intel::Dev,
-    pipe: PipeInfo,
-    plane_slot: usize,
-) -> u32 {
-    crate::intel::mmio_read(dev, pipe.plane(plane_slot).buf_cfg())
-}
 
 pub(in crate::intel) fn decode_pipe_src(value: u32) -> Option<(u32, u32)> {
     if value == 0 || value == u32::MAX {

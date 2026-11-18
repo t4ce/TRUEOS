@@ -3554,7 +3554,7 @@ fn submit_resident_churn_forward_geometry_batched(
                     draw,
                     TriangleBlendProbeMode::MesaZeroedState,
                     Some(draw_depth),
-                    resident.material_rgba(group % trueos_helio_runtime::churn::MATERIAL_COUNT),
+                    resident.material_rgba(group % trueos_helio::churn::MATERIAL_COUNT),
                     None,
                     ResidentSceneFragmentContract::ConstantRgba,
                     [0.0, 0.0],

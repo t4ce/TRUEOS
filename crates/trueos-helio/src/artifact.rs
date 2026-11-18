@@ -1,6 +1,3 @@
-#![no_std]
-#![forbid(unsafe_code)]
-
 //! Zero-copy validation and loading of build-time Helio artifacts.
 //!
 //! This crate is deliberately independent of wgpu and of the TRUEOS GPU
@@ -10,9 +7,7 @@
 use core::{fmt, str};
 use sha2::{Digest, Sha256};
 
-pub mod churn_forward;
-pub mod render_ir;
-pub mod replay;
+use crate::{churn_forward, render_ir, replay};
 
 /// Magic bytes at the start of every HELIOA container.
 pub const MAGIC: [u8; 8] = *b"HELIOA\0\0";
@@ -483,7 +478,5 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, Error> {
 }
 
 #[cfg(test)]
-extern crate std;
-
-#[cfg(test)]
+#[path = "artifact_tests.rs"]
 mod tests;

@@ -1,9 +1,10 @@
-// One indexed USB reply from the frozen DDR frame. A packet carries fifteen
-// 32-byte memory words and a CRC32 over the 480 pixel bytes.
+// Up to four indexed USB replies from the frozen DDR frame. Each packet
+// carries fifteen DDR words and a CRC32. Four packets fit the EP2 TX FIFO.
 module usb_ddr_frame_reply (
     input wire clk, reset, frozen,
     input wire request,
     input wire [14:0] packet,
+    input wire [1:0] batch,
     output wire read_valid,
     input wire read_ready,
     output wire [18:0] read_index,
@@ -21,6 +22,7 @@ module usb_ddr_frame_reply (
     reg [8:0] position;
     reg [18:0] burst_index;
     reg [3:0] burst_count;
+    reg [1:0] packets_after_this;
     reg [255:0] bytes_left;
     reg [31:0] crc;
     reg available;
@@ -68,6 +70,7 @@ module usb_ddr_frame_reply (
                 IDLE: if (request) begin
                     selected <= packet;
                     available <= frozen && packet < 17280;
+                    packets_after_this <= batch;
                     position <= 0;
                     burst_count <= 0;
                     burst_index <= ({4'b0, packet} << 4) - {4'b0, packet};
@@ -100,7 +103,18 @@ module usb_ddr_frame_reply (
                     if (position == 488)
                         state <= PADDING;
                 end
-                PADDING: if (position == 511) state <= IDLE;
+                PADDING: if (position == 511) begin
+                    if (available && packets_after_this != 0 && selected != 17279) begin
+                        selected <= selected + 1'b1;
+                        burst_index <= burst_index + 1'b1;
+                        burst_count <= 0;
+                        packets_after_this <= packets_after_this - 1'b1;
+                        crc <= 32'hffffffff;
+                        state <= HEADER;
+                    end else begin
+                        state <= IDLE;
+                    end
+                end
                 default: state <= IDLE;
             endcase
         end

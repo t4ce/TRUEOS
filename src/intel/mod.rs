@@ -805,10 +805,6 @@ pub(crate) fn begin_ui4_plane_surface_flip_batch() -> bool {
     self::display::begin_ui4_plane_surface_flip_batch()
 }
 
-pub(crate) fn finish_ui4_plane_surface_flip_batch() -> bool {
-    self::display::finish_ui4_plane_surface_flip_batch()
-}
-
 pub(crate) fn submit_ui4_plane_surface_flip_batch() -> bool {
     self::display::submit_ui4_plane_surface_flip_batch()
 }
@@ -965,11 +961,6 @@ pub fn warm_state() -> Option<()> {
     None
 }
 
-pub(crate) fn capture_primary_surface_bgra8() -> Option<self::display::PrimarySurfaceBgra8Snapshot>
-{
-    self::display::capture_primary_surface_bgra8()
-}
-
 pub(crate) fn queue_ui4_live_overlay_scene_on_slot_damage_region(
     plane_slot: usize,
     tiles: &[RgbaOverlayTile<'_>],
@@ -984,10 +975,6 @@ pub(crate) fn queue_ui4_live_overlay_scene_on_slot_damage_region(
 
 pub(crate) fn poll_ui4_live_overlay_flip(flip: Ui4LiveOverlayFlip) -> Ui4LiveOverlayFlipPoll {
     self::display::poll_ui4_live_overlay_flip(flip)
-}
-
-pub fn log_display_plane_ladder_probe(label: &str) {
-    self::display::log_display_plane_ladder_probe(label)
 }
 
 pub async fn run_media2_first_frame_async() -> Option<self::xelp_media2_ngin::Media2FirstFrameState>

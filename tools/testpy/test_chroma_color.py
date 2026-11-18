@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the real CHROMATIC grading/transport code against independent modeled A/B MMIO ports."""
+"""Run CHROMATIC grading and transport against modeled A/B MMIO ports and DSB."""
 from pathlib import Path
 import re
 import subprocess
@@ -22,7 +22,10 @@ def main():
             subprocess.run(["rustup", "run", channel, "rustc", "--edition=2024",
                             "--test", *flags, str(harness), "-o", str(binary)],
                            check=True, timeout=60)
-            subprocess.run([str(binary)], check=True, timeout=30)
+            subprocess.run([str(binary), "--test-threads=1"], check=True, timeout=30)
+            subprocess.run([str(binary), "--ignored", "--exact",
+                            "dsb_unproven_upload_quarantines_pipe_a_without_cpu_replay"],
+                           check=True, timeout=30)
 
 
 if __name__ == "__main__":

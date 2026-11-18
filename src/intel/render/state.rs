@@ -516,7 +516,7 @@ pub(crate) struct ResidentChurnForward {
     expanded_vertex_bytes: u32,
     expanded_index_count: u32,
     expanded_index_bytes: u32,
-    material_rgba: [AtomicU32; trueos_helio_runtime::churn::MATERIAL_COUNT],
+    material_rgba: [AtomicU32; trueos_helio::churn::MATERIAL_COUNT],
     max_instances: usize,
 }
 
@@ -691,7 +691,7 @@ impl ResidentChurnForward {
                 crate::intel::gpgpu::GpgpuHelioBufferSlice::unused()
             },
             row_count,
-            draw_count: trueos_helio_runtime::churn::DRAW_GROUP_COUNT as u32,
+            draw_count: trueos_helio::churn::DRAW_GROUP_COUNT as u32,
             output,
             hierarchy,
         })
@@ -2074,9 +2074,9 @@ fn select_streamout_proof_experiment(probe_seq: u32) -> StreamoutProofExperiment
 /// renderer may represent it as two explicit native draws, but that must be a
 /// declared draw-plan operation rather than an importer-side conversion.
 fn intel_topology_from_helio(
-    topology: trueos_helio_artifact::render_ir::PrimitiveTopology,
+    topology: trueos_helio::render_ir::PrimitiveTopology,
 ) -> Result<u32, &'static str> {
-    use trueos_helio_artifact::render_ir::PrimitiveTopology;
+    use trueos_helio::render_ir::PrimitiveTopology;
 
     match topology {
         PrimitiveTopology::PointList => Ok(INTEL_TOPOLOGY_POINTLIST),
@@ -2109,34 +2109,34 @@ impl TriangleBatchMode {
             Self::CubePatchDraw => 0x20, // 3DPRIM_PATCHLIST_1
             Self::Draw | Self::DrawScreenSpace | Self::VfDraw | Self::VfScreenSpaceDraw => {
                 intel_topology_from_helio(
-                    trueos_helio_artifact::render_ir::PrimitiveTopology::TriangleList,
+                    trueos_helio::render_ir::PrimitiveTopology::TriangleList,
                 )
                 .expect("Intel supports triangle lists")
             }
             Self::PointDraw => intel_topology_from_helio(
-                trueos_helio_artifact::render_ir::PrimitiveTopology::PointList,
+                trueos_helio::render_ir::PrimitiveTopology::PointList,
             )
             .expect("Intel supports point lists"),
             Self::LineDraw => intel_topology_from_helio(
-                trueos_helio_artifact::render_ir::PrimitiveTopology::LineList,
+                trueos_helio::render_ir::PrimitiveTopology::LineList,
             )
             .expect("Intel supports line lists"),
             // The adjacency types are Intel-native VF topology encodings;
             // Helio's glTF-oriented IR has no representation for them.
             Self::LineAdjDraw => INTEL_TOPOLOGY_LINELIST_ADJ,
             Self::LineStripDraw => intel_topology_from_helio(
-                trueos_helio_artifact::render_ir::PrimitiveTopology::LineStrip,
+                trueos_helio::render_ir::PrimitiveTopology::LineStrip,
             )
             .expect("Intel supports line strips"),
             Self::LineStripAdjDraw => INTEL_TOPOLOGY_LINESTRIP_ADJ,
             Self::TriangleStripDraw => intel_topology_from_helio(
-                trueos_helio_artifact::render_ir::PrimitiveTopology::TriangleStrip,
+                trueos_helio::render_ir::PrimitiveTopology::TriangleStrip,
             )
             .expect("Intel supports triangle strips"),
             Self::TriangleAdjDraw => INTEL_TOPOLOGY_TRILIST_ADJ,
             Self::TriangleStripAdjDraw => INTEL_TOPOLOGY_TRISTRIP_ADJ,
             Self::TriangleFanDraw => intel_topology_from_helio(
-                trueos_helio_artifact::render_ir::PrimitiveTopology::TriangleFan,
+                trueos_helio::render_ir::PrimitiveTopology::TriangleFan,
             )
             .expect("Intel supports triangle fans"),
             // QUADLIST is a Gen12 hardware topology, but not a glTF / Helio
@@ -2152,14 +2152,14 @@ impl TriangleBatchMode {
             // derives the final corner without a triangle-list lowering.
             Self::RectListDraw => INTEL_TOPOLOGY_RECTLIST,
             Self::VfLineDraw => intel_topology_from_helio(
-                trueos_helio_artifact::render_ir::PrimitiveTopology::LineList,
+                trueos_helio::render_ir::PrimitiveTopology::LineList,
             )
             .expect("Intel supports line lists"),
             Self::DrawScreenSpaceRect | Self::VfRectDraw | Self::VfRectClipDraw => {
                 TRIANGLE_TOPOLOGY_RECTLIST
             }
             Self::VfPointDraw => intel_topology_from_helio(
-                trueos_helio_artifact::render_ir::PrimitiveTopology::PointList,
+                trueos_helio::render_ir::PrimitiveTopology::PointList,
             )
             .expect("Intel supports point lists"),
             Self::StreamoutProof | Self::VfStreamoutProof | Self::VsStreamoutProof => {
@@ -3104,7 +3104,7 @@ static PRIMARY_PROBE_SEQ: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 mod primitive_topology_tests {
     use super::*;
-    use trueos_helio_artifact::render_ir::PrimitiveTopology;
+    use trueos_helio::render_ir::PrimitiveTopology;
 
     #[test]
     fn helio_topologies_map_to_documented_intel_vf_values() {

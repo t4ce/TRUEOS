@@ -7,6 +7,7 @@ fn usage(io: &Output) {
     Output::line(io, "gpu status");
     Output::line(io, "gpu test broker|abi|guc|compute|blit|font-r8|all");
     Output::line(io, "gpu test compute-dispatch (offscreen rectangle benchmark)");
+    Output::line(io, "gpu test chroma-dsb (Pipe A LUT upload benchmark)");
     Output::line(io, "gpu material pbr|base|normal|uv|solid");
     Output::line(io, "gpu depth on|off (Picasso diagnostic)");
     Output::line(io, "gpu cull on|off (Picasso diagnostic)");
@@ -14,7 +15,7 @@ fn usage(io: &Output) {
     Output::line(io, "gpu capture vue (one Picasso draw)");
 }
 
-pub(super) fn execute(io: &Output, rest: &str) {
+pub(super) async fn execute(io: &Output, rest: &str) {
     let mut args = rest.split_whitespace();
     match (args.next(), args.next(), args.next()) {
         (Some(cmd), None, None) if cmd.eq_ignore_ascii_case("status") => print_status(io),
@@ -67,6 +68,7 @@ pub(super) fn execute(io: &Output, rest: &str) {
                 test if test.eq_ignore_ascii_case("guc") => test_guc(io),
                 test if test.eq_ignore_ascii_case("compute") => test_compute(io),
                 test if test.eq_ignore_ascii_case("compute-dispatch") => test_compute_dispatch(io),
+                test if test.eq_ignore_ascii_case("chroma-dsb") => test_chroma_dsb(io).await,
                 test if test.eq_ignore_ascii_case("blit") => test_blit(io),
                 test if test.eq_ignore_ascii_case("font-r8") => test_font_r8(io),
                 test if test.eq_ignore_ascii_case("all") => {
@@ -484,6 +486,29 @@ fn test_compute_dispatch(io: &Output) -> bool {
     true
 }
 
+async fn test_chroma_dsb(io: &Output) -> bool {
+    let report = match crate::ui4::benchmark_chroma_dsb().await {
+        Ok(report) => report,
+        Err(error) => {
+            io.line(&format!("gpu chroma-dsb failed reason={error}"));
+            return false;
+        }
+    };
+    io.line(&format!(
+        "CHROMATIC Pipe A · physical 8086:{:04X} rev {:02X} · {} samples per transport",
+        report.device_id, report.revision_id, report.samples,
+    ));
+    io.line("All 4,913 LUT entries matched on readback. The original LUT was restored.");
+    for (name, metrics) in [("MMIO", &report.mmio), ("DSB", &report.dsb)] {
+        io.line(&format!(
+            "{name}  CPU stage+submit+commit p50={} p95={} ns   host-observed latch p50={} p95={} ns",
+            metrics.cpu_p50_ns, metrics.cpu_p95_ns, metrics.latch_p50_ns, metrics.latch_p95_ns,
+        ));
+    }
+    io.line("CPU timing includes DSB command preparation. Latch is New LUT Ready clearing.");
+    true
+}
+
 fn test_blit(io: &Output) -> bool {
     let before = gpu::kernel_timeline(KernelClient::Vcpy).unwrap_or_default();
     let probe = crate::intel::submit_guc_bcs0_fast_copy_probe_now();
@@ -589,6 +614,7 @@ const ACTIONS: &[&str] = &[
     "frush start",
     "frush stop",
     "frush status",
+    "test chroma-dsb",
 ];
 pub(super) fn start(frontend: Frontend) -> Result<(), String> {
     let Some((target, spawner)) = helper::admit("gpu", frontend)? else {
@@ -633,7 +659,7 @@ async fn menu_task(target: MatrixTarget) {
                 match event {
                     Event::Choose(index) => {
                         let output = Output::collect(cols);
-                        execute(&output, ACTIONS[index]);
+                        execute(&output, ACTIONS[index]).await;
                         result = Some(output.finish());
                         menu = false;
                         scroll = 0;

@@ -1,9 +1,9 @@
 /// The simulation/runtime ABI is the single canonical byte contract consumed
 /// by the retained-transform artifact. Keep the GPGPU names as boundary-local
 /// aliases so this layer cannot silently drift to another stride or layout.
-pub(crate) type GpgpuHelioRetainedTransform = trueos_helio_runtime::churn::GpuRetainedTransformSeed;
+pub(crate) type GpgpuHelioRetainedTransform = trueos_helio::churn::GpuRetainedTransformSeed;
 pub(crate) type GpgpuHelioRetainedDrawTemplate =
-    trueos_helio_runtime::churn::GpuRetainedDrawTemplate;
+    trueos_helio::churn::GpuRetainedDrawTemplate;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GpgpuHelioBufferSlice {
@@ -110,7 +110,7 @@ pub(crate) const GPGPU_HELIO_INSTANCE_BYTES: usize = 208;
 pub(crate) const GPGPU_HELIO_COMPACTED_INDEX_BYTES: usize = 4;
 pub(crate) const GPGPU_HELIO_INDIRECT_BYTES: usize = 20;
 pub(crate) const GPGPU_HELIO_CAMERA_BYTES: usize =
-    trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN;
+    trueos_helio::churn::GpuCameraUniforms::BYTE_LEN;
 pub(crate) const GPGPU_HELIO_SOURCE_VERTICES_PER_MESH: usize = 24;
 pub(crate) const GPGPU_HELIO_SOURCE_VERTEX_BYTES: usize = 24;
 pub(crate) const GPGPU_HELIO_EXPANDED_VERTICES_PER_ROW: usize = 24;
@@ -120,7 +120,7 @@ pub(crate) const GPGPU_HELIO_HIERARCHY_DYNAMIC_BINDING_BYTES: usize = 4;
 pub(crate) const GPGPU_HELIO_AFFINE_BYTES: usize = 48;
 pub(crate) const GPGPU_HELIO_HIERARCHY_INDEX_BYTES: usize = 4;
 pub(crate) const GPGPU_HELIO_MAX_ROWS: u32 =
-    trueos_helio_runtime::churn::MAX_RETAINED_TRANSFORM_ROWS as u32;
+    trueos_helio::churn::MAX_RETAINED_TRANSFORM_ROWS as u32;
 pub(crate) const GPGPU_HELIO_MAX_DRAWS: u32 = 64;
 pub(crate) const GPGPU_HELIO_MAX_HIERARCHY_NODES: u32 = GPGPU_HELIO_MAX_ROWS * 16;
 pub(crate) const GPGPU_HELIO_MAX_HIERARCHY_DEPTH: u32 = 64;
@@ -136,7 +136,7 @@ pub(crate) const GPGPU_HELIO_DIAGNOSTIC_3D_HANDOFF: u32 = 0x4845_4C13;
 
 const _: () = {
     assert!(
-        GPGPU_HELIO_MAX_ROWS as usize == trueos_helio_runtime::churn::MAX_RETAINED_TRANSFORM_ROWS
+        GPGPU_HELIO_MAX_ROWS as usize == trueos_helio::churn::MAX_RETAINED_TRANSFORM_ROWS
     );
     assert!(GPGPU_HELIO_MAX_ROWS <= GpgpuHelioRetainedTransform::MAX_COMPACT_SLOT);
     // Picasso allocates its transform buffers for the advertised maximum when
@@ -221,45 +221,45 @@ const _: () = {
     assert!(core::mem::offset_of!(GpgpuHelioRetainedDrawTemplate, first_instance) == 12);
     assert!(core::mem::offset_of!(GpgpuHelioRetainedDrawTemplate, capacity) == 16);
     assert!(core::mem::offset_of!(GpgpuHelioRetainedDrawTemplate, packed_mesh_material) == 20);
-    assert!(GPGPU_HELIO_INSTANCE_BYTES == trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN);
-    assert!(GPGPU_HELIO_INDIRECT_BYTES == trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN);
+    assert!(GPGPU_HELIO_INSTANCE_BYTES == trueos_helio::churn::GpuInstanceData::BYTE_LEN);
+    assert!(GPGPU_HELIO_INDIRECT_BYTES == trueos_helio::DrawIndexedIndirectArgs::BYTE_LEN);
     assert!(
         GPGPU_HELIO_HIERARCHY_NODE_BYTES
-            == core::mem::size_of::<trueos_helio_runtime::retained_transform::RetainedTransformNode>(
+            == core::mem::size_of::<trueos_helio::retained_transform::RetainedTransformNode>(
             )
     );
     assert!(
         core::mem::offset_of!(
-            trueos_helio_runtime::retained_transform::RetainedTransformNode,
+            trueos_helio::retained_transform::RetainedTransformNode,
             parent
         ) == 0
     );
     assert!(
         core::mem::offset_of!(
-            trueos_helio_runtime::retained_transform::RetainedTransformNode,
+            trueos_helio::retained_transform::RetainedTransformNode,
             level
         ) == 4
     );
     assert!(
         core::mem::offset_of!(
-            trueos_helio_runtime::retained_transform::RetainedTransformNode,
+            trueos_helio::retained_transform::RetainedTransformNode,
             local_generation
         ) == 8
     );
     assert!(
         core::mem::offset_of!(
-            trueos_helio_runtime::retained_transform::RetainedTransformNode,
+            trueos_helio::retained_transform::RetainedTransformNode,
             world_generation
         ) == 12
     );
     assert!(
         GPGPU_HELIO_AFFINE_BYTES
-            == core::mem::size_of::<trueos_helio_runtime::retained_transform::Affine3x4>()
+            == core::mem::size_of::<trueos_helio::retained_transform::Affine3x4>()
     );
-    assert!(core::mem::align_of::<trueos_helio_runtime::retained_transform::Affine3x4>() == 16);
+    assert!(core::mem::align_of::<trueos_helio::retained_transform::Affine3x4>() == 16);
     assert!(
         GPGPU_HELIO_MAX_HIERARCHY_DEPTH
-            == trueos_helio_runtime::retained_transform::MAX_RETAINED_TRANSFORM_DEPTH
+            == trueos_helio::retained_transform::MAX_RETAINED_TRANSFORM_DEPTH
     );
 };
 
@@ -293,7 +293,7 @@ impl GpgpuHelioRetainedTransformDispatch {
         let indirect_bytes = draws
             .checked_mul(GPGPU_HELIO_INDIRECT_BYTES)
             .ok_or(Error::IndirectBuffer)?;
-        let source_vertex_bytes = trueos_helio_runtime::churn::SHAPE_COUNT
+        let source_vertex_bytes = trueos_helio::churn::SHAPE_COUNT
             .checked_mul(GPGPU_HELIO_SOURCE_VERTICES_PER_MESH)
             .and_then(|vertices| vertices.checked_mul(GPGPU_HELIO_SOURCE_VERTEX_BYTES))
             .ok_or(Error::SourceVertexBuffer)?;

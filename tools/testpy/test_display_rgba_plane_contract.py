@@ -3,7 +3,7 @@
 
 Only MMIO storage, plane addressing and unrelated output readiness are fixtures.
 CTL construction, geometry/auxiliary programming, rearm decisions and contract
-guards execute unchanged. NV12's separate production builders remain covered.
+guards execute unchanged.
 """
 
 from pathlib import Path
@@ -12,20 +12,18 @@ import subprocess
 import tempfile
 
 from test_clip_position3_uv_texture import constant, item
-from test_vgpu_batch_overlay import block
 
 
 ROOT = Path(__file__).resolve().parents[2]
 DISPLAY = "src/intel/display.rs"
 REGS = "src/intel/display/regs.rs"
-PROBES = "src/intel/display/display_probes.rs"
 
 
 def harness() -> str:
     declarations = [item(DISPLAY, name) for name in (
         "PrimaryPlaneSourceFormat", "OverlayAlphaMode", "primary_plane_ctl_enabled",
         "primary_plane_ctl_enabled_for_format", "overlay_plane_ctl_enabled", "plane_color_ctl_alpha",
-        "program_rgba8_plane_static_contract", "primary_plane_contract_regs_match",
+        "program_rgba8_plane_static_contract",
         "overlay_plane_dynamic_flip_guard", "overlay_plane_needs_rearm",
         "plane_keymax_alpha", "plane_keymsk_alpha", "overlay_plane_constant_alpha_matches",
         "overlay_plane_constant_alpha_is_valid", "plane_watermarks_match", "plane_buf_cfg_value",
@@ -35,10 +33,6 @@ def harness() -> str:
     declarations.extend(item(REGS, name) for name in (
         "plane_pos_reg_value", "plane_size_reg_value", "plane_stride_reg_value",
     ))
-    declarations.extend(item(PROBES, name) for name in (
-        "DirectNv12PlaneTiling", "direct_nv12_plane_ctl_enabled", "direct_nv12_y_plane_ctl_enabled",
-    ))
-    declarations.append(block((ROOT / PROBES).read_text(), "impl DirectNv12PlaneTiling"))
     pending = set(re.findall(r"\b[A-Z][A-Z0-9_]+\b", "\n".join(declarations)))
     constants = {}
     while pending:
@@ -198,7 +192,6 @@ fn ready_registers()->(PrimarySurface,OverlaySurface) {
 
 #[test] fn canonical_rgb_words_and_unowned_documented_fields_remain_unchanged() {
  for (format,expected) in [(PrimaryPlaneSourceFormat::Xrgb8888,0x94000000),
-  (PrimaryPlaneSourceFormat::Xbgr8888,0x94100000),
   (PrimaryPlaneSourceFormat::Rgba8888Premultiplied,0x94100000)] {
   for preserved in [0,8,1<<9,1<<13,1<<14,(1<<9)|(1<<13)|(1<<14)|8] {
    assert_eq!(primary_plane_ctl_enabled_for_format(expected|preserved,format),expected|preserved);
@@ -212,7 +205,6 @@ fn ready_registers()->(PrimarySurface,OverlaySurface) {
  for pattern in 0..64 {
   let dirty=firmware_bits(pattern);
   for (format,expected) in [(PrimaryPlaneSourceFormat::Xrgb8888,0x94000008),
-   (PrimaryPlaneSourceFormat::Xbgr8888,0x94100008),
    (PrimaryPlaneSourceFormat::Rgba8888Premultiplied,0x94100008)] {
    assert_eq!(primary_plane_ctl_enabled_for_format(expected|dirty,format),expected,"pattern={pattern:#x}");
   }
@@ -249,15 +241,16 @@ fn ready_registers()->(PrimarySurface,OverlaySurface) {
 }
 
 #[test] fn live_guards_reject_every_dirty_fetch_mode_without_mutating_registers() {
- let (primary,_overlay)=ready_registers();let primary_base=PIPE.primary_plane().base();
+ ready_registers();let primary_base=PIPE.primary_plane().base();
  let overlay_base=PIPE.plane(4).base();let primary_ctl=read(primary_base);let overlay_ctl=read(overlay_base);
- assert!(primary_plane_contract_regs_match(super::Dev,primary));
+ assert_eq!(overlay_plane_dynamic_flip_guard(super::Dev,PIPE,0,OverlayAlphaMode::PremultipliedRgba),Ok(()));
  assert_eq!(overlay_plane_dynamic_flip_guard(super::Dev,PIPE,4,OverlayAlphaMode::PremultipliedRgba),Ok(()));
  for pattern in 1..64 {
   write(primary_base,primary_ctl|firmware_bits(pattern));
   write(overlay_base,overlay_ctl|firmware_bits(pattern));
   let writes=crate::HW.with(|h|h.borrow().writes.len());
-  assert!(!primary_plane_contract_regs_match(super::Dev,primary),"primary pattern={pattern:#x}");
+  assert_eq!(overlay_plane_dynamic_flip_guard(super::Dev,PIPE,0,OverlayAlphaMode::PremultipliedRgba),
+   Err("plane-control"),"primary pattern={pattern:#x}");
   assert_eq!(overlay_plane_dynamic_flip_guard(super::Dev,PIPE,4,OverlayAlphaMode::PremultipliedRgba),
    Err("plane-control"),"overlay pattern={pattern:#x}");
   assert_eq!(crate::HW.with(|h|h.borrow().writes.len()),writes,"guards are read-only");
@@ -280,16 +273,6 @@ fn ready_registers()->(PrimarySurface,OverlaySurface) {
  assert!(!overlay_plane_needs_rearm(super::Dev,overlay,0,0,OverlayAlphaMode::PremultipliedRgba));
 }
 
-#[test] fn nv12_keeps_its_separate_format_y_plane_and_tiling_contract() {
- for (tiling,bits) in [(DirectNv12PlaneTiling::Linear,0),(DirectNv12PlaneTiling::Y,4<<10),
-  (DirectNv12PlaneTiling::Yf,5<<10)] {
-  let expected=0x81000008|bits;
-  assert_eq!(direct_nv12_plane_ctl_enabled(expected,tiling),expected);
-  assert_eq!(direct_nv12_y_plane_ctl_enabled(expected,tiling),expected|(1<<19));
-  assert_eq!(direct_nv12_plane_ctl_enabled(0,tiling)&(0x1f<<23),1<<24);
-  assert_eq!(direct_nv12_y_plane_ctl_enabled(0,tiling)&(0x1f<<23),1<<24);
- }
-}
  }
 }
 '''

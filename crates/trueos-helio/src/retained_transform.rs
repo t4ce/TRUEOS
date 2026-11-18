@@ -7,8 +7,7 @@
 
 use alloc::{vec, vec::Vec};
 
-use crate::Error;
-use trueos_helio_artifact::{Artifact, SectionKind};
+use crate::{Artifact, Error, SectionKind};
 
 pub const NO_PARENT: u32 = u32::MAX;
 pub const CONSTANT_NODE: u32 = u32::MAX;

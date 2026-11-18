@@ -81,7 +81,11 @@ pub(crate) fn bounded_fetch_request(
 }
 
 fn bounded_fetch_error_code(error: &str) -> i32 {
-    if error == "timeout" || error == "timed out" || error.starts_with("timeout ") {
+    if error.starts_with("dns ") {
+        NET_ERR_TIMEOUT_DNS
+    } else if error.starts_with("tls ") {
+        NET_ERR_TLS
+    } else if error == "timeout" || error == "timed out" || error.starts_with("timeout ") {
         NET_ERR_TIMEOUT
     } else if error.starts_with("too large response framing") {
         NET_ERR_RESPONSE_FRAMING

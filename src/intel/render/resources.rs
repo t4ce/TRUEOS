@@ -1360,8 +1360,8 @@ pub(crate) fn release_resident_triangle_mesh(mesh: &ResidentTriangleMesh) -> boo
     true
 }
 
-const CHURN_FORWARD_MESH_COUNT: usize = trueos_helio_runtime::churn::SHAPE_COUNT;
-const CHURN_FORWARD_DRAW_COUNT: usize = trueos_helio_runtime::churn::DRAW_GROUP_COUNT;
+const CHURN_FORWARD_MESH_COUNT: usize = trueos_helio::churn::SHAPE_COUNT;
+const CHURN_FORWARD_DRAW_COUNT: usize = trueos_helio::churn::DRAW_GROUP_COUNT;
 /// The native-matrix shader is not cube-specific. Picasso uses this same
 /// authenticated Helio graphics package with its own immutable PosNormal mesh.
 fn picasso_retained_forward_artifact() -> Result<&'static [u8], &'static str> {
@@ -1382,8 +1382,8 @@ const PICASSO_RETAINED_TEXTURED_PS: &[u32] =
 
 
 fn bootstrap_churn_meshes()
--> [trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT] {
-    core::array::from_fn(|mesh_id| trueos_helio_runtime::churn::MeshDescriptor {
+-> [trueos_helio::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT] {
+    core::array::from_fn(|mesh_id| trueos_helio::churn::MeshDescriptor {
         mesh_id: mesh_id as u32,
         half_extents: [1.0; 3],
         first_vertex: (mesh_id * CHURN_FORWARD_VERTICES_PER_MESH) as u32,
@@ -1409,8 +1409,8 @@ fn churn_forward_stage_words(bytes: &[u8]) -> Result<&'static [u32], &'static st
 }
 
 fn churn_forward_pipeline(
-    artifact: trueos_helio_artifact::Artifact<'_>,
-    program: trueos_helio_artifact::churn_forward::Program<'_>,
+    artifact: trueos_helio::Artifact<'_>,
+    program: trueos_helio::churn_forward::Program<'_>,
 ) -> Result<crate::intel::shader::TrianglePipeline, &'static str> {
     use crate::intel::shader::{
         DispatchMode, ShaderKernelMetadata, TrianglePipeline, TrianglePixelShader,
@@ -1467,7 +1467,7 @@ fn churn_forward_pipeline(
         crate::intel::align_up(vs_section.data.len(), 64).ok_or("churn-native-shader-layout")?;
     let ps_offset = u32::try_from(ps_offset).map_err(|_| "churn-native-shader-layout")?;
 
-    let kernel = |stage: trueos_helio_artifact::churn_forward::StageRef<'_>, offset| {
+    let kernel = |stage: trueos_helio::churn_forward::StageRef<'_>, offset| {
         Ok::<_, &'static str>(ShaderKernelMetadata {
             code_offset_bytes: offset,
             code_size_bytes: stage.code_size_bytes,
@@ -1631,12 +1631,12 @@ fn configure_picasso_retained_uv_diagnostic(
 }
 
 fn build_churn_forward_geometry(
-    meshes: &[trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
+    meshes: &[trueos_helio::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
 ) -> Result<(Vec<u8>, Vec<u8>), &'static str> {
     let mut vertices = Vec::with_capacity(
         CHURN_FORWARD_MESH_COUNT
             * CHURN_FORWARD_VERTICES_PER_MESH
-            * trueos_helio_artifact::churn_forward::VERTEX_STRIDE as usize,
+            * trueos_helio::churn_forward::VERTEX_STRIDE as usize,
     );
     let mut indices = Vec::with_capacity(
         CHURN_FORWARD_MESH_COUNT * CHURN_FORWARD_INDICES_PER_MESH * core::mem::size_of::<u32>(),
@@ -1723,11 +1723,11 @@ fn build_churn_expanded_indices(max_instances: usize) -> Result<Vec<u8>, &'stati
 
 const _: () = {
     assert!(
-        core::mem::size_of::<trueos_helio_runtime::retained_transform::RetainedTransformNode>()
+        core::mem::size_of::<trueos_helio::retained_transform::RetainedTransformNode>()
             == crate::intel::gpgpu::GPGPU_HELIO_HIERARCHY_NODE_BYTES
     );
     assert!(
-        core::mem::size_of::<trueos_helio_runtime::retained_transform::Affine3x4>()
+        core::mem::size_of::<trueos_helio::retained_transform::Affine3x4>()
             == crate::intel::gpgpu::GPGPU_HELIO_AFFINE_BYTES
     );
 };
@@ -1841,10 +1841,10 @@ fn create_resident_churn_transform(
     }
     let artifact = resident_helio_transform_artifact_for_carrier(carrier)?;
     let seed_bytes = max_instances
-        .checked_mul(trueos_helio_runtime::churn::GpuRetainedTransformSeed::BYTE_LEN)
+        .checked_mul(trueos_helio::churn::GpuRetainedTransformSeed::BYTE_LEN)
         .ok_or("churn-transform-buffer-capacity")?;
     let draw_template_bytes = CHURN_FORWARD_DRAW_COUNT
-        .checked_mul(trueos_helio_runtime::churn::GpuRetainedDrawTemplate::BYTE_LEN)
+        .checked_mul(trueos_helio::churn::GpuRetainedDrawTemplate::BYTE_LEN)
         .ok_or("churn-transform-buffer-capacity")?;
     let seeds = allocate_resident_render_buffer_for_carrier(carrier, seed_bytes)
         .map_err(|_| "churn-transform-seed-allocation")?;
@@ -1878,14 +1878,14 @@ fn create_resident_churn_transform(
 fn create_resident_churn_forward_with_admission(
     artifact_bytes: &'static [u8],
     max_instances: usize,
-    meshes: &[trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
+    meshes: &[trueos_helio::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
     hardware_admission: ChurnHardwareAdmission,
     carrier: Option<PicassoCarrierLease>,
 ) -> Result<ResidentChurnForward, &'static str> {
     if max_instances == 0 {
         return Err("churn-native-instance-capacity");
     }
-    let artifact = trueos_helio_artifact::Artifact::parse(artifact_bytes)
+    let artifact = trueos_helio::Artifact::parse(artifact_bytes)
         .map_err(|_| "churn-native-artifact")?;
     let program = artifact
         .churn_forward_program()
@@ -1896,7 +1896,7 @@ fn create_resident_churn_forward_with_admission(
     let sgvs = program.sgvs();
     let synthetic = program.synthetic_instance_id_element();
     let instancing = program.vf_instancing();
-    if fetch.stride != trueos_helio_artifact::churn_forward::VERTEX_STRIDE
+    if fetch.stride != trueos_helio::churn_forward::VERTEX_STRIDE
         || fetch.vf_component_packing_dw0 != 0x0000_0A77
         || fetch.packed_vs_input_count != 8
         || fetch.urb_input_read_length != 1
@@ -1937,13 +1937,13 @@ fn create_resident_churn_forward_with_admission(
         .checked_add(index_bytes.len())
         .ok_or("churn-native-geometry-layout")?;
     let instance_bytes = max_instances
-        .checked_mul(trueos_helio_runtime::churn::GpuInstanceData::BYTE_LEN)
+        .checked_mul(trueos_helio::churn::GpuInstanceData::BYTE_LEN)
         .ok_or("churn-native-instance-capacity")?;
     let compacted_bytes = max_instances
         .checked_mul(core::mem::size_of::<u32>())
         .ok_or("churn-native-instance-capacity")?;
     let indirect_bytes = CHURN_FORWARD_DRAW_COUNT
-        .checked_mul(trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN)
+        .checked_mul(trueos_helio::DrawIndexedIndirectArgs::BYTE_LEN)
         .ok_or("churn-native-indirect-capacity")?;
     let expanded_vertex_count = max_instances
         .checked_mul(CHURN_FORWARD_VERTICES_PER_MESH)
@@ -1991,7 +1991,7 @@ fn create_resident_churn_forward_with_admission(
         };
     let camera = match allocate_resident_render_buffer_for_carrier(
         carrier,
-        trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN,
+        trueos_helio::churn::GpuCameraUniforms::BYTE_LEN,
     ) {
         Ok(buffer) => buffer,
         Err(error) => {
@@ -2057,7 +2057,7 @@ fn create_resident_churn_forward_with_admission(
         vs_storage_bindings: [
             TriangleStorageBufferBinding {
                 gpu_addr: camera.gpu_base(),
-                byte_len: trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN as u32,
+                byte_len: trueos_helio::churn::GpuCameraUniforms::BYTE_LEN as u32,
             },
             TriangleStorageBufferBinding {
                 gpu_addr: instances.gpu_base(),
@@ -2129,7 +2129,7 @@ fn create_resident_churn_forward_with_admission(
         draw_group_count: AtomicU32::new(CHURN_FORWARD_DRAW_COUNT as u32),
         point_width_raw: AtomicU32::new(0),
         vertex_gpu_addr: geometry.gpu_base(),
-        vertex_stride: trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
+        vertex_stride: trueos_helio::churn_forward::VERTEX_STRIDE,
         vertex_format: TriangleVertexFormat::PosNormal,
         vertex_count: (CHURN_FORWARD_MESH_COUNT * CHURN_FORWARD_VERTICES_PER_MESH) as u32,
         vertex_bytes: vertex_byte_len,
@@ -2651,7 +2651,7 @@ fn prepare_resident_churn_forward_draw(
         }),
         indirect_args_gpu_addr: Some(
             resident.indirect_args.gpu_base()
-                + (group * trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
+                + (group * trueos_helio::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
         ),
         native: Some(resident.native_vf),
         sampled_texture: sampled_material.map(|material| TriangleSampledTextureBinding {
@@ -2741,7 +2741,7 @@ fn prepare_resident_churn_expanded_draw(
         }),
         indirect_args_gpu_addr: Some(
             resident.indirect_args.gpu_base()
-                + (group * trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
+                + (group * trueos_helio::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
         ),
         native: None,
         sampled_texture: None,
@@ -2793,7 +2793,7 @@ mod churn_forward_geometry_tests {
 
     #[test]
     fn encodes_three_local_indexed_pos_normal_cubes() {
-        let meshes = core::array::from_fn(|mesh| trueos_helio_runtime::churn::MeshDescriptor {
+        let meshes = core::array::from_fn(|mesh| trueos_helio::churn::MeshDescriptor {
             mesh_id: mesh as u32,
             half_extents: [1.0 + mesh as f32, 2.0, 3.0],
             first_vertex: (mesh * CHURN_FORWARD_VERTICES_PER_MESH) as u32,
@@ -2807,7 +2807,7 @@ mod churn_forward_geometry_tests {
             vertices.len(),
             CHURN_FORWARD_MESH_COUNT
                 * CHURN_FORWARD_VERTICES_PER_MESH
-                * trueos_helio_artifact::churn_forward::VERTEX_STRIDE as usize
+                * trueos_helio::churn_forward::VERTEX_STRIDE as usize
         );
         assert_eq!(
             indices.len(),
@@ -2876,13 +2876,13 @@ mod churn_forward_geometry_tests {
     #[test]
     fn retained_hierarchy_uploads_have_exact_little_endian_gpu_strides() {
         let nodes = [
-            trueos_helio_runtime::retained_transform::RetainedTransformNode {
+            trueos_helio::retained_transform::RetainedTransformNode {
                 parent: u32::MAX,
                 level: 0,
                 local_generation: 1,
                 world_generation: 2,
             },
-            trueos_helio_runtime::retained_transform::RetainedTransformNode {
+            trueos_helio::retained_transform::RetainedTransformNode {
                 parent: 0,
                 level: 1,
                 local_generation: 3,
@@ -2895,7 +2895,7 @@ mod churn_forward_geometry_tests {
         assert_eq!(&node_bytes[16..20], &0u32.to_le_bytes());
         assert_eq!(&node_bytes[28..32], &4u32.to_le_bytes());
 
-        let affine = trueos_helio_runtime::retained_transform::Affine3x4 {
+        let affine = trueos_helio::retained_transform::Affine3x4 {
             rows: core::array::from_fn(|index| index as f32 + 0.25),
         };
         let affine_bytes = encode_churn_affines(&[affine]);

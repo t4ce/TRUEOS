@@ -14,6 +14,7 @@ module usb_rgba8_source #(
     output wire hpd_request,
     output wire release_request,
     output wire [14:0] camera_packet,
+    output reg [1:0] camera_batch,
     output wire valid,
     output reg [7:0] data
 );
@@ -75,6 +76,7 @@ module usb_rgba8_source #(
                         start_y[10:8] <= request_data[2:0];
                         camera_packet_high <= request_data[6:0];
                     end
+                    4: camera_batch <= request_data[1:0];
                     511: begin
                         x <= start_x;
                         y <= start_y;

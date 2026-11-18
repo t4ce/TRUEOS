@@ -71,23 +71,27 @@ def read_indexed_frame(device, endpoint_out, endpoint_in, source):
     return received
 
 
-def read_camera_frame(device, endpoint_out, endpoint_in, expected=None):
+def read_camera_frame(device, endpoint_out, endpoint_in, expected=None, batch_size=1):
     received = bytearray()
     retries = 0
+    resets = 0
     out_address, in_address = endpoint_out.bEndpointAddress, endpoint_in.bEndpointAddress
     location = device.bus, tuple(device.port_numbers)
     packet = 0
     reconnects = 0
     while packet < RGBA_BYTES // 480:
-        header = struct.pack("<HH", 2046, packet)
-        request = header.ljust(512, b"\0")
+        count = min(batch_size, RGBA_BYTES // 480 - packet)
+        request = struct.pack("<HHB", 2046, packet, count - 1).ljust(512, b"\0")
         last_error = "no reply"
         for attempt in range(8):
             try:
-                if attempt:
+                # First retry at the endpoint level. Resetting the whole
+                # device can make Linux lose the current USB address.
+                if attempt >= 2:
                     device.reset()
                     device.set_configuration(1)
                     usb.util.claim_interface(device, 0)
+                    resets += 1
                 device.clear_halt(out_address)
                 device.clear_halt(in_address)
                 if device.write(out_address, request, timeout=500) != 512:
@@ -95,8 +99,8 @@ def read_camera_frame(device, endpoint_out, endpoint_in, expected=None):
                     continue
                 # Let the FPGA fill the complete USB packet from DDR before
                 # the first IN token can read a partially populated FIFO.
-                time.sleep(0.0005)
-                reply = bytes(device.read(in_address, 512, timeout=500))
+                time.sleep(0.0005 * count)
+                reply = bytes(device.read(in_address, 512 * count, timeout=500))
             except usb.core.USBError as error:
                 last_error = str(error)
                 if error.errno in (errno.ENOENT, errno.ENODEV):
@@ -113,27 +117,36 @@ def read_camera_frame(device, endpoint_out, endpoint_in, expected=None):
                         print(f"USB reconnected. Resuming the verified DDR test at packet {packet}.")
                     break
                 continue
-            if len(reply) != 512 or reply[:4] != header:
+            if len(reply) >= 5 and reply[:4] == request[:4] and reply[4] == 0:
+                raise SystemExit("The FPGA has no frozen HDMI frame")
+            if len(reply) != 512 * count:
                 last_error = f"reply length {len(reply)}, header {reply[:4].hex()}"
                 continue
-            if reply[4] == 0:
-                raise SystemExit("The FPGA has no frozen HDMI frame")
-            payload = reply[5:485]
-            checksum, = struct.unpack_from("<I", reply, 485)
-            if reply[4] == 1 and zlib.crc32(payload) == checksum:
-                if expected is not None and payload != expected[480 * packet:480 * (packet + 1)]:
-                    raise SystemExit(f"DDR test pixel mismatch in packet {packet}")
-                received.extend(payload)
+            payloads = bytearray()
+            for i in range(count):
+                offset = 512 * i
+                index = packet + i
+                payload = reply[offset + 5:offset + 485]
+                checksum, = struct.unpack_from("<I", reply, offset + 485)
+                if (reply[offset:offset + 5] != struct.pack("<HHB", 2046, index, 1)
+                        or zlib.crc32(payload) != checksum):
+                    last_error = f"payload CRC or header mismatch in packet {index}"
+                    break
+                if expected is not None and payload != expected[480 * index:480 * (index + 1)]:
+                    raise SystemExit(f"DDR test pixel mismatch in packet {index}")
+                payloads.extend(payload)
+            else:
+                received.extend(payloads)
                 retries += attempt
-                if (packet + 1) % 2160 == 0:
+                if (packet + count) // 2160 != packet // 2160:
                     print(f"Verified {len(received):,} of {RGBA_BYTES:,} DDR bytes", flush=True)
-                packet += 1
+                packet += count
                 break
-            last_error = "payload CRC or status mismatch"
         else:
             raise SystemExit(f"Could not verify camera packet {packet}: {last_error}")
     usb.util.dispose_resources(device)
-    print(f"Retried {retries} USB packets and recovered {reconnects} USB disconnects")
+    print(f"Retried {retries} USB packets, reset {resets} times, "
+          f"and recovered {reconnects} USB disconnects")
     return received
 
 
@@ -243,7 +256,7 @@ def wait_for_next_frame(device):
     raise SystemExit("The FPGA did not freeze a new HDMI frame")
 
 
-def transfer(device, source, from_fpga, from_camera=False):
+def transfer(device, source, from_fpga, from_camera=False, batch_size=1):
     if from_fpga or from_camera:
         device.reset()
         device.set_configuration(1)
@@ -268,7 +281,7 @@ def transfer(device, source, from_fpga, from_camera=False):
             if packet != 512:
                 raise SystemExit("FPGA readout requires high-speed 512-byte endpoints")
             if from_camera:
-                return read_camera_frame(device, endpoint_out, endpoint_in, source)
+                return read_camera_frame(device, endpoint_out, endpoint_in, source, batch_size)
             return read_indexed_frame(device, endpoint_out, endpoint_in, source)
         # Drain echo data left behind by an interrupted host transfer.
         for _ in range(8192 // packet):
@@ -311,6 +324,8 @@ def main():
     modes.add_argument("--verify-ddr-test", action="store_true",
                        help="Download the DDR test frame and compare every pixel")
     parser.add_argument("png", type=pathlib.Path, nargs="?")
+    parser.add_argument("--batch", type=int, choices=range(1, 5), default=1,
+                        help="Indexed DDR reply packets per request on batch-capable firmware")
     args = parser.parse_args()
     if not (args.camera_status or args.reprobe_hdmi) and args.png is None:
         parser.error("a PNG output path is required")
@@ -338,7 +353,7 @@ def main():
     source = None if args.from_camera else test_image(args.from_fpga or args.verify_ddr_test)
     started = time.monotonic()
     received = transfer(devices[0], source, args.from_fpga,
-                        args.from_camera or args.verify_ddr_test)
+                        args.from_camera or args.verify_ddr_test, args.batch)
     seconds = time.monotonic() - started
     subprocess.run([
         "ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba",

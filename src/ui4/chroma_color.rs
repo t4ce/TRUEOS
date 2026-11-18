@@ -10,6 +10,9 @@ use spin::Mutex;
 #[path = "chroma_grade.rs"]
 mod grade;
 pub(super) use grade::{LUT_EDGE, LUT_ENTRIES, Settings, identity_code, unpack_node};
+#[path = "chroma_dsb_experiment.rs"]
+mod dsb_experiment;
+pub(crate) use dsb_experiment::benchmark_chroma_dsb;
 
 #[derive(Clone, Copy)]
 struct Registers {
@@ -161,6 +164,7 @@ pub(super) fn rearm_pipe_if_lost(
     let regs = registers(pipe)?;
     let _route = crate::intel::DISPLAY_COLOR_ROUTE_LOCK.lock();
     let _guard = PIPE_LUT.lock();
+    dsb_experiment::permit_lut_access(pipe)?;
     let dev = device(regs)?;
     let control = ready(dev, regs)?;
     let mut lost = control & LUT_ENABLE == 0;
@@ -194,19 +198,24 @@ pub(super) fn snapshot_pipe(pipe: usize) -> Result<PipeLutSnapshot, &'static str
     let mut entries = vec![0; LUT_ENTRIES].into_boxed_slice();
     let _route = crate::intel::DISPLAY_COLOR_ROUTE_LOCK.lock();
     let _guard = PIPE_LUT.lock();
+    dsb_experiment::permit_lut_access(pipe)?;
     let dev = device(regs)?;
     let control = ready(dev, regs)?;
+    read_table(dev, regs, &mut entries);
+    Ok(PipeLutSnapshot {
+        pipe,
+        control,
+        entries,
+    })
+}
+
+fn read_table(dev: crate::intel::Dev, regs: Registers, entries: &mut [u32]) {
     let old_index = crate::intel::mmio_read(dev, regs.index);
     crate::intel::mmio_write(dev, regs.index, INDEX_AUTO_INCREMENT);
     for entry in entries.iter_mut() {
         *entry = crate::intel::mmio_read(dev, regs.data) & 0x3fff_ffff;
     }
     crate::intel::mmio_write(dev, regs.index, old_index);
-    Ok(PipeLutSnapshot {
-        pipe,
-        control,
-        entries,
-    })
 }
 
 /// Upload a complete back-buffer table, then arm it for the next vblank.
@@ -216,6 +225,7 @@ pub(super) fn program_pipe(pipe: usize, entries: &[u32; LUT_ENTRIES]) -> Result<
     let regs = registers(pipe)?;
     let _route = crate::intel::DISPLAY_COLOR_ROUTE_LOCK.lock();
     let _guard = PIPE_LUT.lock();
+    dsb_experiment::permit_lut_access(pipe)?;
     let dev = device(regs)?;
     let control = ready(dev, regs)?;
     upload(dev, regs, entries, control | LUT_ENABLE)
@@ -236,6 +246,11 @@ fn upload(
         let chicken = crate::intel::mmio_read(dev, CHICKEN_MISC);
         crate::intel::mmio_write(dev, CHICKEN_MISC, chicken | LUT_FIRST_FRAME_ENABLE);
     }
+    write_table_mmio(dev, regs, entries);
+    arm_table(dev, regs, control)
+}
+
+fn write_table_mmio(dev: crate::intel::Dev, regs: Registers, entries: &[u32]) {
     let old_index = crate::intel::mmio_read(dev, regs.index);
     // Vol12's auto-increment prose depends on this explicit Vol2c bit.
     crate::intel::mmio_write(dev, regs.index, INDEX_AUTO_INCREMENT);
@@ -243,6 +258,9 @@ fn upload(
         crate::intel::mmio_write(dev, regs.data, entry);
     }
     crate::intel::mmio_write(dev, regs.index, old_index);
+}
+
+fn arm_table(dev: crate::intel::Dev, regs: Registers, control: u32) -> Result<(), &'static str> {
     let armed = (control & (LUT_ENABLE | LUT_ALLOW_DB_DISABLE)) | LUT_NEW_READY;
     crate::intel::mmio_write(dev, regs.control, armed);
     // Posting read; Ready may already have cleared if vblank raced this read.
@@ -257,6 +275,7 @@ pub(super) fn restore_pipe(snapshot: &PipeLutSnapshot) -> Result<(), &'static st
     let regs = registers(snapshot.pipe)?;
     let _route = crate::intel::DISPLAY_COLOR_ROUTE_LOCK.lock();
     let _guard = PIPE_LUT.lock();
+    dsb_experiment::permit_lut_access(snapshot.pipe)?;
     let dev = device(regs)?;
     ready(dev, regs)?;
     if snapshot.control & LUT_ENABLE == 0 {

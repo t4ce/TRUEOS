@@ -1,22 +1,33 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-//! Narrow runtime lowering from Helio's normalized render IR to the retained
-//! triangle contract already submitted by TRUEOS's Intel Render/GuC path.
+//! Zero-copy Helio artifact loading and runtime lowering to the retained
+//! rendering contracts used by TRUEOS's Intel Render/GuC path.
 
 extern crate alloc;
+#[cfg(test)]
+extern crate std;
 
+mod artifact;
 pub mod churn;
+pub mod churn_forward;
 pub mod picasso_scene;
+pub mod render_ir;
+pub mod replay;
 pub mod retained_transform;
 pub mod scene_db;
 
+pub use artifact::{
+    Artifact, Error as ArtifactError, FORMAT_VERSION, MAGIC, RequiredSection, Section, SectionKind,
+    Sections,
+};
+
 use alloc::vec::Vec;
-use trueos_helio_artifact::render_ir::{
+use crate::render_ir::{
     BindingKind, CompareFunction, CullMode, DrawIndexed, FrontFace, IndexFormat, PrimitiveTopology,
     Program, ShaderStages, TextureFormat, VertexAttribute,
 };
-use trueos_helio_artifact::replay::ReplayPlan;
+use crate::replay::ReplayPlan;
 
 const MAX_TRIANGLES: usize = 4_096;
 
@@ -200,13 +211,13 @@ pub enum Error {
 }
 
 pub fn decode_artifact(bytes: &[u8], aspect: f32, camera: Camera) -> Result<Scene, Error> {
-    let artifact = trueos_helio_artifact::Artifact::parse(bytes).map_err(|_| Error::Artifact)?;
+    let artifact = Artifact::parse(bytes).map_err(|_| Error::Artifact)?;
     let program = artifact.render_program().map_err(|_| Error::Artifact)?;
-    let Some(_) = artifact.section(trueos_helio_artifact::replay::SECTION_NAME) else {
+    let Some(_) = artifact.section(crate::replay::SECTION_NAME) else {
         return decode_program(&program, aspect, camera);
     };
     let render_ir = artifact
-        .section(trueos_helio_artifact::render_ir::SECTION_NAME)
+        .section(crate::render_ir::SECTION_NAME)
         .ok_or(Error::Artifact)?;
     let replay = artifact.replay_plan().map_err(|_| Error::Artifact)?;
     let draw = validate_replay_plan(&program, render_ir.data, replay)?;
@@ -224,13 +235,13 @@ pub fn decode_artifact_with_replay(
     aspect: f32,
     camera: Camera,
 ) -> Result<Scene, Error> {
-    let artifact = trueos_helio_artifact::Artifact::parse(bytes).map_err(|_| Error::Artifact)?;
+    let artifact = Artifact::parse(bytes).map_err(|_| Error::Artifact)?;
     let program = artifact.render_program().map_err(|_| Error::Artifact)?;
     let render_ir = artifact
-        .section(trueos_helio_artifact::render_ir::SECTION_NAME)
+        .section(crate::render_ir::SECTION_NAME)
         .ok_or(Error::Artifact)?;
     if artifact
-        .section(trueos_helio_artifact::replay::SECTION_NAME)
+        .section(crate::replay::SECTION_NAME)
         .is_none()
     {
         return Err(Error::MissingReplay);
@@ -577,11 +588,11 @@ fn normalize(value: [f32; 3]) -> Result<[f32; 3], Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trueos_helio_artifact::render_ir::{
+    use crate::render_ir::{
         CameraBinding, DrawIndexed, IndexBuffer, PipelineState, ResourceId, Shader, StateFlags,
         VertexBuffer, VertexFormat,
     };
-    use trueos_helio_artifact::replay::{COMMAND_STRIDE, HEADER_LEN, MAGIC, VERSION};
+    use crate::replay::{COMMAND_STRIDE, HEADER_LEN, MAGIC, VERSION};
 
     fn f32s(values: &[f32]) -> Vec<u8> {
         values

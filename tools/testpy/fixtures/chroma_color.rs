@@ -4,6 +4,40 @@ extern crate alloc;
 // blue-fastest table addresses, auto-increment, index restoration and arming.
 extern crate self as libm;
 extern crate self as spin;
+extern crate self as trueos_time;
+pub use std::time::Duration;
+
+pub struct Timer;
+impl Timer {
+    pub async fn after(duration: Duration) {
+        assert!(!intel::DISPLAY_COLOR_ROUTE_LOCK.is_locked());
+        let wait_hook = STATE.with(|cell| {
+            let mut state = cell.borrow_mut();
+            state.nanos += duration.as_nanos() as u64;
+            for pipe in &mut state.pipes {
+                if pipe.enabled && pipe.control & 0xc000_0000 == 0xc000_0000 {
+                    pipe.active_table.copy_from_slice(&pipe.table);
+                    pipe.control &= !(1 << 30);
+                }
+            }
+            state.wait_hook.take()
+        });
+        if let Some(hook) = wait_hook {
+            hook();
+        }
+    }
+}
+
+mod chronos {
+    pub fn monotonic_nanos() -> u64 {
+        crate::STATE.with(|cell| {
+            let mut state = cell.borrow_mut();
+            state.nanos += 100;
+            state.nanos
+        })
+    }
+}
+
 pub fn expf(x: f32) -> f32 {
     x.exp()
 }
@@ -23,12 +57,16 @@ impl<T> Mutex<T> {
     }
 }
 mod pci {
-    pub fn config_read_u32(_: u8, _: u8, _: u8, _: u16) -> u32 {
+    pub fn config_read_u32(_: u8, _: u8, _: u8, register: u16) -> u32 {
         assert!(crate::intel::DISPLAY_COLOR_ROUTE_LOCK.is_locked());
         crate::STATE.with(|cell| {
             let mut state = cell.borrow_mut();
             state.pci_reads += 1;
-            state.physical
+            match register {
+                0 => state.physical,
+                8 => state.revision as u32,
+                _ => panic!("unexpected PCI config read {register:x}"),
+            }
         })
     }
 }
@@ -39,15 +77,89 @@ mod intel {
         pub bus: u8,
         pub slot: u8,
         pub function: u8,
+        pub device_id: u16,
+        pub revision_id: u8,
         pub mmio_len: usize,
     }
     pub fn claimed_device() -> Option<Dev> {
-        Some(Dev {
-            bus: 0,
-            slot: 0,
-            function: 0,
-            mmio_len: crate::STATE.with(|cell| cell.borrow().mmio_len),
+        crate::STATE.with(|cell| {
+            let state = cell.borrow();
+            Some(Dev {
+                bus: 0,
+                slot: 0,
+                function: 0,
+                device_id: (state.physical >> 16) as u16,
+                revision_id: state.revision,
+                mmio_len: state.mmio_len,
+            })
         })
+    }
+    pub struct LutDsbUpload {
+        entries: Box<[u32]>,
+        restore_index: u32,
+        first_poll: std::cell::Cell<bool>,
+    }
+    pub enum LutDsbPoll {
+        Pending,
+        Complete,
+        #[allow(dead_code)]
+        Failed(&'static str),
+        Uncertain(&'static str),
+    }
+    pub fn check_lut_dsb_idle(_: Dev) -> Result<(), &'static str> {
+        assert!(DISPLAY_COLOR_ROUTE_LOCK.is_locked());
+        if lut_dsb_port_blocked() {
+            return Err("mock-dsb-busy");
+        }
+        Ok(())
+    }
+    pub fn lut_dsb_port_blocked() -> bool {
+        crate::STATE.with(|cell| cell.borrow().dsb_pending)
+    }
+    pub fn start_lut_dsb(
+        _: Dev,
+        entries: &[u32],
+        restore_index: u32,
+    ) -> Result<LutDsbUpload, &'static str> {
+        assert!(DISPLAY_COLOR_ROUTE_LOCK.is_locked());
+        assert_eq!(entries.len(), 4913);
+        crate::STATE.with(|cell| {
+            let mut state = cell.borrow_mut();
+            assert!(!state.dsb_pending, "overlapping DSB uploads");
+            assert_eq!(state.pipes[0].control & (1 << 30), 0);
+            state.dsb_submissions += 1;
+            state.dsb_pending = true;
+        });
+        Ok(LutDsbUpload {
+            entries: entries.into(),
+            restore_index,
+            first_poll: std::cell::Cell::new(true),
+        })
+    }
+    impl LutDsbUpload {
+        pub fn poll(&self, _: Dev) -> LutDsbPoll {
+            assert!(DISPLAY_COLOR_ROUTE_LOCK.is_locked());
+            if self.first_poll.replace(false) {
+                return LutDsbPoll::Pending;
+            }
+            crate::STATE.with(|cell| {
+                let mut state = cell.borrow_mut();
+                assert!(state.dsb_pending);
+                if matches!(state.dsb_behavior, crate::DsbBehavior::Uncertain) {
+                    return LutDsbPoll::Uncertain("mock-dsb-uncertain");
+                }
+                let corrupt = matches!(state.dsb_behavior, crate::DsbBehavior::Corrupt);
+                let pipe = &mut state.pipes[0];
+                pipe.table.copy_from_slice(&self.entries);
+                pipe.index = self.restore_index;
+                if corrupt {
+                    *pipe.table.last_mut().unwrap() ^= 1;
+                }
+                state.dsb_pending = false;
+                state.dsb_completions += 1;
+                LutDsbPoll::Complete
+            })
+        }
     }
     pub fn mmio_read(_: Dev, off: usize) -> u32 {
         assert!(DISPLAY_COLOR_ROUTE_LOCK.is_locked());
@@ -55,8 +167,8 @@ mod intel {
             let mut state = cell.borrow_mut();
             state.reads.push(off);
             let (slot, reg) = match off {
-                0x70008 => return if state.pipes[0].enabled { 1 << 31 } else { 0 },
-                0x71008 => return if state.pipes[1].enabled { 1 << 31 } else { 0 },
+                0x70008 => return if state.pipes[0].enabled { 0xc000_0000 } else { 0 },
+                0x71008 => return if state.pipes[1].enabled { 0xc000_0000 } else { 0 },
                 0x420b0 => return 0,
                 0x6e400 => return state.wd_function,
                 0x7e008 => return state.wd_transcoder,
@@ -84,6 +196,10 @@ mod intel {
         assert!(DISPLAY_COLOR_ROUTE_LOCK.is_locked());
         crate::STATE.with(|cell| {
             let mut state = cell.borrow_mut();
+            assert!(
+                !state.dsb_pending || !matches!(off, 0x490a4 | 0x490a8 | 0x490ac),
+                "CPU touched Pipe A LUT while DSB may still write it"
+            );
             if matches!(off, 0x490ac | 0x491ac) {
                 if let Some(flag) = &state.teardown_flag {
                     assert!(
@@ -123,6 +239,7 @@ struct Pipe {
     control: u32,
     index: u32,
     table: Box<[u32]>,
+    active_table: Box<[u32]>,
 }
 impl Default for Pipe {
     fn default() -> Self {
@@ -131,11 +248,22 @@ impl Default for Pipe {
             control: 1 << 29,
             index: 7,
             table: vec![0; 4913].into_boxed_slice(),
+            active_table: vec![0; 4913].into_boxed_slice(),
         }
     }
 }
+
+#[derive(Default)]
+enum DsbBehavior {
+    #[default]
+    Complete,
+    Corrupt,
+    Uncertain,
+}
+
 struct State {
     physical: u32,
+    revision: u8,
     mmio_len: usize,
     wd_function: u32,
     wd_transcoder: u32,
@@ -145,11 +273,18 @@ struct State {
     pci_reads: usize,
     reads: Vec<usize>,
     writes: Vec<(usize, u32)>,
+    dsb_behavior: DsbBehavior,
+    dsb_submissions: usize,
+    dsb_completions: usize,
+    dsb_pending: bool,
+    nanos: u64,
+    wait_hook: Option<Box<dyn FnOnce()>>,
 }
 impl Default for State {
     fn default() -> Self {
         Self {
             physical: 0xa7808086,
+            revision: 0,
             mmio_len: 0x100000,
             wd_function: 0,
             wd_transcoder: 0,
@@ -159,12 +294,146 @@ impl Default for State {
             pci_reads: 0,
             reads: Vec::new(),
             writes: Vec::new(),
+            dsb_behavior: DsbBehavior::Complete,
+            dsb_submissions: 0,
+            dsb_completions: 0,
+            dsb_pending: false,
+            nanos: 0,
+            wait_hook: None,
         }
     }
 }
 std::thread_local! { static STATE:std::cell::RefCell<State>=std::cell::RefCell::new(State::default()); }
 #[path = "@CHROMA_COLOR_PATH@"]
 mod color;
+
+fn finish<F: core::future::Future>(future: F) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    match future.as_mut().poll(&mut context) {
+        std::task::Poll::Ready(result) => result,
+        std::task::Poll::Pending => panic!("modeled timer did not complete synchronously"),
+    }
+}
+
+const DSB_OLD_INDEX: u32 = 0x2000 | 317;
+
+fn seed_dsb_benchmark(control: u32, behavior: DsbBehavior) -> Box<[u32]> {
+    let original = (0..4913)
+        .map(|node| ((node * 17_089) ^ 0x14_689) & 0x3fff_ffff)
+        .collect::<Vec<u32>>()
+        .into_boxed_slice();
+    STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        *state = State::default();
+        state.physical = 0x4680_8086;
+        state.revision = 0x0c;
+        state.dsb_behavior = behavior;
+        let pipe = &mut state.pipes[0];
+        pipe.control = control;
+        pipe.index = DSB_OLD_INDEX;
+        pipe.table.copy_from_slice(&original);
+        pipe.active_table.copy_from_slice(&original);
+    });
+    original
+}
+
+fn assert_restored_dsb_pipe(original: &[u32], control: u32) {
+    STATE.with(|cell| {
+        let state = cell.borrow();
+        let pipe = &state.pipes[0];
+        assert_eq!(&*pipe.table, original);
+        assert_eq!(pipe.index, DSB_OLD_INDEX);
+        assert_eq!(pipe.control, control);
+        if control & (1 << 31) != 0 {
+            assert_eq!(&*pipe.active_table, original);
+        }
+        assert!(!state.dsb_pending);
+        assert_eq!(state.dsb_completions, state.dsb_submissions);
+    });
+}
+
+#[test]
+fn dsb_compares_full_tables_and_restores_enabled_or_disabled_pipe() {
+    for control in [0xa000_0000, 0x2000_0000] {
+        let original = seed_dsb_benchmark(control, DsbBehavior::Complete);
+        STATE.with(|cell| {
+            cell.borrow_mut().wait_hook = Some(Box::new(|| {
+                assert_eq!(color::program_pipe_a(&[13; 4913]), Err("chroma-3dlut-busy"));
+                assert!(color::snapshot_pipe_a().is_err());
+                assert_eq!(color::pipe_status(1), Ok(color::PipeLutStatus::Disabled));
+            }));
+        });
+        let report = finish(color::benchmark_chroma_dsb()).unwrap();
+        assert_eq!(report.device_id, 0x4680);
+        assert_eq!(report.revision_id, 0x0c);
+        assert_eq!(report.samples, 24);
+        for timings in [report.mmio, report.dsb] {
+            assert!(timings.cpu_p50_ns > 0);
+            assert!(timings.cpu_p95_ns >= timings.cpu_p50_ns);
+            assert!(timings.latch_p50_ns > 0);
+            assert!(timings.latch_p95_ns >= timings.latch_p50_ns);
+        }
+        assert_restored_dsb_pipe(&original, control);
+        STATE.with(|cell| {
+            let state = cell.borrow();
+            assert!(state.dsb_completions > report.samples as usize);
+            assert!(state.wait_hook.is_none());
+            assert!(state.pipes[1].table.iter().all(|node| *node == 0));
+        });
+    }
+}
+
+#[test]
+fn dsb_rejects_mismatch_at_last_node_and_restores_the_cube() {
+    let control = 0xa000_0000;
+    let original = seed_dsb_benchmark(control, DsbBehavior::Corrupt);
+    assert_eq!(
+        finish(color::benchmark_chroma_dsb()).err(),
+        Some("chroma-dsb-table-mismatch")
+    );
+    assert_restored_dsb_pipe(&original, control);
+    STATE.with(|cell| assert_eq!(cell.borrow().dsb_completions, 1));
+}
+
+#[test]
+fn dsb_refuses_other_desktop_stepping_before_programming() {
+    seed_dsb_benchmark(0xa000_0000, DsbBehavior::Complete);
+    STATE.with(|cell| cell.borrow_mut().revision = 0x0b);
+    assert!(finish(color::benchmark_chroma_dsb()).is_err());
+    STATE.with(|cell| {
+        let state = cell.borrow();
+        assert!(state.writes.is_empty());
+        assert_eq!(state.dsb_submissions, 0);
+    });
+}
+
+#[test]
+#[ignore = "run in its own process because the real Pipe A quarantine is sticky"]
+fn dsb_unproven_upload_quarantines_pipe_a_without_cpu_replay() {
+    let control = 0xa000_0000;
+    let original = seed_dsb_benchmark(control, DsbBehavior::Uncertain);
+    let snapshot = color::snapshot_pipe_a().unwrap();
+    assert_eq!(
+        finish(color::benchmark_chroma_dsb()).err(),
+        Some("chroma-dsb-upload-unproven")
+    );
+    STATE.with(|cell| {
+        let state = cell.borrow();
+        assert!(state.dsb_pending);
+        assert_eq!(state.dsb_submissions, 1);
+        assert_eq!(state.dsb_completions, 0);
+        assert_eq!(&*state.pipes[0].active_table, &*original);
+        assert_eq!(state.pipes[0].control & (1 << 30), 0);
+    });
+    let quarantined = "chroma-dsb-pipe-a-quarantined";
+    assert_eq!(color::program_pipe_a(&[7; 4913]), Err(quarantined));
+    assert_eq!(color::snapshot_pipe_a().err(), Some(quarantined));
+    assert_eq!(color::restore_pipe_a(&snapshot), Err(quarantined));
+    assert_eq!(color::rearm_pipe_a_if_lost(&[7; 4913]), Err(quarantined));
+    assert_eq!(color::program_pipe(1, &[11; 4913]), Ok(()));
+}
+
 #[test]
 fn hardware_upload_order_ready_and_busy() {
     let mut table = [0; 4913];
