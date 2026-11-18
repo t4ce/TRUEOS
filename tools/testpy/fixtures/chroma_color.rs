@@ -28,13 +28,24 @@ impl Timer {
     }
 }
 
-mod chronos {
-    pub fn monotonic_nanos() -> u64 {
-        crate::STATE.with(|cell| {
-            let mut state = cell.borrow_mut();
-            state.nanos += 100;
-            state.nanos
-        })
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Instant(u64);
+impl Instant {
+    pub fn now() -> Self {
+        Self(STATE.with(|cell| cell.borrow().nanos))
+    }
+}
+impl core::ops::Add<Duration> for Instant {
+    type Output = Self;
+
+    fn add(self, duration: Duration) -> Self {
+        Self(self.0 + duration.as_nanos() as u64)
+    }
+}
+
+mod time {
+    pub fn tsc_hz() -> u64 {
+        1_000_000_000
     }
 }
 
@@ -416,7 +427,7 @@ fn dsb_unproven_upload_quarantines_pipe_a_without_cpu_replay() {
     let snapshot = color::snapshot_pipe_a().unwrap();
     assert_eq!(
         finish(color::benchmark_chroma_dsb()).err(),
-        Some("chroma-dsb-upload-unproven")
+        Some("mock-dsb-uncertain")
     );
     STATE.with(|cell| {
         let state = cell.borrow();
@@ -425,6 +436,7 @@ fn dsb_unproven_upload_quarantines_pipe_a_without_cpu_replay() {
         assert_eq!(state.dsb_completions, 0);
         assert_eq!(&*state.pipes[0].active_table, &*original);
         assert_eq!(state.pipes[0].control & (1 << 30), 0);
+        assert!(state.writes.iter().all(|&(reg, _)| reg == 0x490a8));
     });
     let quarantined = "chroma-dsb-pipe-a-quarantined";
     assert_eq!(color::program_pipe_a(&[7; 4913]), Err(quarantined));

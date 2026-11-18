@@ -8,6 +8,9 @@ pub(crate) mod bcs_plan;
 #[path = "copy/blt.rs"]
 mod blt;
 mod display;
+pub(crate) use self::display::lut_dsb::{
+    LutDsbPoll, check_lut_dsb_idle, lut_dsb_port_blocked, start_lut_dsb,
+};
 pub(crate) use self::display::{DISPLAY_COLOR_ROUTE_LOCK, uses_ab_dbuf_layout};
 pub(crate) mod format;
 #[path = "gpgpu/gpgpu.rs"]

@@ -391,6 +391,10 @@ impl MatrixSlots {
         true
     }
 
+    pub(crate) fn echo_default(text: String) {
+        Self::echo(None, None, text);
+    }
+
     /// Prepend text into a named Matrix slot (None is the bare § slot).
     /// Slot selection remains per instance; transcripts are shared Matrix data.
     fn echo(active: Option<&str>, lifetime: Option<u64>, text: String) {

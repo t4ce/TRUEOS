@@ -4,11 +4,11 @@ use super::{
 };
 use alloc::{boxed::Box, vec};
 use core::sync::atomic::{AtomicBool, Ordering};
-use trueos_time::{Duration, Timer};
+use trueos_time::{Duration, Instant, Timer};
 
 const PAIRS: usize = 12;
 const SAMPLES: usize = PAIRS * 2;
-const WAIT_NS: u64 = 100_000_000;
+const TIMEOUT: Duration = Duration::from_millis(100);
 const PIPE_ACTIVE: u32 = 1 << 30;
 const RIG_DEVICE: u16 = 0x4680;
 const RIG_REVISION: u8 = 0x0C;
@@ -70,23 +70,30 @@ fn with_pipe_a<T>(
     operation(dev, regs)
 }
 
-fn now() -> u64 {
-    crate::chronos::monotonic_nanos()
+fn stamp() -> u64 {
+    use core::arch::x86_64::{_mm_lfence, _rdtsc};
+
+    unsafe {
+        _mm_lfence();
+        let ticks = _rdtsc();
+        _mm_lfence();
+        ticks
+    }
 }
 
 // Poll in the task, with no color or route lock held across a timer wait.
 async fn wait_latch() -> Result<u64, &'static str> {
-    let deadline = now().saturating_add(WAIT_NS);
+    let deadline = Instant::now() + TIMEOUT;
     loop {
         let observed = with_pipe_a(|dev, regs| match ready(dev, regs) {
-            Ok(_) => Ok(Some(now())),
+            Ok(_) => Ok(Some(stamp())),
             Err("chroma-3dlut-busy") => Ok(None),
             Err(error) => Err(error),
         })?;
         if let Some(observed) = observed {
             return Ok(observed);
         }
-        if now() >= deadline {
+        if Instant::now() >= deadline {
             return Err("chroma-dsb-lut-latch-timeout");
         }
         Timer::after(Duration::from_millis(1)).await;
@@ -128,13 +135,13 @@ async fn trial(
     readback: &mut [u32],
     verify_before_arm: bool,
 ) -> Result<Sample, &'static str> {
-    let (request, started, mut cpu_ns, index, control) = with_pipe_a(|dev, regs| {
+    let (request, started, mut cpu_ticks, index, control) = with_pipe_a(|dev, regs| {
         let control = ready(dev, regs)? | LUT_ENABLE;
         let index = crate::intel::mmio_read(dev, regs.index);
         if index == u32::MAX {
             return Err("chroma-dsb-index-unavailable");
         }
-        let started = now();
+        let started = stamp();
         let request = match transport {
             Transport::Mmio => {
                 upload(dev, regs, entries, control)?;
@@ -142,22 +149,28 @@ async fn trial(
             }
             Transport::Dsb => Some(crate::intel::start_lut_dsb(dev, entries, index)?),
         };
-        Ok((request, started, now().saturating_sub(started), index, control))
+        Ok((
+            request,
+            started,
+            stamp().saturating_sub(started),
+            index,
+            control,
+        ))
     })?;
 
     if let Some(request) = request {
-        let deadline = started.saturating_add(WAIT_NS);
+        let deadline = Instant::now() + TIMEOUT;
         loop {
-            let (poll, polling_ns) = with_pipe_a(|dev, _| {
-                let start = now();
-                Ok((request.poll(dev), now().saturating_sub(start)))
+            let (poll, polling_ticks) = with_pipe_a(|dev, _| {
+                let start = stamp();
+                Ok((request.poll(dev), stamp().saturating_sub(start)))
             })?;
-            cpu_ns = cpu_ns.saturating_add(polling_ns);
+            cpu_ticks += polling_ticks;
             match poll {
                 crate::intel::LutDsbPoll::Complete => break,
-                crate::intel::LutDsbPoll::Failed(reason) => return Err(reason),
-                crate::intel::LutDsbPoll::Uncertain(_) => return Err("chroma-dsb-upload-unproven"),
-                crate::intel::LutDsbPoll::Pending if now() < deadline => {
+                crate::intel::LutDsbPoll::Failed(reason)
+                | crate::intel::LutDsbPoll::Uncertain(reason) => return Err(reason),
+                crate::intel::LutDsbPoll::Pending if Instant::now() < deadline => {
                     Timer::after(Duration::from_millis(1)).await;
                 }
                 crate::intel::LutDsbPoll::Pending => return Err("chroma-dsb-upload-timeout"),
@@ -165,21 +178,26 @@ async fn trial(
         }
         // The first DSB transfer must prove an actual table change before it
         // can arm the LUT. The warm-up's readback is outside the timed series.
-        let commit_ns = with_pipe_a(|dev, regs| {
+        let commit_ticks = with_pipe_a(|dev, regs| {
             if verify_before_arm {
                 verify_table(dev, regs, entries, readback, index)?;
             }
-            let start = now();
+            let start = stamp();
             ready(dev, regs)?;
             arm_table(dev, regs, control)?;
-            Ok(now().saturating_sub(start))
+            Ok(stamp().saturating_sub(start))
         })?;
-        cpu_ns = cpu_ns.saturating_add(commit_ns);
+        cpu_ticks += commit_ticks;
     }
 
     let latched = wait_latch().await?;
     with_pipe_a(|dev, regs| verify_table(dev, regs, entries, readback, index))?;
-    Ok(Sample { cpu_ns, latch_ns: latched.saturating_sub(started) })
+    let tsc_hz = u128::from(crate::time::tsc_hz());
+    let nanos = |ticks| (u128::from(ticks) * 1_000_000_000 / tsc_hz) as u64;
+    Ok(Sample {
+        cpu_ns: nanos(cpu_ticks),
+        latch_ns: nanos(latched.saturating_sub(started)),
+    })
 }
 
 struct Original {
@@ -227,11 +245,18 @@ fn grade_table(settings: Settings) -> Box<[u32]> {
     entries
 }
 
-async fn compare(readback: &mut [u32]) -> Result<ChromaDsbReport, &'static str> {
+async fn compare(original: &[u32], readback: &mut [u32]) -> Result<ChromaDsbReport, &'static str> {
     let identity = grade_table(Settings::default());
     let muted = grade_table(Settings { saturation: 0.65, ..Settings::default() });
-    trial(Transport::Mmio, &identity, readback, false).await?;
-    trial(Transport::Dsb, &muted, readback, true).await?;
+    // Keep the original grade active until DSB has proven it can change the
+    // complete staging table. Use a different grade even if muted is active.
+    let (dsb_warmup, mmio_warmup) = if original == &*muted {
+        (&identity, &muted)
+    } else {
+        (&muted, &identity)
+    };
+    trial(Transport::Dsb, dsb_warmup, readback, true).await?;
+    trial(Transport::Mmio, mmio_warmup, readback, false).await?;
 
     let mut samples = [[Sample::default(); SAMPLES]; 2];
     let transports = [Transport::Mmio, Transport::Dsb];
@@ -268,7 +293,7 @@ pub(crate) async fn benchmark_chroma_dsb() -> Result<ChromaDsbReport, &'static s
     })?;
     let original = Original { control, index, entries };
     let mut readback = vec![0; LUT_ENTRIES].into_boxed_slice();
-    let result = compare(&mut readback).await;
+    let result = compare(&original.entries, &mut readback).await;
     if crate::intel::lut_dsb_port_blocked() {
         // Drop of an outstanding DMA token retains the command backing and
         // denies further writes. A CPU restore could race its last MMIO.

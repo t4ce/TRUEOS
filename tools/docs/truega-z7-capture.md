@@ -186,7 +186,17 @@ bytes per run, took 7.68 s with endpoint recovery first and 13.88 s with
 an immediate device reset. The two runs recovered zero and three
 disconnects respectively.
 
+The host can pipe successive verified 1920×1080 RGBA8 camera frames to a
+player. Playback updates as complete USB frames arrive. The input rate below
+sets the player's nominal timestamps.
+
+```sh
+python3 tools/truega/usb_rgba8_loopback.py --stream-camera |
+  ffplay -f rawvideo -pixel_format rgba -video_size 1920x1080 -framerate 1 -
+```
+
 A raw RGBA8 Full HD stream at 29.97 fps would need 248.58 MB/s. SOFT_USB's
+
 480 Mb/s line rate permits individual full-resolution snapshots and a
 lower-rate raw stream. Real-time Full HD at the camera's frame rate will need
 compression on the card or a faster device-mode transport.

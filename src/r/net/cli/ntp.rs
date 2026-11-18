@@ -1,5 +1,5 @@
 use alloc::{format, string::String};
-use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 
 use spin::Mutex;
 use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
@@ -17,9 +17,6 @@ const NTP_SERVER_HOSTS: [&str; 4] = [
     "time.nist.gov",
     "pool.ntp.org",
 ];
-// time1.google.com, part of the same Google Public NTP service used above.
-// Secure DNS cannot resolve NTP hosts if the boot clock fails TLS validation.
-const NTP_BOOTSTRAP_SERVER: [u8; 4] = [216, 239, 35, 0];
 const NTP_PORT: u16 = 123;
 const NTP_TIMEOUT_MS: u64 = 4000;
 const NTP_REFRESH_SECS: u64 = 60;
@@ -46,6 +43,7 @@ static NTP_LAST_SYNC_TICKS: AtomicU64 = AtomicU64::new(0);
 static NTP_LOCAL_PORT_SEQ: AtomicU16 = AtomicU16::new(0);
 static NTP_HOST_SEQ: AtomicU16 = AtomicU16::new(0);
 static NTP_FAILED_QUERIES: AtomicU64 = AtomicU64::new(0);
+static NTP_FAILURE_REPORTED: AtomicBool = AtomicBool::new(false);
 const NTP_UNIX_EPOCH_OFFSET: u64 = 2_208_988_800;
 
 #[inline]
@@ -76,7 +74,7 @@ fn parse_ntp_words(packet: &[u8]) -> Option<[u32; 12]> {
     Some(out)
 }
 
-fn build_ntp_request() -> Option<[u8; 48]> {
+fn build_ntp_request() -> [u8; 48] {
     let mut req = [0u8; 48];
     // LI=0, VN=4, Mode=3 (client)
     req[0] = 0x23;
@@ -88,9 +86,7 @@ fn build_ntp_request() -> Option<[u8; 48]> {
         req[40..44].copy_from_slice(&(ntp_secs as u32).to_be_bytes());
     }
 
-    // The server echoes the transmit timestamp. Randomize the fractional
-    // bits so a reply must match this particular request.
-    crate::tyche::fill_bytes(&mut req[44..48]).then_some(req)
+    req
 }
 
 #[inline]
@@ -109,38 +105,30 @@ fn next_ntp_host() -> &'static str {
     NTP_SERVER_HOSTS[idx]
 }
 
-fn validate_ntp_reply(packet: &[u8], request: &[u8; 48]) -> Option<[u32; 12]> {
-    let words = parse_ntp_words(packet)?;
-    let flags = packet[0];
-    if flags & 7 != 4
-        || !matches!((flags >> 3) & 7, 3 | 4)
-        || flags >> 6 == 3
-        || !(1..=15).contains(&packet[1])
-        || packet[24..32] != request[40..48]
-    {
-        return None;
-    }
-    unix_from_ntp_frame(&words)?;
-    Some(words)
-}
+async fn query_ntp_for_device(dev_idx: usize, host: &str) -> Result<([u32; 12], u64), String> {
+    let dns_cfg = DnsConfig::for_device(dev_idx);
+    let remote_ip = dns::resolve_ipv4_for_device(dev_idx, host, dns_cfg)
+        .await
+        .map_err(|error| format!("DNS lookup failed: {error:?}"))?;
 
-async fn query_ntp_words_for_device(dev_idx: usize, remote_ip: [u8; 4]) -> Option<[u32; 12]> {
-    let req = build_ntp_request()?;
-    let net = VNet::open(dev_idx)?;
+    let net = VNet::open(dev_idx).ok_or("network device unavailable")?;
     let mut udp = VNetUdpEndpoint::bind(
         &net,
         alloc_local_port(),
         EmbassyDuration::from_millis(NTP_TIMEOUT_MS),
     )
-    .await?;
+    .await
+    .ok_or("could not open UDP socket")?;
 
-    let _ = udp.send_v4(
+    let req = build_ntp_request();
+    udp.send_v4(
         vnet::EndpointV4 {
             addr: remote_ip,
             port: NTP_PORT,
         },
         &req,
-    );
+    )
+    .map_err(|_| "could not send NTP request")?;
 
     let deadline = Instant::now() + EmbassyDuration::from_millis(NTP_TIMEOUT_MS);
     loop {
@@ -154,23 +142,35 @@ async fn query_ntp_words_for_device(dev_idx: usize, remote_ip: [u8; 4]) -> Optio
                         continue;
                     }
 
-                    if let Some(words) = validate_ntp_reply(data.as_slice(), &req) {
-                        return Some(words);
-                    }
+                    let words = parse_ntp_words(data.as_slice()).ok_or("invalid NTP reply")?;
+                    let unix = unix_from_ntp_frame(&words).ok_or("invalid NTP timestamp")?;
+                    return Ok((words, unix));
                 }
                 VNetUdpEvent::Packet(VNetUdpPacket::V6 { .. }) => {
                     continue;
                 }
-                VNetUdpEvent::Closed => return None,
+                VNetUdpEvent::Closed => return Err("UDP socket closed".into()),
             }
         }
 
         if Instant::now() >= deadline {
-            return None;
+            return Err("NTP reply timed out".into());
         }
 
         Timer::after(EmbassyDuration::from_millis(10)).await;
     }
+}
+
+fn report_sync_failure(host: &str, error: &str) {
+    NTP_FAILED_QUERIES.fetch_add(1, Ordering::AcqRel);
+    if NTP_FAILURE_REPORTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let message = format!(
+        "Time sync failed via {host} ({error}). Check the BIOS/UEFI clock, especially after a CMOS reset."
+    );
+    crate::log_warn!(target: "global"; "{message}\n");
+    crate::shell3::MatrixSlots::echo_default(message);
 }
 
 #[inline]
@@ -244,46 +244,23 @@ pub async fn ntp_sync_task() {
             continue;
         };
         let host = next_ntp_host();
-        let resolved = dns::resolve_ipv4_for_device(dev_idx, host, DnsConfig::for_device(dev_idx)).await;
-        let (source, remote_ip) = match resolved {
-            Ok(ip) => (host, Some(ip)),
-            Err(_) if ntp_last_sync_unix_seconds().is_none() => {
-                ("216.239.35.0", Some(NTP_BOOTSTRAP_SERVER))
-            }
-            Err(_) => (host, None),
-        };
-        let response = match remote_ip {
-            Some(ip) => query_ntp_words_for_device(dev_idx, ip).await,
-            None => None,
-        };
 
-        if let Some(words) = response {
-            *NTP_FRAME_WORDS.lock() = words;
-            if let Some(unix) = unix_from_ntp_frame(&words) {
-                NTP_LAST_SYNC_TICKS.store(embassy_time_driver::now(), Ordering::Release);
+        match query_ntp_for_device(dev_idx, host).await {
+            Ok((words, unix)) => {
+                *NTP_FRAME_WORDS.lock() = words;
                 NTP_LAST_SYNC_UNIX_SECS.store(unix, Ordering::Release);
+                NTP_LAST_SYNC_TICKS.store(embassy_time_driver::now(), Ordering::Release);
                 let previous_failures = NTP_FAILED_QUERIES.swap(0, Ordering::AcqRel);
                 crate::log_info!(target: "net";
                     "ntp: synchronized host={} unix={} recovered_failures={} timezone={} zone={}\n",
-                    source,
+                    host,
                     unix,
                     previous_failures,
                     crate::locale::current_timezone_name(),
                     crate::locale::timezone_abbreviation(unix),
                 );
             }
-        } else {
-            let failures = NTP_FAILED_QUERIES
-                .fetch_add(1, Ordering::AcqRel)
-                .saturating_add(1);
-            if failures == 1 || failures % 10 == 0 {
-                crate::log_warn!(target: "net";
-                    "ntp: query failed host={} consecutive_failures={} retry_s={}\n",
-                    source,
-                    failures,
-                    NTP_REFRESH_SECS,
-                );
-            }
+            Err(error) => report_sync_failure(host, &error),
         }
 
         Timer::after(EmbassyDuration::from_secs(NTP_REFRESH_SECS)).await;

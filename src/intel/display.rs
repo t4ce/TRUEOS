@@ -29,6 +29,7 @@ mod ui4_bcs_queue;
 mod atomic_flip;
 mod bringup_diag;
 mod display_metrics;
+pub(super) mod lut_dsb;
 mod tgl_ui4_layout;
 
 pub(super) fn capture_firmware_handoff_evidence(dev: crate::intel::Dev) {

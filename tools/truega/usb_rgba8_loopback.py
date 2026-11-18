@@ -6,6 +6,7 @@ import hashlib
 import pathlib
 import struct
 import subprocess
+import sys
 import time
 import zlib
 
@@ -110,11 +111,13 @@ def read_camera_frame(device, endpoint_out, endpoint_in, expected=None, batch_si
                     usb.util.dispose_resources(device)
                     device = reconnect_capture_device(location, expected is not None)
                     if expected is None:
-                        print("USB reconnected. Restarting the camera frame from its first packet.")
+                        print("USB reconnected. Restarting the camera frame from its first packet.",
+                              file=sys.stderr)
                         received.clear()
                         packet = 0
                     else:
-                        print(f"USB reconnected. Resuming the verified DDR test at packet {packet}.")
+                        print(f"USB reconnected. Resuming the verified DDR test at packet {packet}.",
+                              file=sys.stderr)
                     break
                 continue
             if len(reply) >= 5 and reply[:4] == request[:4] and reply[4] == 0:
@@ -139,14 +142,15 @@ def read_camera_frame(device, endpoint_out, endpoint_in, expected=None, batch_si
                 received.extend(payloads)
                 retries += attempt
                 if (packet + count) // 2160 != packet // 2160:
-                    print(f"Verified {len(received):,} of {RGBA_BYTES:,} DDR bytes", flush=True)
+                    print(f"Verified {len(received):,} of {RGBA_BYTES:,} DDR bytes",
+                          file=sys.stderr, flush=True)
                 packet += count
                 break
         else:
             raise SystemExit(f"Could not verify camera packet {packet}: {last_error}")
     usb.util.dispose_resources(device)
     print(f"Retried {retries} USB packets, reset {resets} times, "
-          f"and recovered {reconnects} USB disconnects")
+          f"and recovered {reconnects} USB disconnects", file=sys.stderr)
     return received
 
 
@@ -308,6 +312,17 @@ def transfer(device, source, from_fpga, from_camera=False, batch_size=1):
     return received
 
 
+def stream_camera(device, output, batch_size):
+    location = device.bus, tuple(device.port_numbers)
+    while True:
+        wait_for_next_frame(device)
+        frame = transfer(device, None, False, from_camera=True, batch_size=batch_size)
+        output.write(frame)
+        output.flush()
+        # Recovery during transfer may have changed the device address.
+        device = reconnect_capture_device(location, test_mode=False)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group()
@@ -321,17 +336,27 @@ def main():
                        help="Download and verify the frozen HDMI RGBA8 frame")
     modes.add_argument("--next-frame", action="store_true",
                        help="Release any previously captured frame and download a fresh one")
+    modes.add_argument("--stream-camera", action="store_true",
+                       help="Write consecutive verified Full HD RGBA8 frames to stdout")
     modes.add_argument("--verify-ddr-test", action="store_true",
                        help="Download the DDR test frame and compare every pixel")
     parser.add_argument("png", type=pathlib.Path, nargs="?")
     parser.add_argument("--batch", type=int, choices=range(1, 5), default=1,
                         help="Indexed DDR reply packets per request on batch-capable firmware")
     args = parser.parse_args()
-    if not (args.camera_status or args.reprobe_hdmi) and args.png is None:
+    if args.stream_camera and args.png is not None:
+        parser.error("--stream-camera writes to stdout and takes no PNG path")
+    if not (args.camera_status or args.reprobe_hdmi or args.stream_camera) and args.png is None:
         parser.error("a PNG output path is required")
     devices = list(usb.core.find(find_all=True, idVendor=0x04B4, idProduct=0x1004))
     if len(devices) != 1:
         raise SystemExit(f"Expected one Sipeed 04b4:1004 device, found {len(devices)}")
+    if args.stream_camera:
+        try:
+            stream_camera(devices[0], sys.stdout.buffer, args.batch)
+        except (BrokenPipeError, KeyboardInterrupt):
+            return
+        return
     if args.camera_status:
         camera_status(devices[0])
         return

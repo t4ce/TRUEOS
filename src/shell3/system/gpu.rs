@@ -505,7 +505,7 @@ async fn test_chroma_dsb(io: &Output) -> bool {
             metrics.cpu_p50_ns, metrics.cpu_p95_ns, metrics.latch_p50_ns, metrics.latch_p95_ns,
         ));
     }
-    io.line("CPU timing includes DSB command preparation. Latch is New LUT Ready clearing.");
+    io.line("CPU timing includes DSB command preparation. Latch polling uses 1 ms waits.");
     true
 }
 
