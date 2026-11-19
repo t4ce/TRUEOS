@@ -17,6 +17,7 @@ use crate::r::net::{VNet, ports};
 
 const PAGE_PATH: &str = "/";
 const LEGACY_PAGE_PATH: &str = "/audio/live";
+const PCM_PATH: &str = "/audio/live.pcm";
 const WAV_PATH: &str = "/audio/live.wav";
 const CLIP_PATH: &str = "/audio/clip.wav";
 const STATUS_PATH: &str = "/audio/status";
@@ -27,6 +28,9 @@ const MAX_SESSIONS: usize = MAX_STREAM_CLIENTS + MAX_IDLE_REQUESTS;
 const SAMPLE_RATE: usize = 48_000;
 const CHANNELS: usize = 2;
 const SEND_MS: usize = 10;
+const FRAME_BYTES: usize = CHANNELS * 2;
+const BLOCK_BYTES: usize = SAMPLE_RATE * FRAME_BYTES * SEND_MS / 1000;
+const PCM_PREFIX_BYTES: usize = 4;
 const POLL_MS: u64 = 5;
 const REQUEST_IDLE_TIMEOUT_MS: u64 = 750;
 const FIXED_SEND_TIMEOUT_MS: u64 = 1_500;
@@ -40,6 +44,7 @@ enum SessionMode {
     ReadingRequest,
     SendingFixed,
     Streaming,
+    StreamingSources,
     SendingClip,
 }
 
@@ -89,7 +94,7 @@ impl AudioHttpSession {
     fn is_timed_out(&self, now: Instant) -> bool {
         match self.mode {
             SessionMode::ReadingRequest | SessionMode::SendingFixed | SessionMode::SendingClip => now >= self.deadline,
-            SessionMode::Streaming => false,
+            SessionMode::Streaming | SessionMode::StreamingSources => false,
         }
     }
 }
@@ -362,17 +367,26 @@ fn handle_request(vnet: &VNet, session: &mut AudioHttpSession, active_streams: u
             let response = status_response(active_streams);
             !send_fixed_response(vnet, session, response.as_slice())
         }
-        Some(WAV_PATH) => {
+        Some(WAV_PATH) | Some(PCM_PATH) => {
             if active_streams >= MAX_STREAM_CLIENTS {
                 let response = busy_response();
                 return !send_fixed_response(vnet, session, response.as_slice());
             }
-            let head = wav_stream_head();
+            let sources = path == Some(PCM_PATH);
+            let head = if sources {
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".to_vec()
+            } else {
+                wav_stream_head()
+            };
             if !send_tcp_bytes(vnet, session.handle, head.as_slice()) {
                 close_session(vnet, session.handle);
                 return true;
             }
-            session.mode = SessionMode::Streaming;
+            session.mode = if sources {
+                SessionMode::StreamingSources
+            } else {
+                SessionMode::Streaming
+            };
             session.rx.clear();
             session.pending_bytes = head.len();
             session.sent_bytes = 0;
@@ -396,8 +410,8 @@ fn status_response(listeners: usize) -> Vec<u8> {
     let sink = SINK.lock();
     let clip_id = sink.snapshot().map_or(0, |clip| clip.id);
     let body = format!(
-        "{{\"listeners\":{},\"capacity\":{},\"clip_id\":\"{}\",\"playing\":{}}}\n",
-        listeners, MAX_STREAM_CLIENTS, clip_id, sink.busy()
+        "{{\"listeners\":{},\"capacity\":{},\"clip_id\":\"{}\",\"playing\":{},\"producers\":{},\"producer_capacity\":{}}}\n",
+        listeners, MAX_STREAM_CLIENTS, clip_id, sink.busy(), sink.active_count(), sink::MAX_PRODUCERS
     );
     response_with_body(
         "HTTP/1.1 200 OK\r\n",
@@ -406,10 +420,27 @@ fn status_response(listeners: usize) -> Vec<u8> {
     )
 }
 
+fn render_audio_block(
+    sink: &mut Sink,
+    mixed: &mut [u8],
+    sources: &mut [u8],
+) -> [sink::RenderReport; sink::MAX_PRODUCERS] {
+    // The live PCM endpoint sends two u16le frame counts, then one fixed
+    // stereo PCM block per producer. Unused frames in each slot are zero.
+    let (prefix, samples) = sources.split_at_mut(PCM_PREFIX_BYTES);
+    let (a, b) = samples.split_at_mut(BLOCK_BYTES);
+    let reports = sink.render_sources(a, b);
+    for (count, report) in prefix.chunks_exact_mut(2).zip(&reports) {
+        count.copy_from_slice(&((report.bytes / FRAME_BYTES) as u16).to_le_bytes());
+    }
+    sink::mix_center(mixed, &a[..reports[0].bytes], &b[..reports[1].bytes]);
+    reports
+}
+
 fn stream_audio_tick(vnet: &VNet, session: &mut AudioHttpSession, bytes: &[u8]) -> bool {
     // A slow listener cannot retain an unbounded TCP send backlog.
-    const MAX_PENDING_BYTES: usize = SAMPLE_RATE * CHANNELS * 2 / 4;
-    if session.pending_bytes.saturating_sub(session.sent_bytes) > MAX_PENDING_BYTES
+    let max_pending_bytes = (SAMPLE_RATE * FRAME_BYTES / 4) * if session.mode == SessionMode::StreamingSources { 2 } else { 1 };
+    if session.pending_bytes.saturating_sub(session.sent_bytes) > max_pending_bytes
         || !send_tcp_bytes(vnet, session.handle, bytes)
     {
         close_session(vnet, session.handle);
@@ -423,7 +454,7 @@ fn active_stream_count(endpoint: &AudioHttpEndpoint) -> usize {
     endpoint
         .sessions
         .iter()
-        .filter(|session| matches!(session.mode, SessionMode::Streaming | SessionMode::SendingClip))
+        .filter(|session| matches!(session.mode, SessionMode::Streaming | SessionMode::StreamingSources | SessionMode::SendingClip))
         .count()
 }
 
@@ -489,6 +520,8 @@ pub async fn audio_http_task() {
 
     let mut endpoint_discovery_ticks = 0u32;
     let mut next_send = Instant::now();
+    let mut pcm_bytes = alloc::vec![0; BLOCK_BYTES];
+    let mut source_bytes = alloc::vec![0; PCM_PREFIX_BYTES + sink::MAX_PRODUCERS * BLOCK_BYTES];
     loop {
         if endpoint_discovery_ticks == 0 {
             audio_http_add_endpoints(&mut endpoints);
@@ -497,30 +530,30 @@ pub async fn audio_http_task() {
 
         let now = Instant::now();
         let due = now >= next_send;
-        let mut pcm_bytes = Vec::new();
         if due {
             // Advance the timeline instead of accumulating polling latency.
             next_send = next_send + Duration::from_millis(SEND_MS as u64);
             if now >= next_send + Duration::from_millis(100) {
                 next_send = now + Duration::from_millis(SEND_MS as u64);
             }
-            pcm_bytes.resize(SAMPLE_RATE * CHANNELS * 2 * SEND_MS / 1000, 0);
-            let (expired, report) = {
+            let (expired, reports) = {
                 let mut sink = SINK.lock();
                 let expired = sink.expire(now.as_millis());
-                (expired, sink.render(&mut pcm_bytes))
+                (expired, render_audio_block(&mut sink, &mut pcm_bytes, &mut source_bytes))
             };
-            if let Some(id) = expired {
+            for id in expired.into_iter().flatten() {
                 crate::log!("audio-http: progressive clip={} expired\n", id);
             }
-            if let Some((id, started_ms)) = report.first {
-                crate::log!(
-                    "audio-http: progressive clip={} first_render_ms={}\n",
-                    id, now.as_millis().saturating_sub(started_ms)
-                );
-            }
-            if let Some((id, count)) = report.underrun {
-                crate::log!("audio-http: progressive clip={} underruns={}\n", id, count);
+            for report in reports {
+                if let Some((id, started_ms)) = report.first {
+                    crate::log!(
+                        "audio-http: progressive clip={} first_render_ms={}\n",
+                        id, now.as_millis().saturating_sub(started_ms)
+                    );
+                }
+                if let Some((id, count)) = report.underrun {
+                    crate::log!("audio-http: progressive clip={} underruns={}\n", id, count);
+                }
             }
         }
         for endpoint in endpoints.iter_mut() {
@@ -627,7 +660,7 @@ pub async fn audio_http_task() {
                                     endpoint.sessions.remove(idx);
                                 }
                             }
-                            SessionMode::SendingFixed | SessionMode::Streaming | SessionMode::SendingClip => {}
+                            SessionMode::SendingFixed | SessionMode::Streaming | SessionMode::StreamingSources | SessionMode::SendingClip => {}
                         }
                     }
                     api::Event::Closed { handle } => {
@@ -673,14 +706,14 @@ pub async fn audio_http_task() {
 
             let mut idx = 0usize;
             while idx < endpoint.sessions.len() {
-                if due
-                    && endpoint.sessions[idx].mode == SessionMode::Streaming
-                    && stream_audio_tick(&endpoint.vnet, &mut endpoint.sessions[idx], &pcm_bytes)
-                {
-                    endpoint.sessions.remove(idx);
-                } else if endpoint.sessions[idx].mode == SessionMode::SendingClip
-                    && send_clip_tick(&endpoint.vnet, &mut endpoint.sessions[idx])
-                {
+                let session = &mut endpoint.sessions[idx];
+                let remove = match session.mode {
+                    SessionMode::Streaming if due => stream_audio_tick(&endpoint.vnet, session, &pcm_bytes),
+                    SessionMode::StreamingSources if due => stream_audio_tick(&endpoint.vnet, session, &source_bytes),
+                    SessionMode::SendingClip => send_clip_tick(&endpoint.vnet, session),
+                    _ => false,
+                };
+                if remove {
                     endpoint.sessions.remove(idx);
                 } else {
                     idx += 1;

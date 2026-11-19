@@ -36,7 +36,7 @@ fn guest_pcm<'a>(vm_id: u8, address: usize, bytes: usize) -> Option<&'a [u8]> {
 }
 
 /// Submit one complete stereo s16le/48 kHz clip, at most 120 seconds. Returns 0
-/// after a host-owned copy, or successful discard if another clip is playing.
+/// after a host-owned copy, or successful discard if both producer slots are occupied.
 /// Negative values reject invalid size (-22), oversize (-27), invalid memory
 /// (-14), allocation failure (-12), or transport failure (-5).
 #[unsafe(no_mangle)]
@@ -113,7 +113,7 @@ pub(crate) fn release_vm(id: u8, generation: u64) {
 }
 
 /// Begin (0), append (1), finish (2), or abort (3) one stereo s16le/48 kHz
-/// stream. Begin returns its positive token or -16 if the sink is busy.
+/// stream. Begin returns a positive token or -16 if both slots are occupied.
 /// Append accepts complete frames, at most 64 KiB per call. The other actions
 /// take an empty payload. Finished PCM remains available as a retained clip.
 #[unsafe(no_mangle)]

@@ -25,31 +25,29 @@ async function until(predicate, description) {
   assert.fail('async boundary not reached: ' + description);
 }
 
-function wavHeader() {
-  const header = Buffer.alloc(44);
-  header.write('RIFF', 0);
-  header.writeUInt32LE(0xffffffff, 4);
-  header.write('WAVEfmt ', 8);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(2, 22);
-  header.writeUInt32LE(48000, 24);
-  header.writeUInt32LE(192000, 28);
-  header.writeUInt16LE(4, 32);
-  header.writeUInt16LE(16, 34);
-  header.write('data', 36);
-  header.writeUInt32LE(0xffffffff - 36, 40);
-  return header;
-}
-
-function pcm(left, right, endLeft = left) {
-  const block = Buffer.alloc(1920);
+const BLOCK_BYTES = 1920;
+const PACKET_BYTES = 4 + 2 * BLOCK_BYTES;
+function stereo(left, right, endLeft = left) {
+  const block = Buffer.alloc(BLOCK_BYTES);
   for (let offset = 0; offset < block.length; offset += 4) {
     block.writeInt16LE(left, offset);
     block.writeInt16LE(right, offset + 2);
   }
   block.writeInt16LE(endLeft, block.length - 4);
   return block;
+}
+
+function packet(a, b, framesA = a ? 480 : 0, framesB = b ? 480 : 0) {
+  const block = Buffer.alloc(PACKET_BYTES);
+  block.writeUInt16LE(framesA, 0);
+  block.writeUInt16LE(framesB, 2);
+  a?.copy(block, 4);
+  b?.copy(block, 4 + BLOCK_BYTES);
+  return block;
+}
+
+function pcm(left, right, endLeft = left) {
+  return packet(stereo(left, right, endLeft), null);
 }
 
 function fixture() {
@@ -64,7 +62,9 @@ function fixture() {
       state.context = this;
     }
     createGain() {
-      return this.gain = {gain: {value: NaN}, connect() {}};
+      const gain = {gain: {value: NaN}, connect(target) { this.target = target; }};
+      this.gain ??= gain;
+      return gain;
     }
     createConstantSource() {
       return this.silence = {
@@ -74,7 +74,7 @@ function fixture() {
     }
     createBuffer(channels, frames, rate) {
       assert.equal(channels, 2);
-      assert.equal(frames, 480);
+      assert.ok(frames > 0 && frames <= 480);
       assert.equal(rate, 48000);
       const data = Array.from({length: channels}, () => new Float32Array(frames));
       return {getChannelData: channel => data[channel]};
@@ -93,13 +93,13 @@ function fixture() {
     resume() { return resume.promise; }
     close() { this.closed = true; return Promise.resolve(); }
   }
-  const elements = new Map(['listen', 'status', 'volume'].map(id => [id, {}]));
+  const elements = new Map(['listen', 'status', 'volume', 'crossfade'].map(id => [id, {}]));
   const sandbox = vm.createContext({
     window: {AudioContext, addEventListener() {}},
     document: {getElementById: id => elements.get(id)},
     AbortController,
     fetch(url, options) {
-      assert.equal(url, '/audio/live.wav');
+      assert.equal(url, '/audio/live.pcm');
       assert.equal(options.cache, 'no-store');
       const request = Object.assign(deferred(), {signal: options.signal, claimed: false});
       const abort = () => request.reject(new Error('fetch aborted'));
@@ -120,7 +120,7 @@ function fixture() {
   });
   vm.runInContext(script, sandbox, {filename: 'production-player.html'});
   const LivePlayer = vm.runInContext('LivePlayer', sandbox);
-  state.player = new LivePlayer(message => state.reports.push(message), .75);
+  state.player = new LivePlayer(message => state.reports.push(message), .75, .5);
   state.completion = state.player.start();
   state.resume = () => resume.resolve();
   state.request = async () => {
@@ -173,20 +173,18 @@ function fixture() {
 }
 
 const tests = [
-  ['fragmented headers and stereo frames play before the response finishes', async () => {
+  ['fragmented packet counts and stereo frames play before the response finishes', async () => {
     const f = fixture();
     assert.equal(f.requests.length, 0, 'resume precedes the live fetch');
     f.resume();
     const stream = await f.open();
-    const header = wavHeader();
     const a = pcm(-32768, 8192, 16384);
     const b = pcm(4096, -4096);
-    await stream.feed(header.subarray(0, 9));
-    await stream.feed(header.subarray(9, 35));
-    await stream.feed(Buffer.concat([header.subarray(35), a.subarray(0, 3)]));
-    await stream.feed(a.subarray(3, 1919));
+    await stream.feed(a.subarray(0, 1));
+    await stream.feed(a.subarray(1, 7));
+    await stream.feed(a.subarray(7, PACKET_BYTES - 1));
     assert.equal(f.context.sources.length, 0, 'partial block is not played');
-    await stream.feed(Buffer.concat([a.subarray(1919), b]));
+    await stream.feed(Buffer.concat([a.subarray(PACKET_BYTES - 1), b]));
     await until(() => f.context.sources.length === 2, 'two scheduled PCM blocks');
     const [first, second] = f.context.sources;
     assert.equal(stream.closed, false);
@@ -216,7 +214,7 @@ const tests = [
     const f = fixture();
     f.resume();
     const stream = await f.open();
-    await stream.feed(Buffer.concat([wavHeader(), pcm(0, 0), pcm(8000, 8000)]));
+    await stream.feed(Buffer.concat([packet(null, null), pcm(8000, 8000)]));
     await until(() => f.context.sources.length === 1, 'first non-silent block');
     assert.ok(Math.abs(f.context.sources[0].starts[0] - 1.05) < 1e-8);
     assert.equal(f.context.silence.starts, 1);
@@ -227,7 +225,7 @@ const tests = [
     f.resume();
     const stream = await f.open();
     const block = pcm(8000, -8000);
-    await stream.feed(Buffer.concat([wavHeader(), ...Array(40).fill(block)]));
+    await stream.feed(Buffer.concat(Array(40).fill(block)));
     await until(() => f.timers.some(t => t.active && t.ms === 10), 'scheduler backpressure');
     assert.equal(stream.reads.length, 1);
     assert.ok(f.context.sources.length < 17);
@@ -244,27 +242,61 @@ const tests = [
     assert.ok(f.context.sources.every(source => source.stops === 1));
     assert.ok(!f.timers.some(t => t.active));
   }],
-  ['invalid header and EOF reconnect with fresh framing on the same output graph', async () => {
+  ['invalid frame count and EOF reconnect with fresh framing on the same output graph', async () => {
     const f = fixture();
     f.resume();
     const old = await f.open();
-    const badHeader = wavHeader();
-    badHeader.writeUInt32LE(44100, 24);
-    await old.feed(Buffer.concat([badHeader, pcm(8000, 8000)]));
+    await old.feed(packet(null, null, 481, 0));
     await f.fire(500);
     assert.equal(old.releases, 1);
     assert.equal(f.context.sources.length, 0);
     const ended = await f.open();
-    await ended.feed(wavHeader());
+    await ended.feed(packet(null, null));
     await ended.feed();
     await f.fire(500);
     assert.equal(ended.releases, 1);
     const replacement = await f.open();
-    await replacement.feed(Buffer.concat([wavHeader(), pcm(4096, -4096)]));
+    await replacement.feed(pcm(4096, -4096));
     await until(() => f.context.sources.length === 1, 'replacement session PCM');
     assert.equal(f.context.sources[0].buffer.getChannelData(0)[0], .125);
     assert.equal(f.context.silence.starts, 1);
     assert.deepEqual(f.reports, ['Reconnecting…', 'Listening', 'Reconnecting…', 'Listening']);
+    await f.stop();
+  }],
+  ['crossfade is listener-local, keeps volume, and bypasses the fade for solo frames', async () => {
+    const f = fixture();
+    f.resume();
+    const stream = await f.open();
+    f.player.setCrossfade(1);
+    await stream.feed(packet(stereo(8192, -8192), null));
+    await until(() => f.context.sources.length === 1, 'slot A alone at the B endpoint');
+    assert.equal(f.context.sources[0].target, f.player.gain);
+    assert.equal(f.context.sources[0].buffer.getChannelData(0)[0], .25);
+
+    f.player.setCrossfade(0);
+    await stream.feed(packet(null, stereo(16384, -16384)));
+    await until(() => f.context.sources.length === 2, 'slot B alone at the A endpoint');
+    assert.equal(f.context.sources[1].target, f.player.gain);
+    assert.equal(f.context.sources[1].buffer.getChannelData(0)[0], .5);
+
+    await stream.feed(packet(stereo(8192, -8192), stereo(16384, -16384), 240, 480));
+    await until(() => f.context.sources.length === 5, 'overlap and solo tail');
+    const [a, b, tail] = f.context.sources.slice(2);
+    assert.equal(a.target, f.player.lanes[0]);
+    assert.equal(b.target, f.player.lanes[1]);
+    assert.equal(a.target.target, f.player.gain);
+    assert.equal(b.target.target, f.player.gain);
+    assert.equal(a.starts[0], b.starts[0]);
+    assert.equal(tail.target, f.player.gain);
+    assert.ok(Math.abs(tail.starts[0] - b.starts[0] - .005) < 1e-8);
+    assert.equal(tail.buffer.getChannelData(0).length, 240);
+    f.player.setCrossfade(.3);
+    assert.equal(a.target.gain.value, .7);
+    assert.equal(b.target.gain.value, .3);
+    assert.equal(f.player.gain.gain.value, .75);
+    f.player.setCrossfade(1);
+    assert.equal(a.target.gain.value, 0);
+    assert.equal(b.target.gain.value, 1);
     await f.stop();
   }],
   ['stop safely cancels pending resume or fetch', async () => {

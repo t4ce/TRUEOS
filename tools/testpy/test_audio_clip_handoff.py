@@ -79,8 +79,7 @@ fn pointer_boundaries_copy_lifetime_and_native_vm_paths() {
         let mut out=[0;8]; SINK.lock().render(&mut out); assert_eq!(out,bytes.as_slice());
     }
     MODE.store(0,Ordering::SeqCst);
-    // A clip submitted through the ABI outlives its producer buffer. A second
-    // submission before playback finishes leaves the active clip intact.
+    // Both submissions outlive their caller and occupy separate playback slots.
     let mut silent=[1;8]; SINK.lock().render(&mut silent); assert_eq!(silent,[0;8]);
     {
         let clip=vec![123u8,0,56,254,21,3,13,252];
@@ -88,8 +87,11 @@ fn pointer_boundaries_copy_lifetime_and_native_vm_paths() {
     }
     let competing=[9u8,0,9,0];
     assert_eq!(unsafe {handoff::trueos_cabi_http_audio_clip_submit_v1(competing.as_ptr(),competing.len())},0);
-    let mut out=[0;8]; SINK.lock().render(&mut out);
+    let mut out=[0;8]; let mut other=[0;8];
+    let reports=SINK.lock().render_sources(&mut out,&mut other);
     assert_eq!(out,[123,0,56,254,21,3,13,252]);
+    assert_eq!(other,[9,0,9,0,0,0,0,0]);
+    assert_eq!((reports[0].bytes,reports[1].bytes),(8,4));
     SINK.lock().render(&mut out); assert_eq!(out,[0;8]);
 }
 #[test]
@@ -104,7 +106,10 @@ fn progressive_handoff_uses_bounded_guest_payload_and_generation() {
     let id=unsafe { stream(0,0,null,0) };
     assert!(id>0);
     let id=id as u64;
+    let other=unsafe {stream(0,0,null,0)};
+    assert!(other>0);
     assert_eq!(unsafe {stream(0,0,null,0)},-16);
+    assert_eq!(unsafe {stream(3,other as u64,null,0)},0);
     assert_eq!(unsafe {stream(1,id,null,4)},-14);
     assert_eq!(unsafe {stream(1,id,pcm.as_ptr(),2)},-22);
     assert_eq!(unsafe {stream(1,id,pcm.as_ptr(),sink::MAX_APPEND_BYTES+4)},-27);
@@ -117,7 +122,7 @@ fn progressive_handoff_uses_bounded_guest_payload_and_generation() {
     GENERATION.store(1,Ordering::SeqCst);
     assert_eq!(unsafe {stream(2,id,null,0)},0);
     let mut output=[0;8];
-    assert_eq!(SINK.lock().render(&mut output).first,Some((id,0)));
+    assert_eq!(SINK.lock().render(&mut output)[0].first,Some((id,0)));
     assert_eq!(output,[1,2,3,4,5,6,7,8]);
     assert_eq!(SINK.lock().snapshot().unwrap().id,id);
     let next=unsafe {stream(0,0,null,0)};

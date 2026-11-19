@@ -5,34 +5,27 @@
 </head><body><h1>TRUEOS Audio</h1>
 <button id="listen" type="button">Listen</button>
 <label>Volume <input id="volume" type="range" min="0" max="1" step=".01" value="1"></label>
+<label>Crossfade A ↔ B <input id="crossfade" type="range" min="0" max="1" step=".01" value=".5"></label>
 <p id="status" role="status">Ready</p>
 <script>
 const SAMPLE_RATE = 48000;
 const FRAME_BYTES = 4;
 const BLOCK_FRAMES = 480;
+const BLOCK_BYTES = BLOCK_FRAMES * FRAME_BYTES;
+const PREFIX_BYTES = 4;
 const LEAD_SECONDS = .04;
 const QUEUE_SECONDS = .16;
 
-function checkWavHeader(header) {
-  const view = new DataView(header.buffer);
-  const tag = (offset, text) =>
-    [...text].every((character, index) => header[offset + index] === character.charCodeAt(0));
-  if (!tag(0, 'RIFF') || !tag(8, 'WAVE') || !tag(12, 'fmt ') || !tag(36, 'data') ||
-      view.getUint32(16, true) !== 16 || view.getUint16(20, true) !== 1 ||
-      view.getUint16(22, true) !== 2 || view.getUint32(24, true) !== SAMPLE_RATE ||
-      view.getUint32(28, true) !== SAMPLE_RATE * FRAME_BYTES ||
-      view.getUint16(32, true) !== FRAME_BYTES || view.getUint16(34, true) !== 16) {
-    throw new Error('Unexpected audio format');
-  }
-}
-
 class LivePlayer {
-  constructor(report, volume) {
+  constructor(report, volume, crossfade) {
     this.report = report;
     this.context = new (window.AudioContext || window.webkitAudioContext)({latencyHint: 'interactive'});
     this.gain = this.context.createGain();
     this.gain.gain.value = volume;
     this.gain.connect(this.context.destination);
+    this.lanes = [this.context.createGain(), this.context.createGain()];
+    for (const lane of this.lanes) lane.connect(this.gain);
+    this.setCrossfade(crossfade);
     // Keep the device running through silence between replies.
     this.silence = this.context.createConstantSource();
     this.silence.offset.value = 0;
@@ -41,6 +34,10 @@ class LivePlayer {
     this.abort = new AbortController();
     this.sources = new Set();
     this.nextTime = 0;
+  }
+  setCrossfade(value) {
+    this.lanes[0].gain.value = 1 - value;
+    this.lanes[1].gain.value = value;
   }
   delay(ms) {
     const {signal} = this.abort;
@@ -60,12 +57,12 @@ class LivePlayer {
     const {signal} = this.abort;
     while (!signal.aborted) {
       try {
-        const response = await fetch('/audio/live.wav', {cache: 'no-store', signal});
+        const response = await fetch('/audio/live.pcm', {cache: 'no-store', signal});
         if (signal.aborted) return;
         if (!response.ok || !response.body) throw new Error('Audio connection lost');
         await this.readStream(response.body.getReader());
       } catch {
-        // A reset, unexpected WAV header or EOF all need a new live stream.
+        // A reset, invalid PCM frame count or EOF all need a new live stream.
       }
       if (!signal.aborted) {
         this.report('Reconnecting…');
@@ -75,24 +72,14 @@ class LivePlayer {
   }
   async readStream(reader) {
     const {signal} = this.abort;
-    const header = new Uint8Array(44);
-    let headerBytes = 0;
-    const block = new Uint8Array(BLOCK_FRAMES * FRAME_BYTES);
+    const block = new Uint8Array(PREFIX_BYTES + 2 * BLOCK_BYTES);
     let blockBytes = 0;
+    let listening = false;
     try {
       while (!signal.aborted) {
         const {value, done} = await reader.read();
         if (done || signal.aborted) return;
         let offset = 0;
-        if (headerBytes < header.length) {
-          const count = Math.min(header.length - headerBytes, value.length);
-          header.set(value.subarray(0, count), headerBytes);
-          headerBytes += count;
-          offset = count;
-          if (headerBytes < header.length) continue;
-          checkWavHeader(header);
-          this.report('Listening');
-        }
         while (offset < value.length && !signal.aborted) {
           const count = Math.min(block.length - blockBytes, value.length - offset);
           block.set(value.subarray(offset, offset + count), blockBytes);
@@ -106,6 +93,10 @@ class LivePlayer {
           }
           if (signal.aborted) return;
           this.schedule(block);
+          if (!listening) {
+            this.report('Listening');
+            listening = true;
+          }
           blockBytes = 0;
         }
       }
@@ -115,24 +106,36 @@ class LivePlayer {
     }
   }
   schedule(block) {
+    const view = new DataView(block.buffer, block.byteOffset, block.byteLength);
+    const frames = [view.getUint16(0, true), view.getUint16(2, true)];
+    if (frames.some(count => count > BLOCK_FRAMES)) throw new Error('Invalid PCM block');
     const now = this.context.currentTime;
     if (this.nextTime < now + .004) this.nextTime = now + LEAD_SECONDS;
     const when = this.nextTime;
     this.nextTime += BLOCK_FRAMES / SAMPLE_RATE;
-    // The constant source already supplies silent output.
-    if (!block.some(byte => byte !== 0)) return;
 
-    const buffer = this.context.createBuffer(2, BLOCK_FRAMES, SAMPLE_RATE);
-    const view = new DataView(block.buffer);
+    const overlap = Math.min(...frames);
+    for (let lane = 0; lane < frames.length; ++lane) {
+      const offset = PREFIX_BYTES + lane * BLOCK_BYTES;
+      this.scheduleSource(block, view, offset, overlap, when, this.lanes[lane]);
+      // A lone producer plays at unity regardless of the crossfade position.
+      this.scheduleSource(block, view, offset + overlap * FRAME_BYTES,
+        frames[lane] - overlap, when + overlap / SAMPLE_RATE, this.gain);
+    }
+  }
+  scheduleSource(block, view, offset, frames, when, gain) {
+    if (!frames || !block.subarray(offset, offset + frames * FRAME_BYTES).some(byte => byte !== 0)) return;
+    const buffer = this.context.createBuffer(2, frames, SAMPLE_RATE);
     const left = buffer.getChannelData(0);
     const right = buffer.getChannelData(1);
-    for (let frame = 0; frame < BLOCK_FRAMES; ++frame) {
-      left[frame] = view.getInt16(frame * FRAME_BYTES, true) / 32768;
-      right[frame] = view.getInt16(frame * FRAME_BYTES + 2, true) / 32768;
+    for (let frame = 0; frame < frames; ++frame) {
+      left[frame] = view.getInt16(offset, true) / 32768;
+      right[frame] = view.getInt16(offset + 2, true) / 32768;
+      offset += FRAME_BYTES;
     }
     const source = this.context.createBufferSource();
     source.buffer = buffer;
-    source.connect(this.gain);
+    source.connect(gain);
     source.onended = () => {
       this.sources.delete(source);
       source.disconnect();
@@ -156,6 +159,7 @@ class LivePlayer {
 const button = document.getElementById('listen');
 const status = document.getElementById('status');
 const volume = document.getElementById('volume');
+const crossfade = document.getElementById('crossfade');
 let player = null;
 button.onclick = async () => {
   if (player) {
@@ -165,7 +169,7 @@ button.onclick = async () => {
   }
   let current;
   try {
-    current = new LivePlayer(text => { if (player === current) status.textContent = text; }, Number(volume.value));
+    current = new LivePlayer(text => { if (player === current) status.textContent = text; }, Number(volume.value), Number(crossfade.value));
     player = current; button.textContent = 'Stop'; status.textContent = 'Starting…';
     await current.start();
   } catch (error) {
@@ -176,5 +180,6 @@ button.onclick = async () => {
   }
 };
 volume.oninput = () => { if (player) player.gain.gain.value = Number(volume.value); };
+crossfade.oninput = () => { if (player) player.setCrossfade(Number(crossfade.value)); };
 window.addEventListener('pagehide', () => { if (player) player.stop(); });
 </script></body></html>

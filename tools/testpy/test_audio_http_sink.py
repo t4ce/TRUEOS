@@ -18,7 +18,7 @@ def main():
         'fn response_with_body', 'fn live_audio_page', 'fn not_found_response',
         'fn busy_response', 'fn wav_stream_head', 'fn handle_request',
         'fn append_wav_header', 'fn clip_request_id', 'fn start_clip_response', 'fn send_clip_tick',
-        'fn status_response', 'fn stream_audio_tick', 'struct ClipTransfer',
+        'fn status_response', 'fn render_audio_block', 'fn stream_audio_tick', 'struct ClipTransfer',
     ]
     bodies = []
     for marker in markers:
@@ -112,6 +112,24 @@ fn request(path:&str)->(VNet,AudioHttpSession) {
     let (net,mut s)=request("/audio/live.wav");
     s.pending_bytes=48_001; s.sent_bytes=0;
     assert!(stream_audio_tick(&net,&mut s,&[0;4])); assert!(*net.closed.borrow());
+}
+#[test] fn crossfade_endpoint_preserves_two_synchronized_producer_slots() {
+    let (net,mut session)=request("/audio/live.pcm");
+    assert_eq!(session.mode,SessionMode::StreamingSources);
+    assert!(net.bytes.borrow().starts_with(b"HTTP/1.1 200"));
+    let header_end=find_http_header_end(&net.bytes.borrow()).unwrap();
+    let mut sink=Sink::new();
+    sink.submit(&[100,0,200,0]).unwrap();
+    sink.submit(&[200,0,100,0,40,0,60,0]).unwrap();
+    let mut mixed=[0; BLOCK_BYTES];
+    let mut wire=[0; PCM_PREFIX_BYTES+2*BLOCK_BYTES];
+    render_audio_block(&mut sink, &mut mixed, &mut wire);
+    assert_eq!(&wire[..8], &[1,0,2,0,100,0,200,0]);
+    assert_eq!(&wire[PCM_PREFIX_BYTES+BLOCK_BYTES..][..8], &[200,0,100,0,40,0,60,0]);
+    assert_eq!(&mixed[..8], &[150,0,150,0,40,0,60,0]);
+    assert!(!stream_audio_tick(&net,&mut session,&wire));
+    assert_eq!(&net.bytes.borrow()[header_end..], &wire);
+    assert_eq!(sink.active_count(),0);
 }
 #[test] fn finite_wav_starts_at_byte_zero_after_clock_advance_and_snapshot_replacement() {
     *SINK.lock()=Sink::new();

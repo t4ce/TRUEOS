@@ -69,7 +69,7 @@ mod prefix_tests {
     }
 
     #[test]
-    fn busy_first_wins_and_only_valid_accepted_clips_advance_the_id() {
+    fn only_two_valid_clips_are_admitted() {
         let mut sink = Sink::new();
         assert!(!sink.busy());
         assert!(sink.snapshot().is_none());
@@ -83,21 +83,20 @@ mod prefix_tests {
         let accepted = sink.snapshot().unwrap();
         assert_ne!(accepted.id, 0);
         assert!(sink.busy());
-        // Successful discard is the existing exclusive-source contract.
-        assert_eq!(sink.submit(&competing), Ok(()));
-        let unchanged = sink.snapshot().unwrap();
-        assert_eq!(unchanged.id, accepted.id);
-        assert_eq!(unchanged.pcm.as_ref(), first.as_slice());
-        assert!(Arc::ptr_eq(&unchanged.pcm, &accepted.pcm));
+        sink.submit(&competing).unwrap();
+        let second = sink.snapshot().unwrap();
+        assert_eq!(second.id, accepted.id + 1);
+        assert_eq!(second.pcm.as_ref(), competing.as_slice());
+        assert_eq!(sink.active_count(), 2);
 
+        // Successful discard still applies once both playback slots are used.
+        assert_eq!(sink.submit(&first), Ok(()));
+        assert!(Arc::ptr_eq(&sink.snapshot().unwrap().pcm, &second.pcm));
         finish(&mut sink, first.len());
         assert_eq!(sink.submit(&[7, 8]), Err(-22));
-        assert_eq!(sink.snapshot().unwrap().id, accepted.id);
-        sink.submit(&competing).unwrap();
-        let replacement = sink.snapshot().unwrap();
-        assert_eq!(replacement.id, accepted.id + 1);
-        assert_eq!(replacement.pcm.as_ref(), competing.as_slice());
-        assert!(sink.busy());
+        assert_eq!(sink.snapshot().unwrap().id, second.id);
+        sink.submit(&first).unwrap();
+        assert_eq!(sink.snapshot().unwrap().id, second.id + 1);
     }
 
     #[test]

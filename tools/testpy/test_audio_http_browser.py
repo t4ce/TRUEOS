@@ -16,13 +16,18 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 STATE = {"id": "0", "prefix_sent_ms": {}, "tail_sent_ms": {}, "opens": 0}
-WAV_HEAD = struct.pack(
-    '<4sI4s4sIHHIIHH4sI',
-    b'RIFF', 0xffffffff, b'WAVE', b'fmt ', 16, 1, 2, 48000, 192000, 4, 16,
-    b'data', 0xffffffff - 36,
-)
 BLOCK_FRAMES = 480
-SILENCE = bytes(BLOCK_FRAMES * 4)
+STEREO_SILENCE = bytes(BLOCK_FRAMES * 4)
+SILENCE = bytes(4) + STEREO_SILENCE * 2
+
+
+def pcm(left, right, second=None):
+    slot_b = STEREO_SILENCE if second is None else struct.pack('<hh', *second) * BLOCK_FRAMES
+    return (
+        struct.pack('<HH', BLOCK_FRAMES, 0 if second is None else BLOCK_FRAMES)
+        + struct.pack('<hh', left, right) * BLOCK_FRAMES
+        + slot_b
+    )
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -41,7 +46,7 @@ class Handler(BaseHTTPRequestHandler):
         elif target.path == '/fixture/state':
             body = json.dumps(STATE).encode()
             content_type = 'application/json'
-        elif target.path == '/audio/live.wav':
+        elif target.path == '/audio/live.pcm':
             self.live_pcm()
             return
         else:
@@ -56,16 +61,11 @@ class Handler(BaseHTTPRequestHandler):
     def live_pcm(self):
         STATE['opens'] += 1
         self.send_response(200)
-        self.send_header('Content-Type', 'audio/wav')
+        self.send_header('Content-Type', 'application/octet-stream')
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Connection', 'close')
         self.end_headers()
         try:
-            self.wfile.write(WAV_HEAD[:19])
-            self.wfile.flush()
-            time.sleep(.01)
-            self.wfile.write(WAV_HEAD[19:])
-            self.wfile.flush()
             previous = '0'
             while True:
                 spoken = STATE['id']
@@ -76,7 +76,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 previous = spoken
                 amplitude = int(spoken) * 4096
-                block = struct.pack('<hh', amplitude, -amplitude) * BLOCK_FRAMES
+                block = pcm(amplitude, -amplitude, (-4096, 4096) if spoken == '4' else None)
                 # Hold the rest of the utterance back while the browser
                 # schedules its prefix. For the stop case hold part of the
                 # first block too, so a complete block arrives after Stop.
@@ -87,7 +87,7 @@ class Handler(BaseHTTPRequestHandler):
                 time.sleep(.35)
                 STATE['tail_sent_ms'][spoken] = time.time() * 1000
                 self.wfile.write(block[split:])
-                self.wfile.write(struct.pack('<hh', -amplitude, amplitude) * BLOCK_FRAMES)
+                self.wfile.write(pcm(-amplitude, amplitude))
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -147,15 +147,28 @@ let context;
       window.latencyHint = options.latencyHint;
       const ctx = new Original(options);
       window.contexts++;
+      const gains = window.gains = [];
+      const createGain = ctx.createGain.bind(ctx);
+      ctx.createGain = () => {
+        const gain = createGain();
+        gains.push(gain);
+        return gain;
+      };
       const create = ctx.createBufferSource.bind(ctx);
       ctx.createBufferSource = () => {
         const node = create();
         const start = node.start.bind(node);
+        const connect = node.connect.bind(node);
+        let lane;
+        node.connect = target => {
+          lane = gains.indexOf(target);
+          return connect(target);
+        };
         node.start = when => {
           const left = node.buffer.getChannelData(0);
           const right = node.buffer.getChannelData(1);
           window.starts.push({
-            when, clock: ctx.currentTime, at: Date.now(),
+            when, lane, clock: ctx.currentTime, at: Date.now(),
             state: ctx.state, rate: node.buffer.sampleRate,
             length: left.length, left: left[0], right: right[0], last: left.at(-1),
           });
@@ -181,6 +194,7 @@ let context;
     assert.equal(row.left, amplitude);
     assert.equal(row.last, amplitude);
     assert.equal(row.right, -amplitude);
+    assert.equal(row.lane, 0, 'solo routes through master volume');
     const state = await until(async () => {
       const state = await serverState();
       return state.tail_sent_ms[id] && state;
@@ -198,6 +212,23 @@ let context;
   assert.equal(await evaluate('window.latencyHint'), 'interactive');
   assert.equal((await serverState()).opens, 1, 'listener reopened between replies');
 
+  await fetch(base + 'fixture/publish?id=4');
+  const pair = await until(() => evaluate(`(() => {
+    const a = window.starts.find(row => row.lane === 1 && row.left === .5);
+    const b = window.starts.find(row => row.lane === 2 && row.left === -.125);
+    return a && b ? [a, b] : null;
+  })()`));
+  assert.equal(pair[0].when, pair[1].when, 'A and B start on the same audio clock');
+  assert.deepEqual(await evaluate("window.gains.map(node => node.gain.value)"), [0, .5, .5]);
+  await evaluate(`(() => {
+    const slider = document.getElementById('crossfade');
+    slider.value = '1';
+    slider.dispatchEvent(new Event('input'));
+    return true;
+  })()`);
+  assert.deepEqual(await evaluate("window.gains.map(node => node.gain.value)"), [0, 0, 1]);
+  await until(() => evaluate("window.starts.find(row => row.left === -.5) ?? null"));
+
   const beforeStop = await evaluate('window.starts.length');
   await fetch(base + 'fixture/publish?id=3');
   await until(async () => (await serverState()).prefix_sent_ms['3']);
@@ -205,7 +236,7 @@ let context;
   await sleep(500);
   assert.equal(await evaluate('window.starts.length'), beforeStop, 'stopped stream produced stale speech');
   console.log(JSON.stringify({
-    browser: 'Firefox', prefixes, one_live_connection: true, stop_during_transfer: 'passed',
+    browser: 'Firefox', prefixes, crossfade: 'passed', one_live_connection: true, stop_during_transfer: 'passed',
   }, null, 2));
   await command('browsingContext.close', {context});
   context = null;
