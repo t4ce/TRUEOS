@@ -4,7 +4,6 @@
 //! The LUT is post-blend and output-wide. DC5/DC6 lose LUT RAM; keep the desired
 //! table in the service so display-resume integration can submit it again.
 
-use alloc::{boxed::Box, vec};
 use spin::Mutex;
 
 #[path = "chroma_grade.rs"]
@@ -23,12 +22,7 @@ struct Registers {
     wd_input: u32,
 }
 
-/// Only A and B have this block. Do not extrapolate register addresses for
-/// C/D: those pipes may still have software editing buckets, never LUT MMIO.
-pub(super) const fn supports_pipe_lut(pipe: usize) -> bool {
-    matches!(pipe, 0 | 1)
-}
-
+/// The hardware LUT is available on pipes A and B.
 fn registers(pipe: usize) -> Result<Registers, &'static str> {
     match pipe {
         0 => Ok(Registers {
@@ -63,12 +57,6 @@ const WD_TRANSCODER_ENABLE: u32 = 1 << 31;
 const WD_TRANSCODER_STATE: u32 = 1 << 30;
 
 static PIPE_LUT: Mutex<()> = Mutex::new(());
-
-pub(super) struct PipeLutSnapshot {
-    pipe: usize,
-    control: u32,
-    entries: Box<[u32]>,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PipeLutStatus {
@@ -191,24 +179,6 @@ pub(super) fn rearm_pipe_if_lost(
     Ok(lost)
 }
 
-/// Snapshot the pre-session state for rollback if initial frame creation fails.
-/// The service keeps an accepted grade on ordinary Escape-close.
-pub(super) fn snapshot_pipe(pipe: usize) -> Result<PipeLutSnapshot, &'static str> {
-    let regs = registers(pipe)?;
-    let mut entries = vec![0; LUT_ENTRIES].into_boxed_slice();
-    let _route = crate::intel::DISPLAY_COLOR_ROUTE_LOCK.lock();
-    let _guard = PIPE_LUT.lock();
-    dsb_experiment::permit_lut_access(pipe)?;
-    let dev = device(regs)?;
-    let control = ready(dev, regs)?;
-    read_table(dev, regs, &mut entries);
-    Ok(PipeLutSnapshot {
-        pipe,
-        control,
-        entries,
-    })
-}
-
 fn read_table(dev: crate::intel::Dev, regs: Registers, entries: &mut [u32]) {
     let old_index = crate::intel::mmio_read(dev, regs.index);
     crate::intel::mmio_write(dev, regs.index, INDEX_AUTO_INCREMENT);
@@ -269,40 +239,4 @@ fn arm_table(dev: crate::intel::Dev, regs: Registers, control: u32) -> Result<()
         return Err("chroma-3dlut-enable-readback");
     }
     Ok(())
-}
-
-pub(super) fn restore_pipe(snapshot: &PipeLutSnapshot) -> Result<(), &'static str> {
-    let regs = registers(snapshot.pipe)?;
-    let _route = crate::intel::DISPLAY_COLOR_ROUTE_LOCK.lock();
-    let _guard = PIPE_LUT.lock();
-    dsb_experiment::permit_lut_access(snapshot.pipe)?;
-    let dev = device(regs)?;
-    ready(dev, regs)?;
-    if snapshot.control & LUT_ENABLE == 0 {
-        // Disabled LUTs do not consume New LUT Ready. Do not arm an update
-        // that would stay permanently pending while the function is disabled.
-        crate::intel::mmio_write(dev, regs.control, snapshot.control & LUT_ALLOW_DB_DISABLE);
-        return Ok(());
-    }
-    upload(dev, regs, &snapshot.entries, snapshot.control)
-}
-
-// Compatibility entry points for callers that still exclusively own Pipe A.
-pub(super) fn pipe_a_status() -> Result<PipeLutStatus, &'static str> {
-    pipe_status(0)
-}
-pub(super) fn rearm_pipe_a_if_lost(entries: &[u32; LUT_ENTRIES]) -> Result<bool, &'static str> {
-    rearm_pipe_if_lost(0, entries)
-}
-pub(super) fn program_pipe_a(entries: &[u32; LUT_ENTRIES]) -> Result<(), &'static str> {
-    program_pipe(0, entries)
-}
-pub(super) fn snapshot_pipe_a() -> Result<PipeLutSnapshot, &'static str> {
-    snapshot_pipe(0)
-}
-pub(super) fn restore_pipe_a(snapshot: &PipeLutSnapshot) -> Result<(), &'static str> {
-    if snapshot.pipe != 0 {
-        return Err("chroma-3dlut-snapshot-pipe");
-    }
-    restore_pipe(snapshot)
 }

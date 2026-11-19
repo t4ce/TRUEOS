@@ -127,8 +127,8 @@ def main():
             '`define RX_PLL_ODIV0_SEL 2\n'
             '`define RX_CLKOUT0_PE_COARSE 0\n'
             '`define RX_CLKOUT0_PE_FINE 0\n'
-            '`define RX_DYN_DPA_EN "FALSE"\n'
-            '`define RX_DYN_PE0_SEL "FALSE"\n'
+            '`define RX_DYN_DPA_EN "TRUE"\n'
+            '`define RX_DYN_PE0_SEL "TRUE"\n'
             '`define AUTO_PHASE\n')
         sources += ["dvi_rx_top.v", "dvi2rgb.v", "hdmi_rgba8_capture.v"]
         shutil.copyfile(Path(__file__).with_name(sources[-1]), src / sources[-1])

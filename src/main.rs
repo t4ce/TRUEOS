@@ -249,6 +249,7 @@ pub extern "C" fn kmain() -> ! {
     let _ = cpu::register_current_worker_spawner(spawner);
     // Worker spawners for APs are registered in `cpu::ap_start` once each AP brings up its executor.
 
+    time::report_build_time_fallback();
     net::init();
 
     if crate::allcaps::probes::MIO_BOOT_PROBE {

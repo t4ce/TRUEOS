@@ -83,10 +83,16 @@ def main():
     wire [1:0] token_in_kind, token_out_kind;
     wire [255:0] token_in_data, token_out_data;
     reg [2:0] pixel_trace;
+    reg [1:0] active_trace;
     always @(posedge rgb_clk or negedge rst_n)
-        if (!rst_n) pixel_trace <= 0;
-        else pixel_trace <= pixel_trace | {token_in_valid && !token_in_ready,
+        if (!rst_n) begin
+            active_trace <= 0;
+            pixel_trace <= 0;
+        end else begin
+            active_trace <= active_trace | {rgb_de && rgb_vsync, rgb_de};
+            pixel_trace <= pixel_trace | {token_in_valid && !token_in_ready,
                                            arm_capture, rgb_vsync};
+        end
     reg [3:0] ddr_trace;
     always @(posedge clk_x1)
         if (!ddr_reset_sync[1]) ddr_trace <= 0;
@@ -189,14 +195,14 @@ def main():
         .wr_data_end(app_wdf_end), .wr_data(app_wdf_data),
         .rd_data_valid(app_rd_data_valid), .rd_data(app_rd_data)
     );
-    (* async_reg = "true" *) reg [9:0] capture_status_meta, capture_status_sync;
+    (* async_reg = "true" *) reg [11:0] capture_status_meta, capture_status_sync;
     always @(posedge PHY_CLKOUT) begin
-        capture_status_meta <= {hdmi_hpd, ddc_sda_activity, ddc_scl_activity,
+        capture_status_meta <= {active_trace, hdmi_hpd, ddc_sda_activity, ddc_scl_activity,
                                 ddc_sda_level, ddc_scl_level, edid_seen,
                                 frozen_visible, init_calib_complete, phase_ready, pll_ready};
         capture_status_sync <= capture_status_meta;
     end
-    assign camera_status = {8'hdd, 2'b0, capture_status_sync[9:4], 4'ha, capture_status_sync[3:0]};
+    assign camera_status = {8'hde, capture_status_sync[11:4], 4'ha, capture_status_sync[3:0]};
 
     (* async_reg = "true" *) reg [1:0] usb_ddr_reset_sync;
     always @(posedge PHY_CLKOUT or negedge rst_n)

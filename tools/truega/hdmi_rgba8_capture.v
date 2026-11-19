@@ -17,8 +17,10 @@ module hdmi_rgba8_capture #(
     reg vsync_previous, de_previous;
     reg [$clog2(WIDTH + 1)-1:0] column;
     reg [$clog2(HEIGHT + 1)-1:0] row;
+    // Either VSYNC polarity has one rising edge in vertical blanking.
+    // DE identifies active pixels independently of the VSYNC level.
     wire frame_edge = vsync && !vsync_previous;
-    assign pixel_valid = capturing && !invalid && de && !vsync &&
+    assign pixel_valid = capturing && !invalid && de && !frame_edge &&
                          column < WIDTH && row < HEIGHT;
     // Little-endian readout has R, G, B, A in ascending byte addresses.
     assign rgba = {8'hff, blue, green, red};
@@ -44,8 +46,8 @@ module hdmi_rgba8_capture #(
 
             if (frame_edge) begin
                 if (capturing) begin
-                    frame_complete <= !invalid && row == HEIGHT && column == 0;
-                    frame_dropped <= invalid || row != HEIGHT || column != 0;
+                    frame_complete <= !invalid && !de && row == HEIGHT && column == 0;
+                    frame_dropped <= invalid || de || row != HEIGHT || column != 0;
                 end
                 capturing <= armed || arm;
                 armed <= 0;
@@ -54,7 +56,7 @@ module hdmi_rgba8_capture #(
                 row <= 0;
             end else if (capturing) begin
                 if (de) begin
-                    if (!pixel_ready || vsync || column == WIDTH || row == HEIGHT)
+                    if (!pixel_ready || column == WIDTH || row == HEIGHT)
                         invalid <= 1;
                     else
                         column <= column + 1'b1;

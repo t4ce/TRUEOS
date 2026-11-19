@@ -231,10 +231,13 @@ def camera_status(device):
         if sequence:
             print(f"Frozen frame sequence: {sequence}")
         print(f"EDID address seen: {'yes' if status[1] & 1 else 'no'}")
-        if status[2] == 0xdd:
+        if status[2] in (0xdd, 0xde):
             for bit, label in enumerate(("DDC SCL high", "DDC SDA high", "DDC SCL activity",
                                          "DDC SDA activity", "HDMI HPD asserted"), start=1):
                 print(f"{label}: {'yes' if status[1] & (1 << bit) else 'no'}")
+        if status[2] == 0xde:
+            print(f"HDMI active video seen: {'yes' if status[1] & 64 else 'no'}")
+            print(f"HDMI DE with VSYNC high: {'yes' if status[1] & 128 else 'no'}")
         if status[5] & 128:
             labels = ("VSYNC", "capture arm", "FIFO backpressure", "DDR begin",
                       "DDR data", "DDR commit", "DDR abort")

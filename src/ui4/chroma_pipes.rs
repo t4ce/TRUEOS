@@ -54,10 +54,6 @@ impl PipeBuckets {
         true
     }
 
-    pub(super) fn edit_slider(&mut self, slider: usize, value: f32) -> u8 {
-        self.edit_slider_for(self.selected, slider, value)
-    }
-
     /// A drag keeps its mouse-down target even if selection changes afterward.
     /// The return value is the changed pipe's bit, for per-pipe dirty tracking.
     pub(super) fn edit_slider_for(&mut self, pipe: usize, slider: usize, value: f32) -> u8 {
@@ -81,10 +77,6 @@ impl PipeBuckets {
             *field = value;
             changed
         })
-    }
-
-    pub(super) fn edit_curve(&mut self, knot: usize, value: f32) -> u8 {
-        self.edit_curve_for(self.selected, knot, value)
     }
 
     pub(super) fn edit_curve_for(&mut self, pipe: usize, knot: usize, value: f32) -> u8 {
@@ -138,7 +130,7 @@ mod tests {
     fn selecting_a_pipe_changes_only_the_view_and_never_copies_settings() {
         let mut buckets = PipeBuckets::default();
         assert_eq!(buckets.selected(), 0);
-        assert_eq!(buckets.edit_slider(0, 0.7), 1);
+        assert_eq!(buckets.edit_slider_for(0, 0, 0.7), 1);
         let original = buckets.settings;
         assert!(buckets.select(1));
         assert_eq!(buckets.selected(), 1);
@@ -155,12 +147,12 @@ mod tests {
     #[test]
     fn edits_preserve_the_other_pipe_and_every_unrelated_property() {
         let mut buckets = PipeBuckets::default();
-        assert_eq!(buckets.edit_slider(1, -0.5), 1);
+        assert_eq!(buckets.edit_slider_for(0, 1, -0.5), 1);
         assert!(buckets.select(1));
-        assert_eq!(buckets.edit_slider(2, 0.4), 2);
-        assert_eq!(buckets.edit_slider(3, 0.9), 2);
+        assert_eq!(buckets.edit_slider_for(1, 2, 0.4), 2);
+        assert_eq!(buckets.edit_slider_for(1, 3, 0.9), 2);
         assert!(buckets.select(0));
-        assert_eq!(buckets.edit_slider(4, 0.3), 1);
+        assert_eq!(buckets.edit_slider_for(0, 4, 0.3), 1);
         assert_eq!(buckets.settings(0).shadows, -0.5);
         assert_eq!(buckets.settings(0).highlights, 0.0);
         assert_eq!(buckets.settings(0).saturation, 1.0);
@@ -169,7 +161,7 @@ mod tests {
         assert_eq!(buckets.settings(1).highlights, 0.4);
         assert_eq!(buckets.settings(1).saturation, 0.9);
         assert_eq!(buckets.settings(1).strength, 1.0);
-        assert_eq!(buckets.edit_slider(4, 0.3), 0);
+        assert_eq!(buckets.edit_slider_for(0, 4, 0.3), 0);
     }
 
     #[test]
@@ -189,34 +181,34 @@ mod tests {
     #[test]
     fn curve_edits_link_red_endpoints_on_only_the_target_pipe() {
         let mut buckets = PipeBuckets::default();
-        assert_eq!(buckets.edit_curve(2, -0.4), 1);
-        assert_eq!(buckets.edit_curve(6, 0.7), 1);
+        assert_eq!(buckets.edit_curve_for(0, 2, -0.4), 1);
+        assert_eq!(buckets.edit_curve_for(0, 6, 0.7), 1);
         assert_eq!(buckets.settings(0).sat_curve[0], 0.7);
         assert_eq!(buckets.settings(0).sat_curve[6], 0.7);
         assert_eq!(buckets.settings(0).sat_curve[2], -0.4);
         assert_eq!(buckets.settings(1).sat_curve, [0.0; 7]);
         assert!(buckets.select(1));
-        assert_eq!(buckets.edit_curve(0, -0.8), 2);
+        assert_eq!(buckets.edit_curve_for(1, 0, -0.8), 2);
         assert_eq!(buckets.settings(1).sat_curve[0], -0.8);
         assert_eq!(buckets.settings(1).sat_curve[6], -0.8);
         assert_eq!(buckets.settings(0).sat_curve[0], 0.7);
-        assert_eq!(buckets.edit_curve(6, -0.8), 0);
+        assert_eq!(buckets.edit_curve_for(1, 6, -0.8), 0);
     }
 
     #[test]
     fn invalid_edits_do_not_index_past_buckets_or_dirty_pipes() {
         let mut buckets = PipeBuckets::default();
-        assert_eq!(buckets.edit_slider(9, 0.5), 0);
-        assert_eq!(buckets.edit_curve(7, 0.5), 0);
-        assert_eq!(buckets.edit_slider(0, f32::NAN), 0);
-        assert_eq!(buckets.edit_curve(0, f32::INFINITY), 0);
+        assert_eq!(buckets.edit_slider_for(0, 9, 0.5), 0);
+        assert_eq!(buckets.edit_curve_for(0, 7, 0.5), 0);
+        assert_eq!(buckets.edit_slider_for(0, 0, f32::NAN), 0);
+        assert_eq!(buckets.edit_curve_for(0, 0, f32::INFINITY), 0);
         assert_eq!(buckets.edit_slider_for(2, 0, 0.5), 0);
         assert_eq!(buckets.edit_curve_for(usize::MAX, 0, 0.5), 0);
         assert_eq!(buckets.settings(0), &Settings::default());
         assert_eq!(buckets.settings(1), &Settings::default());
-        assert_eq!(buckets.edit_slider(3, 999.0), 1);
+        assert_eq!(buckets.edit_slider_for(0, 3, 999.0), 1);
         assert_eq!(buckets.settings(0).saturation, 1.8);
-        assert_eq!(buckets.edit_curve(0, -999.0), 1);
+        assert_eq!(buckets.edit_curve_for(0, 0, -999.0), 1);
         assert_eq!(buckets.settings(0).sat_curve[0], -1.0);
         assert_eq!(buckets.settings(0).sat_curve[6], -1.0);
     }

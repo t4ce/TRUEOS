@@ -13,6 +13,8 @@ struct WakeEntry {
 }
 
 const MAX_WAKEUPS: usize = 9000;
+const KERNEL_BUILD_UNIX_SECONDS: u64 =
+    u64::from_le_bytes(*include_bytes!(concat!(env!("OUT_DIR"), "/kernel-build-time.bin")));
 
 static START_TSC: AtomicU64 = AtomicU64::new(0);
 static TSC_HZ: AtomicU64 = AtomicU64::new(0);
@@ -41,15 +43,27 @@ pub fn tsc_hz() -> u64 {
 
 /// Best-effort Unix time (seconds since epoch).
 ///
-/// Uses the bootloader-provided timestamp (wall clock at boot) plus monotonic uptime.
-/// Returns `None` if the boot timestamp is unavailable (or 0).
+/// Advances the boot timestamp, or the kernel build timestamp if newer, by uptime.
 #[inline]
 pub fn unix_time_seconds() -> Option<u64> {
-    let base = crate::limine::boot_timestamp_secs()?;
-    if base == 0 {
-        return None;
-    }
+    let base = usable_boot_timestamp().unwrap_or(KERNEL_BUILD_UNIX_SECONDS);
     Some(base.saturating_add(uptime_seconds()))
+}
+
+fn usable_boot_timestamp() -> Option<u64> {
+    crate::limine::boot_timestamp_secs().filter(|&secs| secs >= KERNEL_BUILD_UNIX_SECONDS)
+}
+
+pub(crate) fn report_build_time_fallback() {
+    if usable_boot_timestamp().is_some() {
+        return;
+    }
+    let build_time = v::vclock::UtcDateTime::from_unix_seconds(KERNEL_BUILD_UNIX_SECONDS);
+    let message = alloc::format!(
+        "Boot timestamp missing or older than the kernel. Using kernel build time ({build_time}) until NTP sync."
+    );
+    crate::log_warn!(target: "global"; "{message}\n");
+    crate::shell3::MatrixSlots::echo_default(message);
 }
 
 fn init_once() {

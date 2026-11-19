@@ -5,6 +5,7 @@ use std::{
     fmt::Write as _,
     fs,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 const PORTAL_CABI_LOCK_PATH: &str = "abi/portal-cabi-v2.sha256";
@@ -16,6 +17,7 @@ fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS");
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"));
+    generate_kernel_build_time(&out_dir).expect("embed kernel build time");
     wifi_credentials::generate(&out_dir).expect("prepare optional local Wi-Fi credentials");
 
     if target_os == "trueos" {
@@ -26,6 +28,19 @@ fn main() {
     generate_app_buildins();
     generate_development_ssh_identity(Path::new(&manifest_dir))
         .expect("prepare stable development SSH identity");
+}
+
+fn generate_kernel_build_time(out_dir: &Path) -> std::io::Result<()> {
+    println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+    let unix_seconds = match env::var("SOURCE_DATE_EPOCH") {
+        Ok(epoch) => epoch.parse::<u64>().expect("SOURCE_DATE_EPOCH must be Unix seconds"),
+        Err(env::VarError::NotPresent) => SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("build host clock precedes the Unix epoch")
+            .as_secs(),
+        Err(error) => panic!("invalid SOURCE_DATE_EPOCH: {error}"),
+    };
+    fs::write(out_dir.join("kernel-build-time.bin"), unix_seconds.to_le_bytes())
 }
 
 /// The kernel supplies these ABIs itself; satisfy upstream native-library

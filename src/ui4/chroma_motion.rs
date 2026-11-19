@@ -19,15 +19,6 @@ pub(super) enum MotionMode {
 impl MotionMode {
     pub(super) const ALL: [Self; 4] = [Self::Orbs, Self::Vortex, Self::Water, Self::Life];
 
-    pub(super) const fn label(self) -> &'static str {
-        match self {
-            Self::Orbs => "ORBS",
-            Self::Vortex => "VORTEX",
-            Self::Water => "WATER",
-            Self::Life => "LIFE 3D",
-        }
-    }
-
     pub(super) fn from_index(index: usize) -> Option<Self> {
         Self::ALL.get(index).copied()
     }
@@ -395,7 +386,7 @@ mod tests {
             for _ in 0..100 {
                 motion.step(0.016, [0.3, -0.9, 0.1], &base, &mut output);
             }
-            assert_ne!(output, base, "{} must deform nodes", mode.label());
+            assert_ne!(output, base, "{mode:?} must deform nodes");
         }
         assert!(motion.select(None));
         assert!(motion.step(0.016, [0.0; 3], &base, &mut output));
@@ -441,7 +432,7 @@ mod tests {
             for _ in 0..50 {
                 motion.step(0.016, [0.0, -1.0, 0.0], &base, &mut output);
             }
-            assert_ne!(output, before, "{} must continue moving", mode.label());
+            assert_ne!(output, before, "{mode:?} must continue moving");
             outputs.push(output);
         }
         for a in 0..outputs.len() {

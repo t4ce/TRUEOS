@@ -88,8 +88,6 @@ mod intel {
         pub bus: u8,
         pub slot: u8,
         pub function: u8,
-        pub device_id: u16,
-        pub revision_id: u8,
         pub mmio_len: usize,
     }
     pub fn claimed_device() -> Option<Dev> {
@@ -99,8 +97,6 @@ mod intel {
                 bus: 0,
                 slot: 0,
                 function: 0,
-                device_id: (state.physical >> 16) as u16,
-                revision_id: state.revision,
                 mmio_len: state.mmio_len,
             })
         })
@@ -370,8 +366,11 @@ fn dsb_compares_full_tables_and_restores_enabled_or_disabled_pipe() {
         let original = seed_dsb_benchmark(control, DsbBehavior::Complete);
         STATE.with(|cell| {
             cell.borrow_mut().wait_hook = Some(Box::new(|| {
-                assert_eq!(color::program_pipe_a(&[13; 4913]), Err("chroma-3dlut-busy"));
-                assert!(color::snapshot_pipe_a().is_err());
+                assert_eq!(color::program_pipe(0, &[13; 4913]), Err("chroma-3dlut-busy"));
+                assert_eq!(
+                    color::rearm_pipe_if_lost(0, &[13; 4913]),
+                    Err("chroma-3dlut-busy")
+                );
                 assert_eq!(color::pipe_status(1), Ok(color::PipeLutStatus::Disabled));
             }));
         });
@@ -424,7 +423,6 @@ fn dsb_refuses_other_desktop_stepping_before_programming() {
 fn dsb_unproven_upload_quarantines_pipe_a_without_cpu_replay() {
     let control = 0xa000_0000;
     let original = seed_dsb_benchmark(control, DsbBehavior::Uncertain);
-    let snapshot = color::snapshot_pipe_a().unwrap();
     assert_eq!(
         finish(color::benchmark_chroma_dsb()).err(),
         Some("mock-dsb-uncertain")
@@ -439,10 +437,9 @@ fn dsb_unproven_upload_quarantines_pipe_a_without_cpu_replay() {
         assert!(state.writes.iter().all(|&(reg, _)| reg == 0x490a8));
     });
     let quarantined = "chroma-dsb-pipe-a-quarantined";
-    assert_eq!(color::program_pipe_a(&[7; 4913]), Err(quarantined));
-    assert_eq!(color::snapshot_pipe_a().err(), Some(quarantined));
-    assert_eq!(color::restore_pipe_a(&snapshot), Err(quarantined));
-    assert_eq!(color::rearm_pipe_a_if_lost(&[7; 4913]), Err(quarantined));
+    assert_eq!(color::program_pipe(0, &[7; 4913]), Err(quarantined));
+    assert_eq!(color::rearm_pipe_if_lost(0, &[7; 4913]), Err(quarantined));
+    assert_eq!(finish(color::benchmark_chroma_dsb()).err(), Some(quarantined));
     assert_eq!(color::program_pipe(1, &[11; 4913]), Ok(()));
 }
 
@@ -450,54 +447,42 @@ fn dsb_unproven_upload_quarantines_pipe_a_without_cpu_replay() {
 fn hardware_upload_order_ready_and_busy() {
     let mut table = [0; 4913];
     color::Settings::default().build_table(&mut table);
-    assert_eq!(color::program_pipe_a(&table), Ok(()));
+    assert_eq!(color::program_pipe(0, &table), Ok(()));
     STATE.with(|cell| {
         let s = cell.borrow();
         assert_eq!(&*s.pipes[0].table, &table);
+        let edge = color::LUT_EDGE;
+        let [r, g, b] = [1, 5, edge - 1];
+        let packed = s.pipes[0].table[(r * edge + g) * edge + b];
+        assert_eq!(
+            color::unpack_node(packed),
+            [r, g, b].map(|axis| color::identity_code(axis) as f32 / 1023.0),
+        );
         assert_eq!(s.pipes[0].index, 7);
         assert_eq!(s.pipes[0].control, 0xe0000000);
         assert_eq!(s.writes[0], (0x490a8, 8192));
         assert_eq!(s.writes[1], (0x490ac, 0));
     });
     let writes = STATE.with(|c| c.borrow().writes.len());
-    assert_eq!(color::program_pipe_a(&table), Err("chroma-3dlut-busy"));
+    assert_eq!(color::program_pipe(0, &table), Err("chroma-3dlut-busy"));
     assert_eq!(STATE.with(|c| c.borrow().writes.len()), writes);
 }
 #[test]
 fn unsupported_never_writes() {
     STATE.with(|c| c.borrow_mut().physical = 0x12348086);
     assert_eq!(
-        color::program_pipe_a(&[0; 4913]),
+        color::program_pipe(0, &[0; 4913]),
         Err("chroma-3dlut-device-unsupported")
     );
     assert!(STATE.with(|c| c.borrow().writes.is_empty()));
 }
 #[test]
-fn failure_rollback_restores_preexisting_enabled_cube() {
-    STATE.with(|c| {
-        let mut s = c.borrow_mut();
-        s.pipes[0].control = 0xa0000000;
-        s.pipes[0].table[300] = 12345;
-    });
-    let snapshot = color::snapshot_pipe_a().unwrap();
-    color::program_pipe_a(&[23; 4913]).unwrap();
-    STATE.with(|c| c.borrow_mut().pipes[0].control &= !(1 << 30));
-    color::restore_pipe_a(&snapshot).unwrap();
-    STATE.with(|c| {
-        let s = c.borrow();
-        assert_eq!(s.pipes[0].table[300], 12345);
-        assert_eq!(s.pipes[0].table[0], 0);
-        assert_eq!(s.pipes[0].control, 0xe0000000);
-    });
-}
-
-#[test]
 fn status_accepts_a_pending_vblank_without_mutating_hardware() {
-    assert_eq!(color::pipe_a_status(), Ok(color::PipeLutStatus::Disabled));
+    assert_eq!(color::pipe_status(0), Ok(color::PipeLutStatus::Disabled));
     STATE.with(|c| c.borrow_mut().pipes[0].control = 0xc000_0000);
-    assert_eq!(color::pipe_a_status(), Ok(color::PipeLutStatus::Pending));
+    assert_eq!(color::pipe_status(0), Ok(color::PipeLutStatus::Pending));
     STATE.with(|c| c.borrow_mut().pipes[0].control &= !(1 << 30));
-    assert_eq!(color::pipe_a_status(), Ok(color::PipeLutStatus::Active));
+    assert_eq!(color::pipe_status(0), Ok(color::PipeLutStatus::Active));
     assert!(STATE.with(|c| c.borrow().writes.is_empty()));
 }
 
@@ -505,10 +490,10 @@ fn status_accepts_a_pending_vblank_without_mutating_hardware() {
 fn reset_detection_rearms_but_unchanged_state_never_rewrites_table() {
     let mut table = [0; 4913];
     color::Settings::default().build_table(&mut table);
-    assert_eq!(color::rearm_pipe_a_if_lost(&table), Ok(true));
+    assert_eq!(color::rearm_pipe_if_lost(0, &table), Ok(true));
     STATE.with(|c| c.borrow_mut().pipes[0].control &= !(1 << 30));
     let writes_before = STATE.with(|c| c.borrow().writes.len());
-    assert_eq!(color::rearm_pipe_a_if_lost(&table), Ok(false));
+    assert_eq!(color::rearm_pipe_if_lost(0, &table), Ok(false));
     STATE.with(|c| {
         let s = c.borrow();
         assert_eq!(s.pipes[0].index, 7);
@@ -519,7 +504,7 @@ fn reset_detection_rearms_but_unchanged_state_never_rewrites_table() {
         );
     });
     STATE.with(|c| c.borrow_mut().pipes[0].table.fill(0));
-    assert_eq!(color::rearm_pipe_a_if_lost(&table), Ok(true));
+    assert_eq!(color::rearm_pipe_if_lost(0, &table), Ok(true));
     STATE.with(|c| assert_eq!(&*c.borrow().pipes[0].table, &table));
 }
 
@@ -528,19 +513,10 @@ fn out_of_range_node_is_rejected_before_any_register_write() {
     let mut table = [0; 4913];
     table[4899] = 1 << 30;
     assert_eq!(
-        color::program_pipe_a(&table),
+        color::program_pipe(0, &table),
         Err("chroma-3dlut-entry-range")
     );
     assert!(STATE.with(|c| c.borrow().writes.is_empty()));
-}
-
-#[test]
-fn disabled_rollback_does_not_arm_a_never_consumed_ready_bit() {
-    let snapshot = color::snapshot_pipe_a().unwrap();
-    color::program_pipe_a(&[3; 4913]).unwrap();
-    STATE.with(|c| c.borrow_mut().pipes[0].control &= !(1 << 30));
-    color::restore_pipe_a(&snapshot).unwrap();
-    STATE.with(|c| assert_eq!(c.borrow().pipes[0].control, 1 << 29));
 }
 
 #[test]
@@ -574,10 +550,7 @@ fn pipe_b_upload_is_independent_and_uses_its_own_ports() {
 
 #[test]
 fn missing_c_and_d_lut_blocks_never_access_hardware() {
-    assert!(color::supports_pipe_lut(0));
-    assert!(color::supports_pipe_lut(1));
     for pipe in [2, 3, 4, usize::MAX] {
-        assert!(!color::supports_pipe_lut(pipe));
         assert_eq!(
             color::pipe_status(pipe),
             Err("chroma-3dlut-pipe-unsupported")
@@ -589,10 +562,6 @@ fn missing_c_and_d_lut_blocks_never_access_hardware() {
         assert_eq!(
             color::rearm_pipe_if_lost(pipe, &[0; 4913]),
             Err("chroma-3dlut-pipe-unsupported")
-        );
-        assert_eq!(
-            color::snapshot_pipe(pipe).err(),
-            Some("chroma-3dlut-pipe-unsupported")
         );
     }
     STATE.with(|cell| {
@@ -633,20 +602,14 @@ fn busy_a_and_b_statuses_are_independent() {
 }
 
 #[test]
-fn b_reset_recovery_and_rollback_never_touch_a() {
+fn b_reset_recovery_never_touches_a() {
     let mut identity = [0; 4913];
     color::Settings::default().build_table(&mut identity);
     assert_eq!(color::rearm_pipe_if_lost(1, &identity), Ok(true));
     STATE.with(|cell| cell.borrow_mut().pipes[1].control &= !(1 << 30));
     assert_eq!(color::rearm_pipe_if_lost(1, &identity), Ok(false));
-    let snapshot = color::snapshot_pipe(1).unwrap();
-    assert_eq!(
-        color::restore_pipe_a(&snapshot),
-        Err("chroma-3dlut-snapshot-pipe")
-    );
-    assert_eq!(color::program_pipe(1, &[3; 4913]), Ok(()));
-    STATE.with(|cell| cell.borrow_mut().pipes[1].control &= !(1 << 30));
-    assert_eq!(color::restore_pipe(&snapshot), Ok(()));
+    STATE.with(|cell| cell.borrow_mut().pipes[1].table.fill(0));
+    assert_eq!(color::rearm_pipe_if_lost(1, &identity), Ok(true));
     STATE.with(|cell| {
         let s = cell.borrow();
         assert_eq!(&*s.pipes[1].table, &identity);

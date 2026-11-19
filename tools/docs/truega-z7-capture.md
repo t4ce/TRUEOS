@@ -166,6 +166,34 @@ cycle still produced no DDC transitions or TMDS lock. On dock revision
 pin. The FPGA's HPD status reports its local output and cannot confirm
 that the camera is powered or sees hot-plug at the connector.
 
+Connecting the host NVIDIA HDMI output to DVI B RX verified the dock's
+handshake with a second source. Linux read all 256 EDID bytes back exactly
+and GNOME enabled 1920×1080 at 30 Hz. The FPGA reported TMDS PLL lock and
+DDC activity. Phase lock did not remain asserted and no frame froze. The
+installed Gowin generator enables both dynamic phase controls in Auto mode
+for this device. The staging script now uses those same settings.
+The phase-corrected build reported both locks and VSYNC with the NVIDIA
+source, then aborted capture before writing a line to DDR. In subsequent
+tests none of the four fixed phases from 0° to 270° in 90° steps froze a
+frame. A DVI-only EDID was also read back exactly and did not produce a
+frozen frame. Capture now gates pixels on DE and accepts either VSYNC
+polarity. The existing raster and full-frame ingress simulations pass with
+this change.
+
+The Z7 produced a live image at the host's 1920×1080 USB capture setting
+through a separate UltraSemi USB2 Video adapter. After moving the same
+camera cable back to the FPGA, neither an extended HPD pulse nor enabling
+the EDID responder before HPD produced DDC traffic or a TMDS clock at the
+FPGA input. The connector-side HPD voltage with the Z7 attached remains
+unmeasured.
+
+A raw TMDS clock-only bitstream with the corrected DDC selection measured
+0.000 MHz in eight samples with the Z7 connected. It also saw no EDID
+address. The phase-corrected capture bitstream was restored in SRAM and
+verified over USB. On 4071f, connector pin 19 is on the far side of R127
+(5.1 kΩ) from FPGA pin G26, so FPGA readback cannot replace a voltage
+measurement at the connector under load.
+
 An early DDR-to-USB test verified the first 13,488 packets (6,474,240 bytes)
 before Linux lost the USB device while restoring configuration after a
 reset. The buffered test image failed USB enumeration. A later run with

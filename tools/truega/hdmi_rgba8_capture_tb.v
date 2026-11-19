@@ -2,13 +2,14 @@ module hdmi_rgba8_capture_tb;
     reg clk = 0;
     always #1 clk = !clk;
     reg reset = 1, arm = 0, vsync = 0, de = 0, ready = 1;
+    reg invert_vsync = 0;
     wire valid, complete, dropped;
     wire [31:0] rgba;
     integer accepted = 0, completed = 0, discarded = 0;
 
     hdmi_rgba8_capture #(.WIDTH(4), .HEIGHT(3)) dut (
         .pixel_clk(clk), .reset(reset), .arm(arm),
-        .vsync(vsync), .de(de), .red(8'h21), .green(8'h43), .blue(8'h65),
+        .vsync(vsync ^ invert_vsync), .de(de), .red(8'h21), .green(8'h43), .blue(8'h65),
         .pixel_ready(ready), .pixel_valid(valid), .rgba(rgba),
         .frame_complete(complete), .frame_dropped(dropped)
     );
@@ -59,7 +60,13 @@ module hdmi_rgba8_capture_tb;
         start; repeat (3) line(4, 0); boundary;
         if (completed != 2 || discarded != 2)
             $fatal(1, "Failed to recover at the next frame");
-        $display("Verified RGBA byte order, frame dimensions and overflow recovery");
+        invert_vsync = 1;
+        @(negedge clk);
+        start; repeat (3) line(4, 0); boundary;
+        @(negedge clk);
+        if (completed != 3 || discarded != 2)
+            $fatal(1, "Active-low VSYNC raster was not accepted");
+        $display("Verified RGBA order, both VSYNC polarities, dimensions and overflow recovery");
         $finish;
     end
 endmodule
