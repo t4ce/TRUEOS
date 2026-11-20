@@ -36,6 +36,7 @@ macro_rules! define_started_flags {
 
 define_started_flags!(
     JOB_RUNNER_STARTED,
+    TPM_SERVICE_STARTED,
     CODEX_PROGRESS_STARTED,
     BLUEPRINT_ASYNC_FS_SERVICE_STARTED,
     BLUEPRINT_HTTP_REQUEST_SERVICE_STARTED,
@@ -923,13 +924,17 @@ fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| crate::r::restart::restart_apps_task(spawner))
 }
 
+fn spawn_tpm_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_| super::tpm_service::tpm_service_task())
+}
+
 // --- registry ---
 
 const BP_AUTOSTART_READY: u32 =
     crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY;
 // Own the AtomicBool fields in a static array; an interior-mutable temporary
 // cannot be promoted behind a shared slice reference.
-const TASK_COUNT: usize = 62
+const TASK_COUNT: usize = 63
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + 2 * cfg!(feature = "legacy_vm_checkpoint") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1311,6 +1316,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_user_input_record_writer,
     ),
 
+    TaskSpec::enabled("tpm-service", 0, &TPM_SERVICE_STARTED, spawn_tpm_service),
 ];
 
 pub fn task_index_by_name(name: &str) -> Option<usize> {

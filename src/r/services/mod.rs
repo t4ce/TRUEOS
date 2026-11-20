@@ -23,6 +23,7 @@ pub mod mouse_motion_service;
 
 pub(crate) mod shell3_font_service;
 pub mod spawn_service;
+pub(crate) mod tpm_service;
 pub mod vcpy_service;
 pub(crate) mod video_open_service;
 pub mod video_service;

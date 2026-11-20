@@ -6,6 +6,7 @@ use super::{
 };
 use crate::crypt;
 use crate::disc::block::DeviceHandle;
+use crate::r::services::tpm_service;
 use crate::shell3::MatrixTarget;
 use alloc::{
     format,
@@ -150,6 +151,7 @@ impl Form {
     }
 }
 enum Page {
+    Tpm,
     Home,
     Disks {
         format: bool,
@@ -482,10 +484,12 @@ impl View {
                 "Manage SSH keys",
                 "Sign out",
                 "Finger",
+                "TPM",
                 "Return",
             ],
             Page::Home => &["List disks", "Format a disk", "Create a RAM disk", "Return"],
             Page::Disk(_) => &["Format this disk", "Back", "Return"],
+            Page::Tpm => &["Run capability probe", "Back", "Return"],
             Page::RamSizes => &[
                 "128 MiB",
                 "512 MiB",
@@ -567,6 +571,7 @@ impl View {
     fn body(&self, target: &MatrixTarget) -> Vec<String> {
         match &self.page {
             Page::Home if self.kind == Kind::Cry => Self::account_lines(Self::scope(target)),
+            Page::Tpm => alloc::vec![tpm_service::status()],
             Page::Disks { format, disks } => alloc::vec![
                 if *format {
                     "Choose a disk to format.".into()
@@ -695,13 +700,15 @@ impl View {
                     self.result.clear();
                     self.set_page(Page::Finger(cry::finger::summary()));
                 }
-                9 if self.draft.is_some() => {
+                9 => self.set_page(Page::Tpm),
+                10 if self.draft.is_some() => {
                     self.draft = None;
                     self.result = "Enrollment closed.".into();
                     self.selected = 0;
                 }
                 _ => {}
             },
+            Page::Tpm => tpm_service::request_probe(),
             Page::Finger(_) => {
                 if let Some(scenario) = cry::finger::SCENARIOS.get(self.selected) {
                     self.set_page(Page::FingerResult(scenario.run()));

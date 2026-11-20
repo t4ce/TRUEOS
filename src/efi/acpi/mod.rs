@@ -21,7 +21,7 @@ pub mod sleep;
 pub(crate) mod tlb;
 // pub mod fpdt;
 // pub mod ssdt;
-// pub mod tpm2;
+pub(crate) mod tpm2;
 // pub mod dmar;
 
 pub(crate) const SDT_HEADER_LEN: usize = 36;
