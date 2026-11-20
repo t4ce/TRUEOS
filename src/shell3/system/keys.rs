@@ -21,7 +21,7 @@ use trueos_time::{Duration, Timer};
 
 #[path = "keys_model.rs"]
 mod model;
-use model::{Event, Input};
+pub(super) use model::{Event, Input};
 
 type Reply = Arc<Mutex<Option<Result<Catalog, String>>>>;
 

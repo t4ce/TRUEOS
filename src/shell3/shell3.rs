@@ -1,4 +1,5 @@
 mod admin;
+mod audio;
 #[path = "system/gpu.rs"]
 mod gpu;
 #[path = "system/font.rs"]
@@ -1651,7 +1652,7 @@ impl Shell3 {
         } else if self.mode == Mode::ADM
             && matches!(
                 text.as_str(),
-                "cry" | "disc" | "ram" | "smp" | "net" | "gpu" | "vcpy" | "tlb" | "font" | "link" | "keys"
+                "cry" | "disc" | "ram" | "smp" | "net" | "gpu" | "vcpy" | "tlb" | "font" | "link" | "keys" | "audio"
             )
         {
             let frontend = self.tui_frontend();
@@ -1666,6 +1667,7 @@ impl Shell3 {
                 "font" => font::start(frontend),
                 "link" => link::start(frontend),
                 "keys" => keys::start(frontend),
+                "audio" => audio::start(frontend),
                 _ => {
                     let origin = output::DumpTarget(
                         self.active_matrix_slot

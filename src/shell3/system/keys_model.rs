@@ -75,23 +75,23 @@ pub(super) fn command(
 }
 
 #[derive(Debug, PartialEq)]
-pub(super) enum Event {
+pub(crate) enum Event {
     Submit(String),
     Scroll(isize),
     Quit,
 }
 #[derive(Default)]
-pub(super) struct Input {
+pub(crate) struct Input {
     text: Vec<u8>,
     sequence: Vec<u8>,
     escape_at: u64,
     after_cr: bool,
 }
 impl Input {
-    pub(super) fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         String::from_utf8_lossy(&self.text).into_owned()
     }
-    pub(super) fn feed(&mut self, bytes: &[u8], now: u64) -> Vec<Event> {
+    pub(crate) fn feed(&mut self, bytes: &[u8], now: u64) -> Vec<Event> {
         let mut events = Vec::new();
         for &byte in bytes {
             if !self.sequence.is_empty() {
@@ -146,7 +146,7 @@ impl Input {
         }
         events
     }
-    pub(super) fn timeout(&mut self, now: u64) -> Option<Event> {
+    pub(crate) fn timeout(&mut self, now: u64) -> Option<Event> {
         if !self.sequence.is_empty() && now.saturating_sub(self.escape_at) >= 75_000_000 {
             let quit = self.sequence.len() == 1;
             self.sequence.clear();

@@ -489,7 +489,7 @@ impl View {
             ],
             Page::Home => &["List disks", "Format a disk", "Create a RAM disk", "Return"],
             Page::Disk(_) => &["Format this disk", "Back", "Return"],
-            Page::Tpm => &["Run capability probe", "Back", "Return"],
+            Page::Tpm => &["Run capability probe", "Run storage test", "Back", "Return"],
             Page::RamSizes => &[
                 "128 MiB",
                 "512 MiB",
@@ -571,7 +571,7 @@ impl View {
     fn body(&self, target: &MatrixTarget) -> Vec<String> {
         match &self.page {
             Page::Home if self.kind == Kind::Cry => Self::account_lines(Self::scope(target)),
-            Page::Tpm => alloc::vec![tpm_service::status()],
+            Page::Tpm => alloc::vec![tpm_service::status(), tpm_service::storage_test_status()],
             Page::Disks { format, disks } => alloc::vec![
                 if *format {
                     "Choose a disk to format.".into()
@@ -708,7 +708,8 @@ impl View {
                 }
                 _ => {}
             },
-            Page::Tpm => tpm_service::request_probe(),
+            Page::Tpm if self.selected == 0 => tpm_service::request_probe(),
+            Page::Tpm => tpm_service::request_storage_test(),
             Page::Finger(_) => {
                 if let Some(scenario) = cry::finger::SCENARIOS.get(self.selected) {
                     self.set_page(Page::FingerResult(scenario.run()));
@@ -942,7 +943,8 @@ impl View {
     fn menu_start(&self, rows: usize) -> usize {
         let count = match &self.page {
             Page::Home if self.kind == Kind::Cry => 3,
-            Page::Disks { .. }
+            Page::Tpm
+            | Page::Disks { .. }
             | Page::Recovery(_)
             | Page::SavedRecovery { .. }
             | Page::SshKeys(_) => 2,

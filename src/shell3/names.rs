@@ -154,6 +154,10 @@ pub(super) const ADM_NAMES: &[NameEntry] = &[
         name: "log",
         color: RgbaColor::White,
     },
+    NameEntry {
+        name: "audio",
+        color: RgbaColor::White,
+    },
 ];
 
 pub(super) const ADM_GROUPS: [NameGroup; 2] = [

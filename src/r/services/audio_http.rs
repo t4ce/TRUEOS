@@ -39,6 +39,14 @@ fn monotonic_millis() -> u64 {
     Instant::now().as_millis()
 }
 
+pub(crate) fn set_local_playback(enabled: bool) {
+    SINK.lock().set_local_playback(enabled);
+}
+
+pub(crate) fn render_local(out: &mut [[i16; 2]]) {
+    SINK.lock().render_local(out, monotonic_millis());
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SessionMode {
     ReadingRequest,
@@ -538,6 +546,7 @@ pub async fn audio_http_task() {
             }
             let (expired, reports) = {
                 let mut sink = SINK.lock();
+                sink.set_http_rendering();
                 let expired = sink.expire(now.as_millis());
                 (expired, render_audio_block(&mut sink, &mut pcm_bytes, &mut source_bytes))
             };

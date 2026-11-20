@@ -1,4 +1,6 @@
 //! Owns the TPM transport and publishes the result of capability diagnostics.
+mod bringup;
+
 use alloc::{format, string::String};
 use embassy_sync::signal::Signal;
 use spin::Mutex;
@@ -17,13 +19,37 @@ enum Probe {
 }
 
 static PROBE: Mutex<Probe> = Mutex::new(Probe::Pending);
-static REQUEST: Signal<EmbassySpinRawMutex, ()> = Signal::new();
+#[derive(Clone, Copy)]
+enum Request {
+    Capability,
+    StorageTest,
+}
+
+static REQUEST: Signal<EmbassySpinRawMutex, Request> = Signal::new();
+static STORAGE_TEST: Mutex<Option<Result<(), String>>> = Mutex::new(None);
+
+pub(crate) fn request_storage_test() {
+    let mut probe = PROBE.lock();
+    if matches!(*probe, Probe::Complete(_)) {
+        *probe = Probe::Pending;
+        *STORAGE_TEST.lock() = None;
+        REQUEST.signal(Request::StorageTest);
+    }
+}
+
+pub(crate) fn storage_test_status() -> String {
+    match &*STORAGE_TEST.lock() {
+        Some(Ok(())) => "testTpm/bringupUser: store, read, update, delete OK".into(),
+        Some(Err(error)) => format!("testTpm/bringupUser: {error}"),
+        None => "Storage test uses a generated dummy key".into(),
+    }
+}
 
 pub(crate) fn request_probe() {
     let mut probe = PROBE.lock();
     if matches!(*probe, Probe::Complete(_)) {
         *probe = Probe::Pending;
-        REQUEST.signal(());
+        REQUEST.signal(Request::Capability);
     }
 }
 
@@ -58,6 +84,7 @@ fn format_status(probe: Probe) -> String {
 pub(crate) async fn tpm_service_task() {
     Timer::after(Duration::from_secs(5)).await;
     let device = Crb::discover();
+    let mut request = Request::Capability;
     loop {
         *PROBE.lock() = Probe::Running;
         let result = match &device {
@@ -67,9 +94,17 @@ pub(crate) async fn tpm_service_task() {
                 .map(|vendor| (device.control_address(), vendor)),
             Err(error) => Err(*error),
         };
+        if let Request::StorageTest = request {
+            let test = match &device {
+                Ok(device) if result.is_ok() => bringup::run(device).await,
+                _ => Err(String::from("TPM capability check failed")),
+            };
+            *STORAGE_TEST.lock() = Some(test);
+            crate::log_info!(target: "boot"; "tpm-service: {}\n", storage_test_status());
+        }
         let complete = Probe::Complete(result);
         *PROBE.lock() = complete;
         crate::log_info!(target: "boot"; "tpm-service: {}\n", format_status(complete));
-        REQUEST.wait().await;
+        request = REQUEST.wait().await;
     }
 }

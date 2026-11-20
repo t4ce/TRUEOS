@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise production sink admission and HTTP playback with a recording TCP stub."""
+"""Exercise PCM mixing and HTTP playback with a recording TCP stub."""
 from pathlib import Path
 import re
 import subprocess
@@ -32,6 +32,7 @@ def main():
     harness = r'''
 #![allow(dead_code)]
 extern crate alloc;
+extern crate self as spin;
 use alloc::{format, vec::Vec};
 use std::cell::{RefCell, Cell};
 #[macro_export] macro_rules! log { ($($t:tt)*) => {}; }
@@ -65,6 +66,10 @@ impl VNet {
 @CONSTANTS@
 @PRODUCTION@
 #[path="@SINK@"] mod sink;
+#[path="@VHDA@"] mod vhda;
+mod allocators {
+    pub fn with_host_alloc_domain_strong<T>(f: impl FnOnce() -> T) -> T { f() }
+}
 use sink::Sink;
 struct Mutex<T>(std::sync::Mutex<T>);
 impl<T> Mutex<T> {
@@ -163,7 +168,7 @@ fn request(path:&str)->(VNet,AudioHttpSession) {
     assert!(stale.bytes.borrow().starts_with(b"HTTP/1.1 409"));
     assert_eq!(clip_request_id("/audio/clip.wav?id=1&id=2"),None);
 }
-'''.replace('@CONSTANTS@',constants).replace('@PRODUCTION@','\n'.join(bodies)).replace('@SINK@',str(ROOT / 'src/r/services/audio_http/sink.rs'))
+'''.replace('@CONSTANTS@',constants).replace('@PRODUCTION@','\n'.join(bodies)).replace('@SINK@',str(ROOT / 'src/r/services/audio_http/sink.rs')).replace('@VHDA@',str(ROOT / 'src/intel/hda/vhda.rs'))
     with tempfile.TemporaryDirectory(prefix='trueos-audio-http-') as work:
         source_path=Path(work)/'test.rs'; binary=Path(work)/'test'
         source_path.write_text(harness)

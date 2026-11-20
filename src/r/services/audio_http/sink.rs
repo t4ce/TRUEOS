@@ -22,6 +22,9 @@ pub(super) struct Sink {
     latest_clip: Option<Clip>,
     next_id: u64,
     slots: [Option<Source>; MAX_PRODUCERS],
+    local_enabled: bool,
+    http_rendering: bool,
+    local: [Option<LocalSource>; MAX_PRODUCERS],
 }
 
 #[derive(Clone)]
@@ -56,6 +59,27 @@ enum Source {
     },
 }
 
+enum LocalSource {
+    Live {
+        id: u64,
+        offset: usize,
+        buffering: bool,
+    },
+    Clip {
+        clip: Clip,
+        offset: usize,
+    },
+}
+
+impl LocalSource {
+    fn id(&self) -> u64 {
+        match self {
+            Self::Live { id, .. } => *id,
+            Self::Clip { clip, .. } => clip.id,
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct RenderReport {
     pub(super) bytes: usize,
@@ -69,6 +93,9 @@ impl Sink {
             latest_clip: None,
             next_id: 1,
             slots: [None, None],
+            local_enabled: false,
+            http_rendering: false,
+            local: [None, None],
         }
     }
 
@@ -86,6 +113,10 @@ impl Sink {
             id,
             pcm: Arc::new(pcm),
         };
+        self.add_local(LocalSource::Clip {
+            clip: clip.clone(),
+            offset: 0,
+        });
         self.queue_clip(slot, clip, 0, None);
         Ok(())
     }
@@ -135,6 +166,11 @@ impl Sink {
             buffering: true,
             underruns: 0,
         }));
+        self.add_local(LocalSource::Live {
+            id,
+            offset: 0,
+            buffering: true,
+        });
         Ok(id)
     }
 
@@ -195,7 +231,18 @@ impl Sink {
                 id,
                 pcm: Arc::new(stream.pcm),
             };
+            if let Some(local) = self.local_slot(id)
+                && let Some(LocalSource::Live { offset, .. }) = local.take()
+                && offset < clip.pcm.len()
+            {
+                *local = Some(LocalSource::Clip {
+                    clip: clip.clone(),
+                    offset,
+                });
+            }
             self.queue_clip(slot, clip, stream.offset, pending_start);
+        } else if let Some(local) = self.local_slot(id) {
+            *local = None;
         }
         Ok(())
     }
@@ -203,6 +250,9 @@ impl Sink {
     pub(super) fn abort(&mut self, owner: Owner, id: u64) -> Result<(), i32> {
         let slot = self.owned_slot(owner, id)?;
         self.slots[slot] = None;
+        if let Some(local) = self.local_slot(id) {
+            *local = None;
+        }
         Ok(())
     }
 
@@ -212,10 +262,11 @@ impl Sink {
                 *slot = None;
             }
         }
+        self.remove_orphaned_local_streams();
     }
 
     pub(super) fn expire(&mut self, now_ms: u64) -> [Option<u64>; MAX_PRODUCERS] {
-        self.slots.each_mut().map(|slot| {
+        let expired = self.slots.each_mut().map(|slot| {
             if let Some(Source::Live(stream)) = slot
                 && now_ms.saturating_sub(stream.last_append_ms) >= PRODUCER_IDLE_MS
             {
@@ -225,7 +276,9 @@ impl Sink {
             } else {
                 None
             }
-        })
+        });
+        self.remove_orphaned_local_streams();
+        expired
     }
 
     /// HTTP downloads own an Arc, so a later clip cannot truncate them.
@@ -242,6 +295,130 @@ impl Sink {
         [render_source(first, a), render_source(second, b)]
     }
 
+    pub(super) fn set_http_rendering(&mut self) {
+        self.http_rendering = true;
+    }
+
+    pub(super) fn set_local_playback(&mut self, enabled: bool) {
+        if enabled == self.local_enabled {
+            return;
+        }
+        self.local_enabled = enabled;
+        self.local = if enabled {
+            self.slots.each_ref().map(|slot| match slot {
+                Some(Source::Live(stream)) => Some(LocalSource::Live {
+                    id: stream.id,
+                    offset: stream.offset,
+                    buffering: stream.buffering,
+                }),
+                Some(Source::Clip { clip, offset, .. }) => Some(LocalSource::Clip {
+                    clip: clip.clone(),
+                    offset: *offset,
+                }),
+                None => None,
+            })
+        } else {
+            [None, None]
+        };
+    }
+
+    fn local_slot(&mut self, id: u64) -> Option<&mut Option<LocalSource>> {
+        self.local
+            .iter_mut()
+            .find(|slot| slot.as_ref().is_some_and(|source| source.id() == id))
+    }
+
+    fn add_local(&mut self, source: LocalSource) {
+        if self.local_enabled
+            && let Some(slot) = self.local.iter_mut().find(|slot| slot.is_none())
+        {
+            *slot = Some(source);
+        }
+    }
+
+    fn remove_orphaned_local_streams(&mut self) {
+        for slot in &mut self.local {
+            if let Some(LocalSource::Live { id, .. }) = slot
+                && live_stream(&self.slots, *id).is_none()
+            {
+                *slot = None;
+            }
+        }
+    }
+
+    pub(super) fn render_local(&mut self, out: &mut [[i16; 2]], now_ms: u64) {
+        let local_clock_only = self.local_enabled && !self.http_rendering;
+        if local_clock_only {
+            let _ = self.expire(now_ms);
+        }
+        let max_bytes = core::mem::size_of_val(out);
+        let [first, second] = &mut self.local;
+        let a = local_samples(first, &self.slots, max_bytes);
+        let b = local_samples(second, &self.slots, max_bytes);
+        for (index, frame) in out.iter_mut().enumerate() {
+            let offset = index * 4;
+            let a = a.get(offset..offset + 4);
+            let b = b.get(offset..offset + 4);
+            *frame = match (a, b) {
+                (Some(a), Some(b)) => [center_sample(a, b, 0), center_sample(a, b, 2)],
+                (Some(pcm), None) | (None, Some(pcm)) => [sample(pcm, 0), sample(pcm, 2)],
+                (None, None) => [0; 2],
+            };
+        }
+        // With no NIC playback task, the local clock frees the legacy slots.
+        // The network starts from this position when it comes online.
+        if local_clock_only {
+            self.advance_http_without_nic();
+        }
+        for slot in &mut self.local {
+            if matches!(slot, Some(LocalSource::Clip { clip, offset }) if *offset == clip.pcm.len())
+            {
+                *slot = None;
+            }
+        }
+    }
+
+    fn advance_http_without_nic(&mut self) {
+        for (http, local) in self.slots.iter_mut().zip(&self.local) {
+            match (http, local) {
+                (
+                    Some(Source::Live(stream)),
+                    Some(LocalSource::Live {
+                        id,
+                        offset,
+                        buffering,
+                    }),
+                ) if stream.id == *id => {
+                    stream.offset = *offset;
+                    stream.buffering = *buffering;
+                }
+                (
+                    Some(Source::Clip {
+                        clip,
+                        offset,
+                        pending_start,
+                    }),
+                    Some(LocalSource::Clip {
+                        clip: local_clip,
+                        offset: local,
+                    }),
+                ) if clip.id == local_clip.id => {
+                    *offset = *local;
+                    if *offset != 0 {
+                        *pending_start = None;
+                    }
+                }
+                _ => {}
+            }
+        }
+        for slot in &mut self.slots {
+            if matches!(slot, Some(Source::Clip { clip, offset, .. }) if *offset == clip.pcm.len())
+            {
+                *slot = None;
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn render(&mut self, out: &mut [u8]) -> [RenderReport; MAX_PRODUCERS] {
         let mut a = alloc::vec![0; out.len()];
@@ -250,6 +427,50 @@ impl Sink {
         mix_center(out, &a[..reports[0].bytes], &b[..reports[1].bytes]);
         reports
     }
+}
+
+fn live_stream(slots: &[Option<Source>], id: u64) -> Option<&Stream> {
+    slots.iter().flatten().find_map(|source| match source {
+        Source::Live(stream) if stream.id == id => Some(stream),
+        _ => None,
+    })
+}
+
+fn local_samples<'a>(
+    source: &'a mut Option<LocalSource>,
+    slots: &'a [Option<Source>],
+    max_bytes: usize,
+) -> &'a [u8] {
+    let (pcm, offset) = match source {
+        Some(LocalSource::Live {
+            id,
+            offset,
+            buffering,
+        }) => {
+            let Some(stream) = live_stream(slots, *id) else {
+                return &[];
+            };
+            let available = stream.pcm.len() - *offset;
+            if *buffering && available < PREBUFFER_BYTES {
+                return &[];
+            }
+            *buffering = available < max_bytes;
+            (stream.pcm.as_slice(), offset)
+        }
+        Some(LocalSource::Clip { clip, offset }) => (clip.pcm.as_slice(), offset),
+        None => return &[],
+    };
+    let start = *offset;
+    *offset += max_bytes.min(pcm.len() - start);
+    &pcm[start..*offset]
+}
+
+fn sample(pcm: &[u8], offset: usize) -> i16 {
+    i16::from_le_bytes([pcm[offset], pcm[offset + 1]])
+}
+
+fn center_sample(a: &[u8], b: &[u8], offset: usize) -> i16 {
+    ((i32::from(sample(a, offset)) + i32::from(sample(b, offset))) / 2) as i16
 }
 
 fn render_source(slot: &mut Option<Source>, out: &mut [u8]) -> RenderReport {
@@ -305,9 +526,7 @@ pub(super) fn mix_center(out: &mut [u8], a: &[u8], b: &[u8]) {
         .zip(b[..overlap].chunks_exact(2))
         .zip(out.chunks_exact_mut(2))
     {
-        let x = i16::from_le_bytes([x[0], x[1]]);
-        let y = i16::from_le_bytes([y[0], y[1]]);
-        dest.copy_from_slice(&(((i32::from(x) + i32::from(y)) / 2) as i16).to_le_bytes());
+        dest.copy_from_slice(&center_sample(x, y, 0).to_le_bytes());
     }
     let longer = if a.len() > b.len() { a } else { b };
     out[overlap..longer.len()].copy_from_slice(&longer[overlap..]);
@@ -479,5 +698,50 @@ mod tests {
         assert_eq!(sink.abort(reused, id), Err(-2));
         assert_eq!(sink.snapshot().unwrap().id, previous);
         assert!(!sink.busy());
+    }
+
+    #[test]
+    fn local_and_http_each_consume_the_same_live_and_finished_frames() {
+        let mut sink = Sink::new();
+        sink.set_local_playback(true);
+        sink.set_http_rendering();
+        let a = sink.begin(Owner::Host, 0).unwrap();
+        let b = sink.begin(Owner::Host, 0).unwrap();
+        let mut a_pcm = [16, 0, 48, 0].repeat(PREBUFFER_BYTES / 4);
+        let mut b_pcm = [48, 0, 16, 0].repeat(PREBUFFER_BYTES / 4);
+        a_pcm[..4].copy_from_slice(&[32, 0, 64, 0]);
+        b_pcm[..4].copy_from_slice(&[64, 0, 32, 0]);
+        sink.append(Owner::Host, a, &a_pcm, 0).unwrap();
+        sink.append(Owner::Host, b, &b_pcm, 0).unwrap();
+
+        let mut local = [[0; 2]; 1];
+        sink.render_local(&mut local, 0);
+        assert_eq!(local, [[48, 48]]);
+        sink.render_local(&mut local, 0);
+        assert_eq!(local, [[32, 32]]);
+
+        let mut http = [0; 4];
+        sink.render(&mut http);
+        assert_eq!(http, [48, 0, 48, 0]);
+        sink.finish(Owner::Host, a).unwrap();
+        sink.abort(Owner::Host, b).unwrap();
+        sink.render_local(&mut local, 0);
+        assert_eq!(local, [[16, 48]]);
+        sink.render(&mut http);
+        assert_eq!(http, [16, 0, 48, 0]);
+    }
+
+    #[test]
+    fn local_only_playback_frees_slots_and_does_not_drop_retained_clips() {
+        let mut sink = Sink::new();
+        sink.set_local_playback(true);
+        let mut out = [[0; 2]; 2];
+        for value in [1, 2, 3] {
+            sink.submit(&[value, 0, value, 0]).unwrap();
+            sink.render_local(&mut out, 0);
+            assert_eq!(out, [[i16::from(value); 2], [0; 2]]);
+            assert!(!sink.busy());
+            assert_eq!(*sink.snapshot().unwrap().pcm, [value, 0, value, 0]);
+        }
     }
 }

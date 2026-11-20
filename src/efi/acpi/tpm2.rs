@@ -6,8 +6,11 @@ use core::{
 
 use tpm2_protocol::{
     TpmWriter,
-    data::{TpmCap, TpmPt, TpmSt, TpmuCapabilities},
-    frame::{TpmGetCapabilityCommand, TpmGetCapabilityResponse, TpmResponse, tpm_marshal_command},
+    data::{TpmCap, TpmPt, TpmSt, TpmsAuthCommand, TpmuCapabilities},
+    frame::{
+        TpmFrame, TpmGetCapabilityCommand, TpmGetCapabilityResponse, TpmResponse, TpmUnmarshalBody,
+        tpm_marshal_command,
+    },
 };
 use trueos_time::{Duration, Instant, Timer};
 
@@ -38,11 +41,10 @@ const GO_IDLE: u32 = 2;
 const START: u32 = 1;
 const DEVICE_ERROR: u32 = 1;
 const REGISTER_TIMEOUT: Duration = Duration::from_millis(750);
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
-const MANUFACTURER_COMMAND_BYTES: usize = 22;
 const HEADER_BYTES: usize = 10;
-const MANUFACTURER_RESPONSE_BYTES: usize = 27;
+pub(crate) const MAX_FRAME_BYTES: usize = LOCALITY_BYTES - DATA_OFFSET;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Error {
@@ -154,7 +156,7 @@ impl Crb {
         Ok(unsafe { NonNull::new_unchecked(self.registers.as_ptr().add(offset as usize)) })
     }
 
-    async fn command(&self) -> Result<[u8; 4], Error> {
+    async fn transfer(&self, command: &[u8], response: &mut [u8]) -> Result<usize, Error> {
         self.write(CTRL_REQ, COMMAND_READY);
         if !self
             .wait_for(CTRL_REQ, COMMAND_READY, 0, REGISTER_TIMEOUT)
@@ -165,20 +167,9 @@ impl Crb {
         if self.read(CTRL_STS) & DEVICE_ERROR != 0 {
             return Err(Error::DeviceFailure);
         }
-        let request = TpmGetCapabilityCommand {
-            handles: [],
-            cap: TpmCap::TpmProperties,
-            property: TpmPt::Manufacturer.value().into(),
-            property_count: 1u32.into(),
-        };
-        let mut command = [0; MANUFACTURER_COMMAND_BYTES];
-        let mut writer = TpmWriter::new(&mut command);
-        tpm_marshal_command(&request, TpmSt::NoSessions, &[], &mut writer)
-            .map_err(|_| Error::CommandEncoding)?;
-        let command = writer.as_bytes();
         let cmd = self.buffer(CMD_ADDRESS, self.read(CMD_SIZE) as usize, command.len())?;
         let rsp_size = self.read(RSP_SIZE) as usize;
-        let rsp = self.buffer(RSP_ADDRESS, rsp_size, MANUFACTURER_RESPONSE_BYTES)?;
+        let rsp = self.buffer(RSP_ADDRESS, rsp_size, HEADER_BYTES)?;
         for (offset, byte) in command.iter().copied().enumerate() {
             unsafe { cmd.as_ptr().add(offset).write_volatile(byte) };
         }
@@ -193,7 +184,6 @@ impl Crb {
         if self.read(CTRL_STS) & DEVICE_ERROR != 0 {
             return Err(Error::DeviceFailure);
         }
-        let mut response = [0; MANUFACTURER_RESPONSE_BYTES];
         for (offset, byte) in response[..HEADER_BYTES].iter_mut().enumerate() {
             *byte = unsafe { rsp.as_ptr().add(offset).read_volatile() };
         }
@@ -210,16 +200,44 @@ impl Crb {
         for (offset, byte) in frame.iter_mut().enumerate().skip(HEADER_BYTES) {
             *byte = unsafe { rsp.as_ptr().add(offset).read_volatile() };
         }
-        let frame = TpmResponse::cast(frame).map_err(|_| Error::InvalidResponse)?;
-        if frame.tag().map_err(|_| Error::InvalidResponse)? != TpmSt::NoSessions {
-            return Err(Error::InvalidResponse);
-        }
+        Ok(length)
+    }
+
+    pub(crate) async fn execute<R: TpmUnmarshalBody>(
+        &self,
+        request: &impl TpmFrame,
+        sessions: &[TpmsAuthCommand],
+    ) -> Result<R, Error> {
+        let tag = if sessions.is_empty() {
+            TpmSt::NoSessions
+        } else {
+            TpmSt::Sessions
+        };
+        let mut command = zeroize::Zeroizing::new([0; MAX_FRAME_BYTES]);
+        let mut writer = TpmWriter::new(&mut *command);
+        tpm_marshal_command(request, tag, sessions, &mut writer)
+            .map_err(|_| Error::CommandEncoding)?;
+        let mut response = zeroize::Zeroizing::new([0; MAX_FRAME_BYTES]);
+        let length = self.transact(writer.as_bytes(), &mut *response).await?;
+        let frame = TpmResponse::cast(&response[..length]).map_err(|_| Error::InvalidResponse)?;
         let code = frame.rc().map_err(|_| Error::InvalidResponse)?.value();
         if code != 0 {
             return Err(Error::TpmResponse(code));
         }
-        let response: TpmGetCapabilityResponse =
-            frame.unmarshal().map_err(|_| Error::InvalidResponse)?;
+        if frame.tag().map_err(|_| Error::InvalidResponse)? != tag {
+            return Err(Error::InvalidResponse);
+        }
+        frame.unmarshal().map_err(|_| Error::InvalidResponse)
+    }
+
+    pub(crate) async fn get_manufacturer(&self) -> Result<[u8; 4], Error> {
+        let request = TpmGetCapabilityCommand {
+            handles: [],
+            cap: TpmCap::TpmProperties,
+            property: TpmPt::Manufacturer.value().into(),
+            property_count: 1u32.into(),
+        };
+        let response: TpmGetCapabilityResponse = self.execute(&request, &[]).await?;
         let TpmuCapabilities::TpmProperties(properties) = response.capability_data.data else {
             return Err(Error::InvalidResponse);
         };
@@ -232,7 +250,7 @@ impl Crb {
         Ok(property.value.value().to_be_bytes())
     }
 
-    pub(crate) async fn get_manufacturer(&self) -> Result<[u8; 4], Error> {
+    async fn transact(&self, command: &[u8], response: &mut [u8]) -> Result<usize, Error> {
         let state = self.read(LOC_STATE);
         if state & REGISTERS_VALID == 0 || state == u32::MAX {
             return Err(Error::InvalidLocalityState);
@@ -254,7 +272,7 @@ impl Crb {
             return Err(Error::LocalityTimeout);
         }
 
-        let result = self.command().await;
+        let result = self.transfer(command, response).await;
         if self.read(CTRL_START) & START != 0 {
             return result;
         }
@@ -264,13 +282,13 @@ impl Crb {
         let released = self
             .wait_for(LOC_STATE, LOCALITY_ASSIGNED, 0, REGISTER_TIMEOUT)
             .await;
-        let manufacturer = result?;
+        let length = result?;
         if !idle {
             return Err(Error::IdleTimeout);
         }
         if !released {
             return Err(Error::ReleaseTimeout);
         }
-        Ok(manufacturer)
+        Ok(length)
     }
 }
