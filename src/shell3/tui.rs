@@ -914,6 +914,10 @@ pub(super) fn bind_authenticated_frontend(frontend: u64, account: Option<trueos_
     routes.accounts.bind_human(frontend, account)
 }
 
+pub(super) fn revoke_human_account(account: trueos_crypto::AccountId) {
+    ROUTES.lock().accounts.revoke_human_account(account);
+}
+
 /// A guest-owned terminal keeps the originating VM's principal even when a
 /// different account later signs in through a human terminal.
 pub(super) fn bind_guest_frontend_account(frontend: Frontend, account: Option<trueos_crypto::AccountId>) {

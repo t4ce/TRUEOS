@@ -799,12 +799,14 @@ impl EndpointOp for Endpoint {
             // Transfer ownership before publishing any TRB, for IN and OUT alike.
             transfer.prepare_for_device_all();
             data_bus_addr = transfer.dma_addr();
-            let buffer_end = data_bus_addr + transfer.buffer_len() as u64;
-            if data_bus_addr > self.kernel.dma_mask() || buffer_end > self.kernel.dma_mask() {
+            let buffer_last = data_bus_addr
+                .checked_add(transfer.buffer_len() as u64 - 1)
+                .ok_or_else(|| TransferError::Other(anyhow!("DMA buffer address overflow")))?;
+            if data_bus_addr > self.kernel.dma_mask() || buffer_last > self.kernel.dma_mask() {
                 return Err(TransferError::Other(anyhow!(
-                    "DMA buffer [{:#x}, {:#x}) exceeds controller DMA mask {:#x}",
+                    "DMA buffer [{:#x}, {:#x}] exceeds controller DMA mask {:#x}",
                     data_bus_addr,
-                    buffer_end,
+                    buffer_last,
                     self.kernel.dma_mask()
                 )));
             }

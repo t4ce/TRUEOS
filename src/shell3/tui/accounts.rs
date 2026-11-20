@@ -52,6 +52,9 @@ impl Bindings {
         self.human.retain(|entry| entry.0 != frontend);
         self.guest.push((frontend, account));
     }
+    pub(super) fn revoke_human_account(&mut self, account: AccountId) {
+        self.human.retain(|entry| entry.1 != account);
+    }
     pub(super) fn remove(&mut self, frontend: u64) {
         self.human.retain(|entry| entry.0 != frontend);
         self.guest.retain(|entry| entry.0 != frontend);

@@ -137,6 +137,7 @@ impl Session {
     /// ssh_boot development bypass; otherwise it has no account identity.
     pub fn access_account(&self) -> Option<trueos_crypto::AccountId> {
         self.authenticated.then_some(self.access_account).flatten()
+            .filter(|account| crate::crypt::local_shell_account() == Some(*account))
     }
 
     pub fn wants_shell(&self) -> bool {
@@ -305,13 +306,15 @@ impl Session {
                             }
                         }
                         ServEvent::SessionSubsystem(h) => {
-                            if self.authenticated && !self.shell_requested && self.rdp.is_none()
-                                && self.access_account.is_some()
+                            let account = self.access_account
+                                .filter(|account| crate::crypt::local_shell_account() == Some(*account));
+                            if let Some(account) = account
+                                && self.authenticated && !self.shell_requested && self.rdp.is_none()
                                 && self.channel.as_ref().is_some_and(|c| c.num() == h.channel())
                                 && h.command()? == "trueos-rdp"
                             {
                                 h.succeed()?;
-                                self.rdp = Some(super::rdp_channel::Channel::new(self.access_account.unwrap()));
+                                self.rdp = Some(super::rdp_channel::Channel::new(account));
                             } else { h.fail()?; }
                         }
                         ServEvent::SessionExec(h) => h.fail()?,

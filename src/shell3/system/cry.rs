@@ -194,12 +194,7 @@ pub(crate) async fn ensure_account_name_available(username: &str) -> Result<(), 
     }
     let disk =
         crate::r::fs::trueosfs::primary_root_handle().ok_or("No TRUEOSFS root is mounted.")?;
-    for path in [
-        alloc::format!("users/{username}/account.v1"),
-        alloc::format!("users/{username}/secrets/cry.v1.aes256gcm"),
-        alloc::format!("users/{username}/secrets/uncrypted.blob"),
-        alloc::format!("users/{username}/secrets/{}", crate::machine_key::SAVED_FILENAME),
-    ] {
+    for path in account_record_paths(&username) {
         if crate::r::fs::trueosfs::file_out_async(disk, &path)
             .await
             .map_err(|error| alloc::format!("Account lookup failed: {error:?}"))?
@@ -211,6 +206,42 @@ pub(crate) async fn ensure_account_name_available(username: &str) -> Result<(), 
         }
     }
     Ok(())
+}
+
+fn account_record_paths(username: &str) -> [String; 4] {
+    [
+        alloc::format!("users/{username}/account.v1"),
+        alloc::format!("users/{username}/secrets/uncrypted.blob"),
+        alloc::format!("users/{username}/secrets/{}", crate::machine_key::SAVED_FILENAME),
+        // Keep the credential available for recovery until the other records are gone.
+        alloc::format!("users/{username}/secrets/cry.v1.aes256gcm"),
+    ]
+}
+
+pub(crate) async fn remove_account(username: &str, code: &str) -> Result<String, String> {
+    let disk = crate::r::fs::trueosfs::primary_root_handle()
+        .filter(|disk| !disk.info().is_read_only())
+        .ok_or("A writable TRUEOSFS root is required.")?;
+    // Remote-style proof shares Cry's 2FA replay and rate limits and creates
+    // no signed-in session. Its pending ticket excludes other credential writes.
+    let proof = crypt::prepare_remote_login(username, code).map_err(error_text)?;
+    let _pending = PendingProof(proof.challenge_sequence);
+    crate::machine_key::remove_boot_for(disk, &proof.username).await?;
+    for path in account_record_paths(&proof.username) {
+        crate::r::fs::trueosfs::file_delete_async(disk, &path)
+            .await
+            .map_err(|error| alloc::format!("Account removal failed at {path}: {error:?}"))?;
+        if crate::r::fs::trueosfs::file_out_async(disk, &path)
+            .await
+            .map_err(|error| alloc::format!("Account removal verification failed: {error:?}"))?
+            .is_some()
+        {
+            return Err(alloc::format!("Account record is still present: {path}"));
+        }
+    }
+    crypt::complete_account_removal(&proof).map_err(error_text)?;
+    super::tui::revoke_human_account(proof.account);
+    Ok(alloc::format!("Account {} removed.", proof.username))
 }
 
 pub(crate) async fn create_account_enrollment(

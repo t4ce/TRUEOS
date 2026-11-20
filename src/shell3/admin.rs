@@ -77,6 +77,7 @@ enum Field {
     UnlockUsername,
     UnlockKey(String),
     LoginCode,
+    RemoveAccountCode(String),
     SshPublicKey,
     SshCode { key: [u8; 32], remove: bool },
     RamSize,
@@ -87,7 +88,7 @@ impl Field {
         match self {
             Self::SetupUsername | Self::UnlockUsername => "Username",
             Self::UnlockKey(_) => "Recovery key",
-            Self::LoginCode | Self::SshCode { .. } => "Authenticator code",
+            Self::LoginCode | Self::RemoveAccountCode(_) | Self::SshCode { .. } => "Authenticator code",
             Self::SshPublicKey => "OpenSSH public key",
             Self::RamSize => "Size (e.g. 512MiB)",
             Self::FormatSure(_) => "Type sure to erase this disk",
@@ -97,14 +98,14 @@ impl Field {
         match self {
             Self::SetupUsername | Self::UnlockUsername => 32,
             Self::UnlockKey(_) => 64,
-            Self::LoginCode | Self::SshCode { .. } => 6,
+            Self::LoginCode | Self::RemoveAccountCode(_) | Self::SshCode { .. } => 6,
             Self::SshPublicKey => 512,
             Self::RamSize => 24,
             Self::FormatSure(_) => 4,
         }
     }
     fn secret(&self) -> bool {
-        matches!(self, Self::UnlockKey(_) | Self::LoginCode | Self::SshCode { .. })
+        matches!(self, Self::UnlockKey(_) | Self::LoginCode | Self::RemoveAccountCode(_) | Self::SshCode { .. })
     }
 }
 struct Form {
@@ -238,6 +239,7 @@ enum Request {
         key: [u8; 32],
         remove: bool,
     },
+    RemoveAccount { username: String, code: Zeroizing<String> },
     Ramdisc(u64),
     Format(DeviceHandle),
 }
@@ -320,6 +322,9 @@ impl Request {
                 .await
                 .map(Outcome::message),
             Self::Ssh { code, key, remove } => cry::change_ssh_key(&code, key, remove)
+                .await
+                .map(Outcome::message),
+            Self::RemoveAccount { username, code } => cry::remove_account(&username, &code)
                 .await
                 .map(Outcome::message),
             Self::Ramdisc(bytes) => {
@@ -485,6 +490,7 @@ impl View {
                 "Sign out",
                 "Finger",
                 "TPM",
+                "Remove my account",
                 "Return",
             ],
             Page::Home => &["List disks", "Format a disk", "Create a RAM disk", "Return"],
@@ -615,6 +621,9 @@ impl View {
                 format!("Recovery key for saved account {username}:"),
                 key.to_string()
             ],
+            Page::Field(Field::RemoveAccountCode(username)) => alloc::vec![format!(
+                "Enter a fresh code to permanently remove the saved sign-in for {username}."
+            )],
             Page::Field(Field::SshCode { key, remove }) => alloc::vec![format!(
                 "{} SSH key {}",
                 if *remove { "Remove" } else { "Add" },
@@ -701,7 +710,16 @@ impl View {
                     self.set_page(Page::Finger(cry::finger::summary()));
                 }
                 9 => self.set_page(Page::Tpm),
-                10 if self.draft.is_some() => {
+                10 => {
+                    let state = crypt::status();
+                    if let Some(username) = state.username.filter(|_| state.two_factor == crypt::CryTwoFactorState::Active) {
+                        self.result.clear();
+                        self.set_page(Page::Field(Field::RemoveAccountCode(username)));
+                    } else {
+                        self.problem("Unlock your saved account before removing it.");
+                    }
+                }
+                11 if self.draft.is_some() => {
                     self.draft = None;
                     self.result = "Enrollment closed.".into();
                     self.selected = 0;
@@ -814,6 +832,14 @@ impl View {
                 } else {
                     self.problem("Enter a 6-digit authenticator code.");
                     self.set_page(Page::Enrollment(qr));
+                }
+            }
+            Page::Field(Field::RemoveAccountCode(username)) => {
+                if value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_digit()) {
+                    self.submit(target, Request::RemoveAccount { username, code: value });
+                } else {
+                    self.problem("Enter a 6-digit authenticator code.");
+                    self.set_page(Page::Field(Field::RemoveAccountCode(username)));
                 }
             }
             Page::Field(Field::LoginCode) => {

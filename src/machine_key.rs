@@ -89,6 +89,32 @@ async fn save(disk: DeviceHandle, path: &str, legacy: &str, blob: &[u8]) -> Resu
     Ok(())
 }
 
+/// Remove boot records for the requested account only.
+pub(crate) async fn remove_boot_for(disk: DeviceHandle, username: &str) -> Result<(), String> {
+    for (path, magic) in [(PATH, MAGIC), (LEGACY_PATH, b"TRUNKEY1")] {
+        let Some(blob) = trueosfs::file_out_async(disk, path)
+            .await
+            .map_err(|e| format!("boot key lookup: {e:?}"))?
+        else {
+            continue;
+        };
+        let blob = Zeroizing::new(blob);
+        let (&len, payload) = blob
+            .strip_prefix(magic)
+            .and_then(|bytes| bytes.split_first())
+            .ok_or("invalid boot key header")?;
+        let owner = payload.get(..usize::from(len)).ok_or("invalid boot key owner")?;
+        if owner == username.as_bytes()
+            && !trueosfs::file_delete_async(disk, path)
+                .await
+                .map_err(|e| format!("boot key removal: {e:?}"))?
+        {
+            return Err("boot key removal failed".into());
+        }
+    }
+    Ok(())
+}
+
 async fn unseal(disk: DeviceHandle) -> Result<Option<(String, Zeroizing<[u8; 32]>)>, String> {
     let Some(blob) = trueosfs::file_out_async(disk, PATH)
         .await

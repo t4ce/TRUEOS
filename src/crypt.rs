@@ -798,6 +798,19 @@ fn complete_persisted_for_state(
     Ok(pending.report)
 }
 
+/// Finish the exact fresh proof held by the account-removal operation.
+pub(crate) fn complete_account_removal(proof: &CryLoginReport) -> Result<(), CryError> {
+    let mut state = CRY_STATE.lock();
+    if !state.pending_login.as_ref().is_some_and(|pending| {
+        pending.report.challenge_sequence == proof.challenge_sequence
+            && pending.report.account == proof.account
+    }) {
+        return Err(CryError::PersistenceStateChanged);
+    }
+    *state = CryState::new();
+    Ok(())
+}
+
 pub(crate) fn abort_pending_login(challenge_sequence: u64) {
     let mut state = CRY_STATE.lock();
     if state

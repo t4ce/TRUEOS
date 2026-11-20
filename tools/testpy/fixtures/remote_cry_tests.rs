@@ -35,6 +35,27 @@ mod remote_login_regressions {
     }
     fn no_global_session() { for scope in [0,1,2,3] { assert_eq!(authenticated_access_account(scope),None); } }
     #[test]
+    fn self_removal_requires_a_fresh_proof_for_the_loaded_account() {
+        let account = fresh();
+        let signin = prepare_login(&code(), 1).unwrap();
+        complete_persisted_login(prepare_persistence(signin.challenge_sequence).unwrap()).unwrap();
+        assert!(prepare_remote_login("t4ce", &code()).is_err());
+        crate::advance(30);
+        assert!(prepare_remote_login("someone-else", &code()).is_err());
+        assert!(prepare_remote_login("t4ce", &wrong_code()).is_err());
+        let proof = prepare_remote_login("t4ce", &code()).unwrap();
+        let mut wrong_ticket = proof.clone();
+        wrong_ticket.challenge_sequence += 1;
+        assert!(complete_account_removal(&wrong_ticket).is_err());
+        assert_eq!(local_shell_account(), Some(account));
+        complete_account_removal(&proof).unwrap();
+        assert!(local_shell_account().is_none());
+        assert!(ssh_authorized_keys().is_empty());
+        no_global_session();
+        assert!(complete_account_removal(&proof).is_err());
+        reset();
+    }
+    #[test]
     fn actual_remote_command_commits_exact_account_with_no_enrolled_ssh_keys() {
         let account=fresh(); assert!(ssh_authorized_keys().is_empty()); assert!(ssh_requires_account_proof("t4ce"));
         let code=code(); assert_eq!(crate::run(command::remote_login("t4ce",&code)),Ok(account));
