@@ -2,7 +2,10 @@ use core::ops::Deref;
 use core::time::Duration;
 
 use dma_api::DeviceDma;
-pub use dma_api::{DmaAddr, DmaDirection, DmaError, DmaHandle, DmaMapHandle, DmaOp};
+pub use dma_api::{
+    DmaAddr, DmaAllocHandle, DmaCoherency, DmaConstraints, DmaDeviceInfo, DmaDirection,
+    DmaDomainId, DmaError, DmaMapHandle, DmaOp,
+};
 
 #[derive(Clone)]
 pub(crate) struct Kernel {
@@ -13,9 +16,13 @@ pub(crate) struct Kernel {
 impl Kernel {
     pub fn new(dma_mask: u64, osal: &'static dyn KernelOp) -> Self {
         Self {
-            dma: DeviceDma::new(dma_mask, osal),
+            dma: DeviceDma::new(osal.dma_info(dma_mask), osal),
             osal,
         }
+    }
+
+    pub fn dma_mask(&self) -> u64 {
+        self.dma.info().constraints().addr_mask
     }
 
     pub fn delay(&self, duration: Duration) {
@@ -43,6 +50,9 @@ impl Deref for Kernel {
 }
 
 pub trait KernelOp: DmaOp {
+    /// DMA domain and cache coherency supplied by the platform for this controller.
+    fn dma_info(&self, dma_mask: u64) -> DmaDeviceInfo;
+
     fn delay(&self, duration: Duration);
 
     fn monotonic_millis(&self) -> Option<u64> {

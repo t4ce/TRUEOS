@@ -1,6 +1,6 @@
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::{alloc::Layout, num::NonZeroUsize, ptr::NonNull, time::Duration};
+use core::time::Duration;
 
 use crab_usb as crabusb;
 use spin::Mutex;
@@ -8,114 +8,20 @@ use spin::Mutex;
 static OBSERVED_USB_DEVICES: [Mutex<Vec<TlbUsbDevice>>; super::MAX_CRABUSB_CONTROLLERS] =
     [const { Mutex::new(Vec::new()) }; super::MAX_CRABUSB_CONTROLLERS];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct DmaRemapTrace {
-    size: usize,
-    align: usize,
-    orig_phys: u64,
-    bounce_phys: u64,
-}
-
-static LAST_DMA_REMAP_TRACE: Mutex<Option<DmaRemapTrace>> = Mutex::new(None);
-
-struct TrueosCrabKernel;
+pub(super) struct TrueosCrabKernel;
 
 static TRUEOS_CRAB_KERNEL: TrueosCrabKernel = TrueosCrabKernel;
 
-impl crabusb::DmaOp for TrueosCrabKernel {
-    fn page_size(&self) -> usize {
-        4096
-    }
-
-    unsafe fn map_single(
-        &self,
-        dma_mask: u64,
-        addr: NonNull<u8>,
-        size: NonZeroUsize,
-        align: usize,
-        direction: crabusb::DmaDirection,
-    ) -> Result<crabusb::DmaMapHandle, crabusb::DmaError> {
-        let size = size.get();
-        let layout = Layout::from_size_align(size, align.max(1))?;
-        let phys = crate::phys::virt_to_phys_checked(addr.as_ptr())
-            .ok_or(crabusb::DmaError::NullPointer)?;
-        let dma_addr = crabusb::DmaAddr::from(phys);
-        let end = phys.checked_add(size.saturating_sub(1) as u64).ok_or(
-            crabusb::DmaError::DmaMaskNotMatch {
-                addr: dma_addr,
-                mask: dma_mask,
-            },
-        )?;
-        if end > dma_mask || (align > 1 && !phys.is_multiple_of(align as u64)) {
-            let max_phys = Some(dma_mask.checked_add(1).unwrap_or(u64::MAX));
-            let (bounce_phys, bounce_virt) =
-                crate::dma::alloc_with_max(size, layout.align(), max_phys)
-                    .ok_or(crabusb::DmaError::NoMemory)?;
-            let bounce = NonNull::new(bounce_virt).ok_or(crabusb::DmaError::NullPointer)?;
-
-            if matches!(
-                direction,
-                crabusb::DmaDirection::ToDevice | crabusb::DmaDirection::Bidirectional
-            ) {
-                unsafe {
-                    core::ptr::copy_nonoverlapping(addr.as_ptr(), bounce.as_ptr(), size);
-                }
-            }
-
-            let trace = DmaRemapTrace {
-                size,
-                align: layout.align(),
-                orig_phys: phys,
-                bounce_phys,
-            };
-            if crate::log_os::flags::USB_MASS_UAS_TRACE_LOGS
-                && LAST_DMA_REMAP_TRACE.lock().replace(trace) != Some(trace)
-            {
-                crate::log_trace!(target: "usb";
-                    "crabusb: dma remap size={} align={} orig_phys=0x{:X} bounce_phys=0x{:X}\n",
-                    trace.size,
-                    trace.align,
-                    trace.orig_phys,
-                    trace.bounce_phys
-                );
-            }
-
-            return Ok(unsafe {
-                crabusb::DmaMapHandle::new(
-                    addr,
-                    crabusb::DmaAddr::from(bounce_phys),
-                    layout,
-                    Some(bounce),
-                )
-            });
-        }
-        Ok(unsafe { crabusb::DmaMapHandle::new(addr, dma_addr, layout, None) })
-    }
-
-    unsafe fn unmap_single(&self, handle: crabusb::DmaMapHandle) {
-        if let Some(virt) = handle.alloc_virt() {
-            crate::dma::dealloc(virt.as_ptr(), handle.size());
-        }
-    }
-
-    unsafe fn alloc_coherent(&self, dma_mask: u64, layout: Layout) -> Option<crabusb::DmaHandle> {
-        let max_phys = Some(
-            dma_mask
-                .checked_add(1)
-                .unwrap_or(u64::MAX)
-                .min(0x1_0000_0000),
-        );
-        let (phys, virt) = crate::dma::alloc_with_max(layout.size(), layout.align(), max_phys)?;
-        let ptr = NonNull::new(virt)?;
-        Some(unsafe { crabusb::DmaHandle::new(ptr, crabusb::DmaAddr::from(phys), layout) })
-    }
-
-    unsafe fn dealloc_coherent(&self, handle: crabusb::DmaHandle) {
-        crate::dma::dealloc(handle.as_ptr().as_ptr(), handle.size());
-    }
-}
-
 impl crabusb::KernelOp for TrueosCrabKernel {
+    fn dma_info(&self, mask: u64) -> dma_api::DmaDeviceInfo {
+        // Native x86 PCI/xHCI uses physical DMA addresses and snoops CPU caches.
+        dma_api::DmaDeviceInfo::new(
+            dma_api::DmaDomainId::Direct,
+            dma_api::DmaCoherency::Coherent,
+            dma_api::DmaConstraints::new(mask),
+        )
+    }
+
     fn delay(&self, duration: Duration) {
         let delay_ms = duration.as_millis().try_into().unwrap_or(u64::MAX);
         let _ = crate::wait::spin_until_timeout_no_exec(delay_ms.max(1), || false);

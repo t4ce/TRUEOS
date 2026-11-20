@@ -1,6 +1,6 @@
 use alloc::{collections::BTreeMap, sync::Arc, vec, vec::Vec};
 
-use dma_api::{DArray, DmaDirection};
+use dma_api::{CoherentArray, DmaDirection};
 use mbarrier::mb;
 use spin::Mutex;
 use usb_if::{
@@ -131,7 +131,7 @@ struct IsoPacketTd {
 pub struct Endpoint {
     dci: Dci,
     pub ring: SendRing<TransferEvent>,
-    stream_contexts: Option<DArray<StreamContext>>,
+    stream_contexts: Option<CoherentArray<StreamContext>>,
     stream_rings: Vec<Option<SendRing<TransferEvent>>>,
     bell: Arc<Mutex<SlotBell>>,
     next_request_id: u64,
@@ -253,10 +253,9 @@ impl Endpoint {
             (self.kernel.page_size() / core::mem::size_of::<StreamContext>()).max(count);
         let mut contexts = self
             .kernel
-            .array_zero_with_align::<StreamContext>(
+            .coherent_array_zero_with_align::<StreamContext>(
                 allocated_contexts,
                 self.kernel.page_size(),
-                DmaDirection::Bidirectional,
             )
             .map_err(|_| USBError::NoMemory)?;
         let mut stream_rings = Vec::with_capacity(count);
@@ -267,7 +266,10 @@ impl Endpoint {
                 DmaDirection::Bidirectional,
                 &self.kernel,
             )?;
-            contexts.set(stream_id, StreamContext::transfer_ring(ring.bus_addr(), ring.cycle()));
+            contexts.set_cpu(
+                stream_id,
+                StreamContext::transfer_ring(ring.bus_addr(), ring.cycle()),
+            );
             stream_rings.push(Some(ring));
         }
         let addr = contexts.dma_addr().as_u64().into();
@@ -445,8 +447,17 @@ impl Endpoint {
 
             let transfer_len = actual_lengths.iter().sum();
             transfer.iso_packet_actual_lengths = actual_lengths;
-            if transfer_len > 0 && matches!(transfer.direction, Direction::In) {
-                transfer.prepare_read_all();
+            if matches!(transfer.direction, Direction::In) {
+                // ISO packets keep their requested offsets even when an earlier
+                // packet is short; copy back only bytes the device completed.
+                let mut offset = 0;
+                for (&requested, &actual) in packet_lengths
+                    .iter()
+                    .zip(&transfer.iso_packet_actual_lengths)
+                {
+                    transfer.complete_for_cpu(offset..offset + actual);
+                    offset += requested;
+                }
             }
             transfer.transfer_len = transfer_len;
             if let Some(seen) = TRANSFER_LENGTH_TRACE.sample() {
@@ -466,8 +477,8 @@ impl Endpoint {
             SubmittedTdKind::Iso { .. } => unreachable!("ISO was handled above"),
         };
 
-        if transfer_len > 0 && matches!(transfer.direction, Direction::In) {
-            transfer.prepare_read_all();
+        if matches!(transfer.direction, Direction::In) {
+            transfer.complete_for_cpu(0..transfer_len);
         }
         transfer.transfer_len = transfer_len;
         if let Some(seen) = TRANSFER_LENGTH_TRACE.sample() {
@@ -785,9 +796,8 @@ impl EndpointOp for Endpoint {
 
         let mut data_bus_addr = 0;
         if transfer.buffer_len() > 0 {
-            if matches!(transfer.direction, Direction::Out) {
-                transfer.confirm_write_all();
-            }
+            // Transfer ownership before publishing any TRB, for IN and OUT alike.
+            transfer.prepare_for_device_all();
             data_bus_addr = transfer.dma_addr();
             let buffer_end = data_bus_addr + transfer.buffer_len() as u64;
             if data_bus_addr > self.kernel.dma_mask() || buffer_end > self.kernel.dma_mask() {
@@ -1056,7 +1066,9 @@ fn iso_packet_actual_length(
                 Ok(requested.saturating_sub(remaining))
             }
         },
-        Err(e) => Err(TransferError::Other(anyhow!("unknown XHCI ISO completion code: {e:?}"))),
+        Err(e) => Err(TransferError::Other(anyhow!(
+            "unknown XHCI ISO completion code: {e:?}"
+        ))),
     }
 }
 

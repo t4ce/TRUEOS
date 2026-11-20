@@ -155,7 +155,7 @@ crc32fast = { version = "1.5.0", default-features = false }
 sha2 = { workspace = true }
 embedded-websocket = { version = "0.9.4", default-features = false }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "multicast", "socket-raw", "socket-udp", "socket-tcp", "socket-icmp", "socket-dhcpv4", "medium-ethernet"] }
-dma-api = { version = "=0.7.3", default-features = false }
+dma-api = { version = "=0.10.2", default-features = false }
 crab-usb = { path = "vendor/CrabUSB/usb-host", default-features = false }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
 trueos-fs = { path = "crates/trueos-fs" }
@@ -216,7 +216,7 @@ mio = { path = "vendor/mio-1.2.0" }
 smoltcp = { path = "vendor/smoltcp-0.13.1" }
 zune-core = { path = "vendor/zune-core-0.5.1" }
 zune-jpeg = { path = "vendor/zune-jpeg-0.5.15" }
-dma-api = { path = "vendor/dma-api-0.7.3" }
+dma-api = { path = "vendor/dma-api-0.10.2" }
 
 [build-dependencies]
 sha2 = { workspace = true }

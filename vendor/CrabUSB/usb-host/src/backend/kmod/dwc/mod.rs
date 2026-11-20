@@ -9,7 +9,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use alloc::{boxed::Box, collections::BTreeMap};
-use dma_api::{DArray, DmaDirection};
+use dma_api::CoherentArray;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use tock_registers::interfaces::*;
@@ -133,7 +133,7 @@ pub struct Dwc {
     revistion: u32,
     nr_scratch: u32,
     params: DwcParams,
-    scratchbuf: Option<DArray<u8>>,
+    scratchbuf: Option<CoherentArray<u8>>,
 }
 
 impl Dwc {
@@ -512,10 +512,9 @@ impl Dwc {
 
         let scratchbuf = self
             .kernel()
-            .array_zero_with_align(
+            .coherent_array_zero_with_align(
                 scratch_size,
                 self.kernel().page_size(),
-                DmaDirection::Bidirectional,
             )
             .map_err(|_| USBError::NoMemory)?;
 

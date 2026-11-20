@@ -8,6 +8,7 @@ mod heal_service;
 pub mod hid;
 pub(crate) mod lab;
 mod lib;
+mod dma_backend;
 mod mass;
 mod net;
 mod pen;
