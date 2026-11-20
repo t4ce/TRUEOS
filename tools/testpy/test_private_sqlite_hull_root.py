@@ -15,7 +15,7 @@ def main():
  start=host.index('    let Some(process_fs_root) =');end=host.index('    guest_state.process_fs_root = process_fs_root;',start)+len('    guest_state.process_fs_root = process_fs_root;')
  snapshot=host[start:end]
  start=guest.index('    let Some(app_fs_root) =');end=guest.index('    if module.is_filesystem_independent()',start);selection=guest[start:end]
- start=guest.index('        let mut process_env =');end=guest.index('        if timing.request != 0',start);rebuild=guest[start:end].replace('let mut process_env','let process_env',1)
+ start=guest.index('        let mut process_env =');end=guest.index('        if timing.request != 0',start);rebuild=guest[start:end]
  functions='\n'.join(item(io,needle)for needle in ['pub(crate) fn with_launch_context_console_and_fs_root<','pub(crate) fn current_app_fs_root(', 'fn normalize_app_path(', 'pub(crate) fn resolve_fs_path('])
  code=r'''
 #![allow(dead_code,unused_imports)]
@@ -24,11 +24,12 @@ use std::{collections::BTreeMap,sync::{Mutex,atomic::{AtomicBool,AtomicUsize,Ord
 type AllocString=String;type MatrixTarget=();
 static DOMAIN_OK:AtomicBool=AtomicBool::new(true);static DOMAIN_CALLS:AtomicUsize=AtomicUsize::new(0);static HOST_READS:AtomicUsize=AtomicUsize::new(0);
 struct Lock<T>(Mutex<T>);impl<T>Lock<T>{fn lock(&self)->std::sync::MutexGuard<'_,T>{self.0.lock().unwrap()}}
-#[derive(Clone)]struct LaunchState{archive:String,module_bytes:Vec<u8>,identity:(),launch_script:Option<String>,app_fs_root:String,process_fs_root:Option<String>}
+#[derive(Clone)]struct LaunchState{archive:String,module_bytes:Vec<u8>,identity:(),launch_script:Option<String>,app_fs_root:String,process_fs_root:Option<String>,access_account:Option<u64>}
 struct ProcessContext{vars:BTreeMap<String,String>}
 #[derive(Debug,PartialEq,Eq)]enum StartError{GuestMemoryUnavailable}
 fn clear_blueprint_child_template(_:u8){}fn log(_:&str){}
 mod allocators{pub fn with_hv_guest_alloc_domain<T>(_:u8,f:impl FnOnce()->T)->Option<T>{crate::DOMAIN_CALLS.fetch_add(1,crate::Ordering::SeqCst);crate::DOMAIN_OK.load(crate::Ordering::SeqCst).then(f)}}
+mod access_key_db{pub fn lico_mcp_available(_:&str,_:&str,_:Option<u64>)->bool{false}}
 mod hv{
  pub fn blueprint_process_env_var(_:u8,_:&str)->Option<String>{crate::HOST_READS.fetch_add(1,crate::Ordering::SeqCst);panic!("Hull must not walk the host process map")}
  pub mod blueprint{use std::collections::BTreeMap;
@@ -49,7 +50,7 @@ struct Module;impl Module{fn has_trueosfs_scope(&self)->bool{false}}
 fn projected(state:&LaunchState,out:&mut Option<String>,requested:&str)->bool{let vm_id=1;let module=Module;@SELECTION@ @REBUILD@
  // The real invoke_host_rel receives this exact selected root and environment.
  *out=Some(with_launch_context_console_and_fs_root(Vec::new(),process_env,None,Some(app_fs_root),||resolve_fs_path(requested,false).unwrap()));true}
-fn state()->LaunchState{LaunchState{archive:"sqlite.bp".into(),module_bytes:Vec::new(),identity:(),launch_script:None,app_fs_root:"apps/sqlite".into(),process_fs_root:None}}
+fn state()->LaunchState{LaunchState{archive:"sqlite.bp".into(),module_bytes:Vec::new(),identity:(),launch_script:None,app_fs_root:"apps/sqlite".into(),process_fs_root:None,access_account:None}}
 fn reset(){DOMAIN_OK.store(true,Ordering::SeqCst);DOMAIN_CALLS.store(0,Ordering::SeqCst);HOST_READS.store(0,Ordering::SeqCst);STACK.lock().clear();}
 #[test]fn authoritative_service_view_survives_host_map_release_and_shadows_container_path(){reset();let identity=state();let mut context=ProcessContext{vars:BTreeMap::from([("TRUEOS_APP_FS_ROOT".into(),"apps/codex/.codex/sqlite-service/codex".into())])};let selected=staged(&identity,&context).unwrap();assert_eq!(selected.app_fs_root,"apps/sqlite");context.vars.clear();let mut result=None;assert!(projected(&selected,&mut result,"/apps/codex/.codex/sqlite-service/codex/state.sqlite"));assert_eq!(result.as_deref(),Some("apps/codex/.codex/sqlite-service/codex/state.sqlite"));assert_eq!(HOST_READS.load(Ordering::SeqCst),0);assert_eq!(DOMAIN_CALLS.load(Ordering::SeqCst),2);}
 #[test]fn guest_relative_paths_and_common_alias_use_the_selected_view(){reset();let context=ProcessContext{vars:BTreeMap::from([("TRUEOS_APP_FS_ROOT".into(),"apps/codex/.codex/sqlite-service/codex".into())])};let selected=staged(&state(),&context).unwrap();for(path,expected)in[("state.sqlite","apps/codex/.codex/sqlite-service/codex/state.sqlite"),("/common/sqlite-service/codex","apps/common/sqlite-service/codex")]{let mut result=None;assert!(projected(&selected,&mut result,path));assert_eq!(result.as_deref(),Some(expected));}assert_eq!(HOST_READS.load(Ordering::SeqCst),0);}

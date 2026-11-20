@@ -46,6 +46,12 @@ pub(crate) struct Target {
     receiver_generation: u64,
 }
 
+impl Target {
+    pub(crate) fn belongs_to_run(self, vm: u8, run: u64) -> bool {
+        self.identity.vm == vm && self.identity.run == run
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SubmitError {
     Unavailable,

@@ -51,6 +51,8 @@ pub mod services {
     pub const HTTP_TRUEOSFS_TCP_PORT: u16 = well_known::HTTP;
     pub const LOCALCODER_WEB_TCP_PORT: u16 = 81;
     pub const AUDIO_HTTP_TCP_PORT: u16 = 82;
+    /// Account-scoped Blueprint transport from Codex to Lico.
+    pub const LICO_MCP_TCP_PORT: u16 = 42_127;
     pub const GAMESERVER_TACTICS_TCP_PORT: u16 = 1337;
 }
 

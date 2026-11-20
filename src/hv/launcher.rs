@@ -15,6 +15,7 @@ pub(crate) struct LaunchRequest {
     pub remote_input_origin: Option<crate::shell3::tui::RemoteInputOrigin>,
     pub frontend: Option<crate::shell3::tui::Frontend>,
     pub console_surface: super::BlueprintConsoleSurface,
+    pub signal_codex_startup: bool,
 }
 impl LaunchRequest {
     pub fn new(archive: String, bytes: Vec<u8>) -> Self {
@@ -28,6 +29,7 @@ impl LaunchRequest {
             remote_input_origin: None,
             frontend: None,
             console_surface: super::BlueprintConsoleSurface::Text,
+            signal_codex_startup: false,
         }
     }
 }
@@ -79,6 +81,7 @@ pub(crate) fn enqueue(
         super::matrix::observe_completion(&target);
     }
     let frontend = request.frontend;
+    let signal_codex_startup = request.signal_codex_startup;
     if let Some(frontend) = frontend {
         if let Err(error) = crate::shell3::tui::attach(frontend, &target) {
             super::matrix::discard(&target);
@@ -103,6 +106,9 @@ pub(crate) fn enqueue(
         crate::shell3::tui::park_native_for_launch(frontend);
     }
     crate::log_info!(target: "apps"; "launch phase=queued carrier={} reservation=until-first-poll\n",worker.slot);
+    if signal_codex_startup {
+        crate::shell3::tui::signal_codex_startup(&target);
+    }
     worker.spawner.spawn(task);
     Ok(receipt)
 }

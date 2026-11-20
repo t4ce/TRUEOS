@@ -14,6 +14,7 @@ use trueos_fs::{
     RecordKey,
     access::{AccessDenied, AccessKeyDb, AppId, ContainerId, ContainerPolicy, GrantScope},
 };
+use crate::allports::services::LICO_MCP_TCP_PORT;
 
 // Explicit host-managed grants are separate from provisioned ownership, so
 // revocation never removes a native owner/dependency grant.
@@ -409,15 +410,56 @@ fn sqlite_actor(actor: crate::r::fs::trueosfs::authorized::Actor, reservation: &
     Ok(())
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LicoMcpParty {
+    Codex,
+    Lico,
+}
+
+fn lico_mcp_party(app: &AppId) -> Option<LicoMcpParty> {
+    match app.as_str() {
+        "codex" | "codex-check" => Some(LicoMcpParty::Codex),
+        "lico" => Some(LicoMcpParty::Lico),
+        _ => None,
+    }
+}
+
+/// Attest the kernel's TCP policy only to eligible, account-bound launches.
+pub(crate) fn lico_mcp_available(archive: &str, workspace: &str, account: Option<AccountId>) -> bool {
+    account.is_some()
+        && container_for_workspace(archive, workspace)
+            .is_some_and(|container| lico_mcp_party(container.app()).is_some())
+}
+
+fn lico_mcp_account(
+    actor: crate::r::fs::trueosfs::authorized::Actor,
+    party: LicoMcpParty,
+) -> Option<AccountId> {
+    let crate::r::fs::trueosfs::authorized::Actor::Vm(vm, epoch) = actor else { return None; };
+    with_principal_at(vm, epoch, |subject| {
+        if lico_mcp_party(subject.container.app()) != Some(party) {
+            return None;
+        }
+        subject.account
+    }).flatten()
+}
+
 pub(crate) fn authorize_tcp_listen(actor: crate::r::fs::trueosfs::authorized::Actor, local: core::net::SocketAddr) -> Result<(), ()> {
-    if local.port() != CODEX_SQLITE_PORT { return Ok(()); }
+    if !matches!(local.port(), CODEX_SQLITE_PORT | LICO_MCP_TCP_PORT) { return Ok(()); }
     if local.ip() != core::net::IpAddr::V4(core::net::Ipv4Addr::LOCALHOST) { return Err(()); }
+    if local.port() == LICO_MCP_TCP_PORT {
+        return lico_mcp_account(actor, LicoMcpParty::Lico).map(|_| ()).ok_or(());
+    }
     let reservation = SQLITE_RESERVATION.lock().clone().ok_or(())?;
     sqlite_actor(actor, &reservation, true)
 }
 
 /// Called before connection establishment and before each oriented transfer.
 pub(crate) fn authorize_tcp_connect(client: crate::r::fs::trueosfs::authorized::Actor, server: crate::r::fs::trueosfs::authorized::Actor, port: u16) -> Result<(), ()> {
+    if port == LICO_MCP_TCP_PORT {
+        let account = lico_mcp_account(client, LicoMcpParty::Codex).ok_or(())?;
+        return (lico_mcp_account(server, LicoMcpParty::Lico) == Some(account)).then_some(()).ok_or(());
+    }
     if port != CODEX_SQLITE_PORT { return Ok(()); }
     let reservation = SQLITE_RESERVATION.lock().clone().ok_or(())?;
     sqlite_actor(client, &reservation, false)?;

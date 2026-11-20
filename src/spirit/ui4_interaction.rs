@@ -64,6 +64,9 @@ pub(crate) const KEY_HOME: u32 = v::bp_abi::DOBBY_UI4_KEY_HOME;
 pub(crate) const KEY_END: u32 = v::bp_abi::DOBBY_UI4_KEY_END;
 pub(crate) const KEY_PAGE_UP: u32 = v::bp_abi::DOBBY_UI4_KEY_PAGE_UP;
 pub(crate) const KEY_PAGE_DOWN: u32 = v::bp_abi::DOBBY_UI4_KEY_PAGE_DOWN;
+const KEY_CODE_MASK: u32 = v::bp_abi::DOBBY_UI4_KEY_CODE_MASK;
+const KEY_MODIFIER_SHIFT: u32 = v::bp_abi::DOBBY_UI4_KEY_MODIFIER_SHIFT;
+const KEY_MODIFIER_MASK: u32 = v::bp_abi::DOBBY_UI4_KEY_MODIFIER_MASK;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct BlueprintUiOwner {
@@ -318,8 +321,13 @@ fn observed_input_window(
     }
     let window = selected_lilly_window()?;
     let cache = observation_slot(owner.vm)?.lock();
-    if !cache.permit.is_some_and(crate::ui4::spirit_access::valid) { return Err(ERROR_DENIED); }
-    if !cache_belongs_to(&cache, owner) || !cache_matches_window(&cache, window) {
+    if !cache_belongs_to(&cache, owner) {
+        return Err(ERROR_BAD_STATE);
+    }
+    if !cache.permit.is_some_and(crate::ui4::spirit_access::valid) {
+        return Err(ERROR_DENIED);
+    }
+    if !cache_matches_window(&cache, window) {
         return Err(ERROR_BAD_STATE);
     }
     let placement = cache.placement.ok_or(ERROR_BAD_STATE)?;
@@ -598,9 +606,11 @@ pub(crate) fn observe_metadata(owner: u8, out: &mut [u8]) -> isize {
         Err(error) => return error as isize,
     };
     let cache = slot.lock();
-    if !cache.permit.is_some_and(crate::ui4::spirit_access::valid) { return ERROR_DENIED as isize; }
     if !cache_belongs_to(&cache, identity) || cache.window_id == 0 || cache.metadata.is_empty() {
         return ERROR_BAD_STATE as isize;
+    }
+    if !cache.permit.is_some_and(crate::ui4::spirit_access::valid) {
+        return ERROR_DENIED as isize;
     }
     copy_complete(cache.metadata.as_slice(), out)
 }
@@ -615,9 +625,11 @@ pub(crate) fn observe_read(owner: u8, offset: usize, out: &mut [u8]) -> isize {
         Err(error) => return error as isize,
     };
     let cache = slot.lock();
-    if !cache.permit.is_some_and(crate::ui4::spirit_access::valid) { return ERROR_DENIED as isize; }
     if !cache_belongs_to(&cache, identity) || cache.window_id == 0 || cache.png.is_empty() {
         return ERROR_BAD_STATE as isize;
+    }
+    if !cache.permit.is_some_and(crate::ui4::spirit_access::valid) {
+        return ERROR_DENIED as isize;
     }
     if offset > cache.png.len() {
         return ERROR_BAD_INPUT as isize;
@@ -882,7 +894,9 @@ pub(crate) fn type_text(owner: u8, bytes: &[u8]) -> i32 {
     }
 }
 
-fn named_key_usage(key: u32) -> Option<u16> {
+fn key_usage(key: u32) -> Option<u16> {
+    const ASCII_A: u32 = b'a' as u32;
+    const ASCII_Z: u32 = b'z' as u32;
     match key {
         KEY_ENTER => Some(0x28),
         KEY_ESCAPE => Some(0x29),
@@ -898,14 +912,19 @@ fn named_key_usage(key: u32) -> Option<u16> {
         KEY_END => Some(0x4D),
         KEY_PAGE_UP => Some(0x4B),
         KEY_PAGE_DOWN => Some(0x4E),
+        ASCII_A..=ASCII_Z => Some(0x04 + (key - ASCII_A) as u16),
         _ => None,
     }
 }
 
 pub(crate) fn key(owner: u8, key: u32) -> i32 {
-    let Some(key_code) = named_key_usage(key) else {
+    if key & !(KEY_CODE_MASK | KEY_MODIFIER_MASK) != 0 {
+        return ERROR_BAD_INPUT;
+    }
+    let Some(key_code) = key_usage(key & KEY_CODE_MASK) else {
         return ERROR_BAD_INPUT;
     };
+    let modifiers = ((key & KEY_MODIFIER_MASK) >> KEY_MODIFIER_SHIFT) as u8;
     let mut io = match claim_blueprint_io(owner) {
         Ok(io) => io,
         Err(error) => return error,
@@ -923,6 +942,7 @@ pub(crate) fn key(owner: u8, key: u32) -> i32 {
     let command = KeyboardControlCommand {
         opcode: KEYBOARD_CONTROL_OPCODE_STROKE,
         flags: KEYBOARD_CONTROL_FLAG_CLEAR_QUEUE,
+        modifiers,
         duration_ms: KEY_STROKE_MS,
         key_code,
         ..KeyboardControlCommand::default()

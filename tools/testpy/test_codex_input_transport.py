@@ -270,7 +270,7 @@ def main() -> None:
     assert channel, "repository Rust toolchain channel missing"
     adapter = (ROOT / "src/r/io/async_fs_cabi.rs").read_text()
     start = adapter.index("fn start_codex_input_read(")
-    stop = adapter.index("\npub(crate) fn start_read(", start)
+    stop = adapter.index("\npub(crate) fn start_object(", start)
     reserved_read = adapter[start:stop]
     with tempfile.TemporaryDirectory(prefix="trueos-codex-input-") as directory:
         directory = Path(directory)

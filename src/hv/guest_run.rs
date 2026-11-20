@@ -394,6 +394,9 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
             state.launch_script.as_deref(),
             module.has_trueosfs_scope(),
         );
+        if crate::access_key_db::lico_mcp_available(&state.archive, &state.app_fs_root, state.access_account) {
+            process_env.insert(String::from("TRUEOS_LICO_MCP_ACL"), String::from("1"));
+        }
         if timing.request != 0 {
             process_env.insert(String::from("TRUEOS_STARTUP_REQUEST"), alloc::format!("{}", timing.request));
         }

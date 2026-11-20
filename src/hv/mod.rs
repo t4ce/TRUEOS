@@ -3478,6 +3478,9 @@ pub fn stage_blueprint_launch(
         process_context.vars.insert(AllocString::from("TRUEOS_CODEX_SQLITE_ENDPOINT"),
             AllocString::from(crate::access_key_db::CODEX_SQLITE_ENDPOINT));
     }
+    if crate::access_key_db::lico_mcp_available(&state.archive, &app_fs_root, state.access_account) {
+        process_context.vars.insert(AllocString::from("TRUEOS_LICO_MCP_ACL"), AllocString::from("1"));
+    }
     if codex_sqlite_service {
         process_context.vars.insert(AllocString::from("TRUEOS_CODEX_SQLITE_STORAGE"),
             AllocString::from(crate::access_key_db::CODEX_SQLITE_STORAGE));

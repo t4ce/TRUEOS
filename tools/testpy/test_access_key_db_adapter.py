@@ -78,6 +78,7 @@ mod r { pub mod fs { pub mod trueosfs {
     }
 } } }
 #[path = "__ADAPTER__"] mod access_key_db;
+#[path = "__PORTS__"] mod allports;
 
 type Node = Result<Option<RecordKey>, &'static str>;
 static NODES: Mutex<BTreeMap<(u32, String), Node>> = Mutex::new(BTreeMap::new());
@@ -395,6 +396,52 @@ fn messages() -> Vec<String> { WARNINGS.lock().unwrap().clone() }
     assert!(messages().is_empty());
     assert_eq!(access_key_db::principal_for_vm(0), Some(BOB));
 }
+
+#[test] fn lico_mcp_uses_live_app_identity_and_the_launch_account() {
+    use r::fs::trueosfs::authorized::Actor;
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+    reset();
+    let port = allports::services::LICO_MCP_TCP_PORT;
+    let local = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    assert!(access_key_db::lico_mcp_available("lico.bp", "apps/lico", Some(ALICE)));
+    assert!(access_key_db::lico_mcp_available("codex.bp", "apps/codex", Some(ALICE)));
+    assert!(access_key_db::lico_mcp_available("codex-check.bp", "apps/codex-check_probe", Some(ALICE)));
+    assert!(!access_key_db::lico_mcp_available("lico.bp", "apps/lico", None));
+    assert!(!access_key_db::lico_mcp_available("other.bp", "apps/other", Some(ALICE)));
+    assert!(!access_key_db::lico_mcp_available("other.bp", "apps/lico", Some(ALICE)));
+    access_key_db::bind_launch(0, "codex.bp", "apps/codex", Some(ALICE));
+    access_key_db::bind_launch(1, "lico.bp", "apps/lico", Some(ALICE));
+    access_key_db::bind_launch(2, "other.bp", "apps/other", Some(ALICE));
+    access_key_db::bind_launch(3, "codex.bp", "apps/codex", Some(BOB));
+    let actor = |vm| Actor::Vm(vm, access_key_db::principal_epoch(vm).unwrap());
+    let codex = actor(0);
+    let lico = actor(1);
+    let other = actor(2);
+    let foreign = actor(3);
+    assert_eq!(access_key_db::authorize_tcp_listen(lico, local), Ok(()));
+    assert!(access_key_db::authorize_tcp_listen(lico, SocketAddr::from((Ipv4Addr::UNSPECIFIED, port))).is_err());
+    assert!(access_key_db::authorize_tcp_listen(lico, SocketAddr::from((Ipv6Addr::LOCALHOST, port))).is_err());
+    assert_eq!(access_key_db::authorize_tcp_connect(codex, lico, port), Ok(()));
+    assert_eq!(count_allocations(|| {
+        access_key_db::authorize_tcp_listen(lico, local).unwrap();
+        access_key_db::authorize_tcp_connect(codex, lico, port).unwrap();
+    }), 0);
+    for invalid in [Actor::Host, Actor::Public, codex, other, foreign] {
+        assert!(access_key_db::authorize_tcp_listen(invalid, local).is_err());
+        assert!(access_key_db::authorize_tcp_connect(codex, invalid, port).is_err());
+    }
+    for invalid in [Actor::Host, Actor::Public, lico, other, foreign] {
+        assert!(access_key_db::authorize_tcp_connect(invalid, lico, port).is_err());
+    }
+    access_key_db::bind_launch(0, "codex-check.bp", "apps/codex-check_probe", Some(ALICE));
+    assert!(access_key_db::authorize_tcp_connect(codex, lico, port).is_err());
+    assert_eq!(access_key_db::authorize_tcp_connect(actor(0), lico, port), Ok(()));
+    access_key_db::bind_launch(1, "lico.bp", "apps/lico", None);
+    assert!(access_key_db::authorize_tcp_listen(lico, local).is_err());
+    assert!(access_key_db::authorize_tcp_listen(actor(1), local).is_err());
+    assert!(access_key_db::authorize_tcp_connect(actor(0), actor(1), port).is_err());
+    assert_eq!(access_key_db::authorize_tcp_connect(Actor::Public, Actor::Public, port + 1), Ok(()));
+}
 '''
 
 
@@ -414,7 +461,10 @@ def main():
             'spin = "0.10"', '',
         ])
         (directory / "Cargo.toml").write_text(manifest)
-        (directory / "tests.rs").write_text(HARNESS.replace("__ADAPTER__", str(ROOT / "src/access_key_db.rs")))
+        (directory / "tests.rs").write_text(
+            HARNESS.replace("__ADAPTER__", str(ROOT / "src/access_key_db.rs"))
+            .replace("__PORTS__", str(ROOT / "src/allports.rs"))
+        )
         # Run outside the kernel workspace to avoid its custom target/build-std
         # configuration. Dependencies and adapter source are still production.
         command = [

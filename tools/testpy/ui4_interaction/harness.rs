@@ -49,9 +49,21 @@ mod r { pub mod services { pub mod keyboard_control_service {
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
     pub struct KeyboardControlDevice { pub handle: u64, pub slot_id: u32 }
     #[derive(Default)]
-    pub struct KeyboardControlCommand { pub opcode: u8, pub flags: u8, pub duration_ms: u32, pub key_code: u16 }
+    pub struct KeyboardControlCommand {
+        pub opcode: u8,
+        pub flags: u8,
+        pub duration_ms: u32,
+        pub key_code: u16,
+        pub modifiers: u8,
+    }
+    pub static LAST_KEY: spin::Mutex<Option<KeyboardControlCommand>> = spin::Mutex::new(None);
     pub fn keyboard_is_idle(_: KeyboardControlPrincipal, _: u64) -> Result<bool, ()> { Ok(KEYBOARD_IDLE.load(Ordering::Relaxed)) }
-    pub fn submit_command(_: KeyboardControlPrincipal, _: u64, _: KeyboardControlCommand) -> Result<(), ()> { INPUT_COUNT.fetch_add(1, Ordering::Relaxed); KEYBOARD_IDLE.store(false, Ordering::Relaxed); Ok(()) }
+    pub fn submit_command(_: KeyboardControlPrincipal, _: u64, command: KeyboardControlCommand) -> Result<(), ()> {
+        *LAST_KEY.lock() = Some(command);
+        INPUT_COUNT.fetch_add(1, Ordering::Relaxed);
+        KEYBOARD_IDLE.store(false, Ordering::Relaxed);
+        Ok(())
+    }
     pub fn submit_text(_: KeyboardControlPrincipal, _: u64, text: &str, _: u32, _: bool) -> Result<usize, ()> { INPUT_COUNT.fetch_add(1, Ordering::Relaxed); KEYBOARD_IDLE.store(false, Ordering::Relaxed); Ok(text.chars().count()) }
 } } }
 
@@ -74,6 +86,55 @@ mod ui4 {
     pub fn frame_snapshot(_: u32) -> Result<FrameSnapshot, ()> { Ok(FrameSnapshot { plan: FramePlan { width: BACKING_WIDTH.load(Ordering::Relaxed) as u32, height: 80 } }) }
     #[derive(Copy, Clone, Debug, Eq, PartialEq)] pub struct CursorFrameKey { pub owner: WindowOwner, pub window: WindowId }
     impl CursorFrameKey { pub fn new(owner: WindowOwner, window: WindowId) -> Self { Self { owner, window } } }
+    pub mod spirit_access {
+        use super::{CursorFrameKey, WINDOWS, WindowState};
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        pub struct Permit {
+            frame: CursorFrameKey,
+            serial: u64,
+        }
+
+        static GRANTS: spin::Mutex<Vec<Permit>> = spin::Mutex::new(Vec::new());
+        static NEXT_SERIAL: AtomicU64 = AtomicU64::new(1);
+
+        pub fn share(frame: CursorFrameKey) {
+            revoke(frame);
+            GRANTS.lock().push(Permit {
+                frame,
+                serial: NEXT_SERIAL.fetch_add(1, Ordering::Relaxed),
+            });
+        }
+
+        pub fn revoke(frame: CursorFrameKey) {
+            GRANTS.lock().retain(|permit| permit.frame != frame);
+        }
+
+        pub fn authorize(frame: CursorFrameKey) -> Option<Permit> {
+            let live = WINDOWS.lock().iter().any(|window| {
+                window.owner == frame.owner
+                    && window.id == frame.window
+                    && window.state == WindowState::Ready
+            });
+            if !live {
+                return None;
+            }
+            GRANTS.lock().iter().find(|permit| permit.frame == frame).copied()
+        }
+
+        pub fn valid(permit: Permit) -> bool {
+            authorize(permit.frame) == Some(permit)
+        }
+
+        pub fn is_granted(frame: CursorFrameKey) -> bool {
+            authorize(frame).is_some()
+        }
+
+        pub fn bind_input(_: u32, _: u32, permit: Permit, _: u8, _: u64) -> bool {
+            valid(permit)
+        }
+    }
     pub static WINDOWS: spin::Mutex<Vec<WindowSnapshot>> = spin::Mutex::new(Vec::new());
     pub static SELECTED: spin::Mutex<Option<CursorFrameKey>> = spin::Mutex::new(None);
     pub const COMPACT_WINDOW_GRID_EXTENT: u32 = 1000;
@@ -112,13 +173,64 @@ mod spirit {
 #[cfg(test)] mod tests {
     use super::*;
     use spirit::ui4_interaction as api;
+    fn frame(id: u32) -> ui4::CursorFrameKey {
+        ui4::CursorFrameKey::new(ui4::WindowOwner::Vm(3), ui4::WindowId(id))
+    }
     fn setup() {
         hv::live(1); hv::live(2);
         spirit::register();
         *ui4::WINDOWS.lock() = vec![ui4::window(11), ui4::window(12)];
-        *ui4::SELECTED.lock() = Some(ui4::CursorFrameKey::new(ui4::WindowOwner::Vm(3), ui4::WindowId(11)));
+        *ui4::SELECTED.lock() = Some(frame(11));
+        ui4::spirit_access::share(frame(11));
+        ui4::spirit_access::share(frame(12));
     }
     fn ready() { CURSOR_IDLE.store(true, Ordering::Relaxed); KEYBOARD_IDLE.store(true, Ordering::Relaxed); }
+
+    #[test]
+    fn inventory_and_focus_only_offer_shared_ready_windows() {
+        setup();
+        ui4::spirit_access::revoke(frame(11));
+        ui4::WINDOWS.lock().push(ui4::WindowSnapshot {
+            state: ui4::WindowState::Closing,
+            ..ui4::window(13)
+        });
+        ui4::spirit_access::share(frame(13));
+        let mut inventory = vec![0; api::windows(1, &mut []) as usize];
+        assert_eq!(api::windows(1, &mut inventory), inventory.len() as isize);
+        let inventory: serde_json::Value = serde_json::from_slice(&inventory).unwrap();
+        let windows = inventory["windows"].as_array().unwrap();
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0]["id"], "12");
+        assert_eq!(windows[0]["selected"], false);
+        assert_eq!(api::focus(1, 11), api::ERROR_DENIED);
+        assert_eq!(api::observe_prepare(1), api::ERROR_DENIED as isize);
+        assert_eq!(api::focus(1, 13), api::ERROR_NOT_FOUND);
+        assert_eq!(api::focus(1, 12), 0);
+        assert_eq!(api::observe_prepare(1), 4);
+        let mut metadata = vec![0; api::observe_metadata(1, &mut []) as usize];
+        assert_eq!(api::observe_metadata(1, &mut metadata), metadata.len() as isize);
+        let metadata: serde_json::Value = serde_json::from_slice(&metadata).unwrap();
+        assert_eq!(metadata["id"], "12");
+        assert_eq!(metadata["grid_extent"], 1000);
+        let mut bytes = [0; 4];
+        assert_eq!(api::observe_read(1, 0, &mut bytes), 4);
+        assert_eq!(bytes, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn revoke_and_reshare_deny_old_capture_until_a_fresh_observation() {
+        setup();
+        assert_eq!(api::focus(1, 11), 0);
+        assert_eq!(api::observe_prepare(1), 4);
+        ui4::spirit_access::revoke(frame(11));
+        ui4::spirit_access::share(frame(11));
+        assert_eq!(api::observe_metadata(1, &mut []), api::ERROR_DENIED as isize);
+        assert_eq!(api::observe_read(1, 0, &mut [0; 4]), api::ERROR_DENIED as isize);
+        assert_eq!(api::pointer(1, 500, 500, api::POINTER_ACTION_MOVE), api::ERROR_DENIED);
+        assert_eq!(INPUT_COUNT.load(Ordering::Relaxed), 0);
+        assert_eq!(api::observe_prepare(1), 4);
+        assert_eq!(api::pointer(1, 500, 500, api::POINTER_ACTION_MOVE), 0);
+    }
 
     #[test] fn admits_live_blueprints_without_any_archive_name_gate() {
         setup();
@@ -183,6 +295,34 @@ mod spirit {
         assert_eq!(api::type_text(1, b"hi"), 0);
         ready(); assert_eq!(api::key(1, api::KEY_ENTER), 0);
     }
+    #[test]
+    fn key_chords_queue_a_letter_and_exact_hid_modifiers() {
+        use crate::bp_abi::{
+            DOBBY_UI4_KEY_MODIFIER_CONTROL, DOBBY_UI4_KEY_MODIFIER_SHIFT,
+            DOBBY_UI4_KEY_MODIFIER_SHIFT_LEFT,
+        };
+        use crate::r::services::keyboard_control_service::{KEYBOARD_CONTROL_OPCODE_STROKE, LAST_KEY};
+
+        let modifiers = DOBBY_UI4_KEY_MODIFIER_CONTROL | DOBBY_UI4_KEY_MODIFIER_SHIFT_LEFT;
+        let chord = u32::from(b'z') | (u32::from(modifiers) << DOBBY_UI4_KEY_MODIFIER_SHIFT);
+        setup();
+        assert_eq!(api::key(1, chord), api::ERROR_BAD_STATE);
+        assert_eq!(api::observe_prepare(1), 4);
+        assert_eq!(api::key(1, chord | (1 << 12)), api::ERROR_BAD_INPUT);
+        assert_eq!(api::key(1, chord | (1 << 16)), api::ERROR_BAD_INPUT);
+        assert_eq!(api::key(1, u32::from(b'Z')), api::ERROR_BAD_INPUT);
+        assert_eq!(INPUT_COUNT.load(Ordering::Relaxed), 0);
+        assert_eq!(api::key(1, chord), 0);
+        let stroke = LAST_KEY.lock().take().unwrap();
+        assert_eq!(stroke.opcode, KEYBOARD_CONTROL_OPCODE_STROKE);
+        assert_eq!(stroke.key_code, 0x1D);
+        assert_eq!(stroke.modifiers, modifiers);
+        ready();
+        assert_eq!(api::key(1, api::KEY_ENTER), 0);
+        let stroke = LAST_KEY.lock().take().unwrap();
+        assert_eq!(stroke.key_code, 0x28);
+        assert_eq!(stroke.modifiers, 0);
+    }
     #[test] fn ordinary_repaints_do_not_invalidate_input_geometry() {
         setup(); api::observe_prepare(1);
         ui4::WINDOWS.lock()[0].revision += 1;
@@ -204,6 +344,9 @@ mod spirit {
     #[test] fn paired_serializer_waits_for_both_devices_and_respects_native_owner() {
         setup(); api::observe_prepare(1);
         assert_eq!(api::pointer(1, 100, 100, api::POINTER_ACTION_PRIMARY_CLICK), 0);
+        assert_eq!(api::pointer(1, 100, 100, api::POINTER_ACTION_MOVE), api::ERROR_BUSY);
+        assert_eq!(api::observe_prepare(1), api::ERROR_BUSY as isize);
+        assert_eq!(INPUT_COUNT.load(Ordering::Relaxed), 1);
         assert_eq!(api::focus(2, 12), api::ERROR_BUSY);
         assert!(!spirit::native());
         KEYBOARD_IDLE.store(false, Ordering::Relaxed);

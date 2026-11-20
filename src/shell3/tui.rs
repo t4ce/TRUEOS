@@ -74,6 +74,7 @@ struct Route {
     remote_input_frontiers: Option<((u32, u32), u64)>,
     screen: Terminal,
     program_status: ProgramStatusParser,
+    codex_starting: bool,
     surface_generation: u64,
     suppressed_text: Option<(u32, u32, u32)>,
     stdout_pending: Vec<u8>,
@@ -86,6 +87,7 @@ impl Route {
     fn observe_program_status(&mut self, bytes: &[u8]) -> bool {
         let mut failed = false;
         self.program_status.feed(bytes, |status| {
+            self.codex_starting = false;
             failed |= status == ProgramStatus::Error;
         });
         failed
@@ -139,8 +141,13 @@ pub(crate) fn program_status() -> Option<ProgramStatus> {
         .lock()
         .routes
         .iter()
-        .filter(|route| route.owner.is_some())
-        .filter_map(|route| route.program_status.current())
+        .filter_map(|route| {
+            if route.codex_starting {
+                Some(ProgramStatus::Working)
+            } else {
+                route.owner.and_then(|_| route.program_status.current())
+            }
+        })
         .filter(|status| program_status_priority(*status) != 0)
         .max_by_key(|status| program_status_priority(*status))
 }
@@ -298,6 +305,13 @@ pub(crate) fn reserve(target: &MatrixTarget) -> Result<(), String> {
     create_route(None, target)
 }
 
+pub(crate) fn signal_codex_startup(target: &MatrixTarget) {
+    let lease = crate::shell3::matrix_target_slot_lease(target);
+    if let Some(route) = ROUTES.lock().routes.iter_mut().find(|route| route.lease == lease) {
+        route.codex_starting = true;
+    }
+}
+
 pub(crate) fn attach(frontend: Frontend, target: &MatrixTarget) -> Result<(), String> {
     create_route(Some(frontend), target)
 }
@@ -363,6 +377,7 @@ fn create_route(frontend: Option<Frontend>, target: &MatrixTarget) -> Result<(),
             remote_input_frontiers: None,
             screen: Terminal::new(cols, rows),
             program_status: ProgramStatusParser::new(),
+            codex_starting: false,
             surface_generation: 1,
             suppressed_text: None,
             stdout_pending: Vec::new(),
@@ -401,6 +416,7 @@ pub(crate) fn bind_vm(target: &MatrixTarget, vm: u8) {
         route.remote_input_origin = None;
         route.remote_input_frontiers = None;
         route.program_status.reset();
+        route.codex_starting = false;
         changed.push(route.frontend);
     }
     for frontend in changed {
@@ -528,6 +544,7 @@ pub(crate) fn release(target: &MatrixTarget, vm: u8) -> Option<bool> {
     let was_owned = route.owner.is_some();
     route.owner = None;
     route.program_status.reset();
+    route.codex_starting = false;
     route.suppressed_text = None;
     if was_owned {
         if let Some((_, output)) = routes
@@ -1288,6 +1305,7 @@ pub(super) fn detach(frontend: u64) {
             route.selected = true;
             route.owner = None;
             route.program_status.reset();
+            route.codex_starting = false;
         }
     }
     for (lease, _, _) in native {

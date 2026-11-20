@@ -2,8 +2,8 @@
 """Exercise native UI4 access and input ownership without real UI hardware.
 
 The kernel has test=false. The fixture imports the complete production bridge,
-real wire constants, and its inline tests; it mocks only VM lifecycle, UI4
-snapshots/captures, and paired input devices. Tests run in fresh processes.
+real wire constants, and its inline tests. It substitutes VM lifecycle, window
+sharing and capture, and paired input devices. Tests run in fresh processes.
 Requires the repository toolchain and cached Cargo dependencies (offline).
 """
 

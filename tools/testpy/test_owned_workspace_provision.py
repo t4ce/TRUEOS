@@ -15,6 +15,7 @@ use std::sync::{Mutex, atomic::{AtomicBool, AtomicUsize, Ordering}};
 use trueos_crypto::AccountId;
 use trueos_fs::RecordKey;
 #[path="@ROOT@/src/access_key_db.rs"] mod access_key_db;
+#[path="@ROOT@/src/allports.rs"] mod allports;
 #[path="@ROOT@/src/access_key_store.rs"] mod access_key_store;
 #[path="@ROOT@/src/access_key_workspace.rs"] mod access_key_workspace;
 macro_rules! log_warn { (target:$t:expr;$($a:tt)*) => {{ let _=format_args!($($a)*); }}; }
