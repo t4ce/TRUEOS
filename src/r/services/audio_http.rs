@@ -116,7 +116,7 @@ fn audio_http_open_endpoint(dev_idx: usize) -> Option<AudioHttpEndpoint> {
         return None;
     }
 
-    let vnet = VNet::open(dev_idx)?;
+    let vnet = VNet::open_polled(dev_idx)?;
     if vnet
         .submit(api::Command::OpenTcpListen {
             port: ports::AUDIO_HTTP_TCP_PORT,

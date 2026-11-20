@@ -246,7 +246,9 @@ def main():
             "pub struct NetQueue<T>", "impl<T> NetQueue<T>",
         )),
         "APP_QUEUES": item(source, "struct AppQueues"),
-        "REGISTER": item(source, "pub fn register_app_queues("),
+        "REGISTER": "\n".join(item(source, signature) for signature in (
+            "pub fn register_app_queues(", "pub(crate) fn register_app_queues_with_io_wake(",
+        )),
         "SERVICE_WAKE": re.search(
             r"static NET_SERVICE_WAKE:[\s\S]*?;\n", source)[0],
         "WAKE_SERVICE": item(source, "fn wake_service_for_owner("),

@@ -95,6 +95,19 @@ impl VNet {
         device_index: usize,
         event_queue_depth: usize,
     ) -> Option<Self> {
+        Self::open_with_queue_options(device_index, event_queue_depth, true)
+    }
+
+    /// Open a client whose consumer polls its own event queue on a timer.
+    pub(crate) fn open_polled(device_index: usize) -> Option<Self> {
+        Self::open_with_queue_options(device_index, VNET_EVENT_QUEUE_DEPTH_DEFAULT, false)
+    }
+
+    fn open_with_queue_options(
+        device_index: usize,
+        event_queue_depth: usize,
+        wake_blueprint_io: bool,
+    ) -> Option<Self> {
         if crate::net::device_count() == 0 {
             return None;
         }
@@ -131,7 +144,7 @@ impl VNet {
         let depth = event_queue_depth.max(64);
         let cmds = NetQueue::new_leaked(cmds_name, VNET_CMD_QUEUE_DEPTH);
         let events = NetQueue::new_leaked(events_name, depth);
-        adapter::register_app_queues(owner, cmds, events);
+        adapter::register_app_queues_with_io_wake(owner, cmds, events, wake_blueprint_io);
 
         let vnet = Self {
             owner,

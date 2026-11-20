@@ -701,7 +701,7 @@ impl MioCompat {
     fn ensure_net(&mut self) -> Result<(), i32> {
         if self.net.is_none() {
             let device_index = crate::net::primary_device_index();
-            self.net = VNetBridge::open_primary_native();
+            self.net = VNetBridge::open_native(device_index);
             if self.net.is_some() {
                 MIO_RX_DEVICE_INDEX.store(device_index, AtomicOrdering::Release);
             }
@@ -979,8 +979,14 @@ impl MioCompat {
     }
 
     fn kick_net(&mut self) {
+        let device_index = MIO_RX_DEVICE_INDEX.load(AtomicOrdering::Acquire);
+        let device_index = if device_index == usize::MAX {
+            crate::net::primary_device_index()
+        } else {
+            device_index
+        };
         for _ in 0..4 {
-            if !crate::net::adapter::service_tick_primary_once() {
+            if !crate::net::adapter::service_tick_sync(device_index) {
                 break;
             }
         }
@@ -1414,7 +1420,16 @@ fn mio_socket_poll_ready_owned_host(
     interests: u8,
 ) -> Option<u8> {
     with_compat(|compat| {
-        compat.kick_net();
+        let device_index = MIO_RX_DEVICE_INDEX.load(AtomicOrdering::Acquire);
+        if owner_vm.is_some()
+            && crate::net::adapter::service_task_started(device_index)
+        {
+            // The adapter task drives NIC and socket progress and wakes the
+            // selector after publishing events. Apply the queued events here.
+            compat.pump();
+        } else {
+            compat.kick_net();
+        }
         let socket = compat.socket(socket_id)?;
         if socket.owner_vm != owner_vm {
             return None;

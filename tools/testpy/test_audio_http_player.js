@@ -62,7 +62,14 @@ function fixture() {
       state.context = this;
     }
     createGain() {
-      const gain = {gain: {value: NaN}, connect(target) { this.target = target; }};
+      const gain = {
+        gain: {value: NaN},
+        connect(target) { this.target = target; },
+        disconnect(target) {
+          assert.equal(this.target, target);
+          this.target = null;
+        },
+      };
       this.gain ??= gain;
       return gain;
     }
@@ -71,6 +78,10 @@ function fixture() {
         offset: {value: 1}, connect() {}, starts: 0, stops: 0,
         start() { ++this.starts; }, stop() { ++this.stops; },
       };
+    }
+    createMediaStreamDestination() {
+      const track = {stopped: false, stop() { this.stopped = true; }};
+      return {stream: {getTracks: () => [track]}};
     }
     createBuffer(channels, frames, rate) {
       assert.equal(channels, 2);
@@ -93,7 +104,20 @@ function fixture() {
     resume() { return resume.promise; }
     close() { this.closed = true; return Promise.resolve(); }
   }
-  const elements = new Map(['listen', 'status', 'volume', 'crossfade'].map(id => [id, {}]));
+  const elements = new Map([
+    'listen', 'status', 'volume', 'crossfade', 'low-gain-compat', 'compat-status',
+  ].map(id => [id, {}]));
+  state.compatOutput = {
+    srcObject: null,
+    plays: [],
+    play() {
+      const play = deferred();
+      this.plays.push(play);
+      return play.promise;
+    },
+    pause() {},
+  };
+  elements.set('compat-output', state.compatOutput);
   const sandbox = vm.createContext({
     window: {AudioContext, addEventListener() {}},
     document: {getElementById: id => elements.get(id)},
@@ -310,6 +334,30 @@ const tests = [
     assert.equal(request.signal.aborted, true);
     assert.equal(connecting.context.sources.length, 0);
     assert.equal(connecting.context.closed, true);
+  }],
+  ['native playback failure restores direct output and superseded requests leave the current route in place', async () => {
+    const f = fixture();
+    const blocked = f.player.setCompat(true);
+    const blockedTrack = f.compatOutput.srcObject.getTracks()[0];
+    f.compatOutput.plays[0].reject(new Error('playback refused'));
+    await assert.rejects(blocked, /playback refused/);
+    assert.equal(f.player.gain.target, f.context.destination);
+    assert.equal(f.compatOutput.srcObject, null);
+    assert.equal(blockedTrack.stopped, true);
+
+    const superseded = f.player.setCompat(true);
+    await f.player.setCompat(false);
+    const current = f.player.setCompat(true);
+    const destination = f.player.gain.target;
+    f.compatOutput.plays[1].reject(new Error('superseded'));
+    await superseded;
+    assert.equal(f.player.gain.target, destination);
+    assert.equal(f.compatOutput.srcObject, destination.stream);
+    f.compatOutput.plays[2].resolve();
+    await current;
+    await f.stop();
+    assert.equal(destination.stream.getTracks()[0].stopped, true);
+    assert.equal(f.compatOutput.srcObject, null);
   }],
 ];
 

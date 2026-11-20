@@ -212,6 +212,33 @@ let context;
   assert.equal(await evaluate('window.latencyHint'), 'interactive');
   assert.equal((await serverState()).opens, 1, 'listener reopened between replies');
 
+  const nativeOutput = () => evaluate(`(() => {
+    const option = document.getElementById('low-gain-compat');
+    const audio = document.getElementById('compat-output');
+    return {
+      enabled: option.checked,
+      attached: audio.srcObject instanceof MediaStream,
+      tracks: audio.srcObject?.getAudioTracks().map(track => track.readyState) ?? [],
+      paused: audio.paused,
+    };
+  })()`);
+  const toggleNativeOutput = () => evaluate(`(() => {
+    document.getElementById('low-gain-compat').click();
+    return true;
+  })()`);
+  const playingNativeOutput = async () => {
+    const output = await nativeOutput();
+    const advancing = output.enabled && output.attached && !output.paused &&
+      await evaluate("document.getElementById('compat-output').currentTime > 0");
+    return advancing && output;
+  };
+  assert.deepEqual(await nativeOutput(), {
+    enabled: false, attached: false, tracks: [], paused: true,
+  });
+  await toggleNativeOutput();
+  assert.deepEqual((await until(playingNativeOutput)).tracks, ['live']);
+  assert.equal(await evaluate('window.contexts'), 1, 'mode switch recreated the AudioContext');
+
   await fetch(base + 'fixture/publish?id=4');
   const pair = await until(() => evaluate(`(() => {
     const a = window.starts.find(row => row.lane === 1 && row.left === .5);
@@ -229,14 +256,29 @@ let context;
   assert.deepEqual(await evaluate("window.gains.map(node => node.gain.value)"), [0, 0, 1]);
   await until(() => evaluate("window.starts.find(row => row.left === -.5) ?? null"));
 
+  await toggleNativeOutput();
+  await until(async () => {
+    const output = await nativeOutput();
+    return !output.enabled && !output.attached && output.paused;
+  });
+  await toggleNativeOutput();
+  assert.deepEqual((await until(playingNativeOutput)).tracks, ['live']);
+  assert.deepEqual(await evaluate("window.gains.map(node => node.gain.value)"), [0, 0, 1]);
+  assert.equal(await evaluate('window.contexts'), 1, 'mode switch recreated the AudioContext');
+  assert.equal((await serverState()).opens, 1, 'mode switch opened another live stream');
+
   const beforeStop = await evaluate('window.starts.length');
   await fetch(base + 'fixture/publish?id=3');
   await until(async () => (await serverState()).prefix_sent_ms['3']);
   await evaluate("(() => { document.getElementById('listen').click(); return true; })()");
   await sleep(500);
   assert.equal(await evaluate('window.starts.length'), beforeStop, 'stopped stream produced stale speech');
+  const stoppedOutput = await nativeOutput();
+  assert.equal(stoppedOutput.attached, false);
+  assert.equal(stoppedOutput.paused, true);
   console.log(JSON.stringify({
-    browser: 'Firefox', prefixes, crossfade: 'passed', one_live_connection: true, stop_during_transfer: 'passed',
+    browser: 'Firefox', prefixes, crossfade: 'passed', low_gain_compat: 'passed',
+    one_live_connection: true, stop_during_transfer: 'passed',
   }, null, 2));
   await command('browsingContext.close', {context});
   context = null;

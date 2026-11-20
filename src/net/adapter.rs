@@ -904,6 +904,7 @@ struct AppQueues {
     name: &'static str,
     cmds: &'static NetQueue<NetCommand>,
     events: &'static NetQueue<NetEvent>,
+    wake_blueprint_io: bool,
 }
 
 static APP_QUEUES: spin::Mutex<Vec<AppQueues>> = spin::Mutex::new(Vec::new());
@@ -957,11 +958,25 @@ pub fn register_app_queues(
     cmds: &'static NetQueue<NetCommand>,
     events: &'static NetQueue<NetEvent>,
 ) {
+    register_app_queues_with_io_wake(name, cmds, events, true);
+}
+
+pub(crate) fn register_app_queues_with_io_wake(
+    name: &'static str,
+    cmds: &'static NetQueue<NetCommand>,
+    events: &'static NetQueue<NetEvent>,
+    wake_blueprint_io: bool,
+) {
     let mut guard = APP_QUEUES.lock();
     if guard.iter().any(|entry| entry.name == name) {
         return;
     }
-    guard.push(AppQueues { name, cmds, events });
+    guard.push(AppQueues {
+        name,
+        cmds,
+        events,
+        wake_blueprint_io,
+    });
     drop(guard);
     cmds.wake_on_push(name, wake_service_for_owner);
     events.wake_on_pop(name, wake_service_for_owner);
@@ -982,30 +997,36 @@ fn pop_command_for_device(device_index: usize) -> Option<(&'static str, NetComma
 }
 
 fn push_event(target: &'static str, event: NetEvent) -> bool {
-    let wakes_io = matches!(
-        event,
-        NetEvent::Opened { .. }
-            | NetEvent::Error { .. }
-            | NetEvent::TcpSent { .. }
-            | NetEvent::TcpData { .. }
-            | NetEvent::TcpReadClosed { .. }
-            | NetEvent::TcpEstablished { .. }
-            | NetEvent::Closed { .. }
-            | NetEvent::UdpPacket { .. }
-            | NetEvent::UdpPacketV6 { .. }
-            | NetEvent::IpPacket { .. }
-    );
-
-    let guard = APP_QUEUES.lock();
-    if let Some(entry) = guard.iter().find(|e| e.name == target) {
-        let ok = entry.events.push(event).is_ok();
-        if ok && wakes_io {
-            let _ = crate::wait::platform_wake_all_blueprint_io_waiters();
-        }
-        ok
-    } else {
-        false
+    // The registered queue is static, so its wakers can run outside the registry lock.
+    let registration = APP_QUEUES
+        .lock()
+        .iter()
+        .find(|entry| entry.name == target)
+        .map(|entry| (entry.events, entry.wake_blueprint_io));
+    let Some((events, wake_blueprint_io)) = registration else {
+        return false;
+    };
+    let wakes_io = wake_blueprint_io
+        && matches!(
+            event,
+            NetEvent::Opened { .. }
+                | NetEvent::Error { .. }
+                | NetEvent::TcpSent { .. }
+                | NetEvent::TcpData { .. }
+                | NetEvent::TcpReadClosed { .. }
+                | NetEvent::TcpEstablished { .. }
+                | NetEvent::Closed { .. }
+                | NetEvent::UdpPacket { .. }
+                | NetEvent::UdpPacketV6 { .. }
+                | NetEvent::IpPacket { .. }
+        );
+    if events.push(event).is_err() {
+        return false;
     }
+    if wakes_io {
+        let _ = crate::wait::platform_wake_all_blueprint_io_waiters();
+    }
+    true
 }
 
 struct AdapterDeviceAt<'a> {
@@ -5969,15 +5990,20 @@ fn service_tick_once(device_index: usize, synchronous: bool) -> bool {
     busy
 }
 
-/// Synchronously advance the primary network service once.
+/// Synchronously advance the selected network service once.
 ///
 /// This is used by std/Mio/Tokio compatibility shims that may be running inside
 /// a current-thread runtime during early boot. In that window the async
 /// `net_service_task` can be delayed by other bringup work, but socket clients
 /// still need submitted VNet commands to be drained promptly.
-pub fn service_tick_primary_once() -> bool {
-    let idx = crate::net::primary_device_index();
-    service_tick_once(idx, true)
+pub(crate) fn service_tick_sync(device_index: usize) -> bool {
+    service_tick_once(device_index, true)
+}
+
+pub(crate) fn service_task_started(device_index: usize) -> bool {
+    NET_SERVICE_STARTED
+        .get(device_index)
+        .is_some_and(|started| started.load(Ordering::Acquire))
 }
 
 /// Per-NIC RX poll loop.
@@ -6151,10 +6177,10 @@ pub async fn net_service_task(index: usize) {
             return;
         }
 
+        ensure_services(count);
         if NET_SERVICE_STARTED[index].swap(true, Ordering::AcqRel) {
             return;
         }
-        ensure_services(count);
         let mut irq_passes = 0u64;
         let mut irq_report_at = now();
 

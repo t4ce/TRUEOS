@@ -67,11 +67,25 @@ thread_local! {
     static HULL_QUERIES: Cell<usize> = const { Cell::new(0) };
     static GUEST_CALLS: Cell<usize> = const { Cell::new(0) };
     static GUEST_FAIL: Cell<bool> = const { Cell::new(false) };
+    static RUNNING_NET_DEVICE: Cell<Option<usize>> = const { Cell::new(None) };
+    static SYNC_TICKS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 mod allocators {
     pub fn with_host_alloc_domain_strong<T>(f: impl FnOnce() -> T) -> T { f() }
 }
 mod allcaps { pub mod hv { pub const CODEX_PROGRESS_PROBES_ENABLED: bool = true; } }
+mod net {
+    pub fn primary_device_index() -> usize { 0 }
+    pub mod adapter {
+        pub fn service_task_started(device_index: usize) -> bool {
+            crate::RUNNING_NET_DEVICE.with(|index| index.get() == Some(device_index))
+        }
+        pub fn service_tick_sync(device_index: usize) -> bool {
+            crate::SYNC_TICKS.with(|ticks| ticks.borrow_mut().push(device_index));
+            false
+        }
+    }
+}
 mod r { pub mod threads {
     pub fn current_vm_id() -> Option<u8> {
         crate::THREAD_QUERIES.with(|n| n.set(n.get() + 1));
@@ -105,8 +119,10 @@ mod hv {
 
 mod mio {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     #[path = @PROGRESS@] pub(super) mod progress;
     @MIO_CONSTANTS@
+    static MIO_RX_DEVICE_INDEX: AtomicUsize = AtomicUsize::new(1);
     #[derive(Clone, Copy, PartialEq, Eq)]
     @SOCKET_KIND@
     #[derive(Clone, Copy)]
@@ -115,16 +131,29 @@ mod mio {
     @SOCKET_SETUP@
  #[derive(Clone,Copy)]enum NetworkActor{Public}
     @SOCKET_STATE@
+    struct VNetBridge(RefCell<VecDeque<(u32, u8)>>);
+    impl VNetBridge {
+        fn pop_event(&self) -> Option<(u32, u8)> { self.0.borrow_mut().pop_front() }
+    }
     struct MioCompat {
+        net: Option<VNetBridge>,
         sockets: Vec<MioSocketState>,
         progress: [progress::Counters; 4],
-        kicks: usize,
     }
     impl MioCompat {
-        fn new() -> Self { Self { sockets: Vec::new(), progress: [progress::Counters::new(); 4], kicks: 0 } }
-        // The network service is an instrumented boundary. Authorization and
-        // readiness below are the production implementation.
-        fn kick_net(&mut self) { self.kicks += 1; }
+        fn new() -> Self {
+            Self {
+                net: Some(VNetBridge(RefCell::new(VecDeque::new()))),
+                sockets: Vec::new(),
+                progress: [progress::Counters::new(); 4],
+            }
+        }
+        // Decoding an actual adapter event is outside the readiness fixture.
+        fn handle_event(&mut self, (id, byte): (u32, u8)) {
+            self.sockets.iter_mut().find(|socket| socket.id == id).unwrap().rx_stream.push_back(byte);
+        }
+        @KICK_NET@
+        @PUMP@
         @SOCKET_LOOKUP@
         @READY_MASK@
     }
@@ -153,6 +182,40 @@ mod mio {
         THREAD_VM.with(|v| v.set(None)); BROKER_VM.with(|v| v.set(None)); HULL_VM.with(|v| v.set(None));
         THREAD_QUERIES.with(|v| v.set(0)); BROKER_QUERIES.with(|v| v.set(0));
         HULL_QUERIES.with(|v| v.set(0)); GUEST_CALLS.with(|v| v.set(0)); GUEST_FAIL.with(|v| v.set(false));
+        RUNNING_NET_DEVICE.with(|index| index.set(None));
+        SYNC_TICKS.with(|ticks| ticks.borrow_mut().clear());
+    }
+
+    #[test]
+    fn blueprint_readiness_uses_adapter_events_after_its_device_service_starts() {
+        reset();
+        THREAD_VM.with(|vm| vm.set(Some(1)));
+        assert_eq!(trueos_mio_socket_poll_ready(101, READY_READABLE), 0);
+        RUNNING_NET_DEVICE.with(|index| index.set(Some(0)));
+        assert_eq!(trueos_mio_socket_poll_ready(101, READY_READABLE), 0);
+        SYNC_TICKS.with(|ticks| assert_eq!(ticks.borrow().as_slice(), &[1, 1]));
+
+        RUNNING_NET_DEVICE.with(|index| index.set(Some(1)));
+        assert_eq!(trueos_mio_socket_poll_ready(101, READY_READABLE), 0);
+        with_compat(|c| c.net.as_ref().unwrap().0.borrow_mut().push_back((101, 42)));
+        HULL_VM.with(|vm| vm.set(Some(1)));
+        assert_eq!(trueos_mio_socket_poll_ready(101, READY_READABLE), i32::from(READY_READABLE));
+        assert_eq!(trueos_mio_socket_poll_ready(102, READY_WRITABLE), STATUS_NOT_FOUND);
+        SYNC_TICKS.with(|ticks| assert_eq!(ticks.borrow().as_slice(), &[1, 1]));
+        with_compat(|c| {
+            assert_eq!(c.sockets[1].rx_stream.front(), Some(&42));
+            assert_eq!((c.progress[1].ready_probes, c.progress[1].readable_hits), (4, 1));
+            assert!(!c.progress[2].observed);
+        });
+    }
+
+    #[test]
+    fn host_and_descriptor_readiness_keep_synchronous_progress() {
+        reset();
+        RUNNING_NET_DEVICE.with(|index| index.set(Some(1)));
+        assert_eq!(trueos_mio_socket_poll_ready(100, READY_WRITABLE), i32::from(READY_WRITABLE));
+        assert_eq!(mio_socket_poll_ready_host(101, READY_WRITABLE), Some(READY_WRITABLE));
+        SYNC_TICKS.with(|ticks| assert_eq!(ticks.borrow().as_slice(), &[1, 1]));
     }
 
     #[test]
@@ -210,7 +273,7 @@ mod mio {
         assert_eq!(THREAD_QUERIES.with(|v| v.get()), 0);
         assert_eq!(BROKER_QUERIES.with(|v| v.get()), 0);
         assert_eq!(GUEST_CALLS.with(|v| v.get()), 0);
-        with_compat(|c| assert_eq!(c.kicks, 0));
+        SYNC_TICKS.with(|ticks| assert!(ticks.borrow().is_empty()));
     }
 
     #[test]
@@ -325,23 +388,27 @@ mod adapter {
             events.push_back(event); Ok(())
         }
     }
-    struct AppQueues { name: &'static str, events: Arc<EventQueue> }
+    struct AppQueues { name: &'static str, events: &'static EventQueue, wake_blueprint_io: bool }
     static APP_QUEUES: Mutex<Vec<AppQueues>> = Mutex::new(Vec::new());
-    pub fn register(name: &'static str, queue: Arc<EventQueue>) {
-        APP_QUEUES.lock().push(AppQueues { name, events: queue });
+    pub fn register(name: &'static str, wake_blueprint_io: bool) -> &'static EventQueue {
+        let events = Box::leak(Box::new(EventQueue::new(1)));
+        APP_QUEUES.lock().push(AppQueues { name, events, wake_blueprint_io });
+        events
     }
     pub fn reset() { APP_QUEUES.lock().clear(); }
+    pub fn registry_unlocked() -> bool { APP_QUEUES.try_lock().is_some() }
     @PUSH_EVENT@
     pub fn publish(target: &'static str, event: NetEvent) -> bool { push_event(target, event) }
 }
 
 struct PublishedBeforeWake {
-    queue: Arc<adapter::EventQueue>, expected: api::Event, wakes: AtomicUsize,
+    queue: &'static adapter::EventQueue, expected: api::Event, wakes: AtomicUsize,
 }
 impl Wake for PublishedBeforeWake {
     fn wake(self: Arc<Self>) {
         assert_eq!(self.queue.events.lock().back(), Some(&self.expected), "wake ran before event publication");
         assert!(wait::registry_unlocked(), "wake ran while wait registry lock was retained");
+        assert!(adapter::registry_unlocked(), "wake ran while adapter registry lock was retained");
         self.wakes.fetch_add(1, Ordering::SeqCst);
     }
 }
@@ -364,10 +431,10 @@ fn adapter_publishes_open_error_transmit_and_existing_io_events_before_waking_pa
     ];
     for event in events {
         wait::reset(); adapter::reset();
-        let queue = Arc::new(adapter::EventQueue::new(1)); adapter::register("native-mio", queue.clone());
+        let queue = adapter::register("native-mio", true);
         let host = wait::queue(None, wait::BLUEPRINT_IO_WAIT_KEY);
         let guest = wait::queue(Some(1), wait::BLUEPRINT_IO_WAIT_KEY);
-        let wake = Arc::new(PublishedBeforeWake { queue: queue.clone(), expected: event, wakes: AtomicUsize::new(0) });
+        let wake = Arc::new(PublishedBeforeWake { queue, expected: event, wakes: AtomicUsize::new(0) });
         wait::add_waiter(&host, Waker::from(wake.clone()));
         wait::add_waiter(&guest, Waker::from(wake.clone()));
         assert!(adapter::publish("native-mio", event));
@@ -378,12 +445,36 @@ fn adapter_publishes_open_error_transmit_and_existing_io_events_before_waking_pa
 }
 
 #[test]
+fn timer_polled_consumer_receives_audio_events_without_waking_host_or_guest_io() {
+    use api::{Event, NetHandle};
+    wait::reset(); adapter::reset();
+    let queue = adapter::register("audio-http", false);
+    let other = adapter::register("native-mio", true);
+    let host = wait::queue(None, wait::BLUEPRINT_IO_WAIT_KEY);
+    let guest = wait::queue(Some(1), wait::BLUEPRINT_IO_WAIT_KEY);
+    let count = Arc::new(WakeCount::default());
+    wait::add_waiter(&host, Waker::from(count.clone()));
+    wait::add_waiter(&guest, Waker::from(count.clone()));
+
+    let sent = Event::TcpSent { handle: NetHandle(9), len: 1920 };
+    assert!(adapter::publish("audio-http", sent));
+    assert_eq!(queue.events.lock().pop_front(), Some(sent));
+    assert_eq!((wait::observe(&host), wait::observe(&guest)), (0, 0));
+    assert_eq!(count.0.load(Ordering::SeqCst), 0);
+
+    assert!(adapter::publish("native-mio", sent));
+    assert_eq!(other.events.lock().pop_front(), Some(sent));
+    assert_eq!((wait::observe(&host), wait::observe(&guest)), (1, 1));
+    assert_eq!(count.0.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn adapter_full_or_missing_target_never_wakes_and_non_io_event_remains_non_waking() {
     use api::{ByteBuf, Event, NetHandle};
     wait::reset(); adapter::reset();
     let host = wait::queue(None, wait::BLUEPRINT_IO_WAIT_KEY);
     let count = Arc::new(WakeCount::default()); wait::add_waiter(&host, Waker::from(count.clone()));
-    let queue = Arc::new(adapter::EventQueue::new(1)); adapter::register("native-mio", queue.clone());
+    let queue = adapter::register("native-mio", true);
     let ping = Event::IcmpReply { from: [127,0,0,1], seq: 1, rtt_ms: 1, data: ByteBuf::new() };
     assert!(adapter::publish("native-mio", ping));
     assert_eq!(wait::observe(&host), 0);
@@ -424,6 +515,8 @@ def main() -> None:
         "@COMPAT_ADDR@": keep("CompatAddr", item(sources["mio"], "enum CompatAddr")),
         "@SOCKET_STATE@": keep("MioSocketState", item(sources["mio"], "struct MioSocketState")),
         "@SOCKET_SETUP@": keep("TcpSocketSetup", item(sources["mio"], "struct TcpSocketSetup")),
+        "@KICK_NET@": keep("MioCompat::kick_net", function(sources["mio"], "kick_net")),
+        "@PUMP@": keep("MioCompat::pump", function(sources["mio"], "pump")),
         "@SOCKET_LOOKUP@": keep("socket", function(sources["mio"], "socket")),
         "@READY_MASK@": keep("ready_mask", function(sources["mio"], "ready_mask")),
         "@MIO_FUNCTIONS@": "\n".join(keep(name, function(sources["mio"], name)) for name in (

@@ -1,11 +1,14 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>TRUEOS Audio</title>
-<style>body{font:1rem system-ui;margin:2rem;max-width:40rem}button{font:inherit;padding:.6rem 1.3rem}label{margin-left:1rem}#status{min-height:1.5em;color:#555}</style>
+<style>body{font:1rem system-ui;margin:2rem;max-width:40rem}button{font:inherit;padding:.6rem 1.3rem}label{margin-left:1rem}.compat{display:block;margin:1rem 0}#status{min-height:1.5em;color:#555}</style>
 </head><body><h1>TRUEOS Audio</h1>
 <button id="listen" type="button">Listen</button>
 <label>Volume <input id="volume" type="range" min="0" max="1" step=".01" value="1"></label>
 <label>Crossfade A ↔ B <input id="crossfade" type="range" min="0" max="1" step=".01" value=".5"></label>
+<label class="compat"><input id="low-gain-compat" type="checkbox"> low-gain compat mode</label>
+<audio id="compat-output"></audio>
+<span id="compat-status" role="status"></span>
 <p id="status" role="status">Ready</p>
 <script>
 const SAMPLE_RATE = 48000;
@@ -23,6 +26,7 @@ class LivePlayer {
     this.gain = this.context.createGain();
     this.gain.gain.value = volume;
     this.gain.connect(this.context.destination);
+    this.compatDestination = null;
     this.lanes = [this.context.createGain(), this.context.createGain()];
     for (const lane of this.lanes) lane.connect(this.gain);
     this.setCrossfade(crossfade);
@@ -38,6 +42,37 @@ class LivePlayer {
   setCrossfade(value) {
     this.lanes[0].gain.value = 1 - value;
     this.lanes[1].gain.value = value;
+  }
+  async setCompat(enabled) {
+    if (this.abort.signal.aborted) return;
+    if (!enabled) {
+      this.clearCompat();
+      return;
+    }
+    if (this.compatDestination) return;
+
+    const destination = this.context.createMediaStreamDestination();
+    this.compatDestination = destination;
+    this.gain.disconnect(this.context.destination);
+    this.gain.connect(destination);
+    try {
+      compatOutput.srcObject = destination.stream;
+      await compatOutput.play();
+    } catch (error) {
+      if (this.compatDestination !== destination) return;
+      this.clearCompat();
+      throw error;
+    }
+  }
+  clearCompat() {
+    const destination = this.compatDestination;
+    if (!destination) return;
+    this.compatDestination = null;
+    compatOutput.pause();
+    compatOutput.srcObject = null;
+    this.gain.disconnect(destination);
+    this.gain.connect(this.context.destination);
+    for (const track of destination.stream.getTracks()) track.stop();
   }
   delay(ms) {
     const {signal} = this.abort;
@@ -153,6 +188,7 @@ class LivePlayer {
     }
     this.sources.clear();
     this.silence.stop();
+    this.clearCompat();
     this.context.close().catch(() => {});
   }
 }
@@ -160,7 +196,21 @@ const button = document.getElementById('listen');
 const status = document.getElementById('status');
 const volume = document.getElementById('volume');
 const crossfade = document.getElementById('crossfade');
+const compatMode = document.getElementById('low-gain-compat');
+const compatOutput = document.getElementById('compat-output');
+const compatStatus = document.getElementById('compat-status');
 let player = null;
+async function updateCompat(current) {
+  compatStatus.textContent = '';
+  try {
+    await current.setCompat(compatMode.checked);
+  } catch {
+    if (player === current) {
+      compatMode.checked = false;
+      compatStatus.textContent = 'Compatibility output unavailable. Using standard output.';
+    }
+  }
+}
 button.onclick = async () => {
   if (player) {
     player.stop(); player = null;
@@ -171,7 +221,9 @@ button.onclick = async () => {
   try {
     current = new LivePlayer(text => { if (player === current) status.textContent = text; }, Number(volume.value), Number(crossfade.value));
     player = current; button.textContent = 'Stop'; status.textContent = 'Starting…';
-    await current.start();
+    const listening = current.start();
+    if (compatMode.checked) void updateCompat(current);
+    await listening;
   } catch (error) {
     if (current) current.stop();
     if (!current || player === current) {
@@ -181,5 +233,9 @@ button.onclick = async () => {
 };
 volume.oninput = () => { if (player) player.gain.gain.value = Number(volume.value); };
 crossfade.oninput = () => { if (player) player.setCrossfade(Number(crossfade.value)); };
+compatMode.onchange = () => {
+  if (player) void updateCompat(player);
+  else compatStatus.textContent = '';
+};
 window.addEventListener('pagehide', () => { if (player) player.stop(); });
 </script></body></html>

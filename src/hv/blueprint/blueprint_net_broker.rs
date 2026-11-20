@@ -19,8 +19,8 @@ enum VNetBridgeBackend {
 
 impl VNetBridge {
     /// Native Mio is already in VMX root and shares one broker across owners.
-    pub(crate) fn open_primary_native() -> Option<Self> {
-        Some(Self { backend: VNetBridgeBackend::LocalVnet(VNet::open_primary()?) })
+    pub(crate) fn open_native(device_index: usize) -> Option<Self> {
+        Some(Self { backend: VNetBridgeBackend::LocalVnet(VNet::open(device_index)?) })
     }
 
     pub(crate) fn submit_for_actor(
