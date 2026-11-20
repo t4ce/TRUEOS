@@ -39,7 +39,7 @@ fn canonical_path(path: &str) -> Result<&str, block::Error> {
 fn reserved_path(path: &str) -> bool {
     path == "users"
         || path.starts_with("users/")
-        || ["trueos/uncrypted.blob", "trueos/users-ever-persisted"]
+        || ["trueos/uncrypted.blob", "trueos/cry-key.tpm", "trueos/users-ever-persisted"]
             .iter()
             .any(|reserved| {
                 path == *reserved

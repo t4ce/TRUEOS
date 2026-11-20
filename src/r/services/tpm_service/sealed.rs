@@ -86,7 +86,10 @@ async fn create(
         handles: [parent],
         in_sensitive: TpmsSensitiveCreate {
             user_auth: Default::default(),
-            data: data.as_slice().try_into().map_err(|e| failure("sensitive data", e))?,
+            data: data
+                .as_slice()
+                .try_into()
+                .map_err(|e| failure("sensitive data", e))?,
         }
         .into(),
         in_public: TpmtPublic {

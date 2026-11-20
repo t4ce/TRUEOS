@@ -35,7 +35,9 @@ static REQUESTS: Channel<EmbassySpinRawMutex, Request, 4> = Channel::new();
 
 pub(crate) async fn seal(key: &[u8; 32]) -> Result<Vec<u8>, String> {
     let reply = Arc::new(Signal::new());
-    REQUESTS.send(Request::Seal(Zeroizing::new(*key), reply.clone())).await;
+    REQUESTS
+        .send(Request::Seal(Zeroizing::new(*key), reply.clone()))
+        .await;
     reply.wait().await
 }
 

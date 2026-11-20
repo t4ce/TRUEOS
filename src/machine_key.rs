@@ -1,122 +1,118 @@
-//! Temporary machine-key provider. The file backend is deliberately plaintext.
-//! Callers seal/unseal through this boundary; a TPM backend can replace it later.
-use crate::{disc::block::DeviceHandle, r::fs::trueosfs};
-use alloc::{string::String, vec::Vec};
+//! TPM-only persistence for the Cry recovery key.
+use crate::{
+    disc::block::DeviceHandle,
+    r::{fs::trueosfs, services::tpm_service},
+};
+use alloc::{format, string::String, vec::Vec};
 use zeroize::Zeroizing;
 
-const PATH: &str = "trueos/uncrypted.blob";
-const MAGIC: &[u8; 8] = b"TRUNKEY1";
+pub(crate) const PATH: &str = "trueos/cry-key.tpm";
+pub(crate) const LEGACY_PATH: &str = "trueos/uncrypted.blob";
+pub(crate) const SAVED_FILENAME: &str = "cry-key.tpm";
+const MAGIC: &[u8; 8] = b"TRTPMKEY";
 
 /// Keep account history even if an account's files are later removed. Commit
 /// before any credential write; interrupted enrollment must not reopen SSH.
 pub(crate) async fn mark_account_history(disk: DeviceHandle) -> Result<(), String> {
     const HISTORY: &str = "trueos/users-ever-persisted";
-    if !trueosfs::dir_create_all_async(disk, "trueos").await
-        .map_err(|e| alloc::format!("account history directory: {e:?}"))? {
+    if !trueosfs::dir_create_all_async(disk, "trueos")
+        .await
+        .map_err(|e| alloc::format!("account history directory: {e:?}"))?
+    {
         return Err(String::from("account history directory allocation failed"));
     }
-    if !trueosfs::file_write_all_async(disk, HISTORY, b"1\n").await
-        .map_err(|e| alloc::format!("account history write: {e:?}"))? {
+    if !trueosfs::file_write_all_async(disk, HISTORY, b"1\n")
+        .await
+        .map_err(|e| alloc::format!("account history write: {e:?}"))?
+    {
         return Err(String::from("account history allocation failed"));
     }
-    if trueosfs::file_out_async(disk, HISTORY).await
-        .map_err(|e| alloc::format!("account history readback: {e:?}"))?.as_deref() != Some(b"1\n") {
+    if trueosfs::file_out_async(disk, HISTORY)
+        .await
+        .map_err(|e| alloc::format!("account history readback: {e:?}"))?
+        .as_deref()
+        != Some(b"1\n")
+    {
         return Err(String::from("account history readback failed"));
     }
     Ok(())
 }
 
-fn encode(username: &str, key: &[u8; 32]) -> Zeroizing<Vec<u8>> {
-    let mut blob = Zeroizing::new(Vec::new());
+pub(crate) async fn prepare(username: &str, key: &[u8; 32]) -> Result<Vec<u8>, String> {
+    let name = crate::crypt::canonical_username(username)
+        .map_err(|_| String::from("invalid machine-key account"))?;
+    let sealed = tpm_service::seal(key).await?;
+    let mut blob = Vec::with_capacity(MAGIC.len() + 1 + name.len() + sealed.len());
     blob.extend_from_slice(MAGIC);
-    blob.push(username.len() as u8);
-    blob.extend_from_slice(username.as_bytes());
-    blob.extend_from_slice(key);
-    blob
+    blob.push(name.len() as u8);
+    blob.extend_from_slice(name.as_bytes());
+    blob.extend_from_slice(&sealed);
+    Ok(blob)
 }
 
-fn decode(blob: &[u8]) -> Result<(String, Zeroizing<[u8; 32]>), String> {
-    if blob.len() < 9 || &blob[..8] != MAGIC {
-        return Err(String::from("invalid machine-key blob header"));
-    }
-    let len = blob[8] as usize;
-    if blob.len() != 9 + len + 32 {
-        return Err(String::from("invalid machine-key blob length"));
-    }
-    let name = core::str::from_utf8(&blob[9..9 + len])
-        .map_err(|_| String::from("invalid machine-key account"))?;
-    let username = crate::crypt::canonical_username(name)
-        .map_err(|_| String::from("invalid machine-key account"))?;
-    if username != name {
-        return Err(String::from("noncanonical machine-key account"));
-    }
-    let mut key = Zeroizing::new([0u8; 32]);
-    key.copy_from_slice(&blob[9 + len..]);
-    Ok((username, key))
+pub(crate) async fn save_boot(disk: DeviceHandle, blob: &[u8]) -> Result<(), String> {
+    save(disk, PATH, LEGACY_PATH, blob).await
 }
 
-pub(crate) async fn seal(disk: DeviceHandle, username: &str, key: &[u8; 32]) -> Result<(), String> {
-    seal_at(disk, username, key, PATH, "trueos").await
-}
-
-/// Preserve another account for later selection without changing boot's PATH.
-pub(crate) async fn seal_saved_account(
+pub(crate) async fn save_account(
     disk: DeviceHandle,
     username: &str,
-    key: &[u8; 32],
+    blob: &[u8],
 ) -> Result<(), String> {
-    let canonical = crate::crypt::canonical_username(username)
-        .map_err(|_| String::from("invalid machine-key account"))?;
-    let directory = alloc::format!("users/{canonical}/secrets");
-    let path = alloc::format!("{directory}/uncrypted.blob");
-    seal_at(disk, &canonical, key, &path, &directory).await
+    let directory = format!("users/{username}/secrets");
+    save(
+        disk,
+        &format!("{directory}/{SAVED_FILENAME}"),
+        &format!("{directory}/uncrypted.blob"),
+        blob,
+    )
+    .await
 }
 
-async fn seal_at(
-    disk: DeviceHandle,
-    username: &str,
-    key: &[u8; 32],
-    path: &str,
-    directory: &str,
-) -> Result<(), String> {
-    let canonical = crate::crypt::canonical_username(username)
-        .map_err(|_| String::from("invalid machine-key account"))?;
-    let blob = encode(&canonical, key);
-    mark_account_history(disk).await?;
-    if !trueosfs::dir_create_all_async(disk, directory)
+async fn save(disk: DeviceHandle, path: &str, legacy: &str, blob: &[u8]) -> Result<(), String> {
+    if !trueosfs::file_write_all_async(disk, path, blob)
         .await
-        .map_err(|e| alloc::format!("machine-key directory: {e:?}"))?
+        .map_err(|e| format!("sealed key write: {e:?}"))?
     {
-        return Err(String::from("machine-key directory allocation failed"));
+        return Err("sealed key allocation failed".into());
     }
-    if !trueosfs::file_write_all_async(disk, path, &blob)
+    let readback = trueosfs::file_out_async(disk, path)
         .await
-        .map_err(|e| alloc::format!("machine-key write: {e:?}"))?
-    {
-        return Err(String::from("machine-key allocation failed"));
+        .map_err(|e| format!("sealed key readback: {e:?}"))?;
+    if readback.as_deref() != Some(blob) {
+        return Err("sealed key readback mismatch".into());
     }
-    let readback = Zeroizing::new(
-        trueosfs::file_out_async(disk, path)
-            .await
-            .map_err(|e| alloc::format!("machine-key readback: {e:?}"))?
-            .ok_or_else(|| String::from("machine-key readback missing"))?,
-    );
-    if *readback != *blob {
-        return Err(String::from("machine-key readback mismatch"));
-    }
+    // A TPM replacement must not leave the old plaintext pathname live.
+    trueosfs::file_delete_async(disk, legacy)
+        .await
+        .map_err(|e| format!("legacy key removal: {e:?}"))?;
     Ok(())
 }
 
-pub(crate) async fn unseal(
-    disk: DeviceHandle,
-) -> Result<Option<(String, Zeroizing<[u8; 32]>)>, String> {
+async fn unseal(disk: DeviceHandle) -> Result<Option<(String, Zeroizing<[u8; 32]>)>, String> {
     let Some(blob) = trueosfs::file_out_async(disk, PATH)
         .await
-        .map_err(|e| alloc::format!("machine-key read: {e:?}"))?
+        .map_err(|e| format!("sealed key read: {e:?}"))?
     else {
         return Ok(None);
     };
-    decode(&Zeroizing::new(blob)).map(Some)
+    let payload = blob
+        .strip_prefix(MAGIC)
+        .ok_or("invalid machine-key blob header")?;
+    let (&len, payload) = payload
+        .split_first()
+        .ok_or("missing machine-key account length")?;
+    let (name, sealed) = payload
+        .split_at_checked(usize::from(len))
+        .ok_or("invalid machine-key account length")?;
+    let name = core::str::from_utf8(name).map_err(|_| "invalid machine-key account")?;
+    let username =
+        crate::crypt::canonical_username(name).map_err(|_| "invalid machine-key account")?;
+    if username != name {
+        return Err("noncanonical machine-key account".into());
+    }
+    let key = tpm_service::unseal(sealed.to_vec()).await?;
+    Ok(Some((username, key)))
 }
 
 pub(crate) async fn restore_account(disk: DeviceHandle) {
@@ -141,10 +137,10 @@ pub(crate) async fn restore_account(disk: DeviceHandle) {
     .await;
     match result {
         Ok(Some(report)) => crate::log_important!(target: "storage";
-            "cry-boot: provider=plaintext-file status=unlocked username={} generation={} session=locked\n",
+            "cry-boot: provider=tpm2 status=unlocked username={} generation={} session=locked\n",
             report.username, report.generation),
         Ok(None) => {}
         Err(error) => crate::log_warn!(target: "storage";
-            "cry-boot: provider=plaintext-file status=failed reason={}\n", error),
+            "cry-boot: provider=tpm2 status=failed reason={}\n", error),
     }
 }

@@ -17,6 +17,7 @@ pub(super) fn start(frontend: super::tui::Frontend) -> Result<(), String> {
 pub(crate) async fn write_persistence(plan: &crypt::CryPersistencePlan) -> Result<(), String> {
     let disk = crate::r::fs::trueosfs::primary_root_handle()
         .ok_or_else(|| String::from("no TRUEOSFS root mounted"))?;
+    let sealed = crate::machine_key::prepare(&plan.username, plan.recovery_key_bytes()).await?;
     crate::machine_key::mark_account_history(disk).await?;
     let secrets_dir = alloc::format!("{}/secrets", plan.account_dir);
     match crate::r::fs::trueosfs::dir_create_all_async(disk, secrets_dir.as_str()).await {
@@ -29,7 +30,7 @@ pub(crate) async fn write_persistence(plan: &crypt::CryPersistencePlan) -> Resul
     if plan.initial {
         write_and_verify(disk, plan.profile_path.as_str(), plan.profile.as_slice()).await?;
     }
-    crate::machine_key::seal(disk, &plan.username, plan.recovery_key_bytes()).await?;
+    crate::machine_key::save_boot(disk, &sealed).await?;
     Ok(())
 }
 
@@ -162,10 +163,8 @@ impl AccountEnrollment {
                 self.writing
                     .store(true, core::sync::atomic::Ordering::Release);
             }
-            // Keep the temporary plaintext provider separate from the automatic
-            // boot blob, and save the recovery boundary before the envelope.
-            crate::machine_key::seal_saved_account(disk, &plan.username, plan.recovery_key_bytes())
-                .await?;
+            let sealed = crate::machine_key::prepare(&plan.username, plan.recovery_key_bytes()).await?;
+            crate::machine_key::mark_account_history(disk).await?;
             let secrets = alloc::format!("{}/secrets", plan.account_dir);
             if !crate::r::fs::trueosfs::dir_create_all_async(disk, &secrets)
                 .await
@@ -175,6 +174,7 @@ impl AccountEnrollment {
             }
             write_and_verify(disk, &plan.secret_path, &plan.envelope).await?;
             write_and_verify(disk, &plan.profile_path, &plan.profile).await?;
+            crate::machine_key::save_account(disk, &plan.username, &sealed).await?;
             Ok::<_, String>(())
         }
         .await;
@@ -198,6 +198,7 @@ pub(crate) async fn ensure_account_name_available(username: &str) -> Result<(), 
         alloc::format!("users/{username}/account.v1"),
         alloc::format!("users/{username}/secrets/cry.v1.aes256gcm"),
         alloc::format!("users/{username}/secrets/uncrypted.blob"),
+        alloc::format!("users/{username}/secrets/{}", crate::machine_key::SAVED_FILENAME),
     ] {
         if crate::r::fs::trueosfs::file_out_async(disk, &path)
             .await
@@ -286,13 +287,11 @@ pub(crate) async fn unlock_account(username: &str, encoded: &str) -> Result<Stri
         .await
         .map_err(|_| String::from("Credential read failed."))?
         .ok_or("Credential not found.")?;
-    crypt::unlock_persisted(&username, &key, &envelope).map_err(error_text)?;
-    if crate::machine_key::seal(disk, &username, &key)
-        .await
-        .is_err()
-    {
-        return Ok("Unlocked; boot-key save failed. Enter an authenticator code.".into());
-    }
+    let unlock = crypt::prepare_persisted_unlock(&username, &key, &envelope).map_err(error_text)?;
+    let sealed = crate::machine_key::prepare(&username, &key).await?;
+    crate::machine_key::mark_account_history(disk).await?;
+    crate::machine_key::save_boot(disk, &sealed).await?;
+    unlock().map_err(error_text)?;
     Ok("Account unlocked. Enter an authenticator code to sign in.".into())
 }
 

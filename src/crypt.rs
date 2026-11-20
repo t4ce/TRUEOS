@@ -814,6 +814,14 @@ pub(crate) fn unlock_persisted(
     recovery_key: &[u8; 32],
     envelope: &[u8],
 ) -> Result<CryUnlockReport, CryError> {
+    prepare_persisted_unlock(username, recovery_key, envelope)?()
+}
+
+pub(crate) fn prepare_persisted_unlock(
+    username: &str,
+    recovery_key: &[u8; 32],
+    envelope: &[u8],
+) -> Result<impl FnOnce() -> Result<CryUnlockReport, CryError> + use<>, CryError> {
     let username = canonical_username(username)?;
     if CRY_STATE.lock().credential.is_some() {
         return Err(CryError::AlreadyConfigured);
@@ -874,40 +882,42 @@ pub(crate) fn unlock_persisted(
     let mut durable_key = Zeroizing::new([0u8; 32]);
     durable_key.copy_from_slice(recovery_key);
 
-    let mut state = CRY_STATE.lock();
-    if state.credential.is_some() {
-        totp_secret.zeroize();
-        return Err(CryError::AlreadyConfigured);
-    }
-    state.ssh_public_keys = opened.credential.ssh_public_keys.clone();
-    state.username = Some(username.clone());
-    state.signing_key = Some(signing_key);
-    state.credential = Some(credential);
-    state.machine = Some(machine);
-    state.boot = Some(boot);
-    state.totp = Some(TotpFactor {
-        secret: totp_secret,
-        active: true,
-        last_accepted_step: opened.credential.last_accepted_step,
-        failure_window_step: 0,
-        failed_attempts: 0,
-        blocked_until_ticks: 0,
-    });
-    state.challenge_sequence = 0;
-    state.session = None;
-    state.pending_login = None;
-    state.durable = Some(DurableCredential {
-        recovery_key: durable_key,
-        generation: opened.generation,
-    });
+    Ok(move || {
+        let mut state = CRY_STATE.lock();
+        if state.credential.is_some() {
+            totp_secret.zeroize();
+            return Err(CryError::AlreadyConfigured);
+        }
+        state.ssh_public_keys = opened.credential.ssh_public_keys.clone();
+        state.username = Some(username.clone());
+        state.signing_key = Some(signing_key);
+        state.credential = Some(credential);
+        state.machine = Some(machine);
+        state.boot = Some(boot);
+        state.totp = Some(TotpFactor {
+            secret: totp_secret,
+            active: true,
+            last_accepted_step: opened.credential.last_accepted_step,
+            failure_window_step: 0,
+            failed_attempts: 0,
+            blocked_until_ticks: 0,
+        });
+        state.challenge_sequence = 0;
+        state.session = None;
+        state.pending_login = None;
+        state.durable = Some(DurableCredential {
+            recovery_key: durable_key,
+            generation: opened.generation,
+        });
 
-    Ok(CryUnlockReport {
-        username,
-        key,
-        fingerprint,
-        account,
-        role,
-        generation: opened.generation,
+        Ok(CryUnlockReport {
+            username,
+            key,
+            fingerprint,
+            account,
+            role,
+            generation: opened.generation,
+        })
     })
 }
 
