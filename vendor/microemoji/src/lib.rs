@@ -5,6 +5,7 @@
 mod bounds;
 pub mod raster_line;
 pub mod raster_mask;
+pub mod raster_stroke;
 pub mod svg;
 
 const HEADER_SIZE: usize = 16;

@@ -8,8 +8,7 @@ use alloc::{
 };
 use microemoji::{
     Bundle,
-    raster_line::Edge,
-    raster_mask::{self, Scratch},
+    raster_stroke::{self, Outline},
 };
 
 mod native;
@@ -173,38 +172,25 @@ fn buffer<T: Clone>(len: usize, initial: T) -> Result<Vec<T>, Error> {
 
 fn build(character: char, size: usize) -> Tile {
     let glyph = load_source()?.glyph(character).ok_or(Error::MissingGlyph)?;
-    let (edge_count, winding_count) = raster_mask::scratch_requirements(glyph, size, size)
-        .map_err(|_| Error::Build("microemoji-mask-scratch"))?;
-    let mut edges = buffer(
-        edge_count,
-        Edge {
-            from: [0.0; 2],
-            to: [0.0; 2],
-        },
-    )?;
-    let mut winding = buffer(winding_count, 0)?;
-    let mut scratch = Scratch::new(&mut edges, &mut winding);
+    let outline =
+        Outline::new(glyph, size, size).map_err(|_| Error::Build("microemoji-outline-viewport"))?;
     let mut pixels = buffer(size * size, 0u8)?;
 
-    match native::render(glyph, size, size, &mut scratch, &mut pixels) {
-        Ok(()) => {}
+    match native::render(&outline, size, size, &mut pixels) {
+        Ok(()) => return Ok(Arc::from(pixels)),
         Err(native::Error::Retry) => return Err(Error::Pending),
-        Err(native::Error::Failed(reason)) => return Err(Error::Build(reason)),
-        Err(native::Error::Unavailable) => {
-            let coverage_len = raster_mask::coverage_scratch_size(size, size)
-                .map_err(|_| Error::Build("microemoji-mask-scratch"))?;
-            let mut coverage = buffer(coverage_len, 0u8)?;
-            raster_mask::rasterize(
-                glyph,
-                &mut pixels,
-                size,
-                size,
-                size,
-                &mut scratch,
-                &mut coverage,
-            )
-            .map_err(|_| Error::Build("microemoji-mask-raster"))?;
+        Err(native::Error::Failed(reason)) => {
+            crate::log_warn!(target: "microemoji-mask";
+                "microemoji-mask: native outline failed glyph=U+{:04X} size={} error={} fallback=cpu\n",
+                character as u32, size, reason);
         }
+        Err(native::Error::Unavailable) => {}
     }
+
+    let coverage_len = raster_stroke::coverage_scratch_size(size, size)
+        .map_err(|_| Error::Build("microemoji-mask-scratch"))?;
+    let mut coverage = buffer(coverage_len, 0u8)?;
+    raster_stroke::rasterize(outline, &mut pixels, size, &mut coverage)
+        .map_err(|_| Error::Build("microemoji-mask-raster"))?;
     Ok(Arc::from(pixels))
 }

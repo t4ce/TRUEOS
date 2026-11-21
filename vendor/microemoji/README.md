@@ -49,21 +49,19 @@ and composite its RGBA paint before moving to the next layer. Curves subdivide
 toward a quarter-pixel tolerance with a size-based cap of 4 to 16 segments per
 curve. Line commands and contour closures preserve their endpoints.
 
-## R8 coverage in TRUEOS
+## R8 outline strokes in TRUEOS
 
-`raster_mask::scan_layers` fills flattened contours by nonzero winding and
-emits spans on a 4×4 sample grid. `raster_mask::rasterize` composites layer
-alpha at each sample and averages the result into one byte per pixel. Both
-use caller-provided scratch and center the glyph in the target using its SVG
-bounds.
-
-The kernel MicroEmoji mask service loads the
+The kernel microemoji mask service loads the
 [alpha-only outline bundle](data/README.md) on first use. It shares the
-existing blocking service lanes with MicroFont and retains a bounded cache
-of R8 masks keyed by Unicode scalar and square tile size. For opaque layers
-on supported Intel renderers, the service sends span quads through the
-existing MicroFont R8 shader and averages its fenced readback. The CPU
-producer uses the same span generator when that backend is unavailable.
+existing blocking service lanes with Microfont and caches R8 masks by
+Unicode scalar and square tile size. It centers the outlines in the tile
+and strokes each closed contour at one pixel wide. On supported Intel
+renderers, the service submits native adjacency line strips through
+Microfont’s R8 shader. The CPU producer samples the same flattened outlines
+on a 4×4 grid when the native path is unavailable.
+
+For consumers that need filled glyphs, `raster_mask` also exposes
+nonzero-winding scanlines and a filled R8 rasterizer.
 
 UI4 font sprite requests select this service with
 `UI4_FONT_SPRITE_MICROEMOJI` (font ID 5) and zero extra stroke. A cold
