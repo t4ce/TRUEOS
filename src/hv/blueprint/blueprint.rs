@@ -1158,7 +1158,7 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         return Some(portal_rust_alloc_zeroed as *const () as usize);
     }
 
-    match name {
+    let address = match name {
         "memcpy" => Some(crate::blueprint_shims::memcpy as *const () as usize),
         "memmove" => Some(crate::blueprint_shims::memmove as *const () as usize),
         "memset" => Some(crate::blueprint_shims::memset as *const () as usize),
@@ -1234,7 +1234,15 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         _ => resolve_runtime_abi_import(name)
             .or_else(|| resolve_cabi_import(name))
             .or_else(|| crate::unix_compat::resolve_import(name)),
+    };
+    if address.is_some() && crate::log_os::flags::UI4_DIAG_PROFILE_ENABLED {
+        let permission = crate::hv::vmx_permissions::for_import(name);
+        crate::log_trace!(target: "ui4/vmx";
+            "vmx import symbol={} permission={:?} risk={:?}\n",
+            name, permission, permission.risk_level(),
+        );
     }
+    address
 }
 
 fn resolve_import(name: &str, bind: u8) -> Option<usize> {

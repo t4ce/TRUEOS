@@ -594,3 +594,10 @@ pub fn spawn_window(x: i32, y: i32, width: u32, height: u32) -> Result<u32, i32>
         crate::vsys::sleep_ms(1);
     }
 }
+
+/// Close a Shell3 window returned by `spawn_window` in this Blueprint run.
+pub fn close_window(window: u32) -> Result<(), i32> {
+    if window == 0 { return Err(-1); }
+    let rc = unsafe { vcabi::trueos_cabi_shell3_window_v1(window as i32, 1, 0, 0) };
+    if rc == 0 { Ok(()) } else { Err(rc as i32) }
+}

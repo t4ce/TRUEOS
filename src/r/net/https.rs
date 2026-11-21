@@ -31,6 +31,8 @@ use crate::net::tls_socket::{
     TlsCancelCompletion, TlsCommand, TlsEvent, TlsTimeouts, register_tls_app_queues,
 };
 use crate::r::net::{NetProfile, Queue};
+use crate::r::net::wall::{Caller, Scope, Transport};
+use core::net::{IpAddr, SocketAddr};
 
 static CABI_NET_FETCH_SEQ: AtomicU32 = AtomicU32::new(1);
 static HTTPS_FETCH_TLS_SEQ: AtomicU32 = AtomicU32::new(1);
@@ -45,6 +47,42 @@ const HTTPS_IDLE_SLEEP_MS: u64 = 100;
 const HTTPS_CLIENT_WAIT_MS: u64 = 10;
 const HTTPS_CLIENT_FENCE_TIMEOUT_MS: u64 = 1_000;
 const HTTPS_REQUEST_CANCELLED: &str = "cancelled";
+pub(crate) const FIREWALL_DENIED: &str = "firewall denied";
+
+fn fetch_caller() -> Option<Caller> {
+    Caller::current().filter(|caller| caller.permits_socket(Transport::Tcp))
+}
+
+pub(crate) fn authorize_destination(caller: Caller, host: &str, port: u16) -> Result<(), String> {
+    let permitted = if let Ok(ip) = host.parse::<IpAddr>() {
+        caller.permits_outbound(Transport::Tcp, SocketAddr::new(ip, port))
+    } else {
+        caller.permits_dns()
+            && (caller.permits_outbound_port(Transport::Tcp, Scope::Network, port)
+                || caller.permits_outbound_port(Transport::Tcp, Scope::Local, port))
+    };
+    permitted.then_some(()).ok_or_else(|| String::from(FIREWALL_DENIED))
+}
+
+pub(crate) fn authorize_url_for_caller(url: &str, caller: Caller) -> Result<(), String> {
+    let target = parse_fetch_url(url).map_err(String::from)?;
+    authorize_destination(caller, &target.host, target.port)
+}
+
+pub(crate) fn authorize_network_url_for_caller(url: &str, caller: Caller) -> Result<(), String> {
+    let target = parse_fetch_url(url).map_err(String::from)?;
+    if target.host.parse::<IpAddr>().is_ok_and(|ip| super::wall::scope(ip) == Scope::Local)
+        || !caller.permits_outbound_port(Transport::Tcp, Scope::Network, target.port)
+    {
+        return Err(String::from(FIREWALL_DENIED));
+    }
+    Ok(())
+}
+
+fn authorize_peer(caller: Caller, address: impl Into<IpAddr>, port: u16) -> Result<(), String> {
+    caller.permits_outbound(Transport::Tcp, SocketAddr::new(address.into(), port))
+        .then_some(()).ok_or_else(|| String::from(FIREWALL_DENIED))
+}
 pub(crate) const DEFAULT_USER_AGENT: &str = "TRUEOS net-fetch";
 static CABI_NET_FETCH_RESULTS: Mutex<BTreeMap<u32, Option<i32>>> = Mutex::new(BTreeMap::new());
 static CABI_NET_FETCH_BYTES_RESULTS: Mutex<BTreeMap<u32, CabiNetFetchBytesResult>> =
@@ -134,7 +172,7 @@ async fn await_bounded_fetch<T>(
 }
 
 async fn fetch_bounded_response(
-    url: String, timeout_ms: u32, max_bytes: usize, cancellation: &JsonPostCancellation,
+    url: String, timeout_ms: u32, max_bytes: usize, cancellation: &JsonPostCancellation, caller: Caller,
 ) -> Result<FetchedBytes, String> {
     let request = HttpsRequest {
         method: "GET", headers_only: false, content_type: None, headers: Vec::new(), body: &[],
@@ -152,14 +190,14 @@ async fn fetch_bounded_response(
             // Pool wait cancellation removes queued/ready work or abandons an
             // active completion. Its worker retains its own finite I/O timeout.
             return await_json_post_or_cancel(
-                crate::surfer::html_shack::fetch_bytes_via_pool(current, remaining, max_bytes),
+                crate::surfer::html_shack::fetch_bytes_via_pool_for_caller(current, remaining, max_bytes, caller),
                 cancellation,
             ).await.map_err(|_| String::from(HTTPS_REQUEST_CANCELLED))?
                 .map(|response| FetchedBytes { final_url: response.url, body: response.bytes });
         }
         let response = request_https_response_once_cancellable(
             &target, &request, remaining.min(u64::from(u32::MAX)) as u32,
-            max_bytes, Some(cancellation),
+            max_bytes, Some(cancellation), caller,
         ).await?;
         if cancellation.is_cancelled() { return Err(String::from(HTTPS_REQUEST_CANCELLED)); }
         if matches!(response.status, 301 | 302 | 303 | 307 | 308) {
@@ -183,13 +221,14 @@ pub(crate) fn cabi_net_fetch_bytes_start_bounded_host(
     let Some((_, timeout_ms, max_bytes)) = bounded_fetch_request(url.as_bytes(), timeout_ms, max_bytes) else {
         return 0;
     };
+    let Some(caller) = fetch_caller() else { return 0; };
     let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
     CABI_NET_FETCH_BYTES_RESULTS.lock().insert(op_id, CabiNetFetchBytesResult { owner, ..Default::default() });
     let cancellation = register_json_post_cancellation(op_id);
     let url = String::from(url);
     crate::wait::spawn_local_detached(async move {
         let result = await_bounded_fetch(
-            fetch_bounded_response(url, timeout_ms, max_bytes, cancellation.as_ref()),
+            fetch_bounded_response(url, timeout_ms, max_bytes, cancellation.as_ref(), caller),
             cancellation.as_ref(), timeout_ms,
         ).await;
         finish_json_post_operation(op_id);
@@ -431,7 +470,9 @@ fn monotonic_ms() -> u64 {
 }
 
 fn fetch_error_to_code(err: &str) -> i32 {
-    if err == "timed out" || err == "timeout" {
+    if err == FIREWALL_DENIED {
+        FS_ERR_PERMISSION_DENIED
+    } else if err == "timed out" || err == "timeout" {
         NET_ERR_TIMEOUT
     } else if err == "url too long" || err == "empty url" {
         NET_ERR_BAD_URL
@@ -641,7 +682,7 @@ impl HttpsJsonClient {
         timeout_ms: u32,
         max_bytes: usize,
     ) -> Result<HttpsJsonResponse, String> {
-        self.post_json_inner(url, body, bearer, timeout_ms, max_bytes, None)
+        self.post_json_inner(url, body, bearer, timeout_ms, max_bytes, None, Caller::Kernel)
             .await
     }
 
@@ -653,8 +694,9 @@ impl HttpsJsonClient {
         timeout_ms: u32,
         max_bytes: usize,
         cancellation: &JsonPostCancellation,
+        caller: Caller,
     ) -> Result<HttpsJsonResponse, String> {
-        self.post_json_inner(url, body, bearer, timeout_ms, max_bytes, Some(cancellation))
+        self.post_json_inner(url, body, bearer, timeout_ms, max_bytes, Some(cancellation), caller)
             .await
     }
 
@@ -666,6 +708,7 @@ impl HttpsJsonClient {
         timeout_ms: u32,
         max_bytes: usize,
         cancellation: Option<&JsonPostCancellation>,
+        caller: Caller,
     ) -> Result<HttpsJsonResponse, String> {
         if cancellation.is_some_and(JsonPostCancellation::is_cancelled) {
             return Err(String::from(HTTPS_REQUEST_CANCELLED));
@@ -674,6 +717,7 @@ impl HttpsJsonClient {
         if target.scheme != "https" {
             return Err(String::from("unsupported scheme"));
         }
+        authorize_destination(caller, &target.host, target.port)?;
 
         let mut headers = vec![(String::from("Accept"), String::from("application/json"))];
         if let Some(token) = bearer {
@@ -730,6 +774,7 @@ impl HttpsJsonClient {
             timeout_ms.max(1),
             max_bytes,
             cancellation,
+            caller,
         )
         .await;
         // The queue pair and DNS cache are reusable, but the HTTP connection
@@ -1437,7 +1482,7 @@ async fn fetch_https_bytes_with_context(
     happy_eyeballs: bool,
     referrer: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    fetch_https_response_bytes_with_context(target, timeout_ms, max_bytes, happy_eyeballs, referrer)
+    fetch_https_response_bytes_with_context(target, timeout_ms, max_bytes, happy_eyeballs, referrer, Caller::Kernel)
         .await
         .map(|response| response.body)
 }
@@ -1454,6 +1499,7 @@ async fn fetch_https_response_bytes_with_context(
     max_bytes: usize,
     happy_eyeballs: bool,
     referrer: Option<&str>,
+    caller: Caller,
 ) -> Result<FetchedBytes, String> {
     let mut request = HttpsRequest {
         method: "GET",
@@ -1496,14 +1542,17 @@ async fn fetch_https_response_bytes_with_context(
                     &request,
                     remaining.min(u32::MAX as u64) as u32,
                     max_bytes,
+                    caller,
                 )
                 .await
             } else {
-                request_https_response_once(
+                request_https_response_once_cancellable(
                     &target,
                     &request,
                     remaining.min(u32::MAX as u64) as u32,
                     max_bytes,
+                    None,
+                    caller,
                 )
                 .await
             }
@@ -1517,11 +1566,13 @@ async fn fetch_https_response_bytes_with_context(
                     return Err(String::from("timeout"));
                 }
                 crate::log_info!(target: "net"; "https-fetch: retry empty connection host={}\n", target.host);
-                request_https_response_once(
+                request_https_response_once_cancellable(
                     &target,
                     &request,
                     remaining.min(u32::MAX as u64) as u32,
                     max_bytes,
+                    None,
+                    caller,
                 )
                 .await?
             }
@@ -1626,7 +1677,7 @@ async fn request_https_response_once(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<HttpsJsonResponse, String> {
-    request_https_response_once_cancellable(target, request, timeout_ms, max_bytes, None).await
+    request_https_response_once_cancellable(target, request, timeout_ms, max_bytes, None, Caller::Kernel).await
 }
 
 async fn request_https_response_once_cancellable(
@@ -1635,7 +1686,9 @@ async fn request_https_response_once_cancellable(
     timeout_ms: u32,
     max_bytes: usize,
     cancellation: Option<&JsonPostCancellation>,
+    caller: Caller,
 ) -> Result<HttpsJsonResponse, String> {
+    authorize_destination(caller, &target.host, target.port)?;
     let started = Instant::now();
     let readiness = crate::r::readiness::wait_for(
         crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
@@ -1693,6 +1746,7 @@ async fn request_https_response_once_cancellable(
         timeout_ms,
         max_bytes,
         cancellation,
+        caller,
     )
     .await;
     let _ = fence_https_owner(cmds).await;
@@ -1760,6 +1814,7 @@ async fn request_https_response(
     timeout_ms: u32,
     max_bytes: usize,
     cancellation: Option<&JsonPostCancellation>,
+    caller: Caller,
 ) -> Result<HttpsJsonResponse, String> {
     request_https_response_preconnected(
         target,
@@ -1773,6 +1828,7 @@ async fn request_https_response(
         max_bytes,
         cancellation,
         None,
+        caller,
     )
     .await
 }
@@ -1817,10 +1873,11 @@ async fn request_https_response_preconnected(
     max_bytes: usize,
     cancellation: Option<&JsonPostCancellation>,
     connected: Option<vnet::NetHandle>,
+    caller: Caller,
 ) -> Result<HttpsJsonResponse, String> {
     request_https_response_exchange(
         target, ip, cmds, events, request, tls_config, roots, timeout_ms,
-        max_bytes, cancellation, connected, None,
+        max_bytes, cancellation, connected, None, caller,
     ).await
 }
 
@@ -1869,6 +1926,7 @@ async fn request_https_response_exchange(
     cancellation: Option<&JsonPostCancellation>,
     connected: Option<vnet::NetHandle>,
     mut retained: Option<&mut Option<vnet::NetHandle>>,
+    caller: Caller,
 ) -> Result<HttpsJsonResponse, String> {
     let started = Instant::now();
     let event_driven = retained.is_some();
@@ -1884,8 +1942,10 @@ async fn request_https_response_exchange(
     // already consumed a complete length-delimited response. No connection is
     // active for this client here, so discard such stale events before opening.
     if connected.is_none() {
+        authorize_peer(caller, core::net::Ipv4Addr::from(ip), target.port)?;
         let _ = events.drain(HTTPS_EVENT_QUEUE_DEPTH);
         cmds.push(TlsCommand::OpenTcpConnect {
+            caller,
             remote: vnet::EndpointV4 {
                 addr: ip,
                 port: target.port,
@@ -2104,16 +2164,26 @@ pub(crate) async fn get_bytes_response_shared(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<FetchedBytes, String> {
+    get_bytes_response_for_caller(url, timeout_ms, max_bytes, Caller::Kernel).await
+}
+
+pub(crate) async fn get_bytes_response_for_caller(
+    url: &str,
+    timeout_ms: u32,
+    max_bytes: usize,
+    caller: Caller,
+) -> Result<FetchedBytes, String> {
     let target = parse_fetch_url(url).map_err(String::from)?;
     match target.scheme {
-        "http" => crate::surfer::html_shack::fetch_bytes_via_pool(
+        "http" => crate::surfer::html_shack::fetch_bytes_via_pool_for_caller(
             String::from(url),
             timeout_ms as u64,
             max_bytes,
+            caller,
         )
         .await
         .map(|fetch| FetchedBytes { final_url: fetch.url, body: fetch.bytes }),
-        "https" => fetch_https_response_bytes_with_context(&target, timeout_ms.max(1), max_bytes, false, None).await,
+        "https" => fetch_https_response_bytes_with_context(&target, timeout_ms.max(1), max_bytes, false, None, caller).await,
         _ => Err(String::from("unsupported scheme")),
     }
 }
@@ -2143,6 +2213,7 @@ where
 pub(crate) async fn probe_navigation_headers_shared(
     url: &str,
     timeout_ms: u32,
+    caller: Caller,
 ) -> Result<HttpsJsonResponse, String> {
     let headers = vec![
         (String::from("Accept"), String::from("text/html,*/*;q=0.8")),
@@ -2196,6 +2267,7 @@ pub(crate) async fn probe_navigation_headers_shared(
                     if use_get { get_request } else { head_request },
                     remaining.min(u32::MAX as u64) as u32,
                     0,
+                    caller,
                 )
                 .await
             }
@@ -2226,6 +2298,7 @@ pub(crate) async fn get_image_bytes_shared(
     timeout_ms: u32,
     max_bytes: usize,
     cancellation: &MediaFetchCancellation,
+    caller: Caller,
 ) -> Result<Vec<u8>, String> {
     let request = HttpsRequest {
         method: "GET",
@@ -2254,7 +2327,7 @@ pub(crate) async fn get_image_bytes_shared(
             // path remains unchanged; remote image GETs below expose statuses.
             let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
             if remaining == 0 { return Err(String::from("timeout")); }
-            let fetch = crate::surfer::html_shack::fetch_bytes_via_pool(current, remaining, max_bytes);
+            let fetch = crate::surfer::html_shack::fetch_bytes_via_pool_for_caller(current, remaining, max_bytes, caller);
             return await_json_post_or_cancel(fetch, &cancellation.0).await
                 .map_err(|_| String::from(HTTPS_REQUEST_CANCELLED))?
                 .map(|response| response.bytes);
@@ -2267,7 +2340,7 @@ pub(crate) async fn get_image_bytes_shared(
             if remaining == 0 { return Err(String::from("timeout")); }
             let response = request_https_response_once_cancellable(
                 &target, &request, remaining.min(u32::MAX as u64) as u32,
-                max_bytes, Some(&cancellation.0),
+                max_bytes, Some(&cancellation.0), caller,
             );
             let mut response = core::pin::pin!(response);
             let mut timeout = core::pin::pin!(Timer::after(EmbassyDuration::from_millis(remaining)));
@@ -2409,11 +2482,12 @@ pub(crate) struct MediaRangeClient {
     client: HttpsJsonClient,
     connection: Option<(String, u16, vnet::NetHandle)>,
     owner_active: bool,
+    caller: Caller,
 }
 
 impl MediaRangeClient {
-    pub(crate) fn new() -> Self {
-        Self { client: HttpsJsonClient::new(), connection: None, owner_active: false }
+    pub(crate) fn new(caller: Caller) -> Self {
+        Self { client: HttpsJsonClient::new(), connection: None, owner_active: false, caller }
     }
 
     pub(crate) async fn close(&mut self) {
@@ -2434,6 +2508,7 @@ impl MediaRangeClient {
         max_bytes: usize,
         cancellation: &JsonPostCancellation,
     ) -> Result<HttpsJsonResponse, String> {
+        authorize_destination(self.caller, &target.host, target.port)?;
         let deadline = Instant::now() + EmbassyDuration::from_millis(u64::from(timeout_ms.max(1)));
         if self.connection.as_ref().is_some_and(|(host, port, _)|
             !host.eq_ignore_ascii_case(&target.host) || *port != target.port)
@@ -2463,6 +2538,7 @@ impl MediaRangeClient {
                 Ok(Err(error)) => { self.close().await; return Err(error); }
                 Err(_) => { self.close().await; return Err(String::from(HTTPS_REQUEST_CANCELLED)); }
             };
+            authorize_peer(self.caller, core::net::Ipv4Addr::from(ip), target.port)?;
             let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
             if remaining == 0 {
                 self.close().await;
@@ -2475,7 +2551,7 @@ impl MediaRangeClient {
                 target, ip, queues.cmds, queues.events, request,
                 &self.client.tls_config, &self.client.roots,
                 remaining.min(u64::from(u32::MAX)) as u32, max_bytes,
-                Some(cancellation), connected, Some(&mut retained),
+                Some(cancellation), connected, Some(&mut retained), self.caller,
             ).await;
             if cancellation.is_cancelled() {
                 self.close().await;
@@ -2541,6 +2617,7 @@ pub(crate) async fn get_media_bytes_profile_shared(
     cancellation: &MediaFetchCancellation,
     user_agent: Option<&str>,
     referrer: Option<&str>,
+    caller: Caller,
 ) -> Result<Vec<u8>, String> {
     let target = parse_fetch_url(url).map_err(String::from)?;
     if target.scheme != "https" {
@@ -2591,7 +2668,7 @@ pub(crate) async fn get_media_bytes_profile_shared(
         if let Some(value)=media_referrer_for_target(referrer,&target)? {request.headers.push((String::from("Referer"),value));}
         let remaining=deadline.saturating_duration_since(Instant::now()).as_millis();
         if remaining==0{return Err(String::from("timeout"));}
-        let response=request_https_response_once_cancellable(&target,&request,remaining.min(u32::MAX as u64) as u32,max_bytes,Some(&cancellation.0));
+        let response=request_https_response_once_cancellable(&target,&request,remaining.min(u32::MAX as u64) as u32,max_bytes,Some(&cancellation.0),caller);
         let mut response=core::pin::pin!(response);
         let mut timer=core::pin::pin!(Timer::after(EmbassyDuration::from_millis(remaining)));
         let mut expired=false;
@@ -2724,7 +2801,7 @@ async fn get_media_range_bytes_using(
             match client.as_deref_mut() {
                 Some(client) => client.request(&target, &request, remaining, length, &cancellation.0).await,
                 None => request_https_response_once_cancellable(
-                    &target, &request, remaining, length, Some(&cancellation.0),
+                    &target, &request, remaining, length, Some(&cancellation.0), Caller::Kernel,
                 ).await,
             }
         };
@@ -2829,18 +2906,6 @@ pub async fn post_protobuf_shared(
     request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await
 }
 
-async fn fetch_bytes(url: String, timeout_ms: u32, max_bytes: usize) -> Result<Vec<u8>, i32> {
-    get_bytes_shared(url.as_str(), timeout_ms, max_bytes)
-        .await
-        .map_err(|err| {
-            let host = parse_fetch_url(&url)
-                .map(|target| target.host)
-                .unwrap_or_default();
-            crate::log_warn!(target: "net"; "asset-fetch: failed host={} reason={}\n", host, err);
-            fetch_error_to_code(err.as_str())
-        })
-}
-
 async fn post_json_bytes(
     url: String,
     body_json: String,
@@ -2848,6 +2913,7 @@ async fn post_json_bytes(
     timeout_ms: u32,
     max_bytes: usize,
     cancellation: &JsonPostCancellation,
+    caller: Caller,
 ) -> Result<Vec<u8>, i32> {
     let target = parse_fetch_url(url.as_str()).map_err(fetch_error_to_code)?;
     if target.scheme == "http" {
@@ -2875,6 +2941,7 @@ async fn post_json_bytes(
             body_json.as_bytes(),
             timeout_ms as u64,
             max_bytes,
+            caller,
         );
         let fetch = await_json_post_or_cancel(post, cancellation)
             .await
@@ -2900,6 +2967,7 @@ async fn post_json_bytes(
             timeout_ms,
             max_bytes,
             cancellation,
+            caller,
         )
         .await
         .and_then(success_body);
@@ -2907,10 +2975,10 @@ async fn post_json_bytes(
     result.map_err(|err| fetch_error_to_code(err.as_str()))
 }
 
-fn spawn_fetch_file(op_id: u32, url: String, path: String, timeout_ms: u32, max_bytes: usize) {
+fn spawn_fetch_file(op_id: u32, url: String, path: String, timeout_ms: u32, max_bytes: usize, caller: Caller) {
     crate::wait::spawn_local_detached(async move {
-        let rc = match fetch_bytes(url, timeout_ms, max_bytes).await {
-            Ok(bytes) => write_bytes_to_file(path.as_str(), bytes.as_slice()).await,
+        let rc = match fetch_bytes_response(url, timeout_ms, max_bytes, caller).await {
+            Ok(response) => write_bytes_to_file(path.as_str(), response.body.as_slice()).await,
             Err(rc) => rc,
         };
         if let Some(slot) = CABI_NET_FETCH_RESULTS.lock().get_mut(&op_id) {
@@ -2926,6 +2994,7 @@ fn spawn_fetch_bytes(
     max_bytes: usize,
     happy_eyeballs: bool,
     referrer: Option<String>,
+    caller: Caller,
 ) {
     crate::wait::spawn_local_detached(async move {
         let started = Instant::now();
@@ -2943,6 +3012,7 @@ fn spawn_fetch_bytes(
                     max_bytes,
                     happy_eyeballs,
                     Some(referrer),
+                    caller,
                 )
                 .await
                 .map_err(|err| fetch_error_to_code(&err)),
@@ -2951,14 +3021,14 @@ fn spawn_fetch_bytes(
         } else if happy_eyeballs {
             match parse_fetch_url(&url) {
                 Ok(target) if target.scheme == "https" => {
-                    fetch_https_response_bytes_with_context(&target, timeout_ms, max_bytes, true, None)
+                    fetch_https_response_bytes_with_context(&target, timeout_ms, max_bytes, true, None, caller)
                         .await
                         .map_err(|err| fetch_error_to_code(&err))
                 }
-                _ => fetch_bytes_response(url, timeout_ms, max_bytes).await,
+                _ => fetch_bytes_response(url, timeout_ms, max_bytes, caller).await,
             }
         } else {
-            fetch_bytes_response(url, timeout_ms, max_bytes).await
+            fetch_bytes_response(url, timeout_ms, max_bytes, caller).await
         };
         let (rc, body, final_url) = match fetched {
             Ok(response) => (0, response.body, Some(response.final_url)),
@@ -2975,8 +3045,8 @@ fn spawn_fetch_bytes(
     });
 }
 
-async fn fetch_bytes_response(url: String, timeout_ms: u32, max_bytes: usize) -> Result<FetchedBytes, i32> {
-    get_bytes_response_shared(url.as_str(), timeout_ms, max_bytes).await.map_err(|error| {
+async fn fetch_bytes_response(url: String, timeout_ms: u32, max_bytes: usize, caller: Caller) -> Result<FetchedBytes, i32> {
+    get_bytes_response_for_caller(url.as_str(), timeout_ms, max_bytes, caller).await.map_err(|error| {
         let host = parse_fetch_url(&url).map(|target| target.host).unwrap_or_default();
         crate::log_warn!(target: "net"; "asset-fetch: failed host={} reason={}\n", host, error);
         fetch_error_to_code(&error)
@@ -2992,6 +3062,7 @@ fn spawn_post_json_file(
     timeout_ms: u32,
     max_bytes: usize,
     cancellation: Arc<JsonPostCancellation>,
+    caller: Caller,
 ) {
     crate::wait::spawn_local_detached(async move {
         let rc = match post_json_bytes(
@@ -3001,6 +3072,7 @@ fn spawn_post_json_file(
             timeout_ms,
             max_bytes,
             cancellation.as_ref(),
+            caller,
         )
         .await
         {
@@ -3032,6 +3104,7 @@ fn spawn_post_json_bytes(
     timeout_ms: u32,
     max_bytes: usize,
     cancellation: Arc<JsonPostCancellation>,
+    caller: Caller,
 ) {
     crate::wait::spawn_local_detached(async move {
         let (rc, body) = match post_json_bytes(
@@ -3041,6 +3114,7 @@ fn spawn_post_json_bytes(
             timeout_ms,
             max_bytes,
             cancellation.as_ref(),
+            caller,
         )
         .await
         {
@@ -3066,6 +3140,7 @@ pub(crate) fn cabi_net_fetch_start_host(
     if url_s.trim().is_empty() || path_s.trim().is_empty() {
         return 0;
     }
+    let Some(caller) = fetch_caller() else { return 0; };
     let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
     CABI_NET_FETCH_RESULTS.lock().insert(op_id, None);
     spawn_fetch_file(
@@ -3074,6 +3149,7 @@ pub(crate) fn cabi_net_fetch_start_host(
         String::from(path_s),
         timeout_ms.max(1),
         max_bytes,
+        caller,
     );
     op_id
 }
@@ -3123,6 +3199,7 @@ pub(crate) fn cabi_net_fetch_bytes_start_with_context_host(
     if url_s.trim().is_empty() {
         return 0;
     }
+    let Some(caller) = fetch_caller() else { return 0; };
     let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
     CABI_NET_FETCH_BYTES_RESULTS
         .lock()
@@ -3134,6 +3211,7 @@ pub(crate) fn cabi_net_fetch_bytes_start_with_context_host(
         max_bytes,
         happy_eyeballs,
         referrer.map(String::from),
+        caller,
     );
     op_id
 }
@@ -3145,6 +3223,7 @@ pub(crate) fn cabi_net_fetch_post_json_bytes_start_host(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> u32 {
+    let Some(caller) = fetch_caller() else { return 0; };
     let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
     CABI_NET_FETCH_BYTES_RESULTS
         .lock()
@@ -3158,6 +3237,7 @@ pub(crate) fn cabi_net_fetch_post_json_bytes_start_host(
         timeout_ms.max(1),
         max_bytes,
         cancellation,
+        caller,
     );
     op_id
 }
@@ -3499,6 +3579,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start_with_timeout(
         return 0;
     };
     let bearer = unsafe { optional_abi_string(bearer_ptr, bearer_len) };
+    let Some(caller) = fetch_caller() else { return 0; };
     let op_id = CABI_NET_FETCH_SEQ.fetch_add(1, Ordering::Relaxed);
     CABI_NET_FETCH_RESULTS.lock().insert(op_id, None);
     let cancellation = register_json_post_cancellation(op_id);
@@ -3511,6 +3592,7 @@ pub unsafe extern "C" fn trueos_cabi_net_fetch_post_json_start_with_timeout(
         timeout_ms.max(1),
         4 * 1024 * 1024,
         cancellation,
+        caller,
     );
     op_id
 }
@@ -4119,6 +4201,7 @@ async fn happy_connect(
     events: &'static Queue<TlsEvent>,
     timeout_ms: u32,
     ipv6_failed: &AtomicBool,
+    caller: Caller,
 ) -> Result<vnet::NetHandle, String> {
     let config = crate::r::net::dns::DnsConfig::for_device(device)
         .with_timeout_ms((timeout_ms as u64).min(5_000));
@@ -4133,7 +4216,9 @@ async fn happy_connect(
         let addr = crate::r::net::dns::resolve_ipv6_for_device(device, &target.host, config)
             .await
             .map_err(|err| format!("dns AAAA {:?}", err))?;
+        authorize_peer(caller, core::net::Ipv6Addr::from(addr), target.port)?;
         TlsCommand::OpenTcpConnectV6 {
+            caller,
             remote: vnet::EndpointV6::new(addr, target.port),
             server_name: target.host.clone(),
             cfg,
@@ -4142,12 +4227,14 @@ async fn happy_connect(
         }
     } else {
         let addr = resolve_https_host(device, &target.host, timeout_ms).await?;
+        authorize_peer(caller, core::net::Ipv4Addr::from(addr), target.port)?;
         // DNS lookups run together; the IPv4 connection starts after a short stagger.
         let fallback = Instant::now() + EmbassyDuration::from_millis(250);
         while Instant::now() < fallback && !ipv6_failed.load(Ordering::Relaxed) {
             Timer::after(EmbassyDuration::from_millis(5)).await;
         }
         TlsCommand::OpenTcpConnect {
+            caller,
             remote: vnet::EndpointV4::new(addr, target.port),
             server_name: target.host.clone(),
             cfg,
@@ -4176,7 +4263,9 @@ async fn request_https_happy_eyeballs(
     request: &HttpsRequest<'_>,
     timeout_ms: u32,
     max_bytes: usize,
+    caller: Caller,
 ) -> Result<HttpsJsonResponse, String> {
+    authorize_destination(caller, &target.host, target.port)?;
     let deadline = Instant::now() + EmbassyDuration::from_millis(timeout_ms as u64);
     crate::r::readiness::wait_for_timeout(
         crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
@@ -4213,6 +4302,7 @@ async fn request_https_happy_eyeballs(
             queues[0].1,
             remaining,
             &ipv6_failed,
+            caller,
         )
         .await;
         if result.is_err() {
@@ -4230,6 +4320,7 @@ async fn request_https_happy_eyeballs(
             queues[1].1,
             remaining,
             &ipv6_failed,
+            caller,
         ),
     );
     let winner =
@@ -4262,6 +4353,7 @@ async fn request_https_happy_eyeballs(
                 max_bytes,
                 None,
                 Some(handle),
+                caller,
             )
             .await
         }

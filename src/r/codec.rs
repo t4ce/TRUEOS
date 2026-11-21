@@ -20,8 +20,8 @@ const REQUEST_CAP: usize = 32;
 const OPERATION_CAP: usize = 64;
 
 use super::archive_limits::{
-    MAX_ARCHIVE_BYTES, MAX_ARCHIVE_ENTRIES, MAX_SOURCE_FILE_BYTES, MAX_SOURCE_TOTAL_BYTES,
-    MAX_TAR_BYTES,
+    MAX_ARCHIVE_BYTES, MAX_ARCHIVE_ENTRIES, MAX_RESTORED_FILE_BYTES, MAX_SOURCE_FILE_BYTES,
+    MAX_SOURCE_TOTAL_BYTES, MAX_TAR_BYTES,
 };
 const MAX_ARCHIVE_PATH_BYTES: usize = 1_024;
 const MAX_ARCHIVE_PATH_DEPTH: usize = 64;
@@ -853,7 +853,7 @@ async fn unpack_path_job(
                 super::tar::unpack(
                     &tar,
                     MAX_ARCHIVE_ENTRIES,
-                    MAX_SOURCE_FILE_BYTES,
+                    MAX_RESTORED_FILE_BYTES,
                     MAX_SOURCE_TOTAL_BYTES,
                 )
             })
@@ -903,9 +903,8 @@ async fn unpack_path_job(
     // the preflight keeps one later legacy conflict from leaving earlier files
     // or directories behind.
     for (destination, disposition) in destinations.iter().zip(restore_dispositions.iter()) {
-        let existing = authorized::node_info(actor, disk, destination.as_str())
-            .await?
-            .map(|info| info.content_type);
+        let existing =
+            authorized::restore_destination_content_type(actor, disk, destination.as_str()).await?;
         if legacy_destination_would_downgrade(*disposition, existing) {
             let reason = crate::r::fs::trueosfs::ContentIdentityRejectReason::LegacyDowngrade;
             crate::r::fs::trueosfs::record_type_reject(reason);

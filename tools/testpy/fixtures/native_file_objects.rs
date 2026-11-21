@@ -159,6 +159,36 @@ mod r{
      for actor in [Actor::Public,Actor::Vm(2,1)]{assert_eq!(crate::run(auth::read(actor,D,"apps/demo/old",100)),Err(block::Error::PermissionDenied));assert!(matches!(crate::run(auth::node_info(actor,D,"apps/demo/old")),Err(block::Error::PermissionDenied)));assert_eq!(crate::run(auth::write(actor,D,"apps/demo/old",b"attack",ContentTypeId::BLOB,true)),Err(block::Error::PermissionDenied));assert!(matches!(crate::run(auth::create_dir(actor,D,"apps/demo/sub",false)),Err(CreateDirectoryError::Device(block::Error::PermissionDenied))));assert!(crate::run(auth::list(actor,D,"apps",10)).unwrap().unwrap().entries.is_empty());}
      assert_eq!(disk("apps/demo/old").unwrap(),b"secret");crate::run(auth::create_dir_all(Actor::Vm(1,1),D,"apps/demo/sub/deep")).unwrap();crate::run(auth::write(Actor::Vm(1,1),D,"apps/demo/sub/deep/new",b"new",ContentTypeId::BLOB,true)).unwrap();assert_eq!(INDEX.lock()["apps/demo/sub/deep/new"].record_key,key(4));crate::run(auth::write(Actor::Vm(1,1),D,"apps/demo/legacy-dir/fresh",b"new",ContentTypeId::BLOB,true)).unwrap();assert_eq!(INDEX.lock()["apps/demo/legacy-dir"].record_key,RecordKey::Ffa);assert_eq!(INDEX.lock()["apps/demo/legacy-dir/fresh"].record_key,key(4));assert_eq!(crate::run(auth::read(Actor::Vm(1,1),D,"apps/demo/old",100)).unwrap().unwrap(),b"secret");let mut out=[0;3];assert_eq!(crate::run(auth::read_range(Actor::Vm(1,1),D,"apps/demo/old",1,&mut out)),Ok(Some(3)));assert_eq!(&out,b"ecr");let mut phases=Vec::new();assert_eq!(crate::run(auth::read_range_observed(Actor::Vm(1,1),D,"apps/demo/old",0,&mut out,|phase|phases.push(phase))),Ok(Some(3)));assert_eq!(phases,vec![ReadRangePhase::Placement,ReadRangePhase::Index,ReadRangePhase::Read]);crate::run(auth::write(Actor::Public,D,"public",b"free",ContentTypeId::BLOB,true)).unwrap();assert_eq!(crate::run(auth::read(Actor::Public,D,"public",100)).unwrap().unwrap(),b"free");let snapshot=crate::run(auth::index_snapshot(Actor::Public,D)).unwrap().unwrap();assert!(snapshot.iter().all(|entry|!entry.path.starts_with("apps/demo")));
     }
+    #[test]
+    fn archive_preflight_handles_missing_directories_and_checks_existing_keys() {
+        reset();
+        use authorized::{self as auth, Actor};
+
+        let actor = Actor::Vm(1, 1);
+        assert_eq!(crate::run(auth::create_dir_all(actor, D, "apps/demo")), Ok(true));
+        let path = "apps/demo/extracted/nested/member";
+        assert_eq!(crate::run(auth::restore_destination_content_type(actor, D, path)), Ok(None));
+        assert_eq!(crate::run(auth::create_dir_all(actor, D, "apps/demo/extracted/nested")), Ok(true));
+        let payload = vec![0x5a; 150_123];
+        assert_eq!(
+            crate::run(auth::write(actor, D, path, &payload, ContentTypeId::LZ4, false)),
+            Ok(true)
+        );
+        assert_eq!(disk(path).unwrap(), payload);
+        assert_eq!(
+            crate::run(auth::restore_destination_content_type(actor, D, path)),
+            Ok(Some(ContentTypeId::LZ4))
+        );
+
+        crate::run(stamp_directory_key_async(D, "apps/demo", key(4))).unwrap();
+        for path in [path, "apps/demo/absent/member"] {
+            assert_eq!(
+                crate::run(auth::restore_destination_content_type(actor, D, path)),
+                Err(block::Error::PermissionDenied)
+            );
+        }
+    }
+
     #[test]fn recursive_removal_and_both_move_endpoints_are_authorized(){
      reset();use authorized::{self as auth,Actor};for app in ["apps/demo","apps/other"]{crate::run(auth::create_dir_all(Actor::Host,D,app)).unwrap();}crate::run(auth::write(Actor::Host,D,"apps/demo/legacy",b"private",ContentTypeId::BLOB,true)).unwrap();crate::run(stamp_directory_key_async(D,"apps/demo",key(5))).unwrap();crate::run(stamp_directory_key_async(D,"apps/other",key(6))).unwrap();crate::access_key_db::grant(1,key(5));crate::run(auth::write(Actor::Host,D,"apps/other/target",b"other",ContentTypeId::BLOB,true)).unwrap();
      assert!(matches!(crate::run(auth::remove(Actor::Vm(1,1),D,"apps",None)),Err(RemoveNodeError::Device(block::Error::PermissionDenied))));assert_eq!(crate::run(auth::rename(Actor::Vm(1,1),D,"apps/demo/legacy","apps/other/target",true,false)),Err(block::Error::PermissionDenied));assert_eq!(crate::run(auth::rename(Actor::Vm(1,1),D,"apps/demo/legacy","public",false,false)),Err(block::Error::PermissionDenied));assert_eq!(disk("apps/other/target").unwrap(),b"other");assert_eq!(crate::run(auth::rename(Actor::Vm(1,1),D,"apps/demo/legacy","apps/demo/moved",false,false)),Ok(true));assert_eq!(crate::run(auth::rename(Actor::Vm(1,1),D,"apps/demo","demo-moved",false,true)),Ok(true));assert_eq!(crate::run(auth::read(Actor::Public,D,"demo-moved/moved",100)),Err(block::Error::PermissionDenied));assert_eq!(crate::run(auth::read(Actor::Vm(1,1),D,"demo-moved/moved",100)).unwrap().unwrap(),b"private");assert_eq!(crate::run(auth::remove(Actor::Vm(1,1),D,"demo-moved",None)),Ok(true));assert!(disk("demo-moved/moved").is_none());assert_eq!(disk("apps/other/target").unwrap(),b"other");

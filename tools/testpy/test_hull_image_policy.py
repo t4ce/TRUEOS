@@ -310,7 +310,9 @@ mod service {
     use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use spin::Mutex;
     use crate::policy::{self, ERR_INVALID, ERR_TOO_LARGE, MAX_ENCODED_BYTES};
+    use crate::r::cabi_codes::FS_ERR_PERMISSION_DENIED;
     use crate::r::fs::request_broker as fs;
+    use crate::r::net::wall::Caller;
     use crate::ui;
     use crate::test_time::{Duration,Timer};
     #[derive(Clone, Copy, Default)]
@@ -353,6 +355,19 @@ mod service {
     }
     fn admit(owner:u32, window:u32, url:&str, w:u32, h:u32, generation:u64) -> Result<i32,i32> {
         request_inner(owner, window, url, "apps/hull", "example.test", w,h,generation)
+    }
+
+    #[test]
+    fn image_admission_and_worker_preserve_the_authenticated_network_caller() {
+        use crate::r::net::https::{FIREWALL_DENIED, REPLIES, REQUESTS};
+
+        let _guard = setup();
+        assert_eq!(admit(7, 1, "https://denied.test/photo.png", 1, 1, 9), Err(FS_ERR_PERMISSION_DENIED));
+        assert!(REGISTRY.lock().queue.is_empty());
+        let job = job("https://example.test/photo.png");
+        REPLIES.lock().insert(job.url.clone(), Err(FIREWALL_DENIED.into()));
+        assert_eq!(ready(process(&job)), Err(FS_ERR_PERMISSION_DENIED));
+        assert_eq!(REQUESTS.lock()[0].3, Caller::Blueprint { vm: 7, generation: 1 });
     }
 
     #[test]
@@ -746,25 +761,44 @@ SERVICE_MOCKS = r'''
 }
 #[cfg(test)] mod disc { pub mod block {pub type DeviceHandle=u32;} }
 #[cfg(test)] mod r {
-    pub mod net { pub mod https {
+    pub mod cabi_codes { pub const FS_ERR_PERMISSION_DENIED: i32 = -19; }
+    pub mod net {
+      pub mod wall {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub enum Caller { Kernel, Blueprint { vm: u8, generation: u64 } }
+        impl Caller {
+            pub fn capture(vm: Option<u8>) -> Option<Self> {
+                let Some(vm) = vm else { return Some(Self::Kernel); };
+                Some(Self::Blueprint { vm, generation: crate::hv::vm_run_generation(vm)? })
+            }
+        }
+      }
+      pub mod https {
+        use super::wall::Caller;
         use alloc::{collections::BTreeMap,string::String,vec::Vec};
         use core::sync::atomic::{AtomicBool,Ordering};
-        pub static REQUESTS:spin::Mutex<Vec<(String,u32,usize)>>=spin::Mutex::new(Vec::new());
+        pub const FIREWALL_DENIED: &str = "firewall denied";
+        pub static REQUESTS:spin::Mutex<Vec<(String,u32,usize,Caller)>>=spin::Mutex::new(Vec::new());
         pub static REPLIES:spin::Mutex<BTreeMap<String,Result<Vec<u8>,String>>>=spin::Mutex::new(BTreeMap::new());
         pub static CANCEL_AFTER_FETCH:AtomicBool=AtomicBool::new(false);
+        pub fn authorize_url_for_caller(url: &str, _: Caller) -> Result<(), String> {
+            if url.starts_with("https://denied.test/") { return Err(FIREWALL_DENIED.into()); }
+            Ok(())
+        }
         pub struct MediaFetchCancellation(core::sync::atomic::AtomicBool);
         impl MediaFetchCancellation {
             pub fn new()->Self {Self(core::sync::atomic::AtomicBool::new(false))}
             pub fn cancel(&self) {self.0.store(true,core::sync::atomic::Ordering::Release);}
         }
-        pub async fn get_image_bytes_shared(url:&str,timeout:u32,max:usize,cancellation:&MediaFetchCancellation)->Result<Vec<u8>,String>{
-            REQUESTS.lock().push((url.into(),timeout,max));
+        pub async fn get_image_bytes_shared(url:&str,timeout:u32,max:usize,cancellation:&MediaFetchCancellation,caller:Caller)->Result<Vec<u8>,String>{
+            REQUESTS.lock().push((url.into(),timeout,max,caller));
             if cancellation.0.load(Ordering::Relaxed){return Err("cancelled".into());}
             let result=REPLIES.lock().get(url).cloned().unwrap_or_else(||Err("unconfigured test URL".into()));
             if CANCEL_AFTER_FETCH.load(Ordering::Relaxed){crate::ui::INCARNATION.store(2,Ordering::Relaxed);}
             result
         }
-    }}
+      }
+    }
     pub mod fs {pub mod request_broker {
         use alloc::{collections::BTreeMap,string::String,vec::Vec};
         use core::sync::atomic::{AtomicUsize,Ordering};
@@ -791,7 +825,7 @@ def service_harness() -> str:
     types = source[source.index("struct Life {"):source.index("\nfn ensure_workers(")]
     functions = "\n".join(production_item(source, name) for name in (
         "request_inner", "status", "release", "reset", "complete_error", "read_bounded", "read_cache",
-        "asset_failure", "encoded_source", "converted_svg", "process", "resize", "decode_permit",
+        "asset_failure", "fetch_encoded", "encoded_source", "converted_svg", "process", "resize", "decode_permit",
     ))
     permit = source[source.index("struct DecodePermit;"):source.index("async fn decode_permit(")]
     return (SERVICE_MOCKS + SERVICE_TESTS.replace("SERVICE_CONSTANTS", constants)

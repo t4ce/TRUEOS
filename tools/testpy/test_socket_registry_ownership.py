@@ -73,6 +73,19 @@ mod vmcall {
     }
 }
 static TUN_FAIL: AtomicBool = AtomicBool::new(false);
+mod wall {
+    pub enum Transport { Tcp }
+    pub fn current_vm() -> Option<u8> { crate::hv::current_guest_execution_context_vm_id() }
+    pub struct Caller(Option<u8>);
+    impl Caller {
+        pub fn capture(vm: Option<u8>) -> Option<Self> { Some(Self(vm)) }
+        pub fn current() -> Option<Self> { Self::capture(current_vm()) }
+        pub fn permits_socket(&self, _: Transport) -> bool { self.0 != Some(7) }
+        pub fn permits_outbound(&self, transport: Transport, remote: core::net::SocketAddr) -> bool {
+            self.permits_socket(transport) && remote.port() == 80
+        }
+    }
+}
 mod blueprint_net_broker {
     use crate::vnet::{self as api, Command, Event, NetHandle, SocketKind};
     pub struct VNetBridge { events: crate::Mutex<std::collections::VecDeque<Event>> }
@@ -117,6 +130,9 @@ fn peer_registry_survives_retirement_and_reuse_without_guest_allocations() {
     drop(control);
     GUEST_ALLOCATIONS.store(0, Ordering::Relaxed);
 
+    OWNER.with(|v| v.set(Some(7)));
+    assert_eq!(socket_tcp_open_host(2, 1, 6), -13);
+
     let sockets: [i32; 192] = std::array::from_fn(|i| {
         OWNER.with(|v| v.set(Some((i % 2) as u8)));
         socket_tcp_open_host(2, 1, 6)
@@ -124,16 +140,19 @@ fn peer_registry_survives_retirement_and_reuse_without_guest_allocations() {
     OWNER.with(|v| v.set(Some(0)));
     assert_eq!(socket_tcp_close_host(sockets[1] as u32), -9);
     assert_eq!(socket_tcp_set_nonblocking_host(sockets[0] as u32, 1), 0);
+    assert_eq!(socket_tcp_connect_v4_host(sockets[0] as u32, 0x7f000001, 81u16.to_be(), 0), -13);
     assert_eq!(socket_tcp_connect_v4_host(sockets[0] as u32, 0x7f000001, 80u16.to_be(), 0), 0);
     let mut bytes = [0; 512];
     assert_eq!(socket_tcp_recv_host(sockets[0] as u32, &mut bytes, 0, 1, 0), 256);
     assert_eq!(&bytes[..256], &[42; 256]);
 
+    assert_eq!(tun_open_host(0, 0, [0; 16], 0, 1500), -13);
+    OWNER.with(|v| v.set(None));
     let tun = tun_open_host(0, 0, [0; 16], 0, 1500);
     assert!(tun > 0);
     OWNER.with(|v| v.set(Some(1)));
     assert_eq!(tun_close_host(tun as u32), -9);
-    OWNER.with(|v| v.set(Some(0)));
+    OWNER.with(|v| v.set(None));
     assert_eq!(tun_recv_host(tun as u32, &mut bytes), Ok(Some(256)));
     assert_eq!(&bytes[..256], &[7; 256]);
     assert_eq!(tun_close_host(tun as u32), 0);

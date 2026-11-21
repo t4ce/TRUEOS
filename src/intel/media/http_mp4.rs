@@ -198,6 +198,7 @@ impl HttpMp4Reader {
         indexed_length: Option<usize>,
         user_agent: Option<&str>,
         referrer: Option<&str>,
+        caller: crate::r::net::wall::Caller,
     ) -> Result<Self, &'static str> {
         let started = EmbassyInstant::now();
         let mut source = HttpSource {
@@ -210,7 +211,7 @@ impl HttpMp4Reader {
             index: Window::default(),
             samples: Window::default(),
             bytes_fetched: 0,
-            transport: MediaRangeClient::new(),
+            transport: MediaRangeClient::new(caller),
             stop: None,
         };
         let metadata = async {

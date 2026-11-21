@@ -40,18 +40,10 @@ const MONTH_NAMES: [&str; 12] = [
 static NTP_FRAME_WORDS: Mutex<[u32; 12]> = Mutex::new([0u32; 12]);
 static NTP_LAST_SYNC_UNIX_SECS: AtomicU64 = AtomicU64::new(0);
 static NTP_LAST_SYNC_TICKS: AtomicU64 = AtomicU64::new(0);
-static NTP_LOCAL_PORT_SEQ: AtomicU16 = AtomicU16::new(0);
 static NTP_HOST_SEQ: AtomicU16 = AtomicU16::new(0);
 static NTP_FAILED_QUERIES: AtomicU64 = AtomicU64::new(0);
 static NTP_FAILURE_REPORTED: AtomicBool = AtomicBool::new(false);
 const NTP_UNIX_EPOCH_OFFSET: u64 = 2_208_988_800;
-
-#[inline]
-fn alloc_local_port() -> u16 {
-    // Ephemeral range slice to reduce collisions with other UDP users.
-    let seq = NTP_LOCAL_PORT_SEQ.fetch_add(1, Ordering::Relaxed);
-    49152u16.wrapping_add(seq % 8192)
-}
 
 #[inline]
 fn parse_ntp_words(packet: &[u8]) -> Option<[u32; 12]> {
@@ -114,7 +106,7 @@ async fn query_ntp_for_device(dev_idx: usize, host: &str) -> Result<([u32; 12], 
     let net = VNet::open(dev_idx).ok_or("network device unavailable")?;
     let mut udp = VNetUdpEndpoint::bind(
         &net,
-        alloc_local_port(),
+        0,
         EmbassyDuration::from_millis(NTP_TIMEOUT_MS),
     )
     .await

@@ -121,6 +121,19 @@ enum CompatAddr {
 }
 
 impl CompatAddr {
+    fn from_socket_addr(addr: core::net::SocketAddr) -> Self {
+        match addr {
+            core::net::SocketAddr::V4(addr) => Self::V4 {
+                addr: addr.ip().octets(),
+                port: addr.port(),
+            },
+            core::net::SocketAddr::V6(addr) => Self::V6 {
+                addr: addr.ip().octets(),
+                port: addr.port(),
+            },
+        }
+    }
+
     fn socket_addr(self) -> core::net::SocketAddr {
         match self {
             Self::V4 { addr, port } => core::net::SocketAddr::from((addr, port)),
@@ -344,6 +357,7 @@ struct TcpSocketSetup {
 }
 
 type NetworkActor = crate::r::fs::trueosfs::authorized::Actor;
+use crate::r::net::wall::{Caller as WallCaller, Transport as WallTransport};
 
 struct MioSocketState {
     actor: NetworkActor,
@@ -380,7 +394,6 @@ struct MioCompat {
     progress: [progress::Counters; crate::allcaps::hv::VM_ID_LIMIT],
     pending_opens: VecDeque<PendingOpen>,
     next_socket_id: u32,
-    udp_next_ephemeral: u16,
     tcp_listen_next_ephemeral: u16,
 }
 
@@ -466,12 +479,7 @@ fn vm_guest_vmcall_active() -> bool {
 
 #[inline]
 fn current_owner_vm() -> Option<u8> {
-    crate::hv::current_guest_execution_context_vm_id()
-}
-
-fn capture_network_actor(owner: Option<u8>) -> NetworkActor {
-    owner.and_then(|vm| crate::r::fs::trueosfs::authorized::actor_for_vm(vm).ok())
-        .unwrap_or(NetworkActor::Public)
+    crate::r::net::wall::current_vm()
 }
 
 #[inline]
@@ -693,7 +701,6 @@ impl MioCompat {
             progress: [progress::Counters::new(); crate::allcaps::hv::VM_ID_LIMIT],
             pending_opens: VecDeque::new(),
             next_socket_id: 1,
-            udp_next_ephemeral: 49_152,
             tcp_listen_next_ephemeral: 50_000,
         }
     }
@@ -717,12 +724,6 @@ impl MioCompat {
         let id = self.next_socket_id;
         self.next_socket_id = self.next_socket_id.wrapping_add(1).max(1);
         id
-    }
-
-    fn alloc_udp_port(&mut self) -> u16 {
-        let port = self.udp_next_ephemeral;
-        self.udp_next_ephemeral = self.udp_next_ephemeral.wrapping_add(1).max(49_152);
-        port
     }
 
     fn tcp_listener_address_in_use(&self, local: CompatAddr) -> bool {
@@ -921,6 +922,8 @@ impl MioCompat {
             "no sockets available" | "bind failed" | "listen failed" | "connect failed"
                 | "invalid local address" | "no ipv4 configured" | "tcp connect link down"
                 | "tcp listen link down" | "unsupported listen address"
+                | "tcp listen permission denied" | "tcp connect permission denied"
+                | "udp bind permission denied"
         );
         if !open_error {
             crate::log!(
@@ -1491,52 +1494,30 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
     };
 
     let owner_vm = current_owner_vm();
+    let Some(caller) = WallCaller::capture(owner_vm) else {
+        return STATUS_IO;
+    };
+    if crate::access_key_db::authorize_tcp_listen(caller.actor(), local.socket_addr()).is_err() {
+        return STATUS_IO;
+    }
+    let Some(local) = caller.restrict_bind(WallTransport::Tcp, local.socket_addr()) else {
+        return STATUS_IO;
+    };
+    let local = CompatAddr::from_socket_addr(local);
     with_compat(|compat| {
-        if crate::access_key_db::authorize_tcp_listen(capture_network_actor(owner_vm), local.socket_addr()).is_err() {
-            return STATUS_IO;
-        }
         if !compat.socket_capacity_available(owner_vm) {
             return STATUS_RESOURCE_EXHAUSTED;
         }
-        let local = match local {
-            CompatAddr::V4 { addr, port } => CompatAddr::V4 {
-                addr,
-                port: if port == 0 {
-                    let Some(port) = compat.alloc_tcp_listen_port() else {
-                        return STATUS_IO;
-                    };
-                    port
-                } else {
-                    if compat.tcp_listener_address_in_use(local) {
-                        return STATUS_IO;
-                    }
-                    port
-                },
-            },
-            CompatAddr::V6 { addr, port } => CompatAddr::V6 {
-                addr,
-                port: if port == 0 {
-                    let Some(port) = compat.alloc_tcp_listen_port() else {
-                        return STATUS_IO;
-                    };
-                    port
-                } else {
-                    if compat.tcp_listener_address_in_use(local) {
-                        return STATUS_IO;
-                    }
-                    port
-                },
-            },
-        };
-        let port = match local {
-            CompatAddr::V4 { port, .. } | CompatAddr::V6 { port, .. } => port,
-        };
+        if compat.tcp_listener_address_in_use(local) {
+            return STATUS_IO;
+        }
+        let port = local.socket_addr().port();
 
         let socket_id = compat.alloc_socket_id();
         compat.sockets.push(MioSocketState {
             id: socket_id,
             owner_vm,
-            actor: capture_network_actor(owner_vm),
+            actor: caller.actor(),
             progress_generation: owner_vm.and_then(crate::hv::vm_run_generation).unwrap_or(0),
             kind: MioSocketKind::TcpListener,
             setup: None,
@@ -1658,6 +1639,12 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
     };
 
     let owner_vm = current_owner_vm();
+    let Some(caller) = WallCaller::capture(owner_vm) else {
+        return STATUS_IO;
+    };
+    if !caller.permits_outbound(WallTransport::Tcp, peer.socket_addr()) {
+        return STATUS_IO;
+    }
     with_compat(|compat| {
         if !compat.socket_capacity_available(owner_vm) {
             return STATUS_RESOURCE_EXHAUSTED;
@@ -1666,7 +1653,7 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
         compat.sockets.push(MioSocketState {
             id: socket_id,
             owner_vm,
-            actor: capture_network_actor(owner_vm),
+            actor: caller.actor(),
             progress_generation: owner_vm.and_then(crate::hv::vm_run_generation).unwrap_or(0),
             kind: MioSocketKind::TcpStream,
             setup: None,
@@ -1773,15 +1760,33 @@ pub(crate) unsafe fn mio_udp_socket_bind_host(
     };
 
     let owner_vm = current_owner_vm();
+    let Some(caller) = WallCaller::capture(owner_vm) else {
+        return STATUS_IO;
+    };
+    let ephemeral = addr.port == 0;
+    let local = if ephemeral {
+        if !caller.permits_socket(WallTransport::Udp) {
+            return STATUS_IO;
+        }
+        local
+    } else {
+        let Some(local) = caller.restrict_bind(WallTransport::Udp, local.socket_addr()) else {
+            return STATUS_IO;
+        };
+        CompatAddr::from_socket_addr(local)
+    };
     with_compat(|compat| {
         if !compat.socket_capacity_available(owner_vm) {
             return STATUS_RESOURCE_EXHAUSTED;
+        }
+        if let Err(status) = compat.ensure_net() {
+            return status;
         }
         let local = match local {
             CompatAddr::V4 { addr, port } => CompatAddr::V4 {
                 addr,
                 port: if port == 0 {
-                    compat.alloc_udp_port()
+                    crate::r::net::wall::next_udp_client_port()
                 } else {
                     port
                 },
@@ -1789,7 +1794,7 @@ pub(crate) unsafe fn mio_udp_socket_bind_host(
             CompatAddr::V6 { addr, port } => CompatAddr::V6 {
                 addr,
                 port: if port == 0 {
-                    compat.alloc_udp_port()
+                    crate::r::net::wall::next_udp_client_port()
                 } else {
                     port
                 },
@@ -1800,7 +1805,7 @@ pub(crate) unsafe fn mio_udp_socket_bind_host(
         compat.sockets.push(MioSocketState {
             id: socket_id,
             owner_vm,
-            actor: capture_network_actor(owner_vm),
+            actor: caller.actor(),
             progress_generation: owner_vm.and_then(crate::hv::vm_run_generation).unwrap_or(0),
             kind: MioSocketKind::Udp,
             setup: None,
@@ -1821,20 +1826,19 @@ pub(crate) unsafe fn mio_udp_socket_bind_host(
             accept_queue: VecDeque::new(),
         });
 
-        let port = match local {
-            CompatAddr::V4 { port, .. } | CompatAddr::V6 { port, .. } => port,
-        };
-
         compat.pending_opens.push_back(PendingOpen {
             socket_id,
             kind: api::SocketKind::Udp,
         });
 
-        let status = match compat.submit(api::Command::OpenUdp { port }) {
-            Ok(()) => STATUS_OK,
-            Err(status) => {
+        let status = match compat.net.as_ref().unwrap().open_udp_for_caller(local.socket_addr(), ephemeral, caller) {
+            Ok(()) => {
+                compat.kick_net();
+                STATUS_OK
+            }
+            Err(()) => {
                 compat.pending_opens.pop_back();
-                status
+                STATUS_WOULD_BLOCK
             }
         };
 
@@ -2520,6 +2524,9 @@ pub(crate) unsafe fn mio_udp_socket_connect_host(socket_id: u32, addr: TrueosMio
         };
         if socket.kind != MioSocketKind::Udp {
             return STATUS_INVALID_INPUT;
+        }
+        if !WallCaller::from_actor(socket.actor).is_some_and(|caller| caller.permits_outbound(WallTransport::Udp, peer.socket_addr())) {
+            return STATUS_IO;
         }
         if socket.closed { return STATUS_NOT_CONNECTED; }
         socket.peer = Some(peer);

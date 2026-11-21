@@ -20,6 +20,7 @@ VM = (ROOT / "src/hv/vmcall.rs").read_text()
 
 def production():
     selected = [media.PRODUCTION]
+    selected.append(re.search(r"(?m)^pub\(crate\) const FIREWALL_DENIED:.*;$", HTTPS).group(0))
     for name in ["BOUNDED_FETCH_TIMEOUT_MAX_MS", "BOUNDED_FETCH_BODY_MAX_BYTES", "HTTPS_RESPONSE_OVERHEAD_MAX"]:
         selected.append(re.search(r"(?m)^const " + name + r":.*;$", HTTPS).group(0))
     selected.append("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\nstruct JsonPostCancelled;")
@@ -43,7 +44,7 @@ def production():
     codes = (ROOT / "src/r/cabi_codes.rs").read_text()
     for name in ["NET_ERR_TIMEOUT", "NET_ERR_TIMEOUT_DNS", "NET_ERR_TLS",
                  "NET_ERR_RESPONSE_FRAMING", "NET_ERR_BAD_URL", "NET_ERR_HTTP",
-                 "FS_ERR_TOO_LARGE", "FS_ERR_BAD_PARAM", "FS_ERR_NOT_FOUND"]:
+                 "FS_ERR_TOO_LARGE", "FS_ERR_BAD_PARAM", "FS_ERR_NOT_FOUND", "FS_ERR_PERMISSION_DENIED"]:
         selected.append(re.search(r"(?m)^pub const " + name + r":.*;$", codes).group(0))
     selected.append(media.VM_CONSTANTS)
     constants = (ROOT / "crates/trueos-vm/src/vmcall.rs").read_text()
@@ -85,7 +86,9 @@ mod wait {
 }
 mod surfer {pub mod html_shack {
     pub struct BytesResponse {pub url:String,pub bytes:Vec<u8>}
-    pub async fn fetch_bytes_via_pool(_:String,_:u64,_:usize)->Result<BytesResponse,String> {Err("host fixture does not run HTTP pool".into())}
+    pub async fn fetch_bytes_via_pool_for_caller(_:String,_:u64,_:usize,_:crate::Caller)->Result<BytesResponse,String> {
+        Err("host fixture does not run HTTP pool".into())
+    }
 }}
 '''
 
@@ -100,7 +103,7 @@ TESTS = r'''
     fn setup(steps:impl IntoIterator<Item=Step>) {
         assert!(TASKS.with(|tasks|tasks.borrow().is_empty()),"fixture leaked an active task/fence");
         CLOCK.with(|clock|clock.set(0));GENERATION.with(|g|g.set(Some(7)));GUEST.with(|g|g.set(false));
-        TRANSPORT.with(|t|*t.borrow_mut()=Transport{steps:steps.into_iter().collect(),..Default::default()});
+        TRANSPORT.with(|t|*t.borrow_mut()=TransportTrace{steps:steps.into_iter().collect(),..Default::default()});
         CABI_NET_FETCH_BYTES_RESULTS.lock().clear();CABI_JSON_POST_CANCELLATIONS.lock().clear();
         SPAWNED.with(|s|s.borrow_mut().clear());VM_CALLS.with(|s|s.borrow_mut().clear());
     }
@@ -148,6 +151,7 @@ TESTS = r'''
             settle();assert_eq!(cabi_net_fetch_bytes_result_len_host(id),3);
             assert!(CABI_JSON_POST_CANCELLATIONS.lock().is_empty());
             TRANSPORT.with(|t|{let t=t.borrow();assert_eq!(t.requests.len(),1);let r=&t.requests[0];
+                assert_eq!(r.caller,if guest {Caller::Blueprint(1)} else {Caller::Kernel});
                 assert_eq!(r.timeout,90_000);assert_eq!(r.max_bytes,128*1024*1024);assert_eq!(r.url,"https://catalog.test:443/p/actual.bp?signature=a%2Fb");});
             cabi_net_fetch_bytes_discard_host(id);
         }
@@ -212,7 +216,8 @@ TESTS = r'''
         for (message,expected) in [("timeout during readiness",NET_ERR_TIMEOUT),("too large chunked body",FS_ERR_TOO_LARGE),
             ("too large response framing received=9",NET_ERR_RESPONSE_FRAMING),("response allocation failed",-5),
             ("dns Timeout",NET_ERR_TIMEOUT_DNS),("dns NoAnswer",NET_ERR_TIMEOUT_DNS),
-            ("tls InvalidCertificate",NET_ERR_TLS),("http status 404",NET_ERR_HTTP)] {
+            ("tls InvalidCertificate",NET_ERR_TLS),("http status 404",NET_ERR_HTTP),
+            (FIREWALL_DENIED,FS_ERR_PERMISSION_DENIED)] {
             assert_eq!(bounded_fetch_error_code(message),expected);
         }
     }

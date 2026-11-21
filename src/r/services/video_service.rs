@@ -1,6 +1,7 @@
 //! Owner-scoped video streams. Encoded bytes cross the V boundary once;
 //! decoder pictures and the three persistent RGBA textures stay in the kernel.
 use crate::gpu::vgpu::{self, DeviceHandle, Principal, RetainedTextureHandle};
+use crate::r::net::wall::Caller;
 use crate::ui4::{DecodedNv12Source, VideoPlaybackSession};
 use alloc::{vec, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -33,7 +34,7 @@ struct Stream {
     session: VideoPlaybackSession,
     bytes: Vec<u8>,
     received: usize,
-    url: Option<alloc::string::String>,
+    url: Option<(alloc::string::String, Caller)>,
     queued: bool,
     running: bool,
     looping: bool,
@@ -63,7 +64,15 @@ pub fn command(owner: u32, command: u32, a: u64, b: u64, input: &[u8], output: &
     if (10..=16).contains(&command) {
         return super::live_video_service::command(owner, command, a, b, input, output);
     }
-    if command==8{return if a==0&&b==0&&output.is_empty(){super::video_open_service::browser_request(owner,input)}else{INVALID};}
+    if command == 8 {
+        if a != 0 || b != 0 || !output.is_empty() {
+            return INVALID;
+        }
+        let Some(caller) = Caller::current() else {
+            return crate::r::cabi_codes::FS_ERR_PERMISSION_DENIED;
+        };
+        return super::video_open_service::browser_request(owner, input, caller);
+    }
     if command==9{return if a>0&&a<=i32::MAX as u64&&b==0&&input.is_empty()&&output.is_empty(){super::video_open_service::browser_status(owner,a as u32)}else{INVALID};}
     if command == 0 || command == 6 {
         let url = if command == 6 {
@@ -79,7 +88,13 @@ pub fn command(owner: u32, command: u32, a: u64, b: u64, input: &[u8], output: &
             {
                 return INVALID;
             }
-            Some(alloc::string::String::from(url))
+            let Some(caller) = Caller::current() else {
+                return crate::r::cabi_codes::FS_ERR_PERMISSION_DENIED;
+            };
+            if crate::r::net::https::authorize_url_for_caller(url, caller).is_err() {
+                return crate::r::cabi_codes::FS_ERR_PERMISSION_DENIED;
+            }
+            Some((alloc::string::String::from(url), caller))
         } else {
             if input.len() != 1 || input[0] > 1 || b == 0 || b > MAX_ENCODED as u64 {
                 return INVALID;
@@ -488,10 +503,10 @@ pub async fn worker_task() {
             if session.is_cancelled() {
                 break;
             }
-            let result = if let Some(url) = url.as_deref() {
+            let result = if let Some((url, caller)) = url.as_ref() {
                 // The session's texture target routes the existing URL decoder
                 // into this owner's texture ring instead of a Shell2 window.
-                crate::intel::media::hw_vid::run_resolved_ui4_framed_video_playback(session, url)
+                crate::intel::media::hw_vid::run_resolved_ui4_framed_video_playback(session, url, *caller)
                     .await
             } else {
                 crate::intel::media::hw_vid::run_memory_texture_video_playback(

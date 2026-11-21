@@ -1,5 +1,6 @@
 //! File/URL playback admission for Blueprint callers, independent of terminals.
 use crate::ui4::VideoPlaybackSession;
+use crate::r::net::{https::authorize_url_for_caller, wall::Caller};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -20,7 +21,7 @@ struct BrowserPlayback {
     owner: u32,
     latest: u32,
     phase: i32,
-    queued: Option<BrowserSource>,
+    queued: Option<(BrowserSource, Caller)>,
     pending: Option<VideoPlaybackSession>,
     active: Option<VideoPlaybackSession>,
     worker: bool,
@@ -30,8 +31,11 @@ static NEXT_REQUEST: AtomicU32 = AtomicU32::new(1);
 
 /// One active browser playback and one newest candidate per owner. The active
 /// session belongs to this service, not the requesting VM's lifetime.
-pub(crate) fn browser_request(owner: u32, payload: &[u8]) -> i32 {
+pub(crate) fn browser_request(owner: u32, payload: &[u8], caller: Caller) -> i32 {
     let Some(source)=browser_source(payload) else {return -3;};
+    if authorize_url_for_caller(&source.url, caller).is_err() {
+        return crate::r::cabi_codes::FS_ERR_PERMISSION_DENIED;
+    }
     let Some(worker) = crate::workers::pick_background_spawner() else {
         return -4;
     };
@@ -61,7 +65,7 @@ pub(crate) fn browser_request(owner: u32, payload: &[u8]) -> i32 {
     let state = &mut states[index];
     state.latest = id;
     state.phase = 0;
-    state.queued = Some(source);
+    state.queued = Some((source, caller));
     if let Some(previous) = state.pending.take() {
         previous.cancel();
     }
@@ -148,7 +152,7 @@ async fn browser_prepare_task(owner: u32) {
                 }
             }
         };
-        let Some((id, url)) = request else {
+        let Some((id, (url, caller))) = request else {
             return;
         };
         let started = Instant::now();
@@ -177,7 +181,7 @@ async fn browser_prepare_task(owner: u32) {
                     None
                 };
                 if let Some(worker) = crate::workers::pick_background_spawner() {
-                    if let Ok(task) = playback_task(Source::Browser(url), Session(session), target, crate::r::fs::trueosfs::authorized::Actor::Public) {
+                    if let Ok(task) = playback_task(Source::Browser(url, caller), Session(session), target, crate::r::fs::trueosfs::authorized::Actor::Public) {
                         worker.spawn(task);
                     }
                 } else {
@@ -210,7 +214,7 @@ impl Drop for Session {
 enum Source {
     File(String),
     Url(String),
-    Browser(BrowserSource),
+    Browser(BrowserSource, Caller),
 }
 
 fn source(path: &str, qualified: bool) -> Result<Source, i32> {
@@ -264,9 +268,13 @@ pub(crate) fn enqueue(vm: u8, payload: &[u8], qualified: bool) -> i32 {
         Err(code) => return code,
     };
     if let Source::Url(url) = &source {
+        let Some(caller) = Caller::from_actor(actor) else {
+            return crate::r::cabi_codes::FS_ERR_PERMISSION_DENIED;
+        };
         let rc = browser_request(
             crate::r::io::async_fs_cabi::owner_for_vm(vm),
             url.as_bytes(),
+            caller,
         );
         return if rc > 0 { 0 } else { rc };
     }
@@ -310,7 +318,7 @@ async fn play(source: Source, session: VideoPlaybackSession, actor: crate::r::fs
         Source::File(path) => {
             Some(crate::intel::media::hw_vid::prepare_trueosfs_ui4_video(session, path, actor).await?)
         }
-        Source::Url(_) | Source::Browser(_) => None,
+        Source::Url(_) | Source::Browser(..) => None,
     };
     let extent = prepared.as_ref().map(|p| p.visible_extent()).unwrap_or((
         crate::ui4::DEFAULT_FRAME_WIDTH,
@@ -335,13 +343,15 @@ async fn play(source: Source, session: VideoPlaybackSession, actor: crate::r::fs
                 crate::intel::media::hw_vid::run_prepared_trueosfs_ui4_video(session, path, asset)
                     .await?;
             }
-            Source::Browser(source) => {
-                crate::intel::media::hw_vid::run_resolved_ui4_framed_video_playback_with_referrer(session,&source.url,source.referrer.as_deref()).await?;
+            Source::Browser(source, caller) => {
+                crate::intel::media::hw_vid::run_resolved_ui4_framed_video_playback_with_referrer(
+                    session, &source.url, source.referrer.as_deref(), *caller,
+                ).await?;
                 break;
             }
             Source::Url(url) => {
-                crate::intel::media::hw_vid::run_resolved_ui4_framed_video_playback(session, url)
-                    .await?;
+                let caller = Caller::from_actor(actor).ok_or("firewall denied")?;
+                crate::intel::media::hw_vid::run_resolved_ui4_framed_video_playback(session, url, caller).await?;
                 break;
             }
         }

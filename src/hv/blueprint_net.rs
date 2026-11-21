@@ -5,6 +5,7 @@ use spin::Mutex;
 use v::vnet as api;
 
 use crate::r::net::VNet;
+use crate::r::net::wall::{Caller, Transport};
 
 struct HostBlueprintNetSession {
     id: u32,
@@ -58,6 +59,10 @@ fn pump_host_net(vm_id: u8) -> Result<(), ()> {
 }
 
 pub(crate) fn open_primary(vm_id: u8) -> Option<u32> {
+    let caller = Caller::capture(Some(vm_id))?;
+    if !caller.permits_socket(Transport::Tcp) && !caller.permits_socket(Transport::Udp) {
+        return None;
+    }
     pump_host_net(vm_id).ok()?;
     let net = VNet::open_primary()?;
     let slot = session_slot(vm_id)?;
@@ -95,8 +100,8 @@ pub(crate) fn submit(vm_id: u8, session_id: u32, command_bytes: &[u8]) -> Result
         if session.id != session_id {
             return Err(());
         }
-        let actor = crate::r::fs::trueosfs::authorized::actor_for_vm(vm_id).map_err(|_| ())?;
-        session.net.submit_for_actor(command, actor)
+        let caller = Caller::capture(Some(vm_id)).ok_or(())?;
+        session.net.submit_for_caller(command, caller)
     };
     pump_host_net(vm_id)?;
     result

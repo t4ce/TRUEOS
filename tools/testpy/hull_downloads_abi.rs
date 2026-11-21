@@ -1,8 +1,10 @@
 //! Host boundary stubs; the read entrypoint and path predicates are production code.
 #![allow(dead_code)]
+extern crate self as trueos_appbundle;
 extern crate self as trueos_ide;
 extern crate self as trueos_vm;
 mod codes { include!("@CABI_CODES@"); }
+pub const RAM_INSTALL_VFILE: &[u8] = b"vFile:appdb-install-ram";
 pub mod store_protocol {
     pub const REQUEST: &str = "vFile:ide/request";
     pub const REPLY: &str = "vFile:ide/reply";

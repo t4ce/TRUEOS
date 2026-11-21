@@ -6,31 +6,39 @@ use trueos_time::{Duration, Timer};
 #[path = "download_queue.rs"]
 mod queue;
 use crate::r::cabi_codes::*;
+use crate::r::fs::trueosfs::authorized::Actor;
+use crate::r::net::wall::Caller;
 use queue::{Next, Queue};
 
 pub const PREFIX: &str = "vFile:hulldownloads/";
 pub const MAX_FRAME: usize = queue::MAX_RECEIVED_FRAME;
 static QUEUE: Mutex<Queue> = Mutex::new(Queue::new());
 
-fn worker_identity(owner: u32) -> Result<u64, i32> {
-    let vm = owner & !0x8000_0000;
-    if owner & 0x8000_0000 == 0
-        || vm > u8::MAX as u32
-        || crate::hv::app_vm_archive(vm as u8).as_deref() != Some("trauma.bp")
-    {
-        return Err(FS_ERR_BAD_PARAM);
+fn buildin_caller(owner: u32, actor: Actor, expected: &str) -> Result<(Caller, u64), i32> {
+    let caller = Caller::from_actor(actor).ok_or(FS_ERR_PERMISSION_DENIED)?;
+    let Caller::Blueprint { vm, generation, .. } = caller else {
+        return Err(FS_ERR_PERMISSION_DENIED);
+    };
+    if owner != crate::r::io::async_fs_cabi::owner_for_vm(vm) {
+        return Err(FS_ERR_PERMISSION_DENIED);
     }
-    crate::hv::vm_run_generation(vm as u8).ok_or(FS_ERR_BAD_PARAM)
+    let trusted = crate::hv::with_blueprint_network_identity(vm, generation, |archive, seeded| {
+        seeded && archive == expected
+    });
+    (trusted == Some(true))
+        .then_some((caller, generation))
+        .ok_or(FS_ERR_PERMISSION_DENIED)
 }
+
 fn generation(path: &str, operation: &str) -> Result<u64, i32> {
     path.strip_prefix(PREFIX)
         .and_then(|p| p.strip_prefix(operation))
         .and_then(|p| p.parse().ok())
         .ok_or(FS_ERR_BAD_PARAM)
 }
-pub fn read_for_owner(owner: u32, path: &str) -> Result<Vec<u8>, i32> {
+pub fn read_for_owner(owner: u32, actor: Actor, path: &str) -> Result<Vec<u8>, i32> {
     let generation = generation(path, "next/")?;
-    let run = worker_identity(owner)?;
+    let (_, run) = buildin_caller(owner, actor, "trauma.bp")?;
     match QUEUE
         .lock()
         .next(generation, owner, run)
@@ -41,7 +49,7 @@ pub fn read_for_owner(owner: u32, path: &str) -> Result<Vec<u8>, i32> {
         Next::Drained => Ok(vec![b'D']),
     }
 }
-pub fn write_for_owner(owner: u32, path: &str, bytes: &[u8]) -> Result<(), i32> {
+pub fn write_for_owner(owner: u32, actor: Actor, path: &str, bytes: &[u8]) -> Result<(), i32> {
     if matches!(
         path,
         "vFile:hulldownloads/submit" | "vFile:hulldownloads/received"
@@ -53,6 +61,15 @@ pub fn write_for_owner(owner: u32, path: &str, bytes: &[u8]) -> Result<(), i32> 
             queue::valid_submission(bytes)
         }) {
             return Err(FS_ERR_BAD_PARAM);
+        }
+        if !received {
+            // Trauma's web-only profile is a subset of Hull's. Each redirect
+            // opens a new request with Trauma's own application policy.
+            let (caller, _) = buildin_caller(owner, actor, "hull.bp")?;
+            let url = bytes.split(|&byte| byte == 0).next().ok_or(FS_ERR_BAD_PARAM)?;
+            let url = core::str::from_utf8(url).map_err(|_| FS_ERR_BAD_PARAM)?;
+            crate::r::net::https::authorize_network_url_for_caller(url, caller)
+                .map_err(|_| FS_ERR_PERMISSION_DENIED)?;
         }
         let spawner = crate::workers::pick_background_spawner().ok_or(FS_ERR_IO)?;
         let mut queue = QUEUE.lock();
@@ -77,7 +94,7 @@ pub fn write_for_owner(owner: u32, path: &str, bytes: &[u8]) -> Result<(), i32> 
     }
     let generation = generation(path, "done/")?;
     let id = u64::from_le_bytes(bytes.try_into().map_err(|_| FS_ERR_BAD_PARAM)?);
-    let run = worker_identity(owner)?;
+    let (_, run) = buildin_caller(owner, actor, "trauma.bp")?;
     QUEUE
         .lock()
         .done(generation, owner, run, id)

@@ -13,6 +13,7 @@ use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use embassy_sync::signal::Signal;
 use heapless::Vec;
 use spin::Mutex;
+use trueos_crypto::{RiskLevel, VmxPermission};
 use trueos_time::{Duration, with_timeout};
 
 use super::{
@@ -321,6 +322,12 @@ impl From<super::CursorFrameKey> for WindowTarget {
     }
 }
 
+#[derive(Copy, Clone)]
+enum GeometryGesture {
+    Move(WindowTarget),
+    ConsumeUntilRelease,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct KeyboardSource {
     controller_id: u32,
@@ -350,6 +357,9 @@ struct CursorRoute {
     y: u32,
     buttons_down: u32,
     capture: Option<WindowTarget>,
+    /// Private selection and gesture for geometry, separate from input focus.
+    geometry_selection: Option<WindowTarget>,
+    geometry_gesture: Option<GeometryGesture>,
     keyboard_source: Option<KeyboardSource>,
     selection_serial: u64,
     visible_after_motion: bool,
@@ -395,6 +405,8 @@ impl CursorRoute {
             y,
             buttons_down,
             capture: None,
+            geometry_selection: None,
+            geometry_gesture: None,
             keyboard_source: None,
             selection_serial: 0,
             visible_after_motion: false,
@@ -425,6 +437,7 @@ impl CursorRoute {
         self.resize_latch = None;
         self.screenshot_latch = false;
         self.capture = None;
+        self.geometry_selection = None;
         self.keyboard_source = None;
         self.secondary_anchor = None;
         self.spirit_dock_circle = None;
@@ -568,6 +581,9 @@ impl InputBroker {
         }
         let route = &mut self.cursors[index];
         route.clear_window_interaction();
+        if route.geometry_gesture.is_some() {
+            route.geometry_gesture = Some(GeometryGesture::ConsumeUntilRelease);
+        }
         route.buttons_down = 0;
         route.absorb_select = false;
         route.remote_input_authority = authority;
@@ -689,10 +705,14 @@ impl InputBroker {
                 .into_iter()
                 .flatten()
                 .any(|target| target.owner == owner);
-            if !owned_interaction {
+            let geometry_selected = route.geometry_selection.is_some_and(|target| target.owner == owner);
+            if !owned_interaction && !geometry_selected {
                 continue;
             }
             route.clear_window_interaction();
+            if geometry_selected && route.geometry_gesture.is_some() {
+                route.geometry_gesture = Some(GeometryGesture::ConsumeUntilRelease);
+            }
             released = released.saturating_add(1);
         }
         released
@@ -819,7 +839,7 @@ impl InputBroker {
             self.cursors[index].x,
             self.cursors[index].y,
         );
-        if !super::spirit_access::cursor_is_human(source) {
+        if self.cursors[index].geometry_gesture.is_some() || !super::spirit_access::cursor_is_human(source) {
             self.process_restricted_cursor(index, event, x, y, buttons_down, pressed, released, dx, dy, ring_sequence);
             return;
         }
@@ -1673,26 +1693,66 @@ impl InputBroker {
         }
     }
 
-    /// AI/remote input never enters desktop menus, global dock actions, capture
-    /// hotkeys or resize handles. Its whole route stays on an admitted frame.
+    /// Application input requires a frame permit. A secondary drag can also
+    /// translate a frame through a separate geometry-only route.
     #[allow(clippy::too_many_arguments)]
     fn process_restricted_cursor(&mut self, index: usize,
         event: crate::usb2::hid::TrueosHidCursorEvent, x: u32, y: u32,
         buttons_down: u32, pressed: u32, released: u32, dx: i32, dy: i32, ring_sequence: u64,
     ) {
         let source = self.cursors[index].source;
-        let (combo_id, vcursor) = cursor_hut_metadata(source);
-        let target = self.cursors[index].capture.and_then(window_snapshot_for_target)
-            .or_else(|| topmost_window_at(x, y));
         let route = &mut self.cursors[index];
         route.x = x; route.y = y; route.buttons_down = buttons_down;
         route.visible_after_motion = true;
         route.context_menu = None; route.dock_fields_visible = false; route.dock_preview = None;
+
+        if let Some(gesture) = route.geometry_gesture {
+            if buttons_down == 0 {
+                route.geometry_gesture = None;
+            } else if let GeometryGesture::Move(drag) = gesture {
+                let window = window_snapshot_for_target(drag).filter(geometry_drag_target);
+                if let Some(window) = window.filter(|_| buttons_down == SECONDARY_BUTTON_MASK) {
+                    if (dx != 0 || dy != 0)
+                        && let Some((width, height)) = super::output_dimensions()
+                        && let Some(next) = translated_frame_placement(window.placement, dx, dy, width, height)
+                    {
+                        let _ = super::move_window(window.owner, window.id, next);
+                    }
+                } else {
+                    route.geometry_selection = None;
+                    route.geometry_gesture = Some(GeometryGesture::ConsumeUntilRelease);
+                }
+            }
+            // The complete gesture stays on this route, even if the frame is
+            // closed or gains a permit while the button is still held.
+            return;
+        }
+
+        if pressed == SECONDARY_BUTTON_MASK && buttons_down == SECONDARY_BUTTON_MASK
+            && let Some(selected) = route.geometry_selection
+            && topmost_window_at(x, y).filter(geometry_drag_target).map(WindowTarget::from) == Some(selected)
+        {
+            route.geometry_gesture = Some(GeometryGesture::Move(selected));
+            return;
+        }
+
+        let target = route.capture.and_then(window_snapshot_for_target).or_else(|| topmost_window_at(x, y));
         let Some(mut target) = target.filter(|target| super::spirit_access::cursor_target_allowed(
             source, WindowTarget::from(*target).cursor_frame_key())) else {
-            self.cursors[index].capture = None;
+            route.capture = None;
+            if pressed == PRIMARY_BUTTON_MASK && buttons_down == PRIMARY_BUTTON_MASK
+                && VmxPermission::MoveWindow.risk_level() == RiskLevel::No
+            {
+                route.geometry_selection = topmost_window_at(x, y)
+                    .filter(geometry_drag_target).map(WindowTarget::from);
+                route.geometry_gesture = Some(GeometryGesture::ConsumeUntilRelease);
+            }
             return;
         };
+        if pressed & PRIMARY_BUTTON_MASK != 0 {
+            route.geometry_selection = None;
+        }
+        let (combo_id, vcursor) = cursor_hut_metadata(source);
         let key = WindowTarget::from(target).cursor_frame_key();
         if !super::spirit_access::cursor_sequence_allowed(source, key, ring_sequence) { return; }
         if pressed != 0 && self.select_frame(index, Some(WindowTarget::from(target)), combo_id, vcursor) {
@@ -3949,6 +4009,13 @@ fn topmost_window_at(x: u32, y: u32) -> Option<WindowSnapshot> {
         // Rank follows physical stacking, including interaction above the
         // optional application carrier despite its lower logical slot number.
         .max_by_key(|window| (window.plane.stack_rank(), window.placement.z, window.id))
+}
+
+fn geometry_drag_target(window: &WindowSnapshot) -> bool {
+    window.plane.is_application()
+        && window.interaction.hit_testable
+        && window.interaction.movable
+        && !super::codex_handoff::parked(window.owner, window.id)
 }
 
 fn window_snapshot_for_target(target: WindowTarget) -> Option<WindowSnapshot> {

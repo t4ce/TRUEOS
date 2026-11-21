@@ -76,6 +76,7 @@ impl Pop3Client {
         register_tls_app_queues(owner, cmds, events);
 
         cmds.push(TlsCommand::OpenTcpConnect {
+            caller: crate::r::net::wall::Caller::Kernel,
             remote: EndpointV4::new(ip, POP3_PORT),
             server_name: String::from(POP3_HOST),
             cfg: TlsClientConfig::new(),

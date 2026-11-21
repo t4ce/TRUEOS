@@ -30,6 +30,7 @@ members = [
     "crates/trueos-terminal",
     "crates/trueos-v",
     "crates/trueos-vm",
+    "crates/trueos-wall",
 ]
 # These are patched or directly used upstream projects.  Keeping them out of the
 # TRUEOS workspace preserves their own workspace metadata and lockfile policy.
@@ -162,6 +163,7 @@ trueos-fs = { path = "crates/trueos-fs" }
 infer = { path = "vendor/infer", default-features = false }
 v = { path = "crates/trueos-v" }
 trueos-vm = { path = "crates/trueos-vm" }
+trueos-wall = { path = "crates/trueos-wall" }
 trueos-locale = { path = "crates/trueos-locale", default-features = false }
 trueos-lily-pack = { path = "crates/trueos-lily-pack" }
 trueos-helio = { path = "crates/trueos-helio" }

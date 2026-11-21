@@ -1764,9 +1764,11 @@ async fn file_in_with_metadata_async_for_actor(
     let Some(mut stream) = begun.map_err(map_engine_err)? else {
         return Ok(false);
     };
-    trueos_fs::write_file_stream_chunk(&io, &mut stream, bytes)
-        .await
-        .map_err(map_engine_err)?;
+    for chunk in bytes.chunks(64 * 1024) {
+        trueos_fs::write_file_stream_chunk(&io, &mut stream, chunk)
+            .await
+            .map_err(map_engine_err)?;
+    }
     let record = trueos_fs::write_stream_record_ref(&stream);
     trueos_fs::finish_write_file_stream(&io, &params, stream)
         .await

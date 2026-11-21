@@ -9,7 +9,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use spin::Mutex;
 
-use crate::r::net::cli::smtp::{SmtpClient, SmtpError};
+use crate::r::net::cli::smtp::{SMTP_PORT, SmtpClient, SmtpError};
+use crate::r::net::wall::{Caller, Scope, Transport};
 
 const SMTP_BODY_MAX: usize = 64 * 1024;
 const SMTP_DEFAULT_TIMEOUT_MS: u32 = 20_000;
@@ -19,6 +20,7 @@ static CABI_SMTP_RESULTS: Mutex<BTreeMap<u32, Option<i32>>> = Mutex::new(BTreeMa
 
 fn smtp_error_to_code(err: SmtpError) -> i32 {
     match err {
+        SmtpError::PermissionDenied => FS_ERR_PERMISSION_DENIED,
         SmtpError::DnsFailed => NET_ERR_TIMEOUT_DNS,
         SmtpError::ConnectFailed => NET_ERR_TIMEOUT_CONNECT,
         SmtpError::Timeout => NET_ERR_TIMEOUT,
@@ -67,7 +69,9 @@ fn build_message(from: &str, to: &str, subject: &str, body: &str) -> String {
     )
 }
 
-async fn send_text_mail(to: String, subject: String, body: String, timeout_ms: u32) -> i32 {
+async fn send_text_mail(
+    caller: Caller, to: String, subject: String, body: String, timeout_ms: u32,
+) -> i32 {
     if body.trim().is_empty() || body.len() > SMTP_BODY_MAX {
         return FS_ERR_BAD_PARAM;
     }
@@ -89,7 +93,7 @@ async fn send_text_mail(to: String, subject: String, body: String, timeout_ms: u
     );
 
     let result = async {
-        let mut client = SmtpClient::connect(timeout_ms).await?;
+        let mut client = SmtpClient::connect(caller, timeout_ms).await?;
         client
             .auth_login(user.as_str(), pass.as_str(), timeout_ms)
             .await?;
@@ -113,9 +117,11 @@ async fn send_text_mail(to: String, subject: String, body: String, timeout_ms: u
     }
 }
 
-fn spawn_send_text(op_id: u32, to: String, subject: String, body: String, timeout_ms: u32) {
+fn spawn_send_text(
+    op_id: u32, caller: Caller, to: String, subject: String, body: String, timeout_ms: u32,
+) {
     crate::wait::spawn_local_detached(async move {
-        let rc = send_text_mail(to, subject, body, timeout_ms).await;
+        let rc = send_text_mail(caller, to, subject, body, timeout_ms).await;
         if let Some(slot) = CABI_SMTP_RESULTS.lock().get_mut(&op_id) {
             *slot = Some(rc);
         }
@@ -177,6 +183,12 @@ pub unsafe extern "C" fn trueos_cabi_smtp_send_text_start(
     body_len: usize,
     timeout_ms: u32,
 ) -> u32 {
+    let Some(caller) = Caller::current() else {
+        return 0;
+    };
+    if !caller.permits_outbound_port(Transport::Tcp, Scope::Network, SMTP_PORT) {
+        return 0;
+    }
     let Some(to) = (unsafe { abi_str(to_ptr, to_len) }) else {
         return 0;
     };
@@ -194,6 +206,7 @@ pub unsafe extern "C" fn trueos_cabi_smtp_send_text_start(
     CABI_SMTP_RESULTS.lock().insert(op_id, None);
     spawn_send_text(
         op_id,
+        caller,
         String::from(to),
         String::from(subject),
         String::from(body),

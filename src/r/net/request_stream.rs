@@ -1,6 +1,6 @@
 //! A single native HTTP/1 exchange. Redirect/resume/storage policy stays in apps.
 extern crate alloc;
-use super::{NetProfile, Queue, VNet, http_request_cabi::ResponseSink};
+use super::{NetProfile, Queue, VNet, http_request_cabi::ResponseSink, wall};
 use crate::net::tls_socket::{self, TlsCommand, TlsEvent, TlsTimeouts};
 use crate::r::cabi_codes::*;
 use alloc::{
@@ -124,6 +124,7 @@ struct Activity {
 }
 struct Transport {
     slot: Arc<Slot>,
+    caller: wall::Caller,
     handle: api::NetHandle,
     tls: bool,
     rx: Vec<u8>,
@@ -237,7 +238,9 @@ impl Write for Transport {
                 data: buf[..n].to_vec(),
             })
         } else {
-            self.slot.net.try_send_tcp_chunk(self.handle, &buf[..n])
+            self.slot
+                .net
+                .try_send_tcp_chunk_for_caller(self.handle, &buf[..n], self.caller)
         };
         match result {
             Ok(()) => Poll::Ready(Ok(n)),
@@ -319,10 +322,15 @@ async fn connect(
     tls: bool,
     sink: &ResponseSink,
 ) -> Result<api::NetHandle, i32> {
+    let caller = sink.caller();
+    if !caller.permits_outbound(wall::Transport::Tcp, remote) {
+        return Err(FS_ERR_PERMISSION_DENIED);
+    }
     if tls {
         tls_socket::open_reusable(
             slot.owner,
             slot.net.clone(),
+            caller,
             remote,
             host,
             TlsTimeouts {
@@ -335,28 +343,24 @@ async fn connect(
         )
         .map_err(|_| NET_ERR_TLS)?;
     } else {
-        let command = match remote {
-            SocketAddr::V4(a) => api::Command::OpenTcpConnect {
-                remote: api::EndpointV4::new(a.ip().octets(), a.port()),
-            },
-            SocketAddr::V6(a) => api::Command::OpenTcpConnectV6 {
-                remote: api::EndpointV6::new(a.ip().octets(), a.port()),
-            },
-        };
         cancelled_or(
             async {
                 loop {
-                    if slot.net.submit(command.clone()).is_ok() {
+                    if !caller.permits_outbound(wall::Transport::Tcp, remote) {
+                        return Err(FS_ERR_PERMISSION_DENIED);
+                    }
+                    if slot.net.submit_tcp_connect_for_caller(None, remote, caller).is_ok() {
                         break;
                     }
                     Timer::after(Duration::from_millis(1)).await;
                 }
+                Ok(())
             },
             sink,
             request.timeouts.connect_ms,
             NET_ERR_TIMEOUT_CONNECT,
         )
-        .await?;
+        .await??;
     }
     let mut opened = None;
     let mut tcp_ready = false;
@@ -422,6 +426,8 @@ async fn exchange(
     sink: &ResponseSink,
 ) -> Result<(), i32> {
     let (uri, host, port, tls) = parse(request)?;
+    super::https::authorize_destination(sink.caller(), &host, port)
+        .map_err(|_| FS_ERR_PERMISSION_DENIED)?;
     let remote = resolve(slot, &host, port, request, sink).await?;
     let handle = connect(slot, request, &host, remote, tls, sink).await?;
     let activity = Arc::new(Activity {
@@ -432,6 +438,7 @@ async fn exchange(
     });
     let io = Transport {
         slot: slot.clone(),
+        caller: sink.caller(),
         handle,
         tls,
         rx: Vec::new(),

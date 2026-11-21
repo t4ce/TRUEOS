@@ -5,6 +5,8 @@ use core::{
     sync::atomic::{AtomicU32, AtomicU64, Ordering},
 };
 
+use crate::r::net::wall::{Caller as WallCaller, Scope as WallScope, Transport as WallTransport};
+use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use smoltcp::iface::{
     Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, UdpDispatchError,
 };
@@ -14,8 +16,8 @@ use smoltcp::socket::{dhcpv4, icmp, raw, tcp, udp};
 use smoltcp::time::{Duration as SmolDuration, Instant};
 use smoltcp::wire::{
     EthernetAddress, HardwareAddress, Icmpv4Packet, Icmpv4Repr, Icmpv6Packet, Icmpv6Repr,
-    IpAddress, IpCidr, IpEndpoint, IpProtocol, IpVersion, Ipv4Address, Ipv6Address, Ipv6Packet,
-    Ipv6Repr, NdiscPrefixInfoFlags, NdiscRepr, RawHardwareAddress,
+    IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, IpProtocol, IpVersion, Ipv4Address,
+    Ipv6Address, Ipv6Packet, Ipv6Repr, NdiscPrefixInfoFlags, NdiscRepr, RawHardwareAddress,
 };
 use trueos_executor::task;
 use trueos_time::{Duration as EmbassyDuration, Timer};
@@ -642,6 +644,12 @@ pub enum NetCommand {
         actor: crate::r::fs::trueosfs::authorized::Actor,
         local: Option<core::net::SocketAddr>,
         remote: core::net::SocketAddr,
+    },
+    OpenUdpForCaller {
+        caller: WallCaller,
+        local: SocketAddr,
+        ephemeral: bool,
+        tx_buffer_bytes: Option<usize>,
     },
 
     /// Internal reusable-client fence. Queue ordering ensures all earlier
@@ -1857,7 +1865,11 @@ struct SocketRecord {
     owner: &'static str,
     actor: crate::r::fs::trueosfs::authorized::Actor,
     tcp_bound: Option<core::net::SocketAddr>,
-    tcp_access: Option<(crate::r::fs::trueosfs::authorized::Actor, crate::r::fs::trueosfs::authorized::Actor, u16)>,
+    tcp_access: Option<(
+        crate::r::fs::trueosfs::authorized::Actor,
+        crate::r::fs::trueosfs::authorized::Actor,
+        u16,
+    )>,
     handle: NetHandle,
     kind: SocketKind,
     socket: SocketHandle,
@@ -1872,6 +1884,76 @@ struct SocketRecord {
     tcp_remote_v6: Option<NetEndpointV6>,
     established: bool,
     last_tcp_state: Option<tcp::State>,
+    udp_access: Option<UdpAccess>,
+}
+
+struct UdpAccess {
+    caller: WallCaller,
+    local: SocketAddr,
+    ephemeral: bool,
+    peers: Vec<(SocketAddr, Instant)>,
+}
+
+impl UdpAccess {
+    const MAX_PEERS: usize = 64;
+    const PEER_TIMEOUT: SmolDuration = SmolDuration::from_secs(120);
+
+    fn has_peer(&self, peer: SocketAddr, timestamp: Instant) -> bool {
+        self.peers
+            .iter()
+            .any(|(address, expiry)| *address == peer && *expiry > timestamp)
+    }
+
+    fn remember_peer(&mut self, peer: SocketAddr, timestamp: Instant) {
+        if let Some((_, expiry)) = self.peers.iter_mut().find(|(address, _)| *address == peer) {
+            *expiry = timestamp + Self::PEER_TIMEOUT;
+            return;
+        }
+        self.peers.retain(|(_, expiry)| *expiry > timestamp);
+        if self.peers.len() == Self::MAX_PEERS {
+            if let Some((index, _)) = self.peers.iter().enumerate().min_by_key(|(_, peer)| peer.1) {
+                self.peers.swap_remove(index);
+            }
+        }
+        self.peers.push((peer, timestamp + Self::PEER_TIMEOUT));
+    }
+
+    fn permits_send(&self, remote: SocketAddr, timestamp: Instant) -> bool {
+        remote.port() != 0
+            && (!self.local.ip().is_loopback() || remote.ip().is_loopback())
+            && (self.caller.permits_outbound(WallTransport::Udp, remote)
+                || (self.has_peer(remote, timestamp)
+                    && self.caller.permits_socket(WallTransport::Udp)))
+    }
+
+    fn permits_receive(&self, remote: SocketAddr, scope: WallScope, timestamp: Instant) -> bool {
+        (!self.ephemeral
+            && self
+                .caller
+                .permits_inbound(WallTransport::Udp, scope, self.local.port()))
+            || (self.has_peer(remote, timestamp) && self.caller.permits_socket(WallTransport::Udp))
+    }
+}
+
+fn udp_event(handle: NetHandle, from: SocketAddr, data: &[u8]) -> NetEvent {
+    match from {
+        SocketAddr::V4(from) => NetEvent::UdpPacket {
+            handle,
+            from: NetEndpoint {
+                addr: from.ip().octets(),
+                port: from.port(),
+            },
+            data: data.to_vec(),
+        },
+        SocketAddr::V6(from) => NetEvent::UdpPacketV6 {
+            handle,
+            from: NetEndpointV6 {
+                addr: from.ip().octets(),
+                port: from.port(),
+            },
+            data: data.to_vec(),
+        },
+    }
 }
 
 struct TunRecord {
@@ -2630,10 +2712,6 @@ impl NetService {
         NetHandle(self.next_handle.fetch_add(1, Ordering::Relaxed))
     }
 
-    fn find_record(&mut self, handle: NetHandle) -> Option<&mut SocketRecord> {
-        self.records.iter_mut().find(|rec| rec.handle == handle)
-    }
-
     fn remove_record(&mut self, handle: NetHandle) {
         if let Some(idx) = self.records.iter().position(|rec| rec.handle == handle) {
             let rec = self.records.remove(idx);
@@ -2752,15 +2830,46 @@ impl NetService {
     fn open_udp(
         &mut self,
         owner: &'static str,
-        port: u16,
+        caller: WallCaller,
+        mut local: SocketAddr,
+        ephemeral: bool,
         tx_buffer_bytes: usize,
     ) -> Result<NetHandle, &'static str> {
+        if ephemeral {
+            if !caller.permits_socket(WallTransport::Udp) {
+                return Err("udp bind permission denied");
+            }
+        } else {
+            local = caller
+                .restrict_bind(WallTransport::Udp, local)
+                .ok_or("udp bind permission denied")?;
+        }
         self.require_link_up()?;
         if self.records.len() >= SOCKET_SOFT_CAP {
             return Err("no sockets available");
         }
         if tx_buffer_bytes == 0 || tx_buffer_bytes > UDP_TX_BUF_BYTES_MAX {
             return Err("bad udp tx buffer size");
+        }
+        let in_use = |port| {
+            self.records.iter().any(|record| {
+                record
+                    .udp_access
+                    .as_ref()
+                    .is_some_and(|access| access.local.port() == port)
+            })
+        };
+        if local.port() == 0 {
+            for _ in 49152..=u16::MAX {
+                let port = crate::r::net::wall::next_udp_client_port();
+                if !in_use(port) {
+                    local.set_port(port);
+                    break;
+                }
+            }
+        }
+        if local.port() == 0 || in_use(local.port()) {
+            return Err("bind failed");
         }
 
         let meta_rx = vec![udp::PacketMetadata::EMPTY; UDP_RX_PACKET_SLOTS];
@@ -2770,12 +2879,17 @@ impl NetService {
         let rx = udp::PacketBuffer::new(meta_rx, buf_rx);
         let tx = udp::PacketBuffer::new(meta_tx, buf_tx);
         let mut socket = udp::Socket::new(rx, tx);
-        socket.bind(port).map_err(|_| "bind failed")?;
+        socket
+            .bind(IpListenEndpoint {
+                addr: (!local.ip().is_unspecified()).then(|| IpAddress::from(local.ip())),
+                port: local.port(),
+            })
+            .map_err(|_| "bind failed")?;
 
         let handle = self.alloc_handle();
         let sh = self.sockets.add(socket);
         self.records.push(SocketRecord {
-            actor: NetworkActor::Public,
+            actor: caller.actor(),
             tcp_bound: None,
             tcp_access: None,
             owner,
@@ -2793,6 +2907,7 @@ impl NetService {
             tcp_remote_v6: None,
             established: false,
             last_tcp_state: None,
+            udp_access: Some(UdpAccess { caller, local, ephemeral, peers: Vec::new() }),
         });
         Ok(handle)
     }
@@ -2809,6 +2924,9 @@ impl NetService {
     ) -> Result<NetHandle, &'static str> {
         crate::access_key_db::authorize_tcp_listen(actor, local)
             .map_err(|_| "tcp listen permission denied")?;
+        let local = WallCaller::from_actor(actor)
+            .and_then(|caller| caller.restrict_bind(WallTransport::Tcp, local))
+            .ok_or("tcp listen permission denied")?;
         let port = local.port();
         self.require_link_up()?;
         if self.records.len() >= SOCKET_SOFT_CAP {
@@ -2851,6 +2969,7 @@ impl NetService {
             tcp_remote_v6: None,
             established: false,
             last_tcp_state: Some(initial_state),
+            udp_access: None,
         });
         Ok(handle)
     }
@@ -2876,6 +2995,11 @@ impl NetService {
                     && rec.tcp_local_port == Some(remote.port)
                     && rec.tcp_remote_v4.is_none()
                     && rec.tcp_remote_v6.is_none()
+                    && WallCaller::from_actor(rec.actor).is_some_and(|caller| caller.permits_inbound(
+                        WallTransport::Tcp,
+                        crate::r::net::wall::scope(Ipv4Addr::from(remote.addr).into()),
+                        remote.port,
+                    ))
                     && self.sockets.get::<tcp::Socket>(rec.socket).is_listening()
                     && self
                         .sockets
@@ -2951,6 +3075,7 @@ impl NetService {
             tcp_remote_v6: None,
             established: true,
             last_tcp_state: None,
+            udp_access: None,
         });
 
         if crate::log_os::flags::NET_LOG_TCP_FLOW {
@@ -2969,7 +3094,27 @@ impl NetService {
         self.process_tcp_connect_v4_for_actor(owner, NetworkActor::Public, remote, bound)
     }
 
-    fn process_tcp_connect_v4_for_actor(&mut self, owner: &'static str, actor: NetworkActor, remote: NetEndpoint, bound: Option<core::net::SocketAddrV4>) {
+    fn process_tcp_connect_v4_for_actor(
+        &mut self,
+        owner: &'static str,
+        actor: NetworkActor,
+        remote: NetEndpoint,
+        bound: Option<core::net::SocketAddrV4>,
+    ) {
+        if !WallCaller::from_actor(actor).is_some_and(|caller| {
+            caller.permits_outbound(
+                WallTransport::Tcp,
+                (Ipv4Addr::from(remote.addr), remote.port).into(),
+            )
+        }) {
+            let _ = push_event(
+                owner,
+                NetEvent::Error {
+                    msg: "tcp connect permission denied",
+                },
+            );
+            return;
+        }
                 // Connections to this interface itself must not depend on NIC
                 // hairpin forwarding. Use the same in-kernel path as localhost.
                 if is_ipv4_loopback(remote.addr)
@@ -3012,7 +3157,7 @@ impl NetService {
                         }
                     }
                 } else {
-                    match self.open_tcp_connect(owner, remote, bound) {
+                    match self.open_tcp_connect(owner, actor, remote, bound) {
                         Ok(handle) => {
                             if crate::log_os::flags::NET_LOG_TCP_FLOW {
                                 crate::log_info!(target: "net";
@@ -3045,6 +3190,7 @@ impl NetService {
     fn open_tcp_connect(
         &mut self,
         owner: &'static str,
+        actor: NetworkActor,
         remote: NetEndpoint,
         bound: Option<core::net::SocketAddrV4>,
     ) -> Result<NetHandle, &'static str> {
@@ -3126,7 +3272,7 @@ impl NetService {
             );
         }
         self.records.push(SocketRecord {
-            actor: NetworkActor::Public,
+            actor,
             tcp_bound: None,
             tcp_access: None,
             owner,
@@ -3144,6 +3290,7 @@ impl NetService {
             tcp_remote_v6: None,
             established: false,
             last_tcp_state: Some(initial_state),
+            udp_access: None,
         });
         Ok(handle)
     }
@@ -3151,9 +3298,18 @@ impl NetService {
     fn open_tcp_connect_v6(
         &mut self,
         owner: &'static str,
+        actor: NetworkActor,
         remote: NetEndpointV6,
         bound: Option<core::net::SocketAddrV6>,
     ) -> Result<NetHandle, &'static str> {
+        if !WallCaller::from_actor(actor).is_some_and(|caller| {
+            caller.permits_outbound(
+                WallTransport::Tcp,
+                (Ipv6Addr::from(remote.addr), remote.port).into(),
+            )
+        }) {
+            return Err("tcp connect permission denied");
+        }
         self.require_link_up()?;
         if self.records.len() >= SOCKET_SOFT_CAP {
             return Err("no sockets available");
@@ -3219,7 +3375,7 @@ impl NetService {
             );
         }
         self.records.push(SocketRecord {
-            actor: NetworkActor::Public,
+            actor,
             tcp_bound: None,
             tcp_access: None,
             owner,
@@ -3237,6 +3393,7 @@ impl NetService {
             tcp_remote_v6: Some(record_remote),
             established: false,
             last_tcp_state: Some(initial_state),
+            udp_access: None,
         });
         Ok(handle)
     }
@@ -3332,65 +3489,105 @@ impl NetService {
 
     fn send_loopback_udp(
         &mut self,
-        handle: NetHandle,
-        remote: NetEndpoint,
+        source_idx: usize,
+        remote: SocketAddr,
         data: &[u8],
-    ) -> Option<Result<(), ()>> {
-        if !is_ipv4_loopback(remote.addr) {
-            return None;
+        timestamp: Instant,
+    ) -> Result<(), &'static str> {
+        let source = self.records[source_idx].udp_access.as_ref().unwrap();
+        let sender_ip = if source.local.ip().is_unspecified() {
+            remote.ip()
+        } else {
+            source.local.ip()
+        };
+        let sender = SocketAddr::new(sender_ip, source.local.port());
+        let destination = self.records.iter().position(|record| {
+            record.udp_access.as_ref().is_some_and(|access| {
+                access.local.port() == remote.port()
+                    && (access.local.ip().is_unspecified() || access.local.ip() == remote.ip())
+            })
+        });
+        let Some(idx) = destination else {
+            return Ok(());
+        };
+        if !self.records[idx]
+            .udp_access
+            .as_ref()
+            .unwrap()
+            .permits_receive(sender, WallScope::Local, timestamp)
+        {
+            return Ok(());
         }
+        let event = udp_event(self.records[idx].handle, sender, data);
+        if !push_event(self.records[idx].owner, event) {
+            return Err("udp send fail");
+        }
+        self.records[idx]
+            .udp_access
+            .as_mut()
+            .unwrap()
+            .remember_peer(sender, timestamp);
+        Ok(())
+    }
 
-        let Some(source_idx) = self
+    fn send_udp(
+        &mut self,
+        owner: &'static str,
+        handle: NetHandle,
+        remote: SocketAddr,
+        data: &[u8],
+        direct: bool,
+    ) -> Result<(), &'static str> {
+        let idx = self
             .records
             .iter()
-            .position(|record| record.handle == handle)
-        else {
-            return Some(Err(()));
-        };
-        if self.records[source_idx].kind != SocketKind::Udp {
-            return Some(Err(()));
+            .position(|record| record.handle == handle && record.owner == owner)
+            .ok_or("bad handle")?;
+        let access = self.records[idx].udp_access.as_ref().ok_or("not udp")?;
+        let timestamp = now();
+        if !access.permits_send(remote, timestamp) {
+            return Err("udp send permission denied");
         }
-        let source_socket = self.records[source_idx].socket;
-        let source_port = self
-            .sockets
-            .get_mut::<udp::Socket>(source_socket)
-            .endpoint()
-            .port;
-
-        let mut destination = None;
-        for idx in 0..self.records.len() {
-            let (kind, socket_handle, destination_owner, destination_handle) = {
-                let record = &self.records[idx];
-                (record.kind, record.socket, record.owner, record.handle)
-            };
-            if kind != SocketKind::Udp {
-                continue;
+        let endpoint = IpEndpoint::new(IpAddress::from(remote.ip()), remote.port());
+        if remote.ip().is_loopback() {
+            self.send_loopback_udp(idx, remote, data, timestamp)?;
+        } else {
+            self.require_link_up()?;
+            if direct {
+                let mut transmit_result = None;
+                let dispatch_result = {
+                    let mut device = DirectAdapterDeviceAt {
+                        index: self.device_index,
+                        transmit_result: &mut transmit_result,
+                    };
+                    self.iface.dispatch_udp_payload(
+                        timestamp,
+                        &mut device,
+                        access.local.port(),
+                        endpoint,
+                        data,
+                    )
+                };
+                match (dispatch_result, transmit_result) {
+                    (Ok(()), Some(Ok(()))) => {}
+                    (Err(UdpDispatchError::Unaddressable), _) => return Err("udp unaddressable"),
+                    _ => return Err("udp send fail"),
+                }
+            } else {
+                let socket = self
+                    .sockets
+                    .get_mut::<udp::Socket>(self.records[idx].socket);
+                socket
+                    .send_slice(data, endpoint)
+                    .map_err(|_| "udp send fail")?;
             }
-            let port = self
-                .sockets
-                .get_mut::<udp::Socket>(socket_handle)
-                .endpoint()
-                .port;
-            if port == remote.port {
-                destination = Some((destination_owner, destination_handle));
-                break;
-            }
         }
-
-        if let Some((destination_owner, destination_handle)) = destination {
-            let _ = push_event(
-                destination_owner,
-                NetEvent::UdpPacket {
-                    handle: destination_handle,
-                    from: NetEndpoint {
-                        addr: [127, 0, 0, 1],
-                        port: source_port,
-                    },
-                    data: Vec::from(data),
-                },
-            );
-        }
-        Some(Ok(()))
+        self.records[idx]
+            .udp_access
+            .as_mut()
+            .unwrap()
+            .remember_peer(remote, timestamp);
+        Ok(())
     }
 
     fn close_loopback_tcp(&mut self, handle: NetHandle) -> bool {
@@ -4433,13 +4630,13 @@ impl NetService {
                 (None, core::net::SocketAddr::V4(remote)) => self.process_tcp_connect_v4_for_actor(owner, actor, NetEndpoint { addr: remote.ip().octets(), port: remote.port() }, None),
                 (Some(core::net::SocketAddr::V4(local)), core::net::SocketAddr::V4(remote)) => self.process_tcp_connect_v4_for_actor(owner, actor, NetEndpoint { addr: remote.ip().octets(), port: remote.port() }, Some(local)),
                 (None, core::net::SocketAddr::V6(remote)) => {
-                    match self.open_tcp_connect_v6(owner, NetEndpointV6 { addr: remote.ip().octets(), port: remote.port() }, None) {
+                    match self.open_tcp_connect_v6(owner, actor, NetEndpointV6 { addr: remote.ip().octets(), port: remote.port() }, None) {
                         Ok(handle) => { let _ = push_event(owner, NetEvent::Opened { handle, kind: SocketKind::Tcp }); }
                         Err(msg) => { let _ = push_event(owner, NetEvent::Error { msg: if msg == "link down" { "tcp connect link down" } else { msg } }); }
                     }
                 }
                 (Some(core::net::SocketAddr::V6(local)), core::net::SocketAddr::V6(remote)) => {
-                    match self.open_tcp_connect_v6(owner, NetEndpointV6 { addr: remote.ip().octets(), port: remote.port() }, Some(local)) {
+                    match self.open_tcp_connect_v6(owner, actor, NetEndpointV6 { addr: remote.ip().octets(), port: remote.port() }, Some(local)) {
                         Ok(handle) => { let _ = push_event(owner, NetEvent::Opened { handle, kind: SocketKind::Tcp }); }
                         Err(msg) => { let _ = push_event(owner, NetEvent::Error { msg: if msg == "link down" { "tcp connect link down" } else { msg } }); }
                     }
@@ -4477,39 +4674,21 @@ impl NetService {
                     let _ = push_event(owner, NetEvent::Error { msg });
                 }
             },
-            NetCommand::OpenUdp { port } => {
-                match self.open_udp(owner, port, UDP_TX_BUF_BYTES_DEFAULT) {
-                    Ok(handle) => {
-                        let _ = push_event(
-                            owner,
-                            NetEvent::Opened {
-                                handle,
-                                kind: SocketKind::Udp,
-                            },
-                        );
-                    }
-                    Err(msg) => {
-                        let _ = push_event(owner, NetEvent::Error { msg });
-                    }
-                }
+            NetCommand::OpenUdp { port } => self.handle_command(owner, NetCommand::OpenUdpForCaller {
+                caller: WallCaller::Kernel, local: (Ipv4Addr::UNSPECIFIED, port).into(),
+                ephemeral: port == 0, tx_buffer_bytes: None,
+            }),
+            NetCommand::OpenUdpWithTxBuffer { port, tx_buffer_bytes } => self.handle_command(owner, NetCommand::OpenUdpForCaller {
+                caller: WallCaller::Kernel, local: (Ipv4Addr::UNSPECIFIED, port).into(),
+                ephemeral: port == 0, tx_buffer_bytes: Some(tx_buffer_bytes),
+            }),
+            NetCommand::OpenUdpForCaller { caller, local, ephemeral, tx_buffer_bytes } => {
+                let event = match self.open_udp(owner, caller, local, ephemeral, tx_buffer_bytes.unwrap_or(UDP_TX_BUF_BYTES_DEFAULT)) {
+                    Ok(handle) => NetEvent::Opened { handle, kind: SocketKind::Udp },
+                    Err(msg) => NetEvent::Error { msg },
+                };
+                let _ = push_event(owner, event);
             }
-            NetCommand::OpenUdpWithTxBuffer {
-                port,
-                tx_buffer_bytes,
-            } => match self.open_udp(owner, port, tx_buffer_bytes) {
-                Ok(handle) => {
-                    let _ = push_event(
-                        owner,
-                        NetEvent::Opened {
-                            handle,
-                            kind: SocketKind::Udp,
-                        },
-                    );
-                }
-                Err(msg) => {
-                    let _ = push_event(owner, NetEvent::Error { msg });
-                }
-            },
             NetCommand::OpenTcpListen { port } => match self.open_tcp(owner, port) {
                 Ok(handle) => {
                     let _ = push_event(
@@ -4555,7 +4734,7 @@ impl NetService {
                 (core::net::SocketAddr::V4(local), core::net::SocketAddr::V4(remote)) =>
                     self.process_tcp_connect_v4(owner, NetEndpoint { addr: remote.ip().octets(), port: remote.port() }, Some(local)),
                 (core::net::SocketAddr::V6(local), core::net::SocketAddr::V6(remote)) => {
-                    match self.open_tcp_connect_v6(owner, NetEndpointV6 { addr: remote.ip().octets(), port: remote.port() }, Some(local)) {
+                    match self.open_tcp_connect_v6(owner, NetworkActor::Public, NetEndpointV6 { addr: remote.ip().octets(), port: remote.port() }, Some(local)) {
                         Ok(handle) => { let _ = push_event(owner, NetEvent::Opened { handle, kind: SocketKind::Tcp }); }
                         Err(msg) => {
                             let msg = if msg == "link down" { "tcp connect link down" } else { msg };
@@ -4566,7 +4745,7 @@ impl NetService {
                 _ => { let _ = push_event(owner, NetEvent::Error { msg: "invalid local address" }); }
             },
             NetCommand::OpenTcpConnectV6 { remote } => {
-                match self.open_tcp_connect_v6(owner, remote, None) {
+                match self.open_tcp_connect_v6(owner, NetworkActor::Public, remote, None) {
                     Ok(handle) => {
                         let _ = push_event(
                             owner,
@@ -4582,128 +4761,21 @@ impl NetService {
                     }
                 }
             }
-            NetCommand::SendUdp {
-                handle,
-                remote,
-                data,
-            } => {
-                if let Some(result) = self.send_loopback_udp(handle, remote, &data) {
-                    if result.is_err() {
-                        let _ = push_event(owner, NetEvent::Error { msg: "not udp" });
-                    }
-                    return;
-                }
-                if !self.link_up() {
-                    let _ = push_event(owner, NetEvent::Error { msg: "link down" });
-                    return;
-                }
-                if let Some(rec) = self.find_record(handle) {
-                    if rec.kind != SocketKind::Udp {
-                        let _ = push_event(owner, NetEvent::Error { msg: "not udp" });
-                        return;
-                    }
-                    let socket_handle = rec.socket;
-                    let endpoint = IpEndpoint::new(
-                        IpAddress::Ipv4(Ipv4Address::from_octets(remote.addr)),
-                        remote.port,
-                    );
-                    let socket = self.sockets.get_mut::<udp::Socket>(socket_handle);
-                    if socket.send_slice(&data, endpoint).is_err() {
-                        let _ = push_event(
-                            owner,
-                            NetEvent::Error {
-                                msg: "udp send fail",
-                            },
-                        );
-                    }
-                } else {
-                    let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
+            NetCommand::SendUdp { handle, remote, data } => {
+                let remote = SocketAddr::from((Ipv4Addr::from(remote.addr), remote.port));
+                if let Err(msg) = self.send_udp(owner, handle, remote, &data, false) {
+                    let _ = push_event(owner, NetEvent::Error { msg });
                 }
             }
-            NetCommand::SendUdpChecked {
-                handle,
-                remote,
-                receipt,
-                data,
-            } => {
-                let result = if let Some(result) =
-                    self.send_loopback_udp(handle, remote, data.as_slice())
-                {
-                    result.map_err(|()| "not udp")
-                } else if !self.link_up() {
-                    Err("link down")
-                } else if let Some(rec) = self.find_record(handle) {
-                    if rec.kind != SocketKind::Udp {
-                        Err("not udp")
-                    } else {
-                        let socket_handle = rec.socket;
-                        let local_port = self
-                            .sockets
-                            .get_mut::<udp::Socket>(socket_handle)
-                            .endpoint()
-                            .port;
-                        let endpoint = IpEndpoint::new(
-                            IpAddress::Ipv4(Ipv4Address::from_octets(remote.addr)),
-                            remote.port,
-                        );
-                        let mut transmit_result = None;
-                        let dispatch_result = {
-                            let mut device = DirectAdapterDeviceAt {
-                                index: self.device_index,
-                                transmit_result: &mut transmit_result,
-                            };
-                            self.iface.dispatch_udp_payload(
-                                now(),
-                                &mut device,
-                                local_port,
-                                endpoint,
-                                data.as_slice(),
-                            )
-                        };
-                        match (dispatch_result, transmit_result) {
-                            (Ok(()), Some(Ok(()))) => Ok(()),
-                            (Ok(()), _) | (Err(UdpDispatchError::Exhausted), _) => {
-                                Err("udp send fail")
-                            }
-                            (Err(UdpDispatchError::NeighborPending), _) => Err("udp send fail"),
-                            (Err(UdpDispatchError::Unaddressable), _) => Err("udp unaddressable"),
-                        }
-                    }
-                } else {
-                    Err("bad handle")
-                };
+            NetCommand::SendUdpChecked { handle, remote, receipt, data } => {
+                let remote = SocketAddr::from((Ipv4Addr::from(remote.addr), remote.port));
+                let result = self.send_udp(owner, handle, remote, data.as_slice(), true);
                 publish_checked_udp_send_result(owner, handle, receipt, result);
             }
-            NetCommand::SendUdpV6 {
-                handle,
-                remote,
-                data,
-            } => {
-                if !self.link_up() {
-                    let _ = push_event(owner, NetEvent::Error { msg: "link down" });
-                    return;
-                }
-                if let Some(rec) = self.find_record(handle) {
-                    if rec.kind != SocketKind::Udp {
-                        let _ = push_event(owner, NetEvent::Error { msg: "not udp" });
-                        return;
-                    }
-                    let socket_handle = rec.socket;
-                    let endpoint = IpEndpoint::new(
-                        IpAddress::Ipv6(Ipv6Address::from_octets(remote.addr)),
-                        remote.port,
-                    );
-                    let socket = self.sockets.get_mut::<udp::Socket>(socket_handle);
-                    if socket.send_slice(&data, endpoint).is_err() {
-                        let _ = push_event(
-                            owner,
-                            NetEvent::Error {
-                                msg: "udp6 send fail",
-                            },
-                        );
-                    }
-                } else {
-                    let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
+            NetCommand::SendUdpV6 { handle, remote, data } => {
+                let remote = SocketAddr::from((Ipv6Addr::from(remote.addr), remote.port));
+                if let Err(msg) = self.send_udp(owner, handle, remote, &data, false) {
+                    let _ = push_event(owner, NetEvent::Error { msg });
                 }
             }
             NetCommand::SendTcp { handle, data } => {
@@ -4816,6 +4888,12 @@ impl NetService {
                 self.send_icmp_echo_v6(owner, target, seq, data);
             }
             NetCommand::Close { handle } => {
+                if self.records.iter().any(|record| record.handle == handle && record.owner != owner)
+                    || self.tun_records.iter().any(|record| record.handle == handle && record.owner != owner)
+                {
+                    let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
+                    return;
+                }
                 if self.remove_tun_record(handle) {
                     let _ = push_event(owner, NetEvent::Closed { handle });
                 } else if !self.close_loopback_tcp(handle) {
@@ -4858,49 +4936,21 @@ impl NetService {
     }
 
     fn poll_udp(&mut self, idx: usize) {
-        if self.records.get(idx).map(|r| r.kind) != Some(SocketKind::Udp) {
+        let Some(record) = self.records.get_mut(idx) else {
             return;
-        }
-        let owner = self.records[idx].owner;
-        let handle = self.records[idx].handle;
-        let socket = self
-            .sockets
-            .get_mut::<udp::Socket>(self.records[idx].socket);
+        };
+        let Some(access) = record.udp_access.as_mut() else {
+            return;
+        };
+        let socket = self.sockets.get_mut::<udp::Socket>(record.socket);
+        let timestamp = now();
         let mut bounce = [0u8; 1500];
         while let Ok((len, meta)) = socket.recv_slice(&mut bounce) {
-            let endpoint = meta.endpoint;
-            let data = bounce[..len].to_vec();
-
-            match endpoint.addr {
-                IpAddress::Ipv4(addr) => {
-                    let addr = addr.octets();
-                    let ep = NetEndpoint {
-                        addr,
-                        port: endpoint.port,
-                    };
-                    let _ = push_event(
-                        owner,
-                        NetEvent::UdpPacket {
-                            handle,
-                            from: ep,
-                            data,
-                        },
-                    );
-                }
-                IpAddress::Ipv6(addr) => {
-                    let ep = NetEndpointV6 {
-                        addr: addr.octets(),
-                        port: endpoint.port,
-                    };
-                    let _ = push_event(
-                        owner,
-                        NetEvent::UdpPacketV6 {
-                            handle,
-                            from: ep,
-                            data,
-                        },
-                    );
-                }
+            let peer = SocketAddr::new(IpAddr::from(meta.endpoint.addr), meta.endpoint.port);
+            if access.permits_receive(peer, WallScope::Network, timestamp)
+                && push_event(record.owner, udp_event(record.handle, peer, &bounce[..len]))
+            {
+                access.remember_peer(peer, timestamp);
             }
         }
     }
@@ -4910,6 +4960,17 @@ impl NetService {
             crate::access_key_db::authorize_tcp_connect(client, server, port).is_err()) {
             let handle = self.records[idx].handle;
             return self.close_loopback_tcp(handle);
+        }
+        let record = &self.records[idx];
+        if !WallCaller::from_actor(record.actor)
+            .is_some_and(|caller| caller.permits_socket(WallTransport::Tcp))
+        {
+            let (owner, handle) = (record.owner, record.handle);
+            if !self.close_loopback_tcp(handle) {
+                let _ = push_event(owner, NetEvent::Closed { handle });
+                self.remove_record(handle);
+            }
+            return true;
         }
         // A reservation may have been installed after an unrelated listener
         // bound. Revoke it before physical TCP can deliver application bytes.

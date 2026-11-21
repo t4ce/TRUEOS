@@ -43,6 +43,7 @@ pub(crate) use matrix_target::{
     MatrixSlotLease, MatrixTarget, matrix_target_print_line, matrix_target_slot_lease,
 };
 mod command_history;
+pub(crate) use command_history::{HISTORY_RECALL_CAP, restore_commands};
 mod command_latch;
 mod metafmtstr;
 mod names;
@@ -794,15 +795,16 @@ impl Shell3 {
         )
         .with_matrix(&matrix_lines, matrix_generation);
 
+        let tui_frontend = tui::new_frontend();
         Self {
-            command_history: command_history::CommandHistory::default(),
+            command_history: command_history::CommandHistory::for_frontend(tui_frontend),
             command_feedback: None,
             latched_navigation: None,
             tab_from_right: false,
             title_transition: transition::TokenSteps::default(),
             aka_transition: transition::TokenSteps::default(),
             status_hover: None,
-            tui_frontend: tui::new_frontend(),
+            tui_frontend,
             executor_slot,
             columns,
             rows_count,

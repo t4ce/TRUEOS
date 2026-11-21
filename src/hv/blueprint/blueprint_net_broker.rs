@@ -3,6 +3,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use v::vnet as api;
 
 use crate::r::net::VNet;
+use crate::r::net::wall::{self, Caller};
 
 static VMX_GUEST_NET_BACKEND: AtomicBool = AtomicBool::new(false);
 
@@ -68,6 +69,20 @@ impl VNetBridge {
         }
     }
 
+    pub(crate) fn open_udp_for_caller(
+        &self,
+        local: core::net::SocketAddr,
+        ephemeral: bool,
+        caller: Caller,
+    ) -> Result<(), ()> {
+        match &self.backend {
+            VNetBridgeBackend::LocalVnet(vnet) => {
+                vnet.open_udp_for_caller(local, ephemeral, caller)
+            }
+            VNetBridgeBackend::Vmx(_) => Err(()),
+        }
+    }
+
     /// Native Mio hooks cross into the host before entering this broker. Keep
     /// local-endpoint submission on the same ordered queue as its other I/O.
     pub(crate) fn submit_tcp_connect_from(
@@ -118,7 +133,7 @@ impl VmxBroker {
         // invalid. Keeping the original session also preserves socket/event
         // ordering across Hull and worker execution realms.
         if crate::hv::current_hull_guest_context_vm_id().is_none() {
-            let vm_id = crate::hv::current_guest_execution_context_vm_id().ok_or(())?;
+            let vm_id = wall::current_vm().ok_or(())?;
             return crate::hv::blueprint_net::submit(vm_id, self.session_id, &request[..len]);
         }
 
@@ -141,7 +156,7 @@ impl VmxBroker {
         let mut response = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
 
         if crate::hv::current_hull_guest_context_vm_id().is_none() {
-            let vm_id = crate::hv::current_guest_execution_context_vm_id()?;
+            let vm_id = wall::current_vm()?;
             let len = crate::hv::blueprint_net::poll_event(vm_id, self.session_id, &mut response)
                 .ok()??;
             return crate::blueprint_net_wire::decode_event(&response[..len]).ok();

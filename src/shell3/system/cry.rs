@@ -270,7 +270,10 @@ impl Drop for PendingProof {
     }
 }
 
-pub(crate) async fn login_for_scope(scope: u8, code: &str) -> Result<(String, trueos_crypto::AccountId), String> {
+pub(crate) async fn login_for_scope(
+    scope: u8,
+    code: &str,
+) -> Result<(String, trueos_crypto::AccountId, u64), String> {
     let proof = crypt::prepare_login(code, scope).map_err(error_text)?;
     let _pending = PendingProof(proof.challenge_sequence);
     let plan = crypt::prepare_persistence(proof.challenge_sequence).map_err(error_text)?;
@@ -281,7 +284,7 @@ pub(crate) async fn login_for_scope(scope: u8, code: &str) -> Result<(String, tr
     } else {
         "Signed in; account saved."
     };
-    Ok((message.into(), report.account))
+    Ok((message.into(), report.account, report.challenge_sequence))
 }
 
 /// Verify a username-bound SSH authenticator response and durably consume its

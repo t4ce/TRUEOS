@@ -39,7 +39,7 @@ impl Terminal {
     fn start(mut shell: Shell3, controls: bool) -> Self {
         shell.refresh_title_identity();
         shell.command_history.set_recording(false);
-        let mut history = CommandHistory::default();
+        let mut history = CommandHistory::for_frontend(shell.tui_frontend);
         history.set_scope(super::matrix_target::TRANSPORT_NET_TCP_SCOPE);
         let mut terminal = Self {
             shell,

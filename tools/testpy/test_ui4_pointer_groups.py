@@ -352,7 +352,7 @@ def harness() -> str:
                  "retarget_source", "cursor_retired"):
         source += item(FRAME, name)
     source += BROKER_FIXTURE
-    for name in ("WindowTarget", "KeyboardSource", "CursorRoute", "InputBroker"):
+    for name in ("WindowTarget", "GeometryGesture", "KeyboardSource", "CursorRoute", "InputBroker"):
         source += item(BROKER, name)
     for marker in ("impl WindowTarget {", "impl From<super::CursorFrameKey> for WindowTarget {"):
         source += block(broker, marker)

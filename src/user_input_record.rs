@@ -4,37 +4,112 @@
 //! shell backend. Plaintext is encrypted immediately; the pending queue and
 //! TRUEOSFS only receive fixed-size ChaCha20-Poly1305 records.
 
+mod frame;
+
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+use embassy_sync::signal::Signal;
 use spin::Mutex;
-use trueos_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Instant, with_deadline};
 use zeroize::Zeroizing;
+
+use self::frame::{
+    ALGORITHM_CHACHA20_POLY1305, FORMAT_VERSION, HEADER_BYTES, PLAINTEXT_BYTES, RECORD_BYTES,
+};
 
 pub(crate) const PATH: &str = "user_input_record.v1.enc";
 
 const FLUSH_INTERVAL_SECS: u64 = 120;
 const PENDING_CAP: usize = 256;
-const COMMAND_BYTES: usize = 192;
-const HEADER_BYTES: usize = 32;
-const PLAINTEXT_BYTES: usize = 40 + COMMAND_BYTES;
-const TAG_BYTES: usize = 16;
-const RECORD_BYTES: usize = HEADER_BYTES + PLAINTEXT_BYTES + TAG_BYTES;
-const FORMAT_VERSION: u8 = 1;
-const ALGORITHM_CHACHA20_POLY1305: u8 = 1;
+const RESTORE_SCAN_RECORDS: u64 = 256;
 
 type EncryptedRecord = Zeroizing<Vec<u8>>;
 
 static NEXT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static PENDING: Mutex<VecDeque<EncryptedRecord>> = Mutex::new(VecDeque::new());
 
+static RESTORE: Signal<crate::wait::EmbassySpinRawMutex, RestoreRequest> = Signal::new();
+
+struct RestoreRequest {
+    scope: u8,
+    identity: (u64, u64),
+}
+
+pub(crate) fn request_restore(scope: u8, identity: (u64, u64)) {
+    if crate::crypt::authenticated_history_identity(scope) == Some(identity) {
+        RESTORE.signal(RestoreRequest { scope, identity });
+    }
+}
+
+async fn restore_history(request: RestoreRequest) {
+    use crate::r::fs::trueosfs;
+
+    let RestoreRequest { scope, identity } = request;
+    if crate::crypt::authenticated_history_identity(scope) != Some(identity) {
+        return;
+    }
+    let Some(context) = crate::crypt::authenticated_user_input_record_key(scope) else {
+        return;
+    };
+    if (context.account.raw(), context.challenge_sequence) != identity {
+        return;
+    }
+    let Some(disk) = trueosfs::primary_root_handle() else {
+        return;
+    };
+    let Ok(Some(handle)) = trueosfs::file_read_open_async(disk, PATH).await else {
+        return;
+    };
+    let records = handle.data_len() / RECORD_BYTES as u64;
+    let count = records.min(RESTORE_SCAN_RECORDS);
+    if count == 0 {
+        return;
+    }
+    let mut bytes = alloc::vec![0; count as usize * RECORD_BYTES];
+    let offset = (records - count) * RECORD_BYTES as u64;
+    if !matches!(
+        trueosfs::file_read_handle_range_async(handle, offset, &mut bytes).await,
+        Ok(Some(got)) if got == bytes.len()
+    ) {
+        return;
+    }
+
+    let Ok(cipher) = ChaCha20Poly1305::new_from_slice(context.key_bytes()) else {
+        return;
+    };
+    let mut commands: Vec<Zeroizing<alloc::string::String>> = Vec::new();
+    for record in bytes.rchunks_exact(RECORD_BYTES) {
+        let Some(text) = frame::decode(&cipher, record, identity.0) else {
+            continue;
+        };
+        if commands.iter().any(|entry| entry.as_str() == text.as_str()) {
+            continue;
+        }
+        commands.push(text);
+        if commands.len() == crate::shell3::HISTORY_RECALL_CAP {
+            break;
+        }
+    }
+    // A logout, another login, or a remount may have raced the disk read.
+    if trueosfs::primary_root_handle() == Some(disk)
+        && trueosfs::file_read_handle_is_current(handle)
+        && crate::crypt::authenticated_history_identity(scope) == Some(identity)
+    {
+        crate::shell3::restore_commands(identity.0, commands);
+    }
+}
+
 /// Capture one already-redacted command if this shell backend owns the active
 /// authenticated session. No plaintext is retained by this module.
-pub(crate) fn capture(scope_id: u8, text: &str) {
-    let Some(record) = encrypt_record(scope_id, text) else {
+pub(crate) fn capture(scope_id: u8, identity: (u64, u64), text: &str) {
+    if !frame::recallable(text) {
+        return;
+    }
+    let Some(record) = encrypt_record(scope_id, identity, text) else {
         return;
     };
 
@@ -45,8 +120,11 @@ pub(crate) fn capture(scope_id: u8, text: &str) {
     pending.push_back(record);
 }
 
-fn encrypt_record(scope_id: u8, text: &str) -> Option<EncryptedRecord> {
+fn encrypt_record(scope_id: u8, identity: (u64, u64), text: &str) -> Option<EncryptedRecord> {
     let context = crate::crypt::authenticated_user_input_record_key(scope_id)?;
+    if (context.account.raw(), context.challenge_sequence) != identity {
+        return None;
+    }
 
     let mut nonce_bytes = [0u8; 12];
     if !crate::tyche::fill_bytes(&mut nonce_bytes) {
@@ -68,7 +146,7 @@ fn encrypt_record(scope_id: u8, text: &str) -> Option<EncryptedRecord> {
     plaintext[8..16].copy_from_slice(&context.account.raw().to_le_bytes());
     plaintext[16..24].copy_from_slice(&context.challenge_sequence.to_le_bytes());
     plaintext[24..32].copy_from_slice(&context.authenticated_at_ticks.to_le_bytes());
-    let text_len = text.len().min(COMMAND_BYTES);
+    let text_len = text.len();
     plaintext[32..34].copy_from_slice(&(text_len as u16).to_le_bytes());
     plaintext[34] = context.scope_id;
     plaintext[40..40 + text_len].copy_from_slice(&text.as_bytes()[..text_len]);
@@ -120,7 +198,10 @@ async fn append_and_verify(payload: &[u8]) -> bool {
             return false;
         }
         Err(error) => {
-            crate::log!("user-input-record: write failed phase=append err={:?}\n", error);
+            crate::log!(
+                "user-input-record: write failed phase=append err={:?}\n",
+                error
+            );
             return false;
         }
     }
@@ -132,7 +213,10 @@ async fn append_and_verify(payload: &[u8]) -> bool {
             return false;
         }
         Err(error) => {
-            crate::log!("user-input-record: verify failed phase=info err={:?}\n", error);
+            crate::log!(
+                "user-input-record: verify failed phase=info err={:?}\n",
+                error
+            );
             return false;
         }
     };
@@ -161,7 +245,10 @@ async fn append_and_verify(payload: &[u8]) -> bool {
             false
         }
         Err(error) => {
-            crate::log!("user-input-record: verify failed phase=read err={:?}\n", error);
+            crate::log!(
+                "user-input-record: verify failed phase=read err={:?}\n",
+                error
+            );
             false
         }
     }
@@ -193,8 +280,15 @@ async fn flush_once() {
 #[trueos_executor::task]
 pub(crate) async fn writer_task() {
     crate::log_info!(target: "service"; "user-input-record: writer online default=off auth=cry-2fa encryption=chacha20-poly1305\n");
+    let interval = EmbassyDuration::from_secs(FLUSH_INTERVAL_SECS);
+    let mut next_flush = Instant::now();
     loop {
-        flush_once().await;
-        Timer::after(EmbassyDuration::from_secs(FLUSH_INTERVAL_SECS)).await;
+        if Instant::now() >= next_flush {
+            flush_once().await;
+            next_flush = Instant::now() + interval;
+        }
+        if let Ok(request) = with_deadline(next_flush, RESTORE.wait()).await {
+            restore_history(request).await;
+        }
     }
 }

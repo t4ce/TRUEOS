@@ -35,7 +35,7 @@ def main():
     paths = {name: ROOT / path for name, path in {
         'mio': 'src/mio_compat.rs', 'socket': 'src/mio_compat/tcp_socket.rs',
         'bridge': 'src/r/net/mod.rs', 'adapter': 'src/net/adapter.rs',
-        'protocol': 'crates/trueos-vm/src/vmcall.rs'}.items()}
+        'protocol': 'crates/trueos-vm/src/vmcall.rs', 'wall': 'src/r/net/wall.rs'}.items()}
     sources = {name: path.read_text() for name, path in paths.items()}
     fragments = {}
 
@@ -59,6 +59,7 @@ def main():
         '@VNET@': json.dumps(str(ROOT / 'crates/trueos-v/src/vnet.rs')),
         '@PROGRESS@': json.dumps(str(ROOT / 'src/mio_compat/progress.rs')),
         '@TCP_SOCKET@': json.dumps(str(paths['socket'])),
+        '@WALL@': json.dumps(str(paths['wall'])),
         '@OP_CONSTANTS@': '\n'.join(keep(name, constant(sources['protocol'], name)) for name in [
             'OP_BP_MIO_TCP_SOCKET_CREATE', 'OP_BP_MIO_TCP_SOCKET_BIND',
             'OP_BP_MIO_TCP_SOCKET_CONNECT', 'OP_BP_MIO_TCP_SOCKET_LISTEN']),
@@ -75,7 +76,6 @@ def main():
         '@PENDING@': keep('PendingOpen', item(mio, 'struct PendingOpen')),
         '@METHODS@': '\n'.join(keep(name, function(mio, name)) for name in methods),
         '@OWNER_MATCHES@': keep('owner_matches', function(mio, 'owner_matches')),
-        '@CAPTURE_NETWORK_ACTOR@': keep('capture_network_actor', function(mio, 'capture_network_actor')),
         '@SOCKET_HAS_HANDLE@': keep('socket_has_handle', function(mio, 'socket_has_handle')),
         '@UDP_PEER_MATCHES@': keep('udp_peer_matches', function(mio, 'udp_peer_matches')),
         '@READ_ADDR@': keep('read_addr', function(mio, 'read_addr')),
@@ -84,10 +84,13 @@ def main():
         '@ACCEPT@': keep('mio_tcp_listener_accept_host', function(mio, 'mio_tcp_listener_accept_host')),
         '@BRIDGE_CONNECT@': keep('VNetBridge::submit_tcp_connect_from', function(sources['bridge'], 'submit_tcp_connect_from')),
         '@BRIDGE_ACTOR_CONNECT@': keep('VNet::submit_tcp_connect_from_for_actor', function(sources['bridge'], 'submit_tcp_connect_from_for_actor')),
+        '@BRIDGE_CALLER_CONNECT@': keep('VNet::submit_tcp_connect_for_caller', function(sources['bridge'], 'submit_tcp_connect_for_caller')),
         '@NET_ENDPOINT@': keep('NetEndpoint', item(sources['adapter'], 'pub struct NetEndpoint')),
         '@NET_ENDPOINT6@': keep('NetEndpointV6', item(sources['adapter'], 'pub struct NetEndpointV6')),
         '@SOCKET_KIND@': keep('SocketKind', item(sources['adapter'], 'pub enum SocketKind')),
         '@SOCKET_RECORD@': keep('SocketRecord', item(sources['adapter'], 'struct SocketRecord')),
+        '@UDP_ACCESS@': keep('UdpAccess', item(sources['adapter'], 'struct UdpAccess')),
+        '@UDP_ACCESS_IMPL@': keep('UdpAccess impl', item(sources['adapter'], 'impl UdpAccess')),
         '@OPEN_CONNECT@': keep('open_tcp_connect', function(sources['adapter'], 'open_tcp_connect')),
         '@OPEN_CONNECT6@': keep('open_tcp_connect_v6', function(sources['adapter'], 'open_tcp_connect_v6')),
         '@CONNECT_DISPATCH@': keep('OpenTcpConnectFrom dispatch', item(sources['adapter'], r'NetCommand::OpenTcpConnectFrom \{ local, remote \} => match \(local, remote\) \{')),
@@ -126,17 +129,18 @@ smoltcp={{path={json.dumps(str(ROOT / 'vendor/smoltcp-0.13.1'))},default-feature
                 if result.returncode:
                     raise RuntimeError(log.read_text()[-16000:])
         tests = int(re.search(r'test result: ok\. (\d+) passed', log.read_text())[1])
-        assert tests == 40, tests
+        assert tests == 42, tests
         checks.append({'mode': mode, 'tests': tests, 'log': str(log), 'commands': commands})
     receipt = {'scope': __doc__, 'checks': checks,
                'cases_per_mode': {'native_socket_lifecycle': 20, 'real_smoltcp_endpoints': 4,
                                   'embedded_production_progress': 3, 'private_native_admission_and_capture': 3,
-                                  'private_loopback_authority': 6, 'embedded_transmit_queue': 4},
+                                  'private_loopback_authority': 6, 'embedded_transmit_queue': 4,
+                                  'firewall_admission': 2},
                'source_sha256': {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in paths.items()},
                'production_fragments_sha256': {name: hashlib.sha256(body.encode()).hexdigest() for name, body in fragments.items()},
                'harness_sha256': hashlib.sha256(harness.encode()).hexdigest()}
     (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
-    print('Kernel native TCP lifecycle/private loopback/real smoltcp: 40 production-body cases in debug and release.')
+    print(f'Kernel native TCP lifecycle/private loopback/real smoltcp: {tests} production-body cases in debug and release.')
 
 
 if __name__ == '__main__':

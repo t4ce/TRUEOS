@@ -31,6 +31,7 @@ pub mod store;
 pub use checkpoint::*;
 pub mod sync;
 pub mod vmcall;
+mod vmx_permissions;
 pub mod vmx;
 pub mod vnet;
 pub mod vpid;
@@ -733,6 +734,7 @@ struct BlueprintChildTemplate {
     generation: u64,
     archive: AllocString,
     module_bytes: AllocVec<u8>,
+    seeded_buildin: bool,
 }
 
 struct BlueprintChildLink {
@@ -1101,6 +1103,16 @@ pub(crate) fn blueprint_current_run_archive(vm_id: u8, run: u64) -> Option<Alloc
         .as_ref()
         .filter(|template| template.generation == run)
         .map(|template| template.archive.clone())
+}
+
+pub(crate) fn with_blueprint_network_identity<T>(
+    vm_id: u8,
+    run: u64,
+    check: impl FnOnce(&str, bool) -> T,
+) -> Option<T> {
+    let slot = BLUEPRINT_CHILD_TEMPLATES.get(vm_id as usize)?.lock();
+    let template = slot.as_ref().filter(|template| template.generation == run)?;
+    Some(check(&template.archive, template.seeded_buildin))
 }
 
 fn lifecycle_now_ms() -> u64 {
@@ -1795,12 +1807,7 @@ pub(crate) fn current_guest_execution_context_vm_id() -> Option<u8> {
         return crate::r::threads::current_vm_id();
     }
 
-    let slot = crate::percpu::current_slot();
-    if let Some(tagged) = CURRENT_GUEST_BROKER_VM_ID_BY_CPU
-        .get(slot)
-        .map(|slot| slot.load(Ordering::Acquire))
-        && let Some(vm_id) = tagged.checked_sub(1)
-    {
+    if let Some(vm_id) = current_guest_broker_vm_id() {
         return Some(vm_id);
     }
 
@@ -1816,6 +1823,14 @@ pub(crate) fn current_guest_execution_context_vm_id() -> Option<u8> {
     }
 
     None
+}
+
+/// Explicit owner captured by the host while dispatching a guest request.
+pub(crate) fn current_guest_broker_vm_id() -> Option<u8> {
+    CURRENT_GUEST_BROKER_VM_ID_BY_CPU
+        .get(crate::percpu::current_slot())?
+        .load(Ordering::Acquire)
+        .checked_sub(1)
 }
 
 pub(crate) fn with_guest_broker_context<R>(vm_id: u8, f: impl FnOnce() -> R) -> R {
@@ -3414,11 +3429,13 @@ pub fn stage_blueprint_launch(
     // Retain only archive bytes, not guest pointers or presentation state.
     // The child service later uses this immutable host copy to relaunch the
     // same archive on another Hull/VMX lane.
+    let seeded_buildin = crate::app_db::is_seeded_buildin(&state.archive, &state.module_bytes);
     crate::allocators::with_host_alloc_domain(|| {
         *template_slot.lock() = Some(BlueprintChildTemplate {
             generation,
             archive: state.archive.clone(),
             module_bytes: state.module_bytes.clone(),
+            seeded_buildin,
         });
     });
     let Some(mut guest_state) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.clone())

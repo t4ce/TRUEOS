@@ -18,8 +18,9 @@ pub mod remote_work_wake { pub fn wake_cpu_for_remote_work(_:usize) {} }
 pub mod hv {
     use super::*;
     pub static GENERATION: AtomicU64=AtomicU64::new(7);
-    pub fn vm_run_generation(id:u8)->Option<u64> { (id<2).then(||GENERATION.load(Ordering::SeqCst)) }
+    pub fn vm_run_generation(id:u8)->Option<u64> { (id<3).then(||GENERATION.load(Ordering::SeqCst)) }
     pub fn current_hull_guest_context_vm_id()->Option<u8> { None }
+    pub fn current_guest_execution_context_vm_id()->Option<u8> { None }
 }
 pub mod native_abi {
     pub fn abi_read_bytes<'a>(p:*const u8,n:usize)->Option<&'a[u8]> { Some(unsafe{std::slice::from_raw_parts(p,n)}) }
@@ -60,6 +61,18 @@ pub mod r {
     #[path="/home/t4ce/Repositories/TRUEOS/src/r/cabi_codes.rs"] pub mod cabi_codes;
     pub mod net {
         #[path="@KERNEL@"] pub mod http_request_cabi;
+        pub mod wall {
+            pub fn current_vm() -> Option<u8> {
+                crate::hv::current_guest_execution_context_vm_id()
+            }
+            #[derive(Clone, Copy)]
+            pub struct Caller(Option<u8>);
+            pub enum Transport { Tcp }
+            impl Caller {
+                pub fn capture(vm: Option<u8>) -> Option<Self> { Some(Self(vm)) }
+                pub fn permits_socket(self, _: Transport) -> bool { self.0 != Some(2) }
+            }
+        }
         pub mod request_stream {
             pub async fn start_exchange(_:crate::vnetfs::http::RequestOwned,_:super::http_request_cabi::ResponseSink) {}
         }

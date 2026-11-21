@@ -68,6 +68,8 @@ def harness_source():
     restore_block = "        // The same live circle used for docking" + restore_block
     snapshots_method = block(broker, "    fn snapshots(&self, output: OutputId) -> Vec<WindowSnapshot> {")
     return r'''#![allow(dead_code)]
+#[path = "@VMX_PERMISSIONS@"]
+mod vmx_permissions;
 use std::sync::{Mutex, MutexGuard};
 struct TestMutex<T>(Mutex<T>);
 impl<T> TestMutex<T> {
@@ -141,6 +143,8 @@ mod ui4 {
     mod window_broker {
         use super::*;
         use crate::TestMutex;
+        use crate::vmx_permissions::VmxPermission::{self, MoveWindow, ResizeWindow};
+        fn trace_geometry_permissions(_: WindowId, _: &str, _: &[VmxPermission]) {}
         @TITLE_CONSTANT@
         @BROKER_CODE@
         struct TestBroker { windows: Vec<WindowRecord>, changes: usize }
@@ -389,7 +393,7 @@ mod ui4 {
         }
     }
 }
-'''.replace("@APPLICATION_PLANES@", "\n".join(
+'''.replace("@VMX_PERMISSIONS@", str(ROOT / "crates/trueos-crypto/src/vmxPermissions.rs")).replace("@APPLICATION_PLANES@", "\n".join(
         constant("src/ui4/mod.rs", name) for name in ["MAX_APPLICATION_PLANE_SLOTS", "ADDITIONAL_APPLICATION_PLANE_SLOT", "DEFAULT_APPLICATION_PLANE_MASK", "SUPPORTED_APPLICATION_PLANE_MASK"]
     ) + "\n" + item("src/ui4/mod.rs", "is_application_plane_slot")).replace("@TITLE_CONSTANT@", title_constant).replace("@BROKER_CODE@", broker_code).replace(
         "@COLLAPSE_CODE@", collapse_code).replace("@GEOMETRY_CONSTANTS@", geometry_constants).replace(

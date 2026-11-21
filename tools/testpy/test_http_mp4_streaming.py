@@ -50,7 +50,9 @@ mod allocators {pub fn host_heap_integrity_bounded(){}}
  bytes:Vec<u8>, reads:Vec<(u64,usize)>, fail_at:Option<u64>, short_read:bool,
 }
 thread_local! {static SERVER:RefCell<Server>=RefCell::new(Server::default());}
-mod r {pub mod net {pub mod https {
+mod r {pub mod net {
+pub mod wall{pub struct Caller;}
+pub mod https {
  use alloc::{string::String, vec::Vec};
  #[derive(Clone,Debug,PartialEq,Eq)]pub struct MediaRangeIdentity {
   pub final_url:String,pub total_len:u64,pub etag:Option<String>,pub last_modified:Option<String>,
@@ -58,7 +60,7 @@ mod r {pub mod net {pub mod https {
  pub struct MediaRangeResponse {pub bytes:Vec<u8>,pub identity:MediaRangeIdentity}
  pub struct MediaRangeClient;
  impl MediaRangeClient {
-  pub fn new()->Self {Self}
+  pub fn new(_:super::wall::Caller)->Self {Self}
   pub async fn close(&mut self) {}
   pub async fn get_range(&mut self,url:&str,offset:u64,length:usize,timeout:u32,cancellation:&MediaFetchCancellation,user_agent:Option<&str>,referrer:Option<&str>,expected:Option<&MediaRangeIdentity>)->Result<MediaRangeResponse,String> {
    get_media_range_bytes_shared(url,offset,length,timeout,cancellation,user_agent,referrer,expected).await
@@ -119,7 +121,7 @@ tail = r'''
  }
  fn install(bytes:Vec<u8>) {CANCELLED.store(false,Ordering::SeqCst);SERVER.with(|s|*s.borrow_mut()=Server{bytes,..Server::default()});}
  fn open(indexed:Option<usize>)->Result<HttpMp4Reader,&'static str> {
-  run(HttpMp4Reader::open(crate::ui4::VideoPlaybackSession,"https://fixture.test/movie.mp4",indexed,None,Some("https://fixture.test/watch")))
+  run(HttpMp4Reader::open(crate::ui4::VideoPlaybackSession,"https://fixture.test/movie.mp4",indexed,None,Some("https://fixture.test/watch"),crate::r::net::wall::Caller))
  }
  fn next(reader:&mut HttpMp4Reader)->Result<Option<(Vec<u8>,H264SampleTiming)>,&'static str> {run(reader.next_sample())}
  fn bx(name:&[u8;4],data:&[u8])->Vec<u8> {[(8+data.len() as u32).to_be_bytes().as_slice(),name,data].concat()}

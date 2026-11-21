@@ -16,7 +16,10 @@ use spin::Mutex;
 use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use v::vnet as api;
 
-use crate::r::net::VNet;
+use crate::r::net::{
+    VNet,
+    wall::{Caller, Transport},
+};
 
 pub(crate) const HTML_FETCH_WORKERS: usize = 10;
 const HTML_FETCH_IDLE_MS: u64 = 250;
@@ -34,6 +37,7 @@ struct ByteFetchRequest {
     timeout_ms: u64,
     max_bytes: usize,
     method: ByteFetchMethod,
+    caller: Caller,
 }
 
 #[derive(Clone)]
@@ -238,6 +242,7 @@ mod byte_fetch_lifecycle_tests {
             timeout_ms: 100,
             max_bytes: 1024,
             method: ByteFetchMethod::Get,
+            caller: Caller::Kernel,
         }
     }
 
@@ -398,6 +403,12 @@ pub async fn fetch_bytes_via_pool(
     timeout_ms: u64,
     max_bytes: usize,
 ) -> Result<ByteFetch, String> {
+    fetch_bytes_via_pool_for_caller(url, timeout_ms, max_bytes, Caller::Kernel).await
+}
+
+pub(crate) async fn fetch_bytes_via_pool_for_caller(
+    url: impl Into<String>, timeout_ms: u64, max_bytes: usize, caller: Caller,
+) -> Result<ByteFetch, String> {
     let url = url.into();
     if url.trim().is_empty() {
         return Err(String::from("empty url"));
@@ -407,13 +418,13 @@ pub async fn fetch_bytes_via_pool(
     }
 
     let id = HTML_BYTE_FETCH_SEQ.fetch_add(1, Ordering::AcqRel);
-    fetch_bytes_via_pool_method(id, url, timeout_ms, max_bytes, ByteFetchMethod::Get).await
+    fetch_bytes_via_pool_method(id, url, timeout_ms, max_bytes, ByteFetchMethod::Get, caller).await
 }
 
 /// Probe a navigation URL without fetching its body. The result is exactly
 /// one byte: `b'D'` for a known download response, or `b'N'` for navigation
 /// and uncertain headers. Transport failures remain errors.
-pub async fn probe_navigation_via_pool(url: &str) -> Result<Vec<u8>, String> {
+pub(crate) async fn probe_navigation_via_pool(url: &str, caller: Caller) -> Result<Vec<u8>, String> {
     if url.trim().is_empty() {
         return Ok(vec![NAVIGATION]);
     }
@@ -427,6 +438,7 @@ pub async fn probe_navigation_via_pool(url: &str) -> Result<Vec<u8>, String> {
         HTML_FETCH_CONNECT_TIMEOUT_MS,
         1,
         ByteFetchMethod::Head,
+        caller,
     )
     .await;
     match result {
@@ -436,13 +448,14 @@ pub async fn probe_navigation_via_pool(url: &str) -> Result<Vec<u8>, String> {
     }
 }
 
-pub async fn post_bytes_via_pool(
+pub(crate) async fn post_bytes_via_pool(
     url: impl Into<String>,
     content_type: impl Into<String>,
     headers: &[(&str, &str)],
     body: &[u8],
     timeout_ms: u64,
     max_bytes: usize,
+    caller: Caller,
 ) -> Result<ByteFetch, String> {
     let url = url.into();
     if url.trim().is_empty() {
@@ -471,6 +484,7 @@ pub async fn post_bytes_via_pool(
             headers: owned_headers,
             body: Vec::from(body),
         },
+        caller,
     )
     .await
 }
@@ -481,6 +495,7 @@ async fn fetch_bytes_via_pool_method(
     timeout_ms: u64,
     max_bytes: usize,
     method: ByteFetchMethod,
+    caller: Caller,
 ) -> Result<ByteFetch, String> {
     with_html_shack(|shack| {
         shack.push_byte_fetch(ByteFetchRequest {
@@ -489,6 +504,7 @@ async fn fetch_bytes_via_pool_method(
             timeout_ms,
             max_bytes,
             method,
+            caller,
         })
     });
     // The caller owns this pool slot until it consumes the completion. If its
@@ -582,6 +598,7 @@ struct HttpWorkerTransport {
     worker_id: u32,
     net: Option<Arc<VNet>>,
     state: Arc<Mutex<HttpWorkerNetState>>,
+    caller: Caller,
 }
 
 impl HttpWorkerTransport {
@@ -590,6 +607,7 @@ impl HttpWorkerTransport {
             worker_id,
             net: None,
             state: Arc::new(Mutex::new(HttpWorkerNetState::Idle)),
+            caller: Caller::Kernel,
         }
     }
 
@@ -608,7 +626,7 @@ impl HttpWorkerTransport {
         Ok(net)
     }
 
-    async fn prepare_open(&mut self) -> Result<Arc<VNet>, HttpFetchError> {
+    async fn prepare_open(&mut self, caller: Caller) -> Result<Arc<VNet>, HttpFetchError> {
         let net = self.net()?;
         let deadline =
             Instant::now() + EmbassyDuration::from_millis(HTML_FETCH_VNET_FENCE_TIMEOUT_MS);
@@ -634,6 +652,7 @@ impl HttpWorkerTransport {
                     }
 
                     let Some(handle) = stale_handle else {
+                        self.caller = caller;
                         *self.state.lock() = HttpWorkerNetState::Opening;
                         return Ok(net);
                     };
@@ -660,14 +679,14 @@ impl HttpWorkerTransport {
                     }
                 }
                 HttpWorkerNetState::Open(handle) => {
-                    let submitted = net.submit(api::Command::Close { handle }).is_ok();
+                    let submitted = net.submit_for_caller(api::Command::Close { handle }, self.caller).is_ok();
                     *self.state.lock() = HttpWorkerNetState::Closing { handle, submitted };
                 }
                 HttpWorkerNetState::Closing {
                     handle,
                     submitted: false,
                 } => {
-                    if net.submit(api::Command::Close { handle }).is_ok() {
+                    if net.submit_for_caller(api::Command::Close { handle }, self.caller).is_ok() {
                         *self.state.lock() = HttpWorkerNetState::Closing {
                             handle,
                             submitted: true,
@@ -711,16 +730,18 @@ struct HyperVnetIo {
     handle: api::NetHandle,
     rx: VecDeque<Vec<u8>>,
     closed: bool,
+    caller: Caller,
 }
 
 impl HyperVnetIo {
-    fn new(net: Arc<VNet>, state: Arc<Mutex<HttpWorkerNetState>>, handle: api::NetHandle) -> Self {
+    fn new(net: Arc<VNet>, state: Arc<Mutex<HttpWorkerNetState>>, handle: api::NetHandle, caller: Caller) -> Self {
         Self {
             net,
             state,
             handle,
             rx: VecDeque::new(),
             closed: false,
+            caller,
         }
     }
 
@@ -741,9 +762,9 @@ impl HyperVnetIo {
         if self.closed {
             return Ok(());
         }
-        let submitted = self.net.submit(api::Command::Close {
+        let submitted = self.net.submit_for_caller(api::Command::Close {
             handle: self.handle,
-        });
+        }, self.caller);
         *self.state.lock() = HttpWorkerNetState::Closing {
             handle: self.handle,
             submitted: submitted.is_ok(),
@@ -820,8 +841,9 @@ impl Write for HyperVnetIo {
         if buf.is_empty() {
             return Poll::Ready(Ok(0));
         }
-        match self.net.send_tcp_all(self.handle, buf) {
-            Ok(()) => Poll::Ready(Ok(buf.len())),
+        let chunk = &buf[..buf.len().min(api::MAX_MSG)];
+        match self.net.try_send_tcp_chunk_for_caller(self.handle, chunk, self.caller) {
+            Ok(()) => Poll::Ready(Ok(chunk.len())),
             Err(()) => Poll::Ready(Err(io::other("vnet tcp send"))),
         }
     }
@@ -856,6 +878,7 @@ enum HttpFetchError {
     NoDns,
     Dns,
     Connect,
+    Denied,
     Hyper,
     Body,
     TooLarge,
@@ -872,6 +895,7 @@ impl HttpFetchError {
             Self::NoDns => "no-dns",
             Self::Dns => "dns",
             Self::Connect => "connect",
+            Self::Denied => crate::r::net::https::FIREWALL_DENIED,
             Self::Hyper => "hyper",
             Self::Body => "body",
             Self::TooLarge => "too-large",
@@ -1077,13 +1101,18 @@ async fn connect_tcp(
     worker_transport: &mut HttpWorkerTransport,
     ip: [u8; 4],
     port: u16,
+    caller: Caller,
 ) -> Result<HyperVnetIo, HttpFetchError> {
-    let net = worker_transport.prepare_open().await?;
+    let remote = core::net::SocketAddr::from((ip, port));
+    if !caller.permits_outbound(Transport::Tcp, remote) {
+        return Err(HttpFetchError::Denied);
+    }
+    let net = worker_transport.prepare_open(caller).await?;
     let state = worker_transport.state.clone();
     if net
-        .submit(api::Command::OpenTcpConnect {
+        .submit_for_caller(api::Command::OpenTcpConnect {
             remote: api::EndpointV4::new(ip, port),
-        })
+        }, caller)
         .is_err()
     {
         worker_transport.open_failed();
@@ -1116,7 +1145,7 @@ async fn connect_tcp(
     })
     .await?;
 
-    Ok(HyperVnetIo::new(net, state, handle))
+    Ok(HyperVnetIo::new(net, state, handle, caller))
 }
 
 async fn with_timeout_or_none<F: core::future::Future>(
@@ -1143,7 +1172,10 @@ async fn fetch_http_body_once(
     target: &HttpTarget,
     max_bytes: usize,
     method: &ByteFetchMethod,
+    caller: Caller,
 ) -> Result<Vec<u8>, HttpFetchError> {
+    crate::r::net::https::authorize_destination(caller, &target.host, target.port)
+        .map_err(|_| HttpFetchError::Denied)?;
     let ip = resolve_ipv4(target.host.as_str()).await?;
     crate::log!(
         "html_shack: hyper connect host={} remote={}.{}.{}.{}:{} path={}\n",
@@ -1156,7 +1188,7 @@ async fn fetch_http_body_once(
         target.path_and_query
     );
 
-    let io = connect_tcp(worker_transport, ip, target.port).await?;
+    let io = connect_tcp(worker_transport, ip, target.port, caller).await?;
     let (mut sender, connection) = hyper::client::conn::http1::handshake::<_, RequestBody>(io)
         .await
         .map_err(|_| HttpFetchError::Hyper)?;
@@ -1337,6 +1369,7 @@ async fn fetch_http_body_hyper(
     max_bytes: usize,
     method: &ByteFetchMethod,
     timeout_ms: u64,
+    caller: Caller,
 ) -> Result<(String, Vec<u8>), HttpFetchError> {
     let mut current = String::from(url);
     let mut seen = BTreeSet::new();
@@ -1359,6 +1392,7 @@ async fn fetch_http_body_hyper(
                     match crate::r::net::https::probe_navigation_headers_shared(
                         https_url.as_str(),
                         timeout_ms,
+                        caller,
                     )
                     .await
                     {
@@ -1371,8 +1405,8 @@ async fn fetch_http_body_hyper(
                     }
                 }
                 ByteFetchMethod::Get => {
-                    let response = crate::r::net::https::get_bytes_response_shared(
-                        https_url.as_str(), timeout_ms, max_bytes,
+                    let response = crate::r::net::https::get_bytes_response_for_caller(
+                        https_url.as_str(), timeout_ms, max_bytes, caller,
                     ).await.map_err(|err| {
                         crate::log_warn!(target: "net";
                             "html_shack: https fetch failed url={} err={}\n", https_url, err);
@@ -1386,20 +1420,21 @@ async fn fetch_http_body_hyper(
         }
         let target = parse_http_url(current.as_str())?;
         let response = if matches!(method, ByteFetchMethod::Head) {
-            match fetch_http_body_once(worker_transport, &target, max_bytes, method).await {
+            match fetch_http_body_once(worker_transport, &target, max_bytes, method, caller).await {
                 Err(HttpFetchError::HeadUnsupported) => {
                     fetch_http_body_once(
                         worker_transport,
                         &target,
                         max_bytes,
                         &ByteFetchMethod::ProbeGet,
+                        caller,
                     )
                     .await
                 }
                 result => result,
             }
         } else {
-            fetch_http_body_once(worker_transport, &target, max_bytes, method).await
+            fetch_http_body_once(worker_transport, &target, max_bytes, method, caller).await
         };
         match response {
             Ok(body) => return Ok((target.url, body)),
@@ -1434,6 +1469,7 @@ async fn handle_byte_fetch_request(
             request.max_bytes,
             &request.method,
             request.timeout_ms,
+            request.caller,
         ),
         request.timeout_ms,
     )

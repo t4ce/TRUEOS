@@ -31,17 +31,28 @@ mod crypt {
     pub struct Status { pub username: Option<String> }
     pub fn status() -> Status { Status { username: Some("t4ce".into()) } }
 }
+mod command_history {
+    pub fn bind_verified_login(_: u64, _: u8, _: (u64, u64)) {}
+}
+mod user_input_record {
+    pub fn request_restore(_: u8, _: (u64, u64)) {}
+}
+#[derive(Clone, Copy)]
+struct AccountId(u64);
+impl AccountId {
+    fn raw(self) -> u64 { self.0 }
+}
 mod cry {
     use super::*;
     pub struct AccountEnrollment;
     pub static READY: AtomicBool = AtomicBool::new(true);
     pub static FAIL: AtomicBool = AtomicBool::new(false);
     pub static CALLS: AtomicUsize = AtomicUsize::new(0);
-    pub async fn login_for_scope(_: u8, code: &str) -> Result<(String, u64), String> {
+    pub async fn login_for_scope(_: u8, code: &str) -> Result<(String, AccountId, u64), String> {
         CALLS.fetch_add(1, Ordering::SeqCst);
         poll_fn(|_| if READY.load(Ordering::SeqCst) { Poll::Ready(()) } else { Poll::Pending }).await;
         if FAIL.load(Ordering::SeqCst) { return Err("Invalid authenticator code.".into()); }
-        Ok(("Signed in; account saved.".into(), if code == "654321" { 814 } else { 712 }))
+        Ok(("Signed in; account saved.".into(), AccountId(if code == "654321" { 814 } else { 712 }), 1))
     }
 }
 struct Route {
@@ -78,7 +89,8 @@ mod tui {
     pub fn native_frontend_id(target: &MatrixTarget) -> Option<u64> {
         route(target.0, |r| r.exists.then_some(r.owner))
     }
-    pub fn bind_authenticated_frontend(id: u64, account: Option<u64>) -> bool {
+    pub fn bind_authenticated_frontend(id: u64, account: Option<AccountId>) -> bool {
+        let account = account.map(AccountId::raw);
         route(id, |r| { if !r.exists { return false; } r.account = account; true })
     }
     pub fn native_return(target: &MatrixTarget) {

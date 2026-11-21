@@ -2874,11 +2874,19 @@ pub unsafe extern "C" fn trueos_cabi_blueprint_launch_script_v1(
     blueprint_launch_script_payload(vm_id, payload)
 }
 
-/// Queue a Shell3 with initial pixel geometry, or poll completion when width is zero.
+/// Queue a Shell3, poll with zero geometry, or close the returned ID in `x`
+/// with `y = 1` and zero width and height.
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_shell3_window_v1(x: i32, y: i32, width: u32, height: u32) -> i64 {
+    let close = width == 0 && height == 0 && y == 1;
     let geometry = (width != 0).then_some(crate::shell3::service::WindowGeometry { x, y, width, height });
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        if close {
+            let (status, rc) = trueos_vm::vmcall::call_with_payload(
+                trueos_vm::vmcall::OP_BP_SHELL3_WINDOW_V1, 2, u64::from(x as u32), &[], &mut [],
+            );
+            return if status == trueos_vm::vmcall::STATUS_OK { rc as i64 } else { -3 };
+        }
         let mut payload = [0u8; 16];
         payload[0..4].copy_from_slice(&x.to_le_bytes());
         payload[4..8].copy_from_slice(&y.to_le_bytes());
@@ -2891,5 +2899,9 @@ pub extern "C" fn trueos_cabi_shell3_window_v1(x: i32, y: i32, width: u32, heigh
         return if status == trueos_vm::vmcall::STATUS_OK { rc as i64 } else { -3 };
     }
     let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else { return -3; };
-    crate::shell3::service::blueprint_window_spawn(vm_id, geometry)
+    if close {
+        crate::shell3::service::blueprint_window_close(vm_id, x as u32)
+    } else {
+        crate::shell3::service::blueprint_window_spawn(vm_id, geometry)
+    }
 }

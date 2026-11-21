@@ -6,6 +6,12 @@ pub(crate) unsafe fn mio_tcp_socket_create_host(family: u32, out: *mut u32) -> i
         return STATUS_INVALID_INPUT;
     }
     let owner = current_owner_vm();
+    let Some(caller) = WallCaller::capture(owner) else {
+        return STATUS_IO;
+    };
+    if !caller.permits_socket(WallTransport::Tcp) {
+        return STATUS_IO;
+    }
     with_compat(|compat| {
         if !compat.socket_capacity_available(owner) {
             return STATUS_RESOURCE_EXHAUSTED;
@@ -25,7 +31,7 @@ pub(crate) unsafe fn mio_tcp_socket_create_host(family: u32, out: *mut u32) -> i
         compat.sockets.push(MioSocketState {
             id,
             owner_vm: owner,
-            actor: capture_network_actor(owner),
+            actor: caller.actor(),
             progress_generation: owner.and_then(crate::hv::vm_run_generation).unwrap_or(0),
             kind: MioSocketKind::TcpSocket,
             setup: Some(TcpSocketSetup {
@@ -68,6 +74,12 @@ fn reserve(compat: &mut MioCompat, id: u32, local: CompatAddr) -> i32 {
         return STATUS_INVALID_INPUT;
     }
     let mut raw = local.to_raw();
+    if raw.port != 0
+        && !WallCaller::from_actor(actor)
+            .is_some_and(|caller| caller.permits_bind(WallTransport::Tcp, local.socket_addr()))
+    {
+        return STATUS_IO;
+    }
     if raw.port == 0 {
         let Some(port) = compat.alloc_tcp_listen_port() else {
             return STATUS_RESOURCE_EXHAUSTED;
@@ -128,6 +140,9 @@ pub(crate) fn mio_tcp_socket_connect_host(id: u32, raw: TrueosMioSocketAddr) -> 
             return STATUS_INVALID_INPUT;
         }
         let actor = socket.actor;
+        if !WallCaller::from_actor(actor).is_some_and(|caller| caller.permits_outbound(WallTransport::Tcp, peer.socket_addr())) {
+            return STATUS_IO;
+        }
         let local = match prepare(compat, id) {
             Ok(local) => local,
             Err(status) => return status,
@@ -142,19 +157,11 @@ pub(crate) fn mio_tcp_socket_connect_host(id: u32, raw: TrueosMioSocketAddr) -> 
             socket_id: id,
             kind: api::SocketKind::Tcp,
         });
-        let as_addr = |addr: CompatAddr| match addr {
-            CompatAddr::V4 { addr, port } => {
-                core::net::SocketAddr::new(core::net::Ipv4Addr::from(addr).into(), port)
-            }
-            CompatAddr::V6 { addr, port } => {
-                core::net::SocketAddr::new(core::net::Ipv6Addr::from(addr).into(), port)
-            }
-        };
         if compat
             .net
             .as_ref()
             .unwrap()
-            .submit_tcp_connect_from_for_actor(as_addr(local), as_addr(peer), actor)
+            .submit_tcp_connect_from_for_actor(local.socket_addr(), peer.socket_addr(), actor)
             .is_err()
         {
             compat.pending_opens.pop_back();
@@ -180,6 +187,10 @@ pub(crate) fn mio_tcp_socket_listen_host(id: u32, backlog: u32) -> i32 {
         };
         let port = local.to_raw().port;
         let socket = compat.socket_mut(id).unwrap();
+        let Some(local) = WallCaller::from_actor(socket.actor)
+            .and_then(|caller| caller.restrict_bind(WallTransport::Tcp, local.socket_addr()))
+        else { return STATUS_IO };
+        socket.local = Some(CompatAddr::from_socket_addr(local));
         socket.kind = MioSocketKind::TcpListener;
         socket.listen_port = Some(port);
         socket.setup.as_mut().unwrap().backlog = backlog.max(1) as usize;

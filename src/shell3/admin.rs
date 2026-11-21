@@ -309,13 +309,15 @@ impl Request {
                 if let Some(attempt) = &attempt {
                     attempt.validate(frontend)?;
                 }
-                let (message, account) = cry::login_for_scope(scope, &code).await?;
+                let (message, account, sequence) = cry::login_for_scope(scope, &code).await?;
                 if let Some(attempt) = &attempt {
                     attempt.validate(frontend)?;
                 }
                 if !tui::bind_authenticated_frontend(frontend, Some(account)) {
                     return Err("The signing-in frontend closed or belongs to a guest.".into());
                 }
+                super::command_history::bind_verified_login(frontend, scope, (account.raw(), sequence));
+                crate::user_input_record::request_restore(scope, (account.raw(), sequence));
                 Ok(Outcome::message(message))
             },
             Self::Unlock { username, key } => cry::unlock_account(&username, &key)

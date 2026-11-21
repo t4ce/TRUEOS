@@ -9,6 +9,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
+use core::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::task::{Context, Poll};
 
@@ -20,6 +21,7 @@ use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use v::vnet;
 
 use crate::net::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsError, TlsRoots, TlsTime};
+use crate::r::net::wall::{Caller, Transport};
 use crate::r::net::{Queue, VNet};
 
 static TLS_APP_QUEUES: Mutex<Vec<TlsAppQueues>> = Mutex::new(Vec::new());
@@ -61,7 +63,7 @@ struct TlsAppQueues {
     events: &'static Queue<TlsEvent>,
 }
 
-pub fn register_tls_app_queues(
+pub(crate) fn register_tls_app_queues(
     name: &'static str,
     cmds: &'static Queue<TlsCommand>,
     events: &'static Queue<TlsEvent>,
@@ -149,9 +151,10 @@ impl TlsCancelCompletion {
 }
 
 #[derive(Clone)]
-pub enum TlsCommand {
+pub(crate) enum TlsCommand {
     /// Open a TCP connection and layer TLS over it.
     OpenTcpConnect {
+        caller: Caller,
         remote: vnet::EndpointV4,
         server_name: String,
         cfg: TlsClientConfig,
@@ -159,6 +162,7 @@ pub enum TlsCommand {
         timeouts: TlsTimeouts,
     },
     OpenTcpConnectV6 {
+        caller: Caller,
         remote: vnet::EndpointV6,
         server_name: String,
         cfg: TlsClientConfig,
@@ -275,10 +279,11 @@ static KERNEL_TIME: KernelTime = KernelTime;
 
 struct TlsConn {
     user_owner: &'static str,
+    caller: Caller,
     net: Arc<VNet>,
     delivery: Delivery<TlsEvent>,
     tx: PendingSend,
-    open_pending: Option<vnet::Command>,
+    open_pending: Option<SocketAddr>,
     close_pending: bool,
     terminal: bool,
     explicit_timeouts: bool,
@@ -315,14 +320,28 @@ impl TlsConn {
         self.retry_commands();
     }
     fn retry_commands(&mut self) {
-        if let Some(command) = self.open_pending.take() {
-            if self.net.submit(command.clone()).is_err() {
-                self.open_pending = Some(command);
+        if let Some(remote) = self.open_pending.take() {
+            if !self.caller.permits_outbound(Transport::Tcp, remote) {
+                self.closed = true;
+                self.terminal = true;
+                self.emit(TlsEvent::Error {
+                    msg: "network permission denied",
+                });
+            } else if self
+                .net
+                .submit_tcp_connect_for_caller(None, remote, self.caller)
+                .is_err()
+            {
+                self.open_pending = Some(remote);
             }
         }
         if self.close_pending {
             if let Some(handle) = self.handle {
-                if self.net.submit(vnet::Command::Close { handle }).is_ok() {
+                if self
+                    .net
+                    .submit_for_caller(vnet::Command::Close { handle }, self.caller)
+                    .is_ok()
+                {
                     self.close_pending = false;
                 }
             }
@@ -340,7 +359,8 @@ static TLS_CONNS: Mutex<Vec<TlsConn>> = Mutex::new(Vec::new());
 pub(crate) fn open_reusable(
     owner: &'static str,
     net: Arc<VNet>,
-    remote: core::net::SocketAddr,
+    caller: Caller,
+    remote: SocketAddr,
     server_name: &str,
     timeouts: TlsTimeouts,
 ) -> Result<(), TlsError> {
@@ -353,24 +373,17 @@ pub(crate) fn open_reusable(
         &KERNEL_TIME,
     )?
     .with_buffer_limit(512 * 1024);
-    let command = match remote {
-        core::net::SocketAddr::V4(remote) => vnet::Command::OpenTcpConnect {
-            remote: vnet::EndpointV4::new(remote.ip().octets(), remote.port()),
-        },
-        core::net::SocketAddr::V6(remote) => vnet::Command::OpenTcpConnectV6 {
-            remote: vnet::EndpointV6::new(remote.ip().octets(), remote.port()),
-        },
-    };
     let mut conns = TLS_CONNS.lock();
     if conns.iter().any(|conn| conn.user_owner == owner) {
         return Err(TlsError::Io);
     }
     let mut conn = TlsConn {
         user_owner: owner,
+        caller,
         net,
         delivery: Delivery::new(),
         tx: PendingSend::new(),
-        open_pending: Some(command),
+        open_pending: Some(remote),
         close_pending: false,
         terminal: false,
         explicit_timeouts: true,
@@ -416,7 +429,7 @@ fn flush_outgoing_tls(conn: &mut TlsConn) {
         return;
     };
     if !conn.tx.flush(vnet::MAX_MSG, |bytes| {
-        conn.net.try_send_tcp_chunk(handle, bytes)
+        conn.net.try_send_tcp_chunk_for_caller(handle, bytes, conn.caller)
     }) {
         return;
     }
@@ -424,7 +437,7 @@ fn flush_outgoing_tls(conn: &mut TlsConn) {
         Ok(data) => {
             conn.tx.stage(data);
             let _ = conn.tx.flush(vnet::MAX_MSG, |bytes| {
-                conn.net.try_send_tcp_chunk(handle, bytes)
+                conn.net.try_send_tcp_chunk_for_caller(handle, bytes, conn.caller)
             });
         }
         Err(err) => {
@@ -468,6 +481,7 @@ fn tls_socket_tick_once() -> bool {
         for cmd in cmds {
             let (cmd, remote_v6) = match cmd {
                 TlsCommand::OpenTcpConnectV6 {
+                    caller,
                     remote,
                     server_name,
                     cfg,
@@ -475,6 +489,7 @@ fn tls_socket_tick_once() -> bool {
                     timeouts,
                 } => (
                     TlsCommand::OpenTcpConnect {
+                        caller,
                         remote: vnet::EndpointV4::new([0; 4], remote.port),
                         server_name,
                         cfg,
@@ -487,12 +502,23 @@ fn tls_socket_tick_once() -> bool {
             };
             match cmd {
                 TlsCommand::OpenTcpConnect {
+                    caller,
                     remote,
                     server_name,
                     cfg,
                     roots,
                     timeouts,
                 } => {
+                    let remote = match remote_v6 {
+                        Some(remote) => (Ipv6Addr::from(remote.addr), remote.port).into(),
+                        None => (Ipv4Addr::from(remote.addr), remote.port).into(),
+                    };
+                    if !caller.permits_outbound(Transport::Tcp, remote) {
+                        let _ = push_tls_event(owner, TlsEvent::Error {
+                            msg: "network permission denied",
+                        });
+                        continue;
+                    }
                     let seq = TLS_CONN_SEQ.fetch_add(1, Ordering::Relaxed);
                     let dev_idx =
                         owner_device_index(owner).unwrap_or_else(crate::net::default_device_index);
@@ -531,10 +557,11 @@ fn tls_socket_tick_once() -> bool {
 
                     let mut conn = TlsConn {
                         user_owner: owner,
+                        caller,
                         net: Arc::new(net),
                         delivery: Delivery::new(),
                         tx: PendingSend::new(),
-                        open_pending: None,
+                        open_pending: Some(remote),
                         close_pending: false,
                         terminal: false,
                         explicit_timeouts: false,
@@ -549,11 +576,6 @@ fn tls_socket_tick_once() -> bool {
                         timeouts,
                     };
 
-                    let command = match remote_v6 {
-                        Some(remote) => vnet::Command::OpenTcpConnectV6 { remote },
-                        None => vnet::Command::OpenTcpConnect { remote },
-                    };
-                    conn.open_pending = Some(command);
                     conn.retry_commands();
                     conns.push(conn);
                 }

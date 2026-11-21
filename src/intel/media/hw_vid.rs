@@ -522,12 +522,14 @@ pub(crate) async fn run_prepared_trueosfs_ui4_video(
 pub(crate) async fn run_resolved_ui4_framed_video_playback(
     session: crate::ui4::VideoPlaybackSession,
     url: &str,
+    caller: crate::r::net::wall::Caller,
 ) -> Result<H264PlaybackReport, &'static str> {
-    run_resolved_ui4_framed_video_playback_with_referrer(session,url,None).await
+    run_resolved_ui4_framed_video_playback_with_referrer(session, url, None, caller).await
 }
 
 pub(crate) async fn run_resolved_ui4_framed_video_playback_with_referrer(
     session: crate::ui4::VideoPlaybackSession, url: &str, referrer: Option<&str>,
+    caller: crate::r::net::wall::Caller,
 ) -> Result<H264PlaybackReport, &'static str> {
     let report = run_media_url_playback(
         session,
@@ -539,6 +541,7 @@ pub(crate) async fn run_resolved_ui4_framed_video_playback_with_referrer(
         // Match the browser's kernel GET identity rather than the demo profile.
         Some(crate::r::net::https::DEFAULT_USER_AGENT),
         referrer,
+        caller,
     )
     .await?;
     if report.presented == 0 {
@@ -556,14 +559,15 @@ async fn run_media_url_playback(
     playback_path: &'static str,
     user_agent: Option<&str>,
     referrer: Option<&str>,
+    caller: crate::r::net::wall::Caller,
 ) -> Result<H264PlaybackReport, &'static str> {
     if !crate::intel::has_media_decode_engine() {
         return Err("media decode engine unavailable");
     }
     if url.split('?').next().unwrap_or(url).ends_with(".m3u8") {
-        return run_hls_url_playback(session, url, options, playback_path, user_agent, referrer).await;
+        return run_hls_url_playback(session, url, options, playback_path, user_agent, referrer, caller).await;
     }
-    run_mp4_url_playback(session, url, None, options, log_scope, playback_path, user_agent, referrer).await
+    run_mp4_url_playback(session, url, None, options, log_scope, playback_path, user_agent, referrer, caller).await
 }
 
 async fn run_mp4_url_playback(
@@ -575,9 +579,10 @@ async fn run_mp4_url_playback(
     playback_path: &'static str,
     user_agent: Option<&str>,
     referrer: Option<&str>,
+    caller: crate::r::net::wall::Caller,
 ) -> Result<H264PlaybackReport, &'static str> {
     let mut http =
-        http_mp4::HttpMp4Reader::open(session, url, indexed_length, user_agent, referrer).await?;
+        http_mp4::HttpMp4Reader::open(session, url, indexed_length, user_agent, referrer, caller).await?;
     crate::log_info!(target: "intel-media";
         "intel/hw_vid: {} demux accepted=1 container=mp4 codec=avc1 incremental=1\n", log_scope);
 
@@ -621,6 +626,7 @@ async fn h264_fetch_hls_bytes(
     max_bytes: usize,
     user_agent: Option<&str>,
     referrer: Option<&str>,
+    caller: crate::r::net::wall::Caller,
 ) -> Result<Vec<u8>, &'static str> {
     if !url.starts_with("https://") {
         return Err("HLS requires HTTPS");
@@ -634,6 +640,7 @@ async fn h264_fetch_hls_bytes(
         &cancellation,
         user_agent,
         referrer,
+        caller,
     );
     let mut fetch = core::pin::pin!(fetch);
     let watch = async {
@@ -666,12 +673,13 @@ async fn run_hls_url_playback(
     path: &'static str,
     user_agent: Option<&str>,
     referrer: Option<&str>,
+    caller: crate::r::net::wall::Caller,
 ) -> Result<H264PlaybackReport, &'static str> {
     let mut current = String::from(url);
     let mut segments = None;
     for _ in 0..3 {
         let bytes =
-            h264_fetch_hls_bytes(session, &current, super::hls::PLAYLIST_CAP, user_agent, referrer).await?;
+            h264_fetch_hls_bytes(session, &current, super::hls::PLAYLIST_CAP, user_agent, referrer, caller).await?;
         let text = core::str::from_utf8(&bytes).map_err(|_| "HLS playlist is not UTF-8")?;
         match super::hls::playlist(text)? {
             super::hls::Playlist::Variant(reference) => {
@@ -698,7 +706,7 @@ async fn run_hls_url_playback(
                 crate::log_info!(target: "intel-media";
                     "video/hls: prepared container=fragmented-mp4 single_resource=1 indexed_bytes={} incremental=1\n", length);
                 return run_mp4_url_playback(session, &media, Some(length), options,
-                    "website-hls-single-file-mp4", path, user_agent, referrer).await;
+                    "website-hls-single-file-mp4", path, user_agent, referrer, caller).await;
             }
         }
     }
@@ -717,6 +725,7 @@ async fn run_hls_url_playback(
         failed: false,
         user_agent: user_agent.map(String::from),
         referrer: referrer.map(String::from),
+        caller,
     };
     while reader.timing.is_empty() && reader.next_segment < reader.segments.len() {
         reader.load_segment().await?;
@@ -752,6 +761,7 @@ struct H264HlsNalReader {
     failed: bool,
     user_agent: Option<String>,
     referrer: Option<String>,
+    caller: crate::r::net::wall::Caller,
 }
 impl H264HlsNalReader {
     async fn load_segment(&mut self) -> Result<(), &'static str> {
@@ -765,6 +775,7 @@ impl H264HlsNalReader {
             super::hls::SEGMENT_CAP,
             self.user_agent.as_deref(),
             self.referrer.as_deref(),
+            self.caller,
         )
         .await?;
         let last = self.next_segment + 1 == self.segments.len();

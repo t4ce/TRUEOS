@@ -13,10 +13,13 @@ pub trait VendorAdapter {
     fn pop_rx(&mut self) -> Option<Vec<u8>>;
     fn transmit(&mut self, frame: &[u8]) -> Result<(), ()>;
 
-    fn transmit_with(&mut self, len: usize, fill: &mut dyn FnMut(&mut [u8])) -> Result<(), ()> {
+    fn transmit_with(
+        &mut self,
+        len: usize,
+        fill: &mut dyn FnMut(&mut [u8]) -> Result<(), ()>,
+    ) -> Result<(), ()> {
         let mut frame = crate::net::ring::alloc_packet_buf(len);
-        fill(&mut frame);
-        let result = self.transmit(&frame);
+        let result = fill(&mut frame).and_then(|()| self.transmit(&frame));
         crate::net::ring::recycle_packet_buf(frame);
         result
     }
@@ -111,7 +114,11 @@ impl<A: VendorAdapter> NetDevice for NetCore<A> {
         self.adapter.transmit(frame)
     }
 
-    fn transmit_with(&mut self, len: usize, fill: &mut dyn FnMut(&mut [u8])) -> Result<(), ()> {
+    fn transmit_with(
+        &mut self,
+        len: usize,
+        fill: &mut dyn FnMut(&mut [u8]) -> Result<(), ()>,
+    ) -> Result<(), ()> {
         self.adapter.transmit_with(len, fill)
     }
 

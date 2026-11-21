@@ -33,12 +33,15 @@ pub trait NetDevice {
     /// Transmit a raw Ethernet frame by filling storage owned by the device.
     ///
     /// Drivers with CPU-mapped TX DMA slots can override this to avoid an
-    /// intermediate frame allocation and copy. The default preserves existing
-    /// driver behavior through the shared packet pool.
-    fn transmit_with(&mut self, len: usize, fill: &mut dyn FnMut(&mut [u8])) -> Result<(), ()> {
+    /// intermediate frame allocation and copy. Submit the frame only after
+    /// `fill` succeeds.
+    fn transmit_with(
+        &mut self,
+        len: usize,
+        fill: &mut dyn FnMut(&mut [u8]) -> Result<(), ()>,
+    ) -> Result<(), ()> {
         let mut frame = crate::net::ring::alloc_packet_buf(len);
-        fill(&mut frame);
-        let result = self.transmit(&frame);
+        let result = fill(&mut frame).and_then(|()| self.transmit(&frame));
         crate::net::ring::recycle_packet_buf(frame);
         result
     }

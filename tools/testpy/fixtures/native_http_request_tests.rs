@@ -67,6 +67,14 @@ mod tests {
         assert_eq!(sink.publish_head(head()),Err(FS_ERR_NOT_FOUND));sink.finish(Ok(()));assert!(sink.shared.state.lock().body.is_empty());assert!(sink.shared.state.lock().head.is_none());assert_eq!(head_host(Owner::Kernel,id,&mut[]),FS_ERR_NOT_FOUND as isize);
         assert!(REGISTRY.lock().entries.contains_key(&id));producer_retired(&sink);assert!(!REGISTRY.lock().entries.contains_key(&id));sink.finish(Err(FS_ERR_IO));assert!(!REGISTRY.lock().entries.contains_key(&id));
     }
+    #[test] fn wall_rejects_blueprint_without_tcp_before_reserving_a_request_slot() {
+        reset();
+        let owner = Owner::Vm { id: 2, generation: 7 };
+        assert_eq!(start_host(owner, &frame()), FS_ERR_PERMISSION_DENIED);
+        let registry = REGISTRY.lock();
+        assert!(registry.entries.is_empty());
+        assert!(registry.pending.is_empty());
+    }
     #[test] fn owner_and_generation_isolation_for_every_operation() {
         reset();let owner=Owner::Vm{id:0,generation:7};let(id,sink)=start(owner);publish(&sink);ready(sink.push_body(b"safe")).unwrap();let mut out=[0;4];
         for foreign in [Owner::Kernel,Owner::Vm{id:1,generation:7},Owner::Vm{id:0,generation:6}] {assert_eq!(head_host(foreign,id,&mut[]),FS_ERR_NOT_FOUND as isize);assert_eq!(read_host(foreign,id,&mut out),FS_ERR_NOT_FOUND as isize);assert_eq!(discard_host(foreign,id),FS_ERR_NOT_FOUND);}

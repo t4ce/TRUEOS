@@ -3,17 +3,61 @@ use alloc::{string::String, vec::Vec};
 use spin::Mutex;
 use zeroize::{Zeroize, Zeroizing};
 
-const LIVE_CAP: usize = 10;
+pub(crate) const HISTORY_RECALL_CAP: usize = 10;
 struct Entry { account: u64, text: Zeroizing<String>, count: u64 }
 struct LiveHistory { entries: Vec<Entry>, generation: u64 }
 static LIVE: Mutex<LiveHistory> = Mutex::new(LiveHistory { entries: Vec::new(), generation: 0 });
+
+type SessionIdentity = (u64, u64);
+
+struct HistoryOwner {
+    frontend: u64,
+    scope: u8,
+    identity: SessionIdentity,
+}
+
+static OWNER: Mutex<Option<HistoryOwner>> = Mutex::new(None);
+
+pub(super) fn bind_verified_login(frontend: u64, scope: u8, identity: SessionIdentity) {
+    let mut owner = OWNER.lock();
+    if crate::crypt::authenticated_history_identity(scope) == Some(identity) {
+        *owner = Some(HistoryOwner { frontend, scope, identity });
+    }
+}
+
+fn owned_session(frontend: u64, scope: u8) -> Option<SessionIdentity> {
+    let owner = OWNER.lock();
+    let owner = owner.as_ref().filter(|owner| owner.frontend == frontend && owner.scope == scope)?;
+    crate::crypt::authenticated_history_identity(scope).filter(|identity| *identity == owner.identity)
+}
+
+/// Disk entries arrive newest first. Preserve commands entered while the
+/// reader was running and prepend only distinct older entries.
+pub(crate) fn restore_commands(account: u64, commands: Vec<Zeroizing<String>>) {
+    let mut live = LIVE.lock();
+    live.entries.retain(|entry| entry.account == account);
+    let available = HISTORY_RECALL_CAP.saturating_sub(live.entries.len());
+    if available == 0 {
+        return;
+    }
+    let older: Vec<_> = commands.into_iter()
+        .filter(|text| !live.entries.iter().any(|entry| entry.account == account && entry.text.as_str() == text.as_str()))
+        .take(available)
+        .map(|text| Entry { account, text, count: 1 })
+        .collect();
+    if !older.is_empty() {
+        live.entries.splice(..0, older.into_iter().rev());
+        live.generation = live.generation.wrapping_add(1);
+    }
+}
 
 pub(super) struct CommandHistory {
     pub(super) entries: Vec<String>,
     pub(super) cursor: Option<usize>,
     pub(super) draft: String,
     scope_id: u8,
-    session: Option<(u64, u64)>,
+    frontend: Option<u64>,
+    session: Option<SessionIdentity>,
     generation: u64,
     recording: bool,
 }
@@ -21,7 +65,7 @@ pub(super) struct CommandHistory {
 impl Default for CommandHistory {
     fn default() -> Self {
         Self { entries: Vec::new(), cursor: None, draft: String::new(), scope_id: super::matrix_target::TRANSPORT_LOCAL_SCOPE,
-            session: None, generation: 0, recording: true }
+            frontend: None, session: None, generation: 0, recording: true }
     }
 }
 
@@ -46,6 +90,12 @@ fn redacted(line: &str) -> String {
 }
 
 impl CommandHistory {
+    pub(super) fn for_frontend(frontend: u64) -> Self {
+        let mut history = Self::default();
+        history.frontend = Some(frontend);
+        history
+    }
+
     pub fn set_scope(&mut self, scope_id: u8) {
         self.scope_id = scope_id;
         self.session = None;
@@ -63,7 +113,7 @@ impl CommandHistory {
     }
 
     pub fn sync(&mut self) -> bool {
-        let session = crate::crypt::authenticated_history_identity(self.scope_id);
+        let session = self.frontend.and_then(|frontend| owned_session(frontend, self.scope_id));
         let changed = session != self.session;
         if changed {
             self.wipe();
@@ -87,23 +137,23 @@ impl CommandHistory {
         // Development SSH and UI4 need recall even without a Cry login.
         // These entries stay with this frontend and never reach the writer
         // or the account-shared cache. Authentication changes wipe them.
-        let Some((account, _)) = self.session else {
+        let Some(identity @ (account, _)) = self.session else {
             if self.entries.iter().any(|entry| entry == text.as_str()) { return; }
-            if self.entries.len() == LIVE_CAP {
+            if self.entries.len() == HISTORY_RECALL_CAP {
                 let mut oldest = self.entries.remove(0);
                 oldest.zeroize();
             }
             self.entries.push(String::from(text.as_str()));
             return;
         };
-        crate::user_input_record::capture(self.scope_id, &text);
+        crate::user_input_record::capture(self.scope_id, identity, &text);
         {
             let mut live = LIVE.lock();
             if let Some(entry) = live.entries.iter_mut().find(|entry| entry.account == account && entry.text.as_str() == text.as_str()) {
                 entry.count = entry.count.saturating_add(1);
                 return;
             }
-            if live.entries.len() == LIVE_CAP { live.entries.remove(0); }
+            if live.entries.len() == HISTORY_RECALL_CAP { live.entries.remove(0); }
             live.entries.push(Entry { account, text, count: 1 });
             live.generation = live.generation.wrapping_add(1);
         }

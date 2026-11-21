@@ -62,7 +62,12 @@ pub extern "Rust" fn trueos_platform_dns_resolve_ipv4(host: &str) -> Result<[u8;
     resolve_ipv4_for_sync_abi(host).map_err(|error| dns_resolve_error_code(error) as u32)
 }
 
-pub fn resolve_ipv4_for_sync_abi_host(host: &str) -> Result<[u8; 4], DnsResolveError> {
+pub fn resolve_ipv4_for_sync_abi_host(host: &str) -> Result<[u8; 4], DnsResolveError>{
+    use super::wall::Caller;
+
+    if !Caller::current().is_some_and(Caller::permits_dns) {
+        return Err(DnsResolveError::Runtime);
+    }
     let profile = crate::r::net::NetProfile::default();
     let dev_idx = profile
         .resolve_device_index()

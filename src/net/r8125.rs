@@ -2119,10 +2119,13 @@ impl R8125Adapter {
         (opts1 & DESC_OWN) == 0
     }
 
-    fn transmit_hw_with(&mut self, len: usize, fill: &mut dyn FnMut(&mut [u8])) -> Result<(), ()> {
+    fn transmit_hw_with(
+        &mut self,
+        len: usize,
+        fill: &mut dyn FnMut(&mut [u8]) -> Result<(), ()>,
+    ) -> Result<(), ()> {
         if len == 0 {
-            fill(&mut []);
-            return Ok(());
+            return fill(&mut []);
         }
         if len > TX_BUF_SIZE {
             return Err(());
@@ -2223,7 +2226,7 @@ impl R8125Adapter {
         }
 
         let tx_buffer = unsafe { core::slice::from_raw_parts_mut(self.tx_bufs[idx].virt(), len) };
-        fill(tx_buffer);
+        fill(tx_buffer)?;
 
         Self::maybe_clflush(self.tx_bufs[idx].virt() as *const u8, len, EXP_R8125_CLFLUSH_TX_BUF);
 
@@ -2321,6 +2324,7 @@ impl R8125Adapter {
         let len = min(frame.len(), TX_BUF_SIZE);
         let mut fill = |tx_buffer: &mut [u8]| {
             tx_buffer.copy_from_slice(&frame[..len]);
+            Ok(())
         };
         self.transmit_hw_with(len, &mut fill)
     }
@@ -2343,7 +2347,11 @@ impl VendorAdapter for R8125Adapter {
         self.transmit_hw(frame)
     }
 
-    fn transmit_with(&mut self, len: usize, fill: &mut dyn FnMut(&mut [u8])) -> Result<(), ()> {
+    fn transmit_with(
+        &mut self,
+        len: usize,
+        fill: &mut dyn FnMut(&mut [u8]) -> Result<(), ()>,
+    ) -> Result<(), ()> {
         self.transmit_hw_with(len, fill)
     }
 

@@ -122,6 +122,7 @@ impl WssConnection {
         let handshake_buffer = Vec::from(&frame_buf[..len]);
 
         cmds.push(TlsCommand::OpenTcpConnect {
+            caller: crate::r::net::wall::Caller::Kernel,
             remote: vnet::EndpointV4::new(api_ip, port),
             server_name: host.clone(),
             cfg,

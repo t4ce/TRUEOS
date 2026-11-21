@@ -11,7 +11,9 @@ use trueos_time::{Duration, Timer};
 use v::bp_abi::TrueosUi4HullImageInfoV1 as ImageInfo;
 
 use super::hull_image_policy::{self as policy, ERR_INVALID, ERR_TOO_LARGE, MAX_ENCODED_BYTES};
+use crate::r::cabi_codes::FS_ERR_PERMISSION_DENIED;
 use crate::r::fs::request_broker as fs;
+use crate::r::net::wall::Caller;
 use crate::ui4::blueprint_ui4::hull_image_api as ui;
 
 const ERR_NOT_FOUND: i32 = -3;
@@ -37,6 +39,7 @@ struct Life {
     run: u64,
     generation: u64,
     id: u32,
+    caller: Caller,
     cancelled: AtomicBool,
     fetch: crate::r::net::https::MediaFetchCancellation,
 }
@@ -200,8 +203,13 @@ fn request_inner(
     generation: u64,
 ) -> Result<i32, i32> {
     let incarnation = ui::authenticate_window(owner, window)?;
-    let run = crate::hv::vm_run_generation(owner as u8).ok_or(ERR_NOT_FOUND)?;
+    let caller = Caller::capture(Some(owner as u8)).ok_or(FS_ERR_PERMISSION_DENIED)?;
+    let Caller::Blueprint { generation: run, .. } = caller else {
+        return Err(FS_ERR_PERMISSION_DENIED);
+    };
     let url = policy::canonical_url(url)?;
+    crate::r::net::https::authorize_url_for_caller(&url, caller)
+        .map_err(|_| FS_ERR_PERMISSION_DENIED)?;
     let (width, height, reserved_bytes) = policy::target_extent(width, height)?;
     // Local project assets change at stable URLs on every Save.
     let cache = if url.starts_with("http://127.0.0.1:") { None } else { cache_scope(cache_root, page_host, &url)? };
@@ -266,6 +274,7 @@ fn request_inner(
         run,
         generation,
         id,
+        caller,
         cancelled: AtomicBool::new(false),
         fetch: crate::r::net::https::MediaFetchCancellation::new(),
     });
@@ -433,6 +442,27 @@ fn asset_failure(job: &Job, stage: &str, code: i32, reason: impl core::fmt::Disp
     code
 }
 
+async fn fetch_encoded(job: &Job, url: &str, stage: &str) -> Result<Vec<u8>, i32> {
+    use crate::r::net::https::{FIREWALL_DENIED, get_image_bytes_shared};
+
+    get_image_bytes_shared(
+        url,
+        FETCH_TIMEOUT_MS,
+        MAX_ENCODED_BYTES,
+        &job.life.fetch,
+        job.life.caller,
+    )
+    .await
+    .map_err(|error| {
+        let code = if error == FIREWALL_DENIED {
+            FS_ERR_PERMISSION_DENIED
+        } else {
+            ERR_FAILED
+        };
+        asset_failure(job, stage, code, error)
+    })
+}
+
 async fn process(job: &Job) -> Result<(), i32> {
     let (encoded, svg_cache_key) = encoded_source(job).await?;
     if !job.life.live() {
@@ -577,14 +607,7 @@ async fn encoded_source(job: &Job) -> Result<(Vec<u8>, Option<String>), i32> {
         .and_then(|cache| read_cache(cache, &job.url));
     let encoded = match cached {
         Some(bytes) => bytes,
-        None => crate::r::net::https::get_image_bytes_shared(
-            &job.url,
-            FETCH_TIMEOUT_MS,
-            MAX_ENCODED_BYTES,
-            &job.life.fetch,
-        )
-        .await
-        .map_err(|error| asset_failure(job, "fetch", ERR_FAILED, error))?,
+        None => fetch_encoded(job, &job.url, "fetch").await?,
     };
     if !job.life.live() {
         return Err(ERR_NOT_FOUND);
@@ -611,14 +634,7 @@ async fn converted_svg(job: &Job) -> Result<(Vec<u8>, Option<String>), i32> {
     if !job.life.live() {
         return Err(ERR_NOT_FOUND);
     }
-    let bytes = crate::r::net::https::get_image_bytes_shared(
-        &url,
-        FETCH_TIMEOUT_MS,
-        MAX_ENCODED_BYTES,
-        &job.life.fetch,
-    )
-    .await
-    .map_err(|error| asset_failure(job, "svg-fetch", ERR_FAILED, error))?;
+    let bytes = fetch_encoded(job, &url, "svg-fetch").await?;
     if !job.life.live() {
         return Err(ERR_NOT_FOUND);
     }

@@ -93,10 +93,22 @@ impl LeaseRecords {
         params: &trueos_fs::FsParams,
         path: &str,
     ) -> Result<(), block::Error> {
-        preflight_path(actor, path)?;
         if actor == Actor::Host {
             return Ok(());
         }
+        self.find_node(actor, disk, params, path, true).await?;
+        authorize_keys(actor, &[])
+    }
+
+    async fn find_node(
+        &mut self,
+        actor: Actor,
+        disk: block::DeviceHandle,
+        params: &trueos_fs::FsParams,
+        path: &str,
+        require_ancestors: bool,
+    ) -> Result<Option<trueos_fs::NodeRecordRef>, block::Error> {
+        preflight_path(actor, path)?;
         let path = canonical_path(path)?;
         for end in path
             .bytes()
@@ -114,12 +126,15 @@ impl LeaseRecords {
                     }
                     // Do not inspect descendants of an already denied root.
                     authorize_keys(actor, &[node.record_key])?;
+                    if end == path.len() {
+                        return Ok(Some(node));
+                    }
                 }
-                None if end == path.len() => {}
+                None if end == path.len() || !require_ancestors => return Ok(None),
                 None => return Err(block::Error::NotReady),
             }
         }
-        authorize_keys(actor, &[])
+        Ok(None)
     }
 }
 
@@ -339,6 +354,21 @@ pub(crate) async fn node_info(
             content_type: node.content_type,
             record_key: node.record_key,
         }))
+}
+
+/// Inspect an archive destination before its directories have been created.
+/// A missing ancestor leaves nothing to inspect beneath it.
+pub(crate) async fn restore_destination_content_type(
+    actor: Actor,
+    disk: block::DeviceHandle,
+    path: &str,
+) -> Result<Option<ContentTypeId>, block::Error> {
+    preflight_path(actor, path)?;
+    let (_activity, _lease, params) = lease(disk).await?;
+    Ok(LeaseRecords::default()
+        .find_node(actor, disk, &params, path, false)
+        .await?
+        .map(|node| node.content_type))
 }
 
 pub(crate) async fn read(

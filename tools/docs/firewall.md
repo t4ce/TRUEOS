@@ -1,8 +1,31 @@
-# SCW firewall funnel
+# TRUEOS firewall
+
+[`trueos-wall`](../../crates/trueos-wall) compiles a default-deny policy into
+the kernel. The build reads the Buildins catalog and Blueprint `apps.json`.
+Catalog membership alone grants no socket access.
+
+The [static profile](../../crates/trueos-wall/src/profile.rs) lists exact TCP
+and UDP service ports by direction and application. Add a named rule to
+`EXTRA_BLUEPRINTS` for a Blueprint outside `apps.json`, then rebuild the
+kernel. Network listeners can also serve localhost. Local-only entries stay
+private to the host.
+
+The kernel checks a Blueprint's launch identity before creating sockets or
+opening endpoints. It also carries that identity through network brokers and
+checks loopback delivery. Every active NIC uses the same Ethernet ingress and
+egress rules. Return traffic uses bounded flow state, so client source ports
+stay closed to unsolicited traffic. DHCP, ARP and IP control traffic have
+their own rules in the [packet filter](../../crates/trueos-wall/src/packet.rs).
+
+IDEdit's HTML preview uses loopback TCP 42128 on TRUEOS. Applications that
+require arbitrary peer or listener ports are limited to the ports in the
+compiled profile.
+
+## Original design review
 
 SmallChinaWall (SCW) is the working name for this firewall idea. This document
-persists the design and the focused source review from 2026-11-12. SCW is not
-implemented; the enforcement points and rules below are proposals.
+records the design and focused source review from 2026-11-12. The remaining
+sections describe the network stack and proposals at the time of that review.
 
 The proposed firewall has one kernel policy, enforced at two points: socket
 operations and local delivery inside the network service, and packets crossing
@@ -171,5 +194,5 @@ in [`adapter.rs`](../../src/net/adapter.rs),
 2. Enforce socket admission and local-delivery rules inside `NetService`.
 3. Enforce stateful packet rules at every NIC, covering both TX routes and RX.
 
-Implementation, policy-management UI, persistence format and deployment remain
-future work. This document adds no firewall enforcement or runtime behavior.
+The review left implementation, policy management, persistence and deployment
+as follow-up work.

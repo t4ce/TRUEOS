@@ -534,6 +534,7 @@ async fn dns_tls_exchange_v4(
         idle_ms: (timeout_ms as u32).max(1000),
     };
     cmds.push(TlsCommand::OpenTcpConnect {
+        caller: crate::r::net::wall::Caller::Kernel,
         remote: vnet::EndpointV4 { addr, port },
         server_name: String::from(server_name),
         cfg,

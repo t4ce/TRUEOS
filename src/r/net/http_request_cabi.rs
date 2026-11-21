@@ -17,6 +17,8 @@ use core::{
 use spin::Mutex;
 use v::vnetfs::http::{MAX_BODY_READ_BYTES, MAX_FRAME_BYTES, RequestOwned, ResponseHead, wire};
 
+use super::wall::{Caller, Transport};
+
 const MAX_OPERATIONS: usize = 64;
 const MAX_OPERATIONS_PER_OWNER: usize = 32;
 const BODY_WINDOW: usize = 64 * 1024;
@@ -28,6 +30,9 @@ pub(crate) enum Owner {
 }
 pub(crate) fn owner_for_vm(id: u8) -> Option<Owner> {
     crate::hv::vm_run_generation(id).map(|generation| Owner::Vm { id, generation })
+}
+fn current_owner() -> Option<Owner> {
+    super::wall::current_vm().map_or(Some(Owner::Kernel), owner_for_vm)
 }
 fn owner_current(owner: Owner) -> bool {
     match owner {
@@ -46,6 +51,7 @@ struct State {
 struct Shared {
     id: u32,
     owner: Owner,
+    caller: Caller,
     state: Mutex<State>,
     changed: crate::wait::WaitQueue,
 }
@@ -86,6 +92,10 @@ pub struct ResponseSink {
     shared: Arc<Shared>,
 }
 impl ResponseSink {
+    pub(super) fn caller(&self) -> Caller {
+        self.shared.caller
+    }
+
     pub fn is_cancelled(&self) -> bool {
         self.shared.state.lock().cancelled || !owner_current(self.shared.owner)
     }
@@ -182,6 +192,16 @@ pub(crate) fn start_host(owner: Owner, frame: &[u8]) -> i32 {
             Ok(value) => value,
             Err(code) => return code,
         };
+        let vm = match owner {
+            Owner::Kernel => None,
+            Owner::Vm { id, .. } => Some(id),
+        };
+        let Some(caller) = Caller::capture(vm) else {
+            return FS_ERR_PERMISSION_DENIED;
+        };
+        if !caller.permits_socket(Transport::Tcp) {
+            return FS_ERR_PERMISSION_DENIED;
+        }
         let mut registry = REGISTRY.lock();
         if !owner_current(owner) || !registry.owner_open(owner) {
             return FS_ERR_NOT_FOUND;
@@ -211,6 +231,7 @@ pub(crate) fn start_host(owner: Owner, frame: &[u8]) -> i32 {
         let shared = Arc::new(Shared {
             id,
             owner,
+            caller,
             state: Mutex::new(State {
                 head: None,
                 body,
@@ -487,7 +508,7 @@ pub unsafe extern "C" fn trueos_cabi_net_http_request_start_v1(
             &mut [],
         ) as i32
     } else {
-        start_host(Owner::Kernel, bytes)
+        current_owner().map_or(FS_ERR_NOT_FOUND, |owner| start_host(owner, bytes))
     }
 }
 /// # Safety
@@ -513,7 +534,7 @@ pub unsafe extern "C" fn trueos_cabi_net_http_request_head_v1(
             bytes,
         )
     } else {
-        head_host(Owner::Kernel, id, bytes)
+        current_owner().map_or(FS_ERR_NOT_FOUND as isize, |owner| head_host(owner, id, bytes))
     }
 }
 /// # Safety
@@ -539,7 +560,7 @@ pub unsafe extern "C" fn trueos_cabi_net_http_request_read_v1(
             bytes,
         )
     } else {
-        read_host(Owner::Kernel, id, bytes)
+        current_owner().map_or(FS_ERR_NOT_FOUND as isize, |owner| read_host(owner, id, bytes))
     }
 }
 #[unsafe(no_mangle)]
@@ -553,6 +574,6 @@ pub extern "C" fn trueos_cabi_net_http_request_discard_v1(id: u32) -> i32 {
             &mut [],
         ) as i32
     } else {
-        discard_host(Owner::Kernel, id)
+        current_owner().map_or(FS_ERR_NOT_FOUND, |owner| discard_host(owner, id))
     }
 }

@@ -43,6 +43,18 @@ mod workers{pub struct Worker;pub fn pick_background_spawner()->Option<Worker>{S
 mod shell3{#[derive(Clone)]pub struct MatrixTarget;pub fn matrix_target_print_line(_:&MatrixTarget,_:&str){}}
 mod hv{pub fn with_guest_broker_context<T>(_:u8,f:impl FnOnce()->T)->T{f()}pub fn blueprint_console_target(_:u8)->Option<crate::shell3::MatrixTarget>{None}}
 mod r{
+ pub mod cabi_codes{pub const FS_ERR_PERMISSION_DENIED:i32=-19;}
+ pub mod net{
+  pub mod wall{
+   #[derive(Clone,Copy)]pub enum Caller{Kernel,Denied}
+   impl Caller{pub fn from_actor(_:crate::r::fs::trueosfs::authorized::Actor)->Option<Self>{Some(Self::Kernel)}}
+  }
+  pub mod https{
+   pub fn authorize_url_for_caller(_:&str,caller:super::wall::Caller)->Result<(),()>{
+    match caller{super::wall::Caller::Kernel=>Ok(()),super::wall::Caller::Denied=>Err(())}
+   }
+  }
+ }
  pub mod fs{pub mod trueosfs{pub mod authorized{
   #[derive(Clone,Copy)]pub enum Actor{Public,Vm(u8,u64)}
   pub fn actor_for_vm(vm:u8)->Result<Actor,()>{Ok(Actor::Vm(vm,1))}
@@ -55,8 +67,8 @@ mod intel{pub mod media{pub mod hw_vid{
  pub struct Asset;impl Asset{pub fn visible_extent(&self)->(u32,u32){(1280,720)}}
  pub async fn prepare_trueosfs_ui4_video(_:crate::ui4::VideoPlaybackSession,_:&str,_:crate::r::fs::trueosfs::authorized::Actor)->Result<Asset,&'static str>{Ok(Asset)}
  pub async fn run_prepared_trueosfs_ui4_video(_:crate::ui4::VideoPlaybackSession,_:&str,_:Asset)->Result<(),&'static str>{Ok(())}
- pub async fn run_resolved_ui4_framed_video_playback(_:crate::ui4::VideoPlaybackSession,_:&str)->Result<(),&'static str>{Ok(())}
- pub async fn run_resolved_ui4_framed_video_playback_with_referrer(_:crate::ui4::VideoPlaybackSession,url:&str,referrer:Option<&str>)->Result<(),&'static str>{
+ pub async fn run_resolved_ui4_framed_video_playback(_:crate::ui4::VideoPlaybackSession,_:&str,_:crate::r::net::wall::Caller)->Result<(),&'static str>{Ok(())}
+ pub async fn run_resolved_ui4_framed_video_playback_with_referrer(_:crate::ui4::VideoPlaybackSession,url:&str,referrer:Option<&str>,_:crate::r::net::wall::Caller)->Result<(),&'static str>{
   crate::PLAYBACK_SOURCES.lock().push((url.into(),referrer.map(String::from)));
   match *crate::PLAYBACK_FAILURE.lock(){Some(error)=>Err(error),None=>Ok(())}
  }
@@ -69,7 +81,7 @@ fn playback_task(_:Source,_:Session,_:Option<crate::shell3::MatrixTarget>,_:crat
 #[cfg(test)]mod tests{
  use super::*;use crate::{CANCELLED,STOPPED};
  fn reset(){BROWSERS.lock().clear();NEXT_REQUEST.store(1,Ordering::Relaxed);CANCELLED.store(0,Ordering::SeqCst);STOPPED.store(0,Ordering::SeqCst);*crate::PLAYBACK_FAILURE.lock()=None;crate::PLAYBACK_SOURCES.lock().clear();crate::LOG_LINES.lock().clear();}
- fn request(owner:u32)->u32{let id=browser_request(owner,b"https://example.test/video.mp4");assert!(id>0);id as u32}
+ fn request(owner:u32)->u32{let id=browser_request(owner,b"https://example.test/video.mp4",Caller::Kernel);assert!(id>0);id as u32}
  fn candidate(owner:u32,active:Option<u8>,pending:u8){let mut states=BROWSERS.lock();let s=states.iter_mut().find(|s|s.owner==owner).unwrap();s.active=active.map(VideoPlaybackSession);s.pending=Some(VideoPlaybackSession(pending));s.queued=None;}
  #[test]fn switches_only_after_successful_first_publication(){
   reset();let id=request(1);candidate(1,Some(1),2);
@@ -92,7 +104,9 @@ fn playback_task(_:Source,_:Session,_:Option<crate::shell3::MatrixTarget>,_:crat
   assert_eq!(BROWSERS.lock()[0].active,Some(VideoPlaybackSession(2)));
  }
  #[test]fn source_validation_and_pending_requests_are_bounded(){
-  reset();for bad in ["http://example.test/video.mp4","https://","https://user@example.test/a","https://example.test/a\n"]{assert!(browser_request(1,bad.as_bytes())<0);}
+  reset();for bad in ["http://example.test/video.mp4","https://","https://user@example.test/a","https://example.test/a\n"]{assert!(browser_request(1,bad.as_bytes(),Caller::Kernel)<0);}
+  assert_eq!(browser_request(1,b"https://example.test/video.mp4",Caller::Denied),-19);
+  assert!(BROWSERS.lock().is_empty());
   for _ in 0..300{request(1);}assert_eq!(BROWSERS.lock().len(),1);assert!(BROWSERS.lock()[0].queued.is_some());
  }
  fn finish_immediate(future:impl core::future::Future<Output=()>){
@@ -103,7 +117,7 @@ fn playback_task(_:Source,_:Session,_:Option<crate::shell3::MatrixTarget>,_:crat
  #[test]fn native_fetch_or_container_failure_reaches_browser_status_and_keeps_old_frame(){
   for error in ["online media fetch failed","HLS encrypted, fragmented or discontinuous stream unsupported"]{
    reset();let id=request(1);candidate(1,Some(1),2);*crate::PLAYBACK_FAILURE.lock()=Some(error);
-   finish_immediate(playback_body(Source::Browser(browser_source(b"https://cdn.example.test/video.mp4\0https://page.example.test/watch").unwrap()),Session(VideoPlaybackSession(2)),None,crate::r::fs::trueosfs::authorized::Actor::Public));
+   finish_immediate(playback_body(Source::Browser(browser_source(b"https://cdn.example.test/video.mp4\0https://page.example.test/watch").unwrap(),Caller::Kernel),Session(VideoPlaybackSession(2)),None,crate::r::fs::trueosfs::authorized::Actor::Public));
    assert_eq!(browser_status(1,id),-2);
    assert_eq!(BROWSERS.lock()[0].pending,None);
    assert_eq!(BROWSERS.lock()[0].active,Some(VideoPlaybackSession(1)));
@@ -114,9 +128,9 @@ fn playback_task(_:Source,_:Session,_:Option<crate::shell3::MatrixTarget>,_:crat
  }
  #[test]fn browser_referrer_is_validated_without_modifying_media_url(){
   reset();
-  for bad in ["https://cdn.example.test/video.mp4\0http://page.example.test/","https://cdn.example.test/video.mp4\0https://page.example.test/#fragment","https://cdn.example.test/video.mp4\0https://page.example.test/\0extra"]{assert!(browser_request(1,bad.as_bytes())<0);}
-  assert!(browser_request(1,b"https://cdn.example.test/video.mp4?signature=unchanged\0https://page.example.test/watch")>0);
-  let states=BROWSERS.lock();let source=states[0].queued.as_ref().unwrap();
+  for bad in ["https://cdn.example.test/video.mp4\0http://page.example.test/","https://cdn.example.test/video.mp4\0https://page.example.test/#fragment","https://cdn.example.test/video.mp4\0https://page.example.test/\0extra"]{assert!(browser_request(1,bad.as_bytes(),Caller::Kernel)<0);}
+  assert!(browser_request(1,b"https://cdn.example.test/video.mp4?signature=unchanged\0https://page.example.test/watch",Caller::Kernel)>0);
+  let states=BROWSERS.lock();let (source,_)=states[0].queued.as_ref().unwrap();
   assert_eq!(source.url,"https://cdn.example.test/video.mp4?signature=unchanged");
   assert_eq!(source.referrer.as_deref(),Some("https://page.example.test/watch"));
  }

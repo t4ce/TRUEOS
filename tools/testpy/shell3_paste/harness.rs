@@ -32,7 +32,7 @@ pub struct MouseOptions { pub tracking: MouseTracking, pub encoding: MouseEncodi
 
 mod crypt { pub fn authenticated_history_identity(_: u8) -> Option<(u64, u64)> { None } }
 mod chronos { pub fn monotonic_nanos() -> u64 { 0 } }
-mod user_input_record { pub fn capture(_: u8, _: &str) { panic!("paste recorded as keyboard history"); } }
+mod user_input_record { pub fn capture(_: u8, _: (u64, u64), _: &str) { panic!("paste recorded as keyboard history"); } }
 mod r {
     pub mod keyboard {
         pub const KEYBOARD_OUTPUT_KIND_KEY: u8 = 1;

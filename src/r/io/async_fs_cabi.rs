@@ -1241,7 +1241,7 @@ async fn process(request: &Request) -> OperationState {
             return state;
         }
         if path.starts_with(crate::r::services::hull_download_service::PREFIX) {
-            return match crate::r::services::hull_download_service::read_for_owner(request.owner, path) {
+            return match crate::r::services::hull_download_service::read_for_owner(request.owner, actor, path) {
                 Ok(bytes) => OperationState::Read(bytes), Err(code) => OperationState::Failed(code),
             };
         }
@@ -1249,8 +1249,14 @@ async fn process(request: &Request) -> OperationState {
             if url.len() > 4096 || url.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
                 return OperationState::Failed(FS_ERR_BAD_PARAM);
             }
-            return match crate::surfer::html_shack::probe_navigation_via_pool(url).await {
+            let Some(caller) = crate::r::net::wall::Caller::from_actor(actor) else {
+                return OperationState::Failed(FS_ERR_PERMISSION_DENIED);
+            };
+            return match crate::surfer::html_shack::probe_navigation_via_pool(url, caller).await {
                 Ok(bytes) => OperationState::Read(bytes),
+                Err(error) if error == crate::r::net::https::FIREWALL_DENIED => {
+                    OperationState::Failed(FS_ERR_PERMISSION_DENIED)
+                }
                 Err(error) => {
                     crate::log!("hull-navigation: probe failed: {}: {}\n", url, error);
                     OperationState::Failed(FS_ERR_IO)
@@ -1260,7 +1266,7 @@ async fn process(request: &Request) -> OperationState {
     }
     if let RequestKind::Write { path, bytes, .. } = &request.kind {
         if path.starts_with(crate::r::services::hull_download_service::PREFIX) {
-            return match crate::r::services::hull_download_service::write_for_owner(request.owner, path, bytes) {
+            return match crate::r::services::hull_download_service::write_for_owner(request.owner, actor, path, bytes) {
                 Ok(()) => OperationState::Unit, Err(code) => OperationState::Failed(code),
             };
         }

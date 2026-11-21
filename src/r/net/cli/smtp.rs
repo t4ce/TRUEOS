@@ -1,12 +1,14 @@
 extern crate alloc;
 
 use alloc::{format, string::String, vec::Vec};
+use core::net::{Ipv4Addr, SocketAddr};
 
 use trueos_time::{Duration, Instant, Timer};
-use v::vnet::{Command, EndpointV4, Event, NetHandle, SocketKind};
+use v::vnet::{self, Command, Event, NetHandle, SocketKind};
 
 use crate::net::tls::{KernelTlsRng, TlsClient, TlsClientConfig, TlsRoots, TlsTime};
 use crate::r::net::dns::{self, DnsConfig};
+use crate::r::net::wall::{Caller, Transport};
 use crate::r::net::{NetProfile, VNet};
 
 pub const SMTP_HOST: &str = crate::allports::mail::SMTP_HOST;
@@ -15,6 +17,7 @@ pub const SMTP_EHLO_DOMAIN: &str = crate::allports::mail::SMTP_EHLO_DOMAIN;
 
 #[derive(Debug)]
 pub enum SmtpError {
+    PermissionDenied,
     DnsFailed,
     ConnectFailed,
     Timeout,
@@ -44,6 +47,7 @@ static KERNEL_TIME: KernelTime = KernelTime;
 
 pub struct SmtpClient {
     net: VNet,
+    caller: Caller,
     handle: NetHandle,
     rx: Vec<u8>,
     closed: bool,
@@ -51,14 +55,8 @@ pub struct SmtpClient {
 }
 
 impl SmtpClient {
-    pub async fn connect(timeout_ms: u32) -> Result<Self, SmtpError> {
-        Self::connect_with_profile(NetProfile::default(), timeout_ms).await
-    }
-
-    pub async fn connect_with_profile(
-        profile: NetProfile,
-        timeout_ms: u32,
-    ) -> Result<Self, SmtpError> {
+    pub(crate) async fn connect(caller: Caller, timeout_ms: u32) -> Result<Self, SmtpError> {
+        let profile = NetProfile::default();
         let dev_idx = profile
             .resolve_device_index()
             .ok_or(SmtpError::ConnectFailed)?;
@@ -66,11 +64,13 @@ impl SmtpClient {
             .await
             .map_err(|_| SmtpError::DnsFailed)?;
 
+        let remote = SocketAddr::from((Ipv4Addr::from(ip), SMTP_PORT));
+        if !caller.permits_outbound(Transport::Tcp, remote) {
+            return Err(SmtpError::PermissionDenied);
+        }
         let net = VNet::open_with_profile(profile).ok_or(SmtpError::ConnectFailed)?;
-        net.submit(Command::OpenTcpConnect {
-            remote: EndpointV4::new(ip, SMTP_PORT),
-        })
-        .map_err(|_| SmtpError::ConnectFailed)?;
+        net.submit_tcp_connect_for_caller(None, remote, caller)
+            .map_err(|_| SmtpError::ConnectFailed)?;
 
         let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
         let mut handle: Option<NetHandle> = None;
@@ -102,6 +102,7 @@ impl SmtpClient {
 
         let mut client = Self {
             net,
+            caller,
             handle: handle.ok_or(SmtpError::ConnectFailed)?,
             rx,
             closed: false,
@@ -223,9 +224,7 @@ impl SmtpClient {
 
         if !self.closed {
             self.net
-                .submit(Command::Close {
-                    handle: self.handle,
-                })
+                .submit_for_caller(Command::Close { handle: self.handle }, self.caller)
                 .map_err(|_| SmtpError::Io)?;
             self.closed = true;
         }
@@ -305,10 +304,7 @@ impl SmtpClient {
         }
 
         if self.tls.is_none() {
-            self.net
-                .send_tcp_all(self.handle, bytes)
-                .map_err(|_| SmtpError::Io)?;
-            return Ok(());
+            return self.send_transport(bytes);
         }
 
         // Write plaintext into TLS and flush produced ciphertext over TCP.
@@ -369,9 +365,16 @@ impl SmtpClient {
             return Ok(());
         }
 
-        self.net
-            .send_tcp_all(self.handle, &ciphertext)
-            .map_err(|_| SmtpError::Io)
+        self.send_transport(&ciphertext)
+    }
+
+    fn send_transport(&self, bytes: &[u8]) -> Result<(), SmtpError> {
+        for chunk in bytes.chunks(vnet::MAX_MSG) {
+            self.net
+                .try_send_tcp_chunk_for_caller(self.handle, chunk, self.caller)
+                .map_err(|_| SmtpError::Io)?;
+        }
+        Ok(())
     }
 }
 

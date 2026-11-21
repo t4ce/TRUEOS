@@ -28,6 +28,7 @@ static APP_DB: Mutex<Option<Database>> = Mutex::new(None);
 // Only the kernel's embedded seed may approve a controller. Runtime AppDB
 // downloads can replace executable bytes, but cannot add or change these roles.
 static REMOTE_INPUT_CONTROLLERS: Once<Vec<(String, [u8; 32])>> = Once::new();
+static BUILDIN_DIGESTS: Once<Vec<(String, [u8; 32])>> = Once::new();
 const BLUEPRINT_CAP_REMOTE_INPUT_CONTROLLER: u16 = 1 << 12;
 
 fn declares_remote_input_controller(bytes: &[u8]) -> bool {
@@ -46,6 +47,14 @@ pub(crate) fn is_remote_input_controller(archive: &str, bytes: &[u8]) -> bool {
     };
     let actual: [u8; 32] = Sha256::digest(bytes).into();
     *approved == actual
+}
+
+pub(crate) fn is_seeded_buildin(archive: &str, bytes: &[u8]) -> bool {
+    BUILDIN_DIGESTS.get().is_some_and(|entries| {
+        entries.iter().any(|(name, digest)| {
+            archive == name && *digest == <[u8; 32]>::from(Sha256::digest(bytes))
+        })
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -111,7 +120,7 @@ pub(crate) fn init_bsp() -> Result<usize, String> {
             .commit()
             .map_err(|err| alloc::format!("commit empty app.db initialization: {err}"))?;
     }
-    let (count, controllers) = {
+    let (count, controllers, buildins) = {
         let read = database
             .begin_read()
             .map_err(|err| alloc::format!("begin app.db seed read: {err}"))?;
@@ -142,13 +151,16 @@ pub(crate) fn init_bsp() -> Result<usize, String> {
             ));
         }
         let mut controllers = Vec::new();
+        let mut buildins = Vec::new();
         for row in apps.iter().map_err(|err| alloc::format!("iterate seeded roles: {err}"))? {
             let (archive, bytes) = row.map_err(|err| alloc::format!("read seeded role: {err}"))?;
+            let digest = Sha256::digest(bytes.value()).into();
             if declares_remote_input_controller(bytes.value()) {
-                controllers.push((archive.value().to_string(), Sha256::digest(bytes.value()).into()));
+                controllers.push((archive.value().to_string(), digest));
             }
+            buildins.push((archive.value().to_string(), digest));
         }
-        (count as usize, controllers)
+        (count as usize, controllers, buildins)
     };
     {
         let read = database
@@ -164,6 +176,7 @@ pub(crate) fn init_bsp() -> Result<usize, String> {
         trueos_appbundle::AppBundles::parse(json.value())?;
     }
     REMOTE_INPUT_CONTROLLERS.call_once(|| controllers);
+    BUILDIN_DIGESTS.call_once(|| buildins);
     *APP_DB.lock() = Some(database);
     Ok(count)
 }

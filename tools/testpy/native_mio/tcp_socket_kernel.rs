@@ -2,14 +2,32 @@
 #![allow(dead_code, unused_variables, unsafe_op_in_unsafe_fn)]
 extern crate alloc;
 extern crate self as trueos_vm;
+extern crate self as trueos_wall;
 extern crate self as v;
 pub mod vnet{pub const MAX_MSG:usize=128;}
 use std::{cell::{Cell, RefCell}, collections::{BTreeMap, VecDeque}};
 use core::{net::SocketAddr, sync::atomic::{AtomicUsize, Ordering as AtomicOrdering}};
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]enum NetworkActor{Public,Vm(u8,u64)}
-mod r{pub mod fs{pub mod trueosfs{pub mod authorized{pub(crate) use crate::NetworkActor as Actor;pub fn actor_for_vm(vm:u8)->Result<Actor,()>{Ok(Actor::Vm(vm,crate::EPOCHS.with(|e|e.get()[vm as usize])))}}}}}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]enum NetworkActor{Host,Public,Vm(u8,u64)}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum Principal<'a>{Kernel,Buildin(&'a str),Blueprint(&'a str)}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum Transport{Tcp,Udp}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum Scope{Local,Network}
+pub fn permits_socket(principal:Principal<'_>,_:Transport)->bool{principal!=Principal::Blueprint("blocked")}
+pub fn permits_dns(principal:Principal<'_>)->bool{permits_socket(principal,Transport::Tcp)}
+pub fn permits_inbound(principal:Principal<'_>,transport:Transport,_:Scope,port:u16)->bool{
+ permits_socket(principal,transport)&&port!=0&&(transport==Transport::Tcp||port==30018)
+}
+pub fn permits_outbound(principal:Principal<'_>,transport:Transport,_:Scope,port:u16)->bool{
+ permits_socket(principal,transport)&&port!=0&&port!=9999&&(transport==Transport::Tcp||port==30018)
+}
+#[path=@WALL@]mod wall;
+use wall::{Caller as WallCaller,Scope as WallScope,Transport as WallTransport};
+mod r{
+ pub mod fs{pub mod trueosfs{pub mod authorized{pub(crate) use crate::NetworkActor as Actor;}}}
+ pub mod net{pub(crate) use crate::wall;}
+}
 mod access_key_db{
  use crate::NetworkActor;
+ pub fn principal_epoch(vm:u8)->Option<u64>{crate::EPOCHS.with(|v|v.get().get(vm as usize).copied())}
  pub fn authorize_tcp_listen(actor:NetworkActor,local:core::net::SocketAddr)->Result<(),()>{if local.port()!=42116||!crate::RESERVED.with(|v|v.get()){return Ok(())}if local=="127.0.0.1:42116".parse().unwrap()&&actor==NetworkActor::Vm(2,crate::EPOCHS.with(|e|e.get()[2]))&&crate::ALLOWED.with(|v|v.get()){Ok(())}else{Err(())}}
  pub fn authorize_tcp_connect(client:NetworkActor,server:NetworkActor,port:u16)->Result<(),()>{if port!=42116||!crate::RESERVED.with(|v|v.get()){return Ok(())}if client==NetworkActor::Vm(1,crate::EPOCHS.with(|e|e.get()[1]))&&server==NetworkActor::Vm(2,crate::EPOCHS.with(|e|e.get()[2]))&&crate::ALLOWED.with(|v|v.get()){Ok(())}else{Err(())}}
 }
@@ -38,7 +56,11 @@ thread_local! {
 mod hv {
  pub fn current_hull_guest_context_vm_id()->Option<u8>{crate::HULL.with(Cell::get)}
  pub fn current_guest_execution_context_vm_id()->Option<u8>{crate::OWNER.with(Cell::get)}
+ pub fn current_guest_broker_vm_id()->Option<u8>{None}
  pub fn vm_run_generation(_:u8)->Option<u64>{Some(9)}
+ pub fn with_blueprint_network_identity<T>(vm:u8,_:u64,check:impl FnOnce(&str,bool)->T)->Option<T>{
+  Some(check(if vm==7{"blocked.bp"}else{"fixture.bp"},false))
+ }
  pub fn guest_pause_requested(_:u8)->bool{false}
  pub fn with_guest_broker_context<T>(owner:u8,f:impl FnOnce()->T)->T{
   let old=crate::OWNER.with(|v|v.replace(Some(owner)));let hull=crate::HULL.with(|v|v.replace(None));let result=f();crate::OWNER.with(|v|v.set(old));crate::HULL.with(|v|v.set(hull));result
@@ -63,6 +85,7 @@ impl FakeNet {
  fn submit_for_actor(&self,cmd:api::Command,actor:NetworkActor)->Result<(),()>{ACTORS.with(|v|v.borrow_mut().push(actor));self.submit(cmd)}
  @BRIDGE_CONNECT@
  @BRIDGE_ACTOR_CONNECT@
+ @BRIDGE_CALLER_CONNECT@
  fn submit_kernel(&self,cmd:NetCommand)->Result<(),()>{
   if SUBMIT_FAIL.with(Cell::get){return Err(());}let(local,remote)=match cmd{NetCommand::OpenTcpConnectFrom{local,remote}=>(local,remote),NetCommand::OpenTcpConnectForActor{local:Some(local),remote,..}=>(local,remote),_=>panic!("bound connect expected")};CONNECTS.with(|c|c.borrow_mut().push((local,remote)));Ok(())
  }
@@ -91,7 +114,6 @@ mod mio_compat {
  fn with_compat<T>(f:impl FnOnce(&mut MioCompat)->T)->T{COMPAT.with(|c|f(&mut c.borrow_mut()))}
  fn current_owner_vm()->Option<u8>{OWNER.with(Cell::get)}
  pub fn tcp_receive_paused(_:usize,_:u32)->bool{PAUSED.with(Cell::get)}
- @CAPTURE_NETWORK_ACTOR@
  @OWNER_MATCHES@
  @SOCKET_HAS_HANDLE@
  @UDP_PEER_MATCHES@
@@ -131,6 +153,19 @@ mod mio_compat {
  fn live()->usize{with_compat(|c|c.sockets.len())}
 
  #[test]fn create_validates_output_family_capacity_and_execution_owner(){reset();let mut out=123;for family in [0,1,5,7,u32::MAX]{assert_eq!(unsafe{mio_tcp_socket_create_host(family,&mut out)},-4);assert_eq!(out,123);}assert_eq!(unsafe{mio_tcp_socket_create_host(4,core::ptr::null_mut())},-4);OWNER.with(|o|o.set(Some(2)));let a=create(4);let b=create(6);with_compat(|c|{for id in [a,b]{let s=c.socket(id).unwrap();assert_eq!(s.owner_vm,Some(2));assert_eq!(s.progress_generation,9);assert!(s.kind==MioSocketKind::TcpSocket);}});for _ in 2..64{create(4);}assert_eq!(unsafe{mio_tcp_socket_create_host(4,&mut out)},-9);OWNER.with(|o|o.set(Some(1)));create(4);}
+ #[test]
+ fn wall_rejects_socket_and_peer_before_mutation() {
+  reset();
+  OWNER.with(|owner| owner.set(Some(7)));
+  let mut output = 0;
+  assert_eq!(unsafe { mio_tcp_socket_create_host(4, &mut output) }, STATUS_IO);
+  assert_eq!(live(), 0);
+  OWNER.with(|owner| owner.set(Some(1)));
+  let socket = create(4);
+  assert_eq!(mio_tcp_socket_connect_host(socket, v4([10,0,0,1],9999)), STATUS_IO);
+  assert_eq!(local(socket).port, 0);
+  assert_eq!(pending(socket), 0);
+ }
  #[test]fn reserve_is_immediate_wildcard_aware_family_specific_and_released_on_close(){reset();let a=create(4);let b=create(4);let c=create(6);assert_eq!(mio_tcp_socket_bind_host(a,v4([0;4],9000)),0);assert_eq!(mio_tcp_socket_bind_host(b,v4([10,0,0,1],9000)),-6);assert_eq!(mio_tcp_socket_bind_host(c,v6(9000)),0);assert_eq!(mio_tcp_socket_bind_host(a,v4([0;4],9001)),-4);assert_eq!(unsafe{mio_socket_close_host(a)},0);assert_eq!(mio_tcp_socket_bind_host(b,v4([10,0,0,1],9000)),0);}
  #[test]fn ephemeral_reservations_are_distinct_and_family_mismatch_is_not_a_bind(){reset();let a=create(4);let b=create(4);assert_eq!(mio_tcp_socket_bind_host(a,v6(0)),-4);assert_eq!(mio_tcp_socket_bind_host(a,v4([0;4],0)),0);assert_eq!(mio_tcp_socket_bind_host(b,v4([0;4],0)),0);assert!(local(a).port>=50_000);assert_ne!(local(a).port,local(b).port);}
  #[test]fn namespaces_block_bind_connect_listen_options_and_close(){reset();OWNER.with(|o|o.set(Some(1)));let a=create(4);OWNER.with(|o|o.set(Some(2)));assert_eq!(mio_tcp_socket_bind_host(a,v4([0;4],80)),-5);assert_eq!(mio_tcp_socket_connect_host(a,v4([10,0,0,2],80)),-5);assert_eq!(mio_tcp_socket_listen_host(a,1),-5);assert_eq!(mio_socket_option_host(a,1,1),-5);assert_eq!(unsafe{mio_socket_close_host(a)},-5);assert_eq!(live(),1);}
@@ -158,6 +193,7 @@ mod mio_compat {
 
 mod transport {
  use super::*;
+ use core::net::{Ipv4Addr, Ipv6Addr};
  use smoltcp::{iface::{Config,Interface,SocketHandle,SocketSet},phy::{Loopback,Medium},socket::tcp,time::{Instant,Duration as SmolDuration},wire::{EthernetAddress,HardwareAddress,IpAddress,IpEndpoint,Ipv4Address,Ipv6Address}};
  const SOCKET_SOFT_CAP:usize=64;const TCP_RX_BUF_BYTES:usize=128;const TCP_TX_BUF_BYTES:usize=128;
  #[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct NetHandle(pub u32);
@@ -166,6 +202,38 @@ mod transport {
  #[derive(Clone,Copy,Debug,PartialEq,Eq)] @SOCKET_KIND@
  #[path=@TCP_TX_QUEUE@]mod tcp_tx_queue;use tcp_tx_queue::TcpTxQueue;
  @SOCKET_RECORD@
+ @UDP_ACCESS@
+ @UDP_ACCESS_IMPL@
+ #[test]
+ fn udp_return_permission_matches_the_observed_peer_and_expires() {
+  let now = Instant::from_millis(0);
+  let client = "127.0.0.1:50023".parse().unwrap();
+  let other_client = "127.0.0.1:50024".parse().unwrap();
+  let mut server = UdpAccess {
+   caller: WallCaller::Kernel,
+   local: "0.0.0.0:30018".parse().unwrap(),
+   ephemeral: false,
+   peers: Vec::new(),
+  };
+  assert!(!server.permits_send(client, now));
+  assert!(server.permits_receive(client, WallScope::Local, now));
+  server.remember_peer(client, now);
+  assert!(server.permits_send(client, now));
+  assert!(!server.permits_send(other_client, now));
+  assert!(!server.permits_send(client, now + UdpAccess::PEER_TIMEOUT));
+
+  let mut socket = UdpAccess {
+   caller: WallCaller::Kernel,
+   local: client,
+   ephemeral: true,
+   peers: Vec::new(),
+  };
+  let peer = "127.0.0.1:30018".parse().unwrap();
+  assert!(!socket.permits_receive(peer, WallScope::Local, now));
+  assert!(socket.permits_send(peer, now));
+  socket.remember_peer(peer, now);
+  assert!(socket.permits_receive(peer, WallScope::Local, now));
+ }
  #[derive(Debug)]enum NetEvent{Opened{handle:NetHandle,kind:SocketKind},Error{msg:&'static str},Closed{handle:NetHandle},TcpData{handle:NetHandle,data:Vec<u8>},TcpSent{handle:NetHandle,len:usize},TcpReadClosed{handle:NetHandle}}
  thread_local!{static EVENTS:RefCell<Vec<(&'static str,NetEvent)>>=const{RefCell::new(Vec::new())};}
  fn push_event(owner:&'static str,event:NetEvent)->bool{EVENTS.with(|v|v.borrow_mut().push((owner,event)));true}
@@ -178,13 +246,13 @@ mod transport {
   @OPEN_CONNECT@
   @OPEN_CONNECT6@
   @PRIVATE_ADAPTER_METHODS@
-  fn process_tcp_connect_v4(&mut self,owner:&'static str,remote:NetEndpoint,bound:Option<core::net::SocketAddrV4>){self.open_tcp_connect(owner,remote,bound).unwrap();}
+  fn process_tcp_connect_v4(&mut self,owner:&'static str,remote:NetEndpoint,bound:Option<core::net::SocketAddrV4>){self.open_tcp_connect(owner,NetworkActor::Public,remote,bound).unwrap();}
   fn route_command(&mut self,cmd:NetCommand){let owner="test";match cmd{@CONNECT_DISPATCH@ _=>panic!("unexpected fixture command")}}
  }
  fn endpoint(service:&NetService,handle:NetHandle)->(IpEndpoint,IpEndpoint){let r=service.records.iter().find(|r|r.handle==handle).unwrap();let s=service.sockets.get::<tcp::Socket>(r.socket);(s.local_endpoint().unwrap(),s.remote_endpoint().unwrap())}
- #[test]fn real_smoltcp_ipv4_connect_uses_reserved_port_and_validates_source_ip(){let mut s=NetService::new();let remote=NetEndpoint{addr:[10,0,0,2],port:80};let h=s.open_tcp_connect("test",remote,Some("10.0.0.1:55001".parse().unwrap())).unwrap();let(local,peer)=endpoint(&s,h);assert_eq!(local.port,55001);assert_eq!(local.addr,IpAddress::Ipv4(Ipv4Address::new(10,0,0,1)));assert_eq!(peer.port,80);assert_eq!(s.tcp_next_ephemeral,49152);assert_eq!(s.open_tcp_connect("test",remote,Some("10.0.0.9:55002".parse().unwrap())),Err("invalid local address"));}
- #[test]fn real_smoltcp_wildcard_bind_selects_configured_ipv4_and_keeps_port(){let mut s=NetService::new();let h=s.open_tcp_connect("test",NetEndpoint{addr:[10,0,0,2],port:80},Some("0.0.0.0:55003".parse().unwrap())).unwrap();let(local,_)=endpoint(&s,h);assert_eq!(local.port,55003);assert_eq!(local.addr,IpAddress::Ipv4(Ipv4Address::new(10,0,0,1)));}
- #[test]fn real_smoltcp_ipv6_connect_preserves_global_and_link_local_endpoint(){let mut s=NetService::new();let remote=NetEndpointV6{addr:core::net::Ipv6Addr::new(0x2001,0xdb8,0,0,0,0,0,2).octets(),port:80};let h=s.open_tcp_connect_v6("test",remote,Some("[2001:db8::1]:55004".parse().unwrap())).unwrap();let(local,_)=endpoint(&s,h);assert_eq!(local.port,55004);assert_eq!(local.addr,IpAddress::Ipv6(s.local_ipv6_global.unwrap()));let h=s.open_tcp_connect_v6("test",remote,Some("[fe80::1]:55005".parse().unwrap())).unwrap();assert_eq!(endpoint(&s,h).0.addr,IpAddress::Ipv6(s.local_ipv6_ll));assert_eq!(s.open_tcp_connect_v6("test",remote,Some("[2001:db8::9]:55006".parse().unwrap())),Err("invalid local address"));}
+ #[test]fn real_smoltcp_ipv4_connect_uses_reserved_port_and_validates_source_ip(){let mut s=NetService::new();let remote=NetEndpoint{addr:[10,0,0,2],port:80};let h=s.open_tcp_connect("test",NetworkActor::Public,remote,Some("10.0.0.1:55001".parse().unwrap())).unwrap();let(local,peer)=endpoint(&s,h);assert_eq!(local.port,55001);assert_eq!(local.addr,IpAddress::Ipv4(Ipv4Address::new(10,0,0,1)));assert_eq!(peer.port,80);assert_eq!(s.tcp_next_ephemeral,49152);assert_eq!(s.open_tcp_connect("test",NetworkActor::Public,remote,Some("10.0.0.9:55002".parse().unwrap())),Err("invalid local address"));}
+ #[test]fn real_smoltcp_wildcard_bind_selects_configured_ipv4_and_keeps_port(){let mut s=NetService::new();let h=s.open_tcp_connect("test",NetworkActor::Public,NetEndpoint{addr:[10,0,0,2],port:80},Some("0.0.0.0:55003".parse().unwrap())).unwrap();let(local,_)=endpoint(&s,h);assert_eq!(local.port,55003);assert_eq!(local.addr,IpAddress::Ipv4(Ipv4Address::new(10,0,0,1)));}
+ #[test]fn real_smoltcp_ipv6_connect_preserves_global_and_link_local_endpoint(){let mut s=NetService::new();let remote=NetEndpointV6{addr:core::net::Ipv6Addr::new(0x2001,0xdb8,0,0,0,0,0,2).octets(),port:80};let h=s.open_tcp_connect_v6("test",NetworkActor::Public,remote,Some("[2001:db8::1]:55004".parse().unwrap())).unwrap();let(local,_)=endpoint(&s,h);assert_eq!(local.port,55004);assert_eq!(local.addr,IpAddress::Ipv6(s.local_ipv6_global.unwrap()));let h=s.open_tcp_connect_v6("test",NetworkActor::Public,remote,Some("[fe80::1]:55005".parse().unwrap())).unwrap();assert_eq!(endpoint(&s,h).0.addr,IpAddress::Ipv6(s.local_ipv6_ll));assert_eq!(s.open_tcp_connect_v6("test",NetworkActor::Public,remote,Some("[2001:db8::9]:55006".parse().unwrap())),Err("invalid local address"));}
  #[test]fn actual_private_command_dispatch_keeps_reserved_ipv4_and_ipv6_transport_ports(){for(local,remote)in[("10.0.0.1:55007","10.0.0.2:80"),("[2001:db8::1]:55008","[2001:db8::2]:80")]{let mut s=NetService::new();s.route_command(NetCommand::OpenTcpConnectFrom{local:local.parse().unwrap(),remote:remote.parse().unwrap()});let local:SocketAddr=local.parse().unwrap();assert_eq!(endpoint(&s,NetHandle(1)).0.port,local.port());}}
  fn actor(vm:u8)->NetworkActor{NetworkActor::Vm(vm,1)}
  fn private(s:&mut NetService)->NetHandle{s.open_tcp_listener_for_actor("server",actor(2),"127.0.0.1:42116".parse().unwrap()).unwrap()}

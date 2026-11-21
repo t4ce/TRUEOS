@@ -826,6 +826,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         hvwarnf(format_args!("hv: vm{} reporting: vmcall bad vm id", vm_id));
         return DispatchOutcome::Stop;
     };
+    if crate::log_os::flags::UI4_DIAG_PROFILE_ENABLED {
+        let permission = super::vmx_permissions::for_vmcall(op);
+        crate::log_rate_limited!(
+            target: "ui4/vmx"; level: LogLevel::Trace; first: 16; every: 256;
+            "vmx operation vm={} op={:#x} permission={:?} risk={:?}\n",
+            vm_id, op, permission, permission.risk_level(),
+        );
+    }
     match op {
         OP_PRESERVE => {
             match crate::hv::prepare_preserve_mode(vm_id, crate::hv::PreserveMode::Stop) {
@@ -3576,6 +3584,10 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_SHELL3_WINDOW_V1 => {
             let rc = if arg0 == 0 {
                 crate::shell3::service::blueprint_window_spawn(vm_id, None)
+            } else if arg0 == 2 {
+                u32::try_from(arg1).map_or(-1, |window| {
+                    crate::shell3::service::blueprint_window_close(vm_id, window)
+                })
             } else if let Some(payload) = request_payload(vm_id, req_len).filter(|p| p.len() == 16) {
                 let geometry = crate::shell3::service::WindowGeometry {
                     x: i32::from_le_bytes(payload[0..4].try_into().unwrap()),

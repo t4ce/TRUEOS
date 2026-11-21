@@ -27,6 +27,7 @@ mod wifi_adapter;
 
 use ::core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
+use trueos_wall::packet::{Direction, PacketWall};
 
 use crate::net::core::NetCore;
 use crate::net::device::NetDevice;
@@ -158,7 +159,11 @@ impl NetDevice for ActiveDevice {
         }
     }
 
-    fn transmit_with(&mut self, len: usize, fill: &mut dyn FnMut(&mut [u8])) -> Result<(), ()> {
+    fn transmit_with(
+        &mut self,
+        len: usize,
+        fill: &mut dyn FnMut(&mut [u8]) -> Result<(), ()>,
+    ) -> Result<(), ()> {
         match self {
             ActiveDevice::Virtio(dev) => dev.transmit_with(len, fill),
             ActiveDevice::E1000(dev) => dev.transmit_with(len, fill),
@@ -347,12 +352,14 @@ pub fn device_index_from_owner(owner: &str) -> Option<usize> {
 }
 
 static DEVICES: Mutex<alloc::vec::Vec<ActiveDevice>> = Mutex::new(alloc::vec::Vec::new());
+static PACKET_WALL: Mutex<PacketWall> = Mutex::new(PacketWall::new());
 static PRIMARY_DEVICE_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 pub fn init() {
     {
         let mut guard = DEVICES.lock();
         guard.clear();
+        *PACKET_WALL.lock() = PacketWall::new();
     }
     PRIMARY_DEVICE_INDEX.store(0, Ordering::Relaxed);
 
@@ -600,7 +607,21 @@ pub fn drain_rx_packets_each_at(
     limit: usize,
     f: &mut dyn FnMut(alloc::vec::Vec<u8>),
 ) -> usize {
-    with_device_at(index, |dev| dev.drain_rx_each(limit, f)).unwrap_or(0)
+    with_device_at(index, |dev| {
+        let now_secs = trueos_time::Instant::now().as_secs();
+        let mut wall = PACKET_WALL.lock();
+        let mut admitted = 0;
+        dev.drain_rx_each(limit, &mut |packet| {
+            if wall.allows_frame(index, Direction::Inbound, &packet, now_secs) {
+                f(packet);
+                admitted += 1;
+            } else {
+                ring::recycle_rx_buf(packet);
+            }
+        });
+        admitted
+    })
+    .unwrap_or(0)
 }
 
 pub fn rx_pending_at(index: usize) -> usize {
@@ -623,13 +644,13 @@ pub fn transmit_batch_at(index: usize, packets: impl Iterator<Item = alloc::vec:
 
         let mut ok_count: u32 = 0;
         let mut err_count: u32 = 0;
+        let now_secs = trueos_time::Instant::now().as_secs();
+        let mut wall = PACKET_WALL.lock();
         for pkt in packets {
-            match dev.transmit(&pkt) {
-                Ok(()) => {
-                    ok_count = ok_count.saturating_add(1);
-                }
-                Err(()) => {
-                    err_count = err_count.saturating_add(1);
+            if wall.allows_frame(index, Direction::Outbound, &pkt, now_secs) {
+                match dev.transmit(&pkt) {
+                    Ok(()) => ok_count = ok_count.saturating_add(1),
+                    Err(()) => err_count = err_count.saturating_add(1),
                 }
             }
             // TX path copies into device DMA buffers for all current NICs, so we can
@@ -654,7 +675,19 @@ pub fn transmit_with_at(
     len: usize,
     fill: &mut dyn FnMut(&mut [u8]),
 ) -> Result<(), ()> {
-    with_device_at(index, |dev| dev.transmit_with(len, fill)).unwrap_or(Err(()))
+    with_device_at(index, |dev| {
+        let now_secs = trueos_time::Instant::now().as_secs();
+        let mut wall = PACKET_WALL.lock();
+        dev.transmit_with(len, &mut |frame| {
+            fill(frame);
+            if wall.allows_frame(index, Direction::Outbound, frame, now_secs) {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+    })
+    .unwrap_or(Err(()))
 }
 
 pub fn mac_address_at(index: usize) -> Option<[u8; 6]> {

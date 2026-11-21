@@ -1071,9 +1071,12 @@ struct WindowSpawn {
 }
 static WINDOW_SPAWNS: spin::Mutex<Vec<(u8, alloc::sync::Arc<core::sync::atomic::AtomicI64>)>> =
     spin::Mutex::new(Vec::new());
+static BLUEPRINT_WINDOWS: spin::Mutex<Vec<(u8, u64, crate::ui4::WindowId)>> =
+    spin::Mutex::new(Vec::new());
 
 pub(crate) fn clear_window_spawn(vm_id: u8) {
     WINDOW_SPAWNS.lock().retain(|(owner, _)| *owner != vm_id);
+    BLUEPRINT_WINDOWS.lock().retain(|(owner, _, _)| *owner != vm_id);
 }
 
 // One outstanding request per Blueprint; zero polls its first-paint completion.
@@ -1108,8 +1111,33 @@ pub(crate) fn blueprint_window_spawn(vm_id: u8, geometry: Option<WindowGeometry>
         };
         let result = requests[index].1.load(Ordering::Acquire);
         if result != 0 {
+            if result > 0
+                && let Some(window) = crate::ui4::WindowId::from_raw(result as u32)
+                && let Some(run) = crate::hv::vm_run_generation(vm_id)
+            {
+                let mut windows = BLUEPRINT_WINDOWS.lock();
+                let owner = crate::ui4::WindowOwner::SHELL3_SERVICE;
+                windows.retain(|(_, _, id)| !crate::ui4::window_is_closed(owner, *id));
+                crate::allocators::with_host_alloc_domain_strong(|| windows.push((vm_id, run, window)));
+            }
             requests.remove(index);
         }
         result
+    }
+}
+
+pub(crate) fn blueprint_window_close(vm_id: u8, raw_window: u32) -> i64 {
+    let Some(window) = crate::ui4::WindowId::from_raw(raw_window) else { return -1; };
+    let Some(run) = crate::hv::vm_run_generation(vm_id) else { return -3; };
+    let mut windows = BLUEPRINT_WINDOWS.lock();
+    let Some(index) = windows.iter().position(|entry| *entry == (vm_id, run, window)) else { return -3; };
+    windows.swap_remove(index);
+    drop(windows);
+
+    let owner = crate::ui4::WindowOwner::SHELL3_SERVICE;
+    if crate::ui4::close_window(owner, window).is_ok() || crate::ui4::window_is_closed(owner, window) {
+        0
+    } else {
+        -3
     }
 }

@@ -21,6 +21,8 @@ pub mod identity;
 pub mod intent;
 pub mod provider;
 pub mod totp;
+#[path = "vmxPermissions.rs"]
+pub mod vmx_permissions;
 
 pub use identity::{
     AccountId, AlgorithmId, BootId, KeyDescriptor, KeyHandle, KeyProfile, KeyProfileError,
@@ -38,3 +40,4 @@ pub use totp::{
     TOTP_BASE32_BYTES, TOTP_DIGITS, TOTP_PERIOD_SECONDS, TOTP_SECRET_BYTES, TotpError,
     encode_totp_secret_base32, generate_totp_sha1, verify_totp_sha1,
 };
+pub use vmx_permissions::{RiskLevel, VmxPermission};

@@ -21,6 +21,7 @@ def between(start, end):
 
 
 PRODUCTION = "\n".join([
+    between("fn fetch_caller()", "pub(crate) fn authorize_destination("),
     between("struct JsonPostCancellation {", "#[derive(Clone, Copy, Debug, Eq, PartialEq)]"),
     between("struct FetchTarget {", "#[derive(Clone, Copy)]\nstruct HttpsClientQueues"),
     between("fn request_has_header(", "fn parse_fetch_url("),
@@ -65,6 +66,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::{Context, Poll};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use crate::r::net::wall::{Caller, Transport};
 const HTTPS_REQUEST_CANCELLED:&str="cancelled";
 const DEFAULT_USER_AGENT:&str="TRUEOS net-fetch";
 const HTTPS_PROBE_HEADER_MAX:usize=32768;
@@ -103,9 +105,9 @@ impl Future for Sleep {
 }
 thread_local! {
     static CLOCK:Cell<u64>=const {Cell::new(0)};
-    static TRANSPORT:RefCell<Transport>=RefCell::new(Transport::default());
+    static TRANSPORT:RefCell<TransportTrace>=RefCell::new(TransportTrace::default());
 }
-#[derive(Default)]struct Transport {
+#[derive(Default)]struct TransportTrace {
     steps:VecDeque<Step>,
     requests:Vec<RequestRecord>,
     happy_calls:usize,
@@ -114,7 +116,7 @@ thread_local! {
     fence_retired:bool,
     dropped_before_fence:bool,
 }
-struct RequestRecord {url:String,wire:String,timeout:u32,max_bytes:usize}
+struct RequestRecord {url:String,wire:String,timeout:u32,max_bytes:usize,caller:Caller}
 enum Step {
     Reply {status:u16,location:Option<String>,body:Vec<u8>,elapsed:u64,cancel:bool},
     Error(&'static str),
@@ -130,18 +132,18 @@ impl Drop for FenceGuard {
 struct MediaRangeClient;
 impl MediaRangeClient {
  async fn request(&mut self,target:&FetchTarget,request:&HttpsRequest<'_>,timeout:u32,max_bytes:usize,cancellation:&JsonPostCancellation)->Result<HttpsJsonResponse,String> {
-  request_https_response_once_cancellable(target,request,timeout,max_bytes,Some(cancellation)).await
+  request_https_response_once_cancellable(target,request,timeout,max_bytes,Some(cancellation),Caller::Kernel).await
  }
 }
-async fn request_https_response_once_cancellable(
+async fn mock_https_response(
     target:&FetchTarget, request:&HttpsRequest<'_>, timeout:u32, max_bytes:usize,
-    cancellation:Option<&JsonPostCancellation>,
+    cancellation:Option<&JsonPostCancellation>, caller:Caller,
 )->Result<HttpsJsonResponse,String> {
     // Serialize production headers before a mock socket is opened.
     let wire=String::from_utf8(build_http_request(target,request)?).unwrap();
     let step=TRANSPORT.with(|t| {
         let mut t=t.borrow_mut();
-        t.requests.push(RequestRecord{url:fetch_target_url(target),wire,timeout,max_bytes});
+        t.requests.push(RequestRecord{url:fetch_target_url(target),wire,timeout,max_bytes,caller});
         t.steps.pop_front().expect("unexpected extra media request")
     });
     match step {
@@ -169,17 +171,18 @@ async fn request_https_response_once_cancellable(
         }
     }
 }
-async fn request_https_response_once(
+async fn request_https_response_once_cancellable(
     target:&FetchTarget,request:&HttpsRequest<'_>,timeout:u32,max_bytes:usize,
+    cancellation:Option<&JsonPostCancellation>,caller:Caller,
 )->Result<HttpsJsonResponse,String> {
     TRANSPORT.with(|t|t.borrow_mut().ordinary_calls+=1);
-    request_https_response_once_cancellable(target,request,timeout,max_bytes,None).await
+    mock_https_response(target,request,timeout,max_bytes,cancellation,caller).await
 }
 async fn request_https_happy_eyeballs(
-    target:&FetchTarget,request:&HttpsRequest<'_>,timeout:u32,max_bytes:usize,
+    target:&FetchTarget,request:&HttpsRequest<'_>,timeout:u32,max_bytes:usize,caller:Caller,
 )->Result<HttpsJsonResponse,String> {
     TRANSPORT.with(|t|t.borrow_mut().happy_calls+=1);
-    request_https_response_once_cancellable(target,request,timeout,max_bytes,None).await
+    mock_https_response(target,request,timeout,max_bytes,None,caller).await
 }
 
 struct Mutex<T>(std::sync::Mutex<T>);
@@ -190,7 +193,7 @@ impl<T> Mutex<T> {
 static CABI_NET_FETCH_SEQ:core::sync::atomic::AtomicU32=core::sync::atomic::AtomicU32::new(1);
 static CABI_NET_FETCH_BYTES_RESULTS:Mutex<alloc::collections::BTreeMap<u32,CabiNetFetchBytesResult>>=
     Mutex::new(alloc::collections::BTreeMap::new());
-struct SpawnRecord {url:String,timeout:u32,max_bytes:usize,happy:bool,referrer:Option<String>}
+struct SpawnRecord {url:String,timeout:u32,max_bytes:usize,happy:bool,referrer:Option<String>,caller:Caller}
 thread_local! {
     static SPAWNED:RefCell<Vec<SpawnRecord>>=const {RefCell::new(Vec::new())};
     static GUEST:Cell<bool>=const {Cell::new(false)};
@@ -202,13 +205,25 @@ struct HostPage {payload:[u8;PAYLOAD_CAP]}
 enum DispatchOutcome {Resume}
 fn host_ptr(_:u8)->Option<*mut HostPage> {Some(VM_HOST.with(|page|page.get()))}
 fn write_response(_:u8,_:u32,status:u32,value:u64,_:u32) {VM_RESPONSE.with(|v|v.set((status,value)));}
-fn spawn_fetch_bytes(_:u32,url:String,timeout:u32,max_bytes:usize,happy:bool,referrer:Option<String>) {
-    SPAWNED.with(|s|s.borrow_mut().push(SpawnRecord{url,timeout,max_bytes,happy,referrer}));
+fn spawn_fetch_bytes(_:u32,url:String,timeout:u32,max_bytes:usize,happy:bool,referrer:Option<String>,caller:Caller) {
+    SPAWNED.with(|s|s.borrow_mut().push(SpawnRecord{url,timeout,max_bytes,happy,referrer,caller}));
 }
 mod hv {pub fn current_hull_guest_context_vm_id()->Option<u8> {crate::GUEST.with(|v|v.get().then_some(1))}}
-mod r {pub mod net {pub mod https {
-    pub(crate) use crate::{fetch_bytes_request_context,cabi_net_fetch_bytes_start_with_context_host};
-}}}
+mod r {pub mod net {
+    pub mod wall {
+        #[derive(Clone,Copy,Debug,Eq,PartialEq)]
+        pub enum Caller { Kernel, Blueprint(u8) }
+        pub enum Transport { Tcp }
+        impl Caller {
+            pub fn capture(vm:Option<u8>)->Option<Self> {Some(vm.map_or(Self::Kernel,Self::Blueprint))}
+            pub fn current()->Option<Self> {Self::capture(crate::hv::current_hull_guest_context_vm_id())}
+            pub fn permits_socket(self,_:Transport)->bool {true}
+        }
+    }
+    pub mod https {
+        pub(crate) use crate::{fetch_bytes_request_context,cabi_net_fetch_bytes_start_with_context_host};
+    }
+}}
 mod trueos_vm {pub mod vmcall {
     pub use crate::{PAYLOAD_CAP,OP_BP_FETCH_BYTES_START,STATUS_OK};
     pub fn call_with_payload(op:u32,a:u64,b:u64,payload:&[u8],out:&mut[u8])->(u32,u64) {
@@ -229,7 +244,7 @@ TESTS = r'''
     }
     fn setup(steps:impl IntoIterator<Item=Step>) {
         CLOCK.with(|clock|clock.set(0));
-        TRANSPORT.with(|t|*t.borrow_mut()=Transport{steps:steps.into_iter().collect(),..Default::default()});
+        TRANSPORT.with(|t|*t.borrow_mut()=TransportTrace{steps:steps.into_iter().collect(),..Default::default()});
     }
     fn run<T>(future:impl Future<Output=T>)->T {
         let mut future=Box::pin(future);
@@ -241,7 +256,7 @@ TESTS = r'''
         panic!("media future did not settle under its deadline/cancellation fence");
     }
     fn fetch(url:&str,referrer:Option<&str>)->Result<Vec<u8>,String> {
-        run(get_media_bytes_profile_shared(url,"media-range",50,4096,&MediaFetchCancellation::new(),Some("TRUEOS test-agent"),referrer))
+        run(get_media_bytes_profile_shared(url,"media-range",50,4096,&MediaFetchCancellation::new(),Some("TRUEOS test-agent"),referrer,Caller::Blueprint(1)))
     }
     fn header<'a>(wire:&'a str,name:&str)->Option<&'a str> {
         wire.lines().find_map(|line|line.split_once(": ").filter(|(key,_)|key.eq_ignore_ascii_case(name)).map(|(_,value)|value))
@@ -375,15 +390,19 @@ TESTS = r'''
     #[test]fn completed_get_metadata_keeps_the_final_host_directory_and_query() {
         setup([reply(302,Some("../moved/start")),reply(307,Some("https://cdn.test/assets/page.html?token=a%2Fb#local")),reply(200,None)]);
         let target=parse_fetch_url("https://old.test/original/index.html").unwrap();
-        let response=run(fetch_https_response_bytes_with_context(&target,50,4096,true,None)).unwrap();
+        let response=run(fetch_https_response_bytes_with_context(&target,50,4096,true,None,Caller::Blueprint(1))).unwrap();
         assert_eq!(response.final_url,"https://cdn.test/assets/page.html?token=a%2Fb");
         assert_eq!(response.body,[1,2,3]);
-        TRANSPORT.with(|t|assert_eq!(t.borrow().requests.last().unwrap().url,"https://cdn.test:443/assets/page.html?token=a%2Fb"));
+        TRANSPORT.with(|t| {
+            let t=t.borrow();
+            assert_eq!(t.requests.last().unwrap().url,"https://cdn.test:443/assets/page.html?token=a%2Fb");
+            assert!(t.requests.iter().all(|request|request.caller==Caller::Blueprint(1)));
+        });
     }
     #[test]fn nonredirected_get_metadata_and_legacy_body_wrapper_are_consistent() {
         let target=parse_fetch_url("https://page.test:8443/directory/page.html?q=a%2Fb").unwrap();
         setup([reply(200,None)]);
-        let response=run(fetch_https_response_bytes_with_context(&target,50,4096,false,None)).unwrap();
+        let response=run(fetch_https_response_bytes_with_context(&target,50,4096,false,None,Caller::Kernel)).unwrap();
         assert_eq!(response.final_url,"https://page.test:8443/directory/page.html?q=a%2Fb");
         setup([reply(200,None)]);
         assert_eq!(run(fetch_https_bytes_with_context(&target,50,4096,false,None)).unwrap(),response.body);
@@ -391,7 +410,7 @@ TESTS = r'''
     #[test]fn forwards_profile_headers_on_each_hop() {
         for profile in ["media-range","media-norange","plain-range","plain-norange"] {
             setup([reply(302,Some("/final")),reply(206,None)]);
-            run(get_media_bytes_profile_shared("https://page.test/start",profile,50,1234,&MediaFetchCancellation::new(),None,None)).unwrap();
+            run(get_media_bytes_profile_shared("https://page.test/start",profile,50,1234,&MediaFetchCancellation::new(),None,None,Caller::Kernel)).unwrap();
             TRANSPORT.with(|t|for request in &t.borrow().requests {
                 assert_eq!(request.max_bytes,1234);
                 assert_eq!(header(&request.wire,"Range").is_some(),!profile.contains("norange"));
@@ -439,7 +458,7 @@ TESTS = r'''
     }
     #[test]fn cancellation_before_start_and_between_redirects_prevents_new_io() {
         setup([]);let cancellation=MediaFetchCancellation::new();cancellation.cancel();
-        assert_eq!(run(get_media_bytes_profile_shared("https://page.test/start","media-range",50,4096,&cancellation,None,None)).unwrap_err(),"cancelled");
+        assert_eq!(run(get_media_bytes_profile_shared("https://page.test/start","media-range",50,4096,&cancellation,None,None,Caller::Kernel)).unwrap_err(),"cancelled");
         TRANSPORT.with(|t|assert!(t.borrow().requests.is_empty()));
         setup([Step::Reply{status:302,location:Some("https://cdn.test/movie".into()),body:vec![],elapsed:0,cancel:true}]);
         assert_eq!(fetch("https://page.test/start",None).unwrap_err(),"cancelled");
@@ -447,7 +466,7 @@ TESTS = r'''
     }
     #[test]fn deadline_waits_for_tls_cancellation_fence_to_retire() {
         setup([Step::WaitForCancellation]);let cancellation=MediaFetchCancellation::new();
-        assert_eq!(run(get_media_bytes_profile_shared("https://page.test/movie","media-range",3,4096,&cancellation,None,None)).unwrap_err(),"cancelled");
+        assert_eq!(run(get_media_bytes_profile_shared("https://page.test/movie","media-range",3,4096,&cancellation,None,None,Caller::Kernel)).unwrap_err(),"cancelled");
         assert!(cancellation.0.is_cancelled());
         TRANSPORT.with(|t| {
             let t=t.borrow();assert_eq!(t.cancelled_polls,3);assert!(t.fence_retired);assert!(!t.dropped_before_fence);
@@ -549,6 +568,7 @@ TESTS = r'''
                 assert_eq!(request.url,"https://cdn.test/player?signature=keep");
                 assert_eq!(request.referrer.as_deref(),Some("https://page.test/watch?id=1"));
                 assert_eq!(request.timeout,45_000);assert_eq!(request.max_bytes,8*1024*1024);assert!(request.happy);
+                assert_eq!(request.caller,if guest {Caller::Blueprint(1)} else {Caller::Kernel});
             });
             VM_CALLS.with(|v| {
                 let v=v.borrow();assert_eq!(v.len(),usize::from(guest));

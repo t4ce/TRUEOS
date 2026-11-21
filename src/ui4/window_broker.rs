@@ -11,6 +11,7 @@ use embassy_sync::{
 };
 use heapless::Deque;
 use spin::Mutex;
+use trueos_crypto::VmxPermission::{self, MoveWindow, ResizeWindow};
 use trueos_time::{Duration, Timer};
 
 use super::{DamageRect, DamageRegion, FrameBuffering, FrameHandle, OutputId};
@@ -2551,9 +2552,6 @@ pub(crate) fn move_window(
     let output_extent = crate::ui4::output_dimensions();
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
-    // A cursor may have sampled geometry before another cursor changed focus.
-    // Moving must not restore the z from that older snapshot.
-    let placement = WindowPlacement { z: window.placement.z, ..placement };
     // The tile owns its placement independently of the retained producer.
     if let Some(tile) = window
         .collapse
@@ -2566,12 +2564,14 @@ pub(crate) fn move_window(
         {
             return Err(WindowBrokerError::InteractionDenied);
         }
-        if *tile != placement {
-            *tile = placement;
+        if (tile.x, tile.y) != (placement.x, placement.y) {
+            tile.x = placement.x;
+            tile.y = placement.y;
             window.revision = next_serial(window.revision);
             window.damage = Some(DamageRegion::FULL);
             broker.mark_composition_changed();
             drop(broker);
+            trace_geometry_permissions(id, "move-collapsed", &[MoveWindow]);
             super::cursor_frame_inout::selection_strip_stack_changed();
         }
         return Ok(());
@@ -2582,6 +2582,9 @@ pub(crate) fn move_window(
     {
         return Err(WindowBrokerError::InteractionDenied);
     }
+    // A stale drag snapshot may predate focus, visibility or opacity changes.
+    // Only update position from the snapshot under this lock.
+    let placement = WindowPlacement { x: placement.x, y: placement.y, ..window.placement };
     let changed = window.placement != placement;
     if changed {
         let previous = window.placement;
@@ -2600,9 +2603,21 @@ pub(crate) fn move_window(
     }
     drop(broker);
     if changed {
+        trace_geometry_permissions(id, "move", &[MoveWindow]);
         super::cursor_frame_inout::selection_strip_stack_changed();
     }
     Ok(())
+}
+
+fn trace_geometry_permissions(id: WindowId, effect: &str, permissions: &[VmxPermission]) {
+    if crate::log_os::flags::UI4_DIAG_PROFILE_ENABLED {
+        for permission in permissions {
+            crate::log_trace!(target: "ui4/vmx";
+                "ui4 geometry window={} effect={} permission={:?} risk={:?}\n",
+                id.raw(), effect, permission, permission.risk_level(),
+            );
+        }
+    }
 }
 
 /// Return the broker geometry represented by a dock preview or commit.
@@ -2832,6 +2847,7 @@ fn change_window_dock(
         );
     }
     if change.changed {
+        trace_geometry_permissions(id, "dock-geometry", &[MoveWindow, ResizeWindow]);
         super::cursor_frame_inout::selection_strip_stack_changed();
     }
     Ok(change.transition)
@@ -2976,6 +2992,9 @@ pub(super) fn resize_quad_dock(
     }
     drop(broker);
     for (snapshot, change) in current.iter().zip(changes) {
+        if change.changed {
+            trace_geometry_permissions(snapshot.id, "dock-geometry", &[MoveWindow, ResizeWindow]);
+        }
         if change.notify_resize {
             let previous = change.transition.previous;
             let placement = change.transition.placement;
@@ -3785,6 +3804,7 @@ fn change_collapse(
     }
     broker.mark_composition_changed();
     drop(broker);
+    trace_geometry_permissions(id, "collapse-geometry", &[ResizeWindow]);
     if collapsing {
         super::codex_handoff::queue(owner, id, compact.frame,
             crate::spirit::codex_handoff::geometry::Point { x: compact.placement.x, y: compact.placement.y },
@@ -3826,6 +3846,7 @@ pub(super) fn follow_collapsed_cursor(
     window.damage = Some(DamageRegion::FULL);
     broker.mark_composition_changed();
     drop(broker);
+    trace_geometry_permissions(id, "move-collapsed", &[MoveWindow]);
     super::cursor_frame_inout::selection_strip_stack_changed();
     Ok(())
 }

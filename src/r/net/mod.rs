@@ -5,20 +5,21 @@ pub mod cli;
 pub mod discovery;
 pub mod dns;
 pub mod dns_request_broker;
-pub mod https;
 pub mod http_request_cabi;
-pub mod request_stream;
+pub mod https;
 pub mod ipp_print;
 pub mod mail_config;
 pub mod ports;
 pub mod printer;
 pub mod pwg_raster;
+pub mod request_stream;
 pub mod smtp_cabi;
 pub mod socket_cabi;
 pub mod srv;
 pub mod trueos_peer;
 pub mod udp;
 pub mod vlayer;
+pub(crate) mod wall;
 
 pub use cli::ntp;
 pub use srv::sntp;
@@ -214,37 +215,107 @@ impl VNet {
     }
 
     pub fn submit(&self, cmd: api::Command) -> Result<(), ()> {
-        let actor = crate::hv::current_guest_execution_context_vm_id()
-            .and_then(|vm| crate::r::fs::trueosfs::authorized::actor_for_vm(vm).ok())
-            .unwrap_or(crate::r::fs::trueosfs::authorized::Actor::Public);
-        self.submit_for_actor(cmd, actor)
+        if matches!(cmd, api::Command::Close { .. }) {
+            return self.submit_kernel(to_kernel_cmd(cmd)?);
+        }
+        self.submit_for_caller(cmd, wall::Caller::current().ok_or(())?)
     }
 
     pub(crate) fn submit_for_actor(
-        &self, cmd: api::Command, actor: crate::r::fs::trueosfs::authorized::Actor,
+        &self,
+        cmd: api::Command,
+        actor: crate::r::fs::trueosfs::authorized::Actor,
+    ) -> Result<(), ()> {
+        self.submit_for_caller(cmd, wall::Caller::from_actor(actor).ok_or(())?)
+    }
+
+    pub(crate) fn submit_for_caller(
+        &self,
+        cmd: api::Command,
+        caller: wall::Caller,
     ) -> Result<(), ()> {
         use core::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+        use wall::Transport::{Tcp, Udp};
+        let actor = caller.actor();
         let authorized = match cmd {
-            api::Command::OpenTcpListen { port } => NetCommand::OpenTcpListenForActor {
-                actor, local: SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)),
-            },
-            api::Command::OpenTcpListenAt { local } => NetCommand::OpenTcpListenForActor { actor, local },
-            api::Command::OpenTcpConnect { remote } => NetCommand::OpenTcpConnectForActor {
-                actor, local: None, remote: SocketAddr::from((Ipv4Addr::from(remote.addr), remote.port)),
-            },
-            api::Command::OpenTcpConnectV6 { remote } => NetCommand::OpenTcpConnectForActor {
-                actor, local: None, remote: SocketAddr::from((Ipv6Addr::from(remote.addr), remote.port)),
-            },
+            api::Command::OpenTcpListen { port } => return self.submit_for_caller(
+                api::Command::OpenTcpListenAt { local: (Ipv4Addr::UNSPECIFIED, port).into() }, caller,
+            ),
+            api::Command::OpenTcpListenAt { local } => {
+                crate::access_key_db::authorize_tcp_listen(actor, local)?;
+                let local = caller.restrict_bind(Tcp, local).ok_or(())?;
+                NetCommand::OpenTcpListenForActor { actor, local }
+            }
+            api::Command::OpenTcpConnect { remote } => return self.submit_tcp_connect_for_caller(
+                None, (Ipv4Addr::from(remote.addr), remote.port).into(), caller,
+            ),
+            api::Command::OpenTcpConnectV6 { remote } => return self.submit_tcp_connect_for_caller(
+                None, (Ipv6Addr::from(remote.addr), remote.port).into(), caller,
+            ),
+            api::Command::OpenUdp { port } => return self.open_udp_for_caller(
+                SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)), port == 0, caller,
+            ),
+            api::Command::OpenTun { .. } | api::Command::SendIpPacket { .. }
+            | api::Command::IcmpEcho { .. } | api::Command::IcmpEchoV6 { .. }
+                if !matches!(caller, wall::Caller::Kernel) => return Err(()),
+            api::Command::SendUdp { .. } | api::Command::SendUdpV6 { .. }
+                if !caller.permits_socket(Udp) => return Err(()),
+            api::Command::SendTcp { .. } | api::Command::FinishTcp { .. }
+                if !caller.permits_socket(Tcp) => return Err(()),
             other => return self.submit_kernel(to_kernel_cmd(other)?),
         };
         self.submit_kernel(authorized)
     }
 
+    pub(crate) fn open_udp_for_caller(
+        &self,
+        local: core::net::SocketAddr,
+        ephemeral: bool,
+        caller: wall::Caller,
+    ) -> Result<(), ()> {
+        let allowed = if ephemeral {
+            caller.permits_socket(wall::Transport::Udp)
+        } else {
+            caller.permits_bind(wall::Transport::Udp, local)
+        };
+        if !allowed {
+            return Err(());
+        }
+        self.submit_kernel(NetCommand::OpenUdpForCaller {
+            caller,
+            local,
+            ephemeral,
+            tx_buffer_bytes: None,
+        })
+    }
+
     pub(crate) fn submit_tcp_connect_from_for_actor(
-        &self, local: core::net::SocketAddr, remote: core::net::SocketAddr,
+        &self,
+        local: core::net::SocketAddr,
+        remote: core::net::SocketAddr,
         actor: crate::r::fs::trueosfs::authorized::Actor,
     ) -> Result<(), ()> {
-        self.submit_kernel(NetCommand::OpenTcpConnectForActor { actor, local: Some(local), remote })
+        self.submit_tcp_connect_for_caller(
+            Some(local),
+            remote,
+            wall::Caller::from_actor(actor).ok_or(())?,
+        )
+    }
+
+    pub(crate) fn submit_tcp_connect_for_caller(
+        &self,
+        local: Option<core::net::SocketAddr>,
+        remote: core::net::SocketAddr,
+        caller: wall::Caller,
+    ) -> Result<(), ()> {
+        if !caller.permits_outbound(wall::Transport::Tcp, remote) {
+            return Err(());
+        }
+        self.submit_kernel(NetCommand::OpenTcpConnectForActor {
+            actor: caller.actor(),
+            local,
+            remote,
+        })
     }
 
     pub(crate) fn submit_tcp_connect_from(
@@ -320,10 +391,19 @@ impl VNet {
     /// Submit exactly one chunk. Failure consumes zero bytes, so callers can
     /// retain an exact ciphertext offset without replaying an accepted prefix.
     pub(crate) fn try_send_tcp_chunk(&self, handle: api::NetHandle, data: &[u8]) -> Result<(), ()> {
+        self.try_send_tcp_chunk_for_caller(handle, data, wall::Caller::current().ok_or(())?)
+    }
+
+    pub(crate) fn try_send_tcp_chunk_for_caller(
+        &self,
+        handle: api::NetHandle,
+        data: &[u8],
+        caller: wall::Caller,
+    ) -> Result<(), ()> {
         if data.len() > api::MAX_MSG { return Err(()); }
-        self.submit(api::Command::SendTcp {
+        self.submit_for_caller(api::Command::SendTcp {
             handle, data: api::ByteBuf::from_slice_trunc(data),
-        })
+        }, caller)
     }
 
     /// Retire this client's old sockets and events before its queue pair is

@@ -9,9 +9,11 @@ use core::slice;
 use spin::Mutex;
 use v::vnet as api;
 
+use super::wall::{self, Caller, Transport};
 use crate::blueprint_net_broker::VNetBridge;
 
 const EBADF: i32 = 9;
+const EACCES: i32 = 13;
 const EAGAIN: i32 = 11;
 const EPIPE: i32 = 32;
 const EIO: i32 = 5;
@@ -53,6 +55,15 @@ fn with_tuns<T>(f: impl FnOnce(&mut BTreeMap<u32, TunState>) -> T) -> T {
 enum RemoteAddr {
     V4([u8; 4], u16),
     V6([u8; 16], u16),
+}
+
+impl RemoteAddr {
+    fn socket_addr(self) -> core::net::SocketAddr {
+        match self {
+            Self::V4(addr, port) => (addr, port).into(),
+            Self::V6(addr, port) => (addr, port).into(),
+        }
+    }
 }
 
 struct SocketState {
@@ -141,7 +152,7 @@ fn with_socket_mut<T>(
     socket_id: u32,
     f: impl FnOnce(&mut SocketState) -> Result<T, i32>,
 ) -> Result<T, i32> {
-    let owner_vm = crate::hv::current_guest_execution_context_vm_id();
+    let owner_vm = wall::current_vm();
     with_sockets(|sockets| {
         let Some(socket) = sockets.get_mut(&socket_id) else {
             return Err(-EBADF);
@@ -154,7 +165,7 @@ fn with_socket_mut<T>(
 }
 
 fn with_tun_mut<T>(tun_id: u32, f: impl FnOnce(&mut TunState) -> Result<T, i32>) -> Result<T, i32> {
-    let owner_vm = crate::hv::current_guest_execution_context_vm_id();
+    let owner_vm = wall::current_vm();
     with_tuns(|tuns| {
         let Some(tun) = tuns.get_mut(&tun_id) else {
             return Err(-EBADF);
@@ -375,6 +386,9 @@ fn connect_inner(socket_id: u32, remote: RemoteAddr, nonblocking: bool) -> Resul
         if socket.connected {
             return Err(-EISCONN);
         }
+        if !Caller::current().is_some_and(|caller| caller.permits_outbound(Transport::Tcp, remote.socket_addr())) {
+            return Err(-EACCES);
+        }
         socket.ensure_vnet()?;
         socket.remote = Some(remote);
 
@@ -482,8 +496,11 @@ pub(crate) fn socket_tcp_open_host(domain: i32, socket_type: i32, protocol: i32)
         return -EPROTONOSUPPORT;
     }
 
+    let owner_vm = wall::current_vm();
+    if !Caller::capture(owner_vm).is_some_and(|caller| caller.permits_socket(Transport::Tcp)) {
+        return -EACCES;
+    }
     let socket_id = next_socket_id();
-    let owner_vm = crate::hv::current_guest_execution_context_vm_id();
     with_sockets(|sockets| {
         sockets.insert(socket_id, SocketState::new(owner_vm, domain, socket_type, protocol));
     });
@@ -491,7 +508,7 @@ pub(crate) fn socket_tcp_open_host(domain: i32, socket_type: i32, protocol: i32)
 }
 
 pub(crate) fn socket_tcp_close_host(socket_id: u32) -> i32 {
-    let owner_vm = crate::hv::current_guest_execution_context_vm_id();
+    let owner_vm = wall::current_vm();
     let socket = with_sockets(|sockets| {
         if sockets.get(&socket_id).is_some_and(|socket| socket.owner_vm == owner_vm) {
             sockets.remove(&socket_id)
@@ -791,7 +808,10 @@ pub(crate) fn tun_open_host(
     }
 
     let ipv4 = ipv4_be.to_be_bytes();
-    let owner_vm = crate::hv::current_guest_execution_context_vm_id();
+    let owner_vm = wall::current_vm();
+    if owner_vm.is_some() {
+        return -EACCES;
+    }
     let vnet = crate::allocators::with_host_alloc_domain_strong(|| {
         let vnet = VNetBridge::open_primary().ok_or(-ENETUNREACH)?;
         vnet.submit(api::Command::OpenTun {
