@@ -639,7 +639,7 @@ fn software_cursor_scene() -> Slot4Scene {
                 Rgba8::new(180, 188, 204, 150),
             );
         }
-        for (row, label) in [(0u32, "COLOR PICKER"), (1u32, "CHROMATIC"), (2u32, "SHELL"), (3u32, "LINK"), (4u32, "CODEX"), (5u32, "APPDB")] {
+        for (row, label) in [(0u32, "COLOR PICKER"), (1u32, "CHROMATIC"), (2u32, "SHELL"), (3u32, "LINK"), (4u32, "APPDB")] {
             let y = row_top
                 .saturating_add(row.saturating_mul(row_height))
                 .saturating_add(row_text_y);

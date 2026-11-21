@@ -39,6 +39,7 @@ pub mod vmcall {
     pub const OP_BP_SPIRIT_EMOTION_PLAY: u32 = 1;
     pub const OP_BP_SPIRIT_TEXT_PRESENT_SILENT: u32 = 2;
     pub const OP_BP_SPIRIT_MOVE: u32 = 3;
+    pub const OP_BP_SPIRIT_CONTEXTUAL_PLAY_V1: u32 = 4;
     pub fn call_with_payload(op: u32, _: u64, _: u64, _: &[u8], _: &mut [u8]) -> (u32,u64) {
         super::LAST_OP.store(op, super::Ordering::Relaxed);
         (STATUS_OK, (-19i64) as u64)
@@ -52,8 +53,14 @@ mod spirit {
         super::PRESENTATIONS.fetch_add(1, super::Ordering::Relaxed);
         super::AVAILABLE.load(super::Ordering::Relaxed)
     }
-    pub fn enqueue_emotion_words(_: &[&str]) -> Result<(), ()> {
-        super::AVAILABLE.load(super::Ordering::Relaxed).then_some(()).ok_or(())
+    pub mod lilly_protocol {
+        pub enum LillyProtocolError { UnknownContext, RingFull }
+    }
+    pub fn enqueue_presentation_word(_: &str) -> Result<usize, ()> { Ok(0) }
+    pub fn enqueue_contextual_word(word: &str) -> Result<(), lilly_protocol::LillyProtocolError> {
+        use lilly_protocol::LillyProtocolError::*;
+        if word != "Happy" { return Err(UnknownContext); }
+        super::AVAILABLE.load(super::Ordering::Relaxed).then_some(()).ok_or(RingFull)
     }
     pub fn move_spirit_to(_: f64, _: f64) -> Result<(), ()> {
         super::AVAILABLE.load(super::Ordering::Relaxed).then_some(()).ok_or(())
@@ -120,7 +127,11 @@ fn spirit_text_remains_bounded_and_independent_of_inference() {
     assert_eq!(presentation::spirit_move(-0.1,0.5),-3);
     assert_eq!(presentation::spirit_move(0.5,1.1),-3);
     assert_eq!(presentation::spirit_move(0.5,0.5),0);
-    unsafe { assert_eq!(presentation::trueos_cabi_spirit_emotion_play(b"happy".as_ptr(),5),0); }
+    unsafe {
+        assert_eq!(presentation::trueos_cabi_spirit_emotion_play(b"happy".as_ptr(),5),0);
+        assert_eq!(presentation::trueos_cabi_spirit_contextual_play_v1(b"Happy".as_ptr(),5),0);
+        assert_eq!(presentation::trueos_cabi_spirit_contextual_play_v1(b"vibe:happy".as_ptr(),10),-3);
+    }
 }
 
 #[test]
@@ -131,6 +142,8 @@ fn guest_spirit_exports_still_forward_through_vmcall() {
         assert_eq!(LAST_OP.load(Ordering::Relaxed),vmcall::OP_BP_SPIRIT_TEXT_PRESENT_SILENT);
         assert_eq!(presentation::trueos_cabi_spirit_emotion_play(b"happy".as_ptr(),5),-19);
         assert_eq!(LAST_OP.load(Ordering::Relaxed),vmcall::OP_BP_SPIRIT_EMOTION_PLAY);
+        assert_eq!(presentation::trueos_cabi_spirit_contextual_play_v1(b"Happy".as_ptr(),5),-19);
+        assert_eq!(LAST_OP.load(Ordering::Relaxed),vmcall::OP_BP_SPIRIT_CONTEXTUAL_PLAY_V1);
     }
     assert_eq!(presentation::trueos_cabi_spirit_move(0.5,0.5),-19);
     assert_eq!(LAST_OP.load(Ordering::Relaxed),vmcall::OP_BP_SPIRIT_MOVE);

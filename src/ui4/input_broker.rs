@@ -45,7 +45,7 @@ pub(super) const CONTEXT_MENU_ROW_GAP_PX: u32 = 2;
 pub(super) const CONTEXT_MENU_ROW_HEIGHT_PX: u32 = (microfont::FHEIGHT as u32)
     .saturating_mul(2)
     .saturating_add(CONTEXT_MENU_ROW_GAP_PX);
-pub(super) const DESKTOP_CONTEXT_MENU_ENTRY_COUNT: u32 = 6;
+pub(super) const DESKTOP_CONTEXT_MENU_ENTRY_COUNT: u32 = 5;
 pub(super) const DESKTOP_CONTEXT_MENU_HORIZONTAL_INSET_PX: u32 = 12;
 pub(super) const DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX: u32 = 12;
 
@@ -87,7 +87,6 @@ enum DesktopContextMenuAction {
     Chromatic,
     Shell,
     Link,
-    Codex,
     AppDb,
 }
 
@@ -1113,7 +1112,6 @@ impl InputBroker {
                             request_desktop_shell_launch(source, x, y, false)
                         }
                         DesktopContextMenuAction::Link => super::request_link_open(source, anchor),
-                        DesktopContextMenuAction::Codex => super::request_codex_prompt_open(source, anchor),
                         DesktopContextMenuAction::AppDb => request_desktop_shell_launch(source, anchor.0, anchor.1, true),
                     }
                 }
@@ -1444,9 +1442,12 @@ impl InputBroker {
                 let result = super::spirit_access::toggle_from_human(
                     source, WindowTarget::from(target).cursor_frame_key(),
                 );
+                if let Ok(Some(permit)) = result {
+                    crate::spirit::request_shared_frame_focus(permit);
+                }
                 crate::log_info!(target: "ui4";
                     "ui4/input: Spirit access owner={:?} window={} result={:?}\n",
-                    target.owner, target.id.raw(), result);
+                    target.owner, target.id.raw(), result.map(|permit| permit.is_some()));
                 let route = &mut self.cursors[index];
                 route.capture = None;
                 route.secondary_anchor = None;
@@ -3532,8 +3533,7 @@ fn desktop_context_menu_action_at(
         1 => Some(DesktopContextMenuAction::Chromatic),
         2 => Some(DesktopContextMenuAction::Shell),
         3 => Some(DesktopContextMenuAction::Link),
-        4 => Some(DesktopContextMenuAction::Codex),
-        5 => Some(DesktopContextMenuAction::AppDb),
+        4 => Some(DesktopContextMenuAction::AppDb),
         _ => None,
     }
 }
@@ -4229,7 +4229,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_context_menu_exposes_codex_directly_below_link() {
+    fn desktop_context_menu_exposes_appdb_directly_below_link() {
         let menu = super::Ui4VisualRect {
             x: 0,
             y: 0,
@@ -4245,11 +4245,11 @@ mod tests {
         );
         assert_eq!(
             desktop_context_menu_action_at(menu, 12, y + super::CONTEXT_MENU_ROW_HEIGHT_PX),
-            Some(DesktopContextMenuAction::Codex)
+            Some(DesktopContextMenuAction::AppDb)
         );
         assert_eq!(
             desktop_context_menu_action_at(menu, 12, y + super::CONTEXT_MENU_ROW_HEIGHT_PX * 2),
-            Some(DesktopContextMenuAction::AppDb)
+            None
         );
     }
 

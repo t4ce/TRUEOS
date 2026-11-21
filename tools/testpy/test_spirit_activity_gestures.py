@@ -2,8 +2,8 @@
 """Exercise the real Spirit sequencer on the host, without GPU hardware.
 
 The kernel has test=false. This harness imports its production sequencer,
-terminal parser, animation helpers and resident catalog, mocking only the
-clock, random choices, terminal snapshot and hardware surfaces. Each test runs
+timing rules and resident adapter, with mocked clock, randomness and GPU
+surfaces. Each test runs
 in a fresh process because the real sequencer deliberately owns global slots.
 Requires the repository toolchain and cached Cargo dependencies (offline).
 """

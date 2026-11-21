@@ -36,8 +36,7 @@ struct Binding {
     cursor: Ui4CursorSource,
     keyboard_slot: u32,
     permit: Permit,
-    vm: u8,
-    run: u64,
+    owner: Option<(u8, u64)>,
     keyboard_frontiers: (u32, u32),
     cursor_frontier: u64,
 }
@@ -57,17 +56,16 @@ impl Registry {
         }
     }
 
-    fn toggle(&mut self, frame: CursorFrameKey, session: u32) -> Result<bool, ()> {
+    fn toggle(&mut self, frame: CursorFrameKey, session: u32) -> Result<Option<Permit>, ()> {
         // Human sharing supersedes the private kernel exercise, including any
         // strokes it has already queued. It never adopts that private permit.
         self.grants
             .retain(|grant| grant.frame != frame || grant.scope == PermitScope::Shared);
         if let Some(index) = self.grants.iter().position(|grant| grant.frame == frame) {
             self.grants.swap_remove(index);
-            return Ok(false);
+            return Ok(None);
         }
-        self.grant(frame, session, PermitScope::Shared)?;
-        Ok(true)
+        self.grant(frame, session, PermitScope::Shared).map(Some)
     }
 
     fn grant(
@@ -356,6 +354,14 @@ pub(crate) fn is_granted(frame: CursorFrameKey) -> bool {
     authorize(frame).is_some()
 }
 
+pub(crate) fn shared_window(permit: Permit) -> Option<WindowSnapshot> {
+    let window = live(permit.frame)?;
+    (permit.scope == PermitScope::Shared
+        && window.session.raw() == permit.session
+        && REGISTRY.lock().contains(permit))
+        .then_some(window)
+}
+
 /// Dock sharing cannot take over an ungranted UI4 frame: the input broker
 /// lets AI select or move only frames already admitted to AI, so it cannot drag
 /// another frame into Spirit's share circle to acquire access. Grant changes
@@ -366,7 +372,7 @@ pub(crate) fn is_granted(frame: CursorFrameKey) -> bool {
 pub(crate) fn toggle_from_human(
     source: Ui4CursorSource,
     frame: CursorFrameKey,
-) -> Result<bool, ()> {
+) -> Result<Option<Permit>, ()> {
     if !cursor_is_human(source) || !cursor_target_allowed(source, frame) {
         return Err(());
     }
@@ -452,7 +458,7 @@ pub(crate) fn bind_kernel_owned_input(
             PermitScope::KernelOwned { vm, run, cursor, keyboard_slot })?
     };
     let lease = KernelOwnedInput(permit);
-    if !bind_devices(cursor, keyboard_slot, permit, vm, run) {
+    if !bind_devices(cursor, keyboard_slot, permit, Some((vm, run))) {
         return Err(());
     }
     Ok(lease)
@@ -468,15 +474,26 @@ pub(crate) fn bind_input(
     run: u64,
 ) -> bool {
     permit.scope == PermitScope::Shared
-        && bind_devices(cursor, keyboard_slot, permit, vm, run)
+        && bind_devices(cursor, keyboard_slot, permit, Some((vm, run)))
+}
+
+/// Give Spirit's own combo the exact share, with fresh input frontiers, after
+/// its previous input lease has finished.
+pub(crate) fn bind_native_input(
+    cursor: Ui4CursorSource,
+    keyboard_slot: u32,
+    permit: Permit,
+) -> bool {
+    permit.scope == PermitScope::Shared
+        && kernel_ai_devices(cursor, keyboard_slot)
+        && bind_devices(cursor, keyboard_slot, permit, None)
 }
 
 fn bind_devices(
     cursor: Ui4CursorSource,
     keyboard_slot: u32,
     permit: Permit,
-    vm: u8,
-    run: u64,
+    owner: Option<(u8, u64)>,
 ) -> bool {
     if !valid(permit) {
         return false;
@@ -496,8 +513,7 @@ fn bind_devices(
             cursor,
             keyboard_slot,
             permit,
-            vm,
-            run,
+            owner,
             keyboard_frontiers,
             cursor_frontier,
         })
@@ -556,7 +572,7 @@ fn ai_stamp(
     let stamp = match binding {
         Some(binding) => InputStamp::Ai {
             permit: binding.permit,
-            owner: Some((binding.vm, binding.run)),
+            owner: binding.owner,
         },
         None => InputStamp::Ai {
             permit: authorize(frame)?,
@@ -763,11 +779,11 @@ mod tests {
             super::super::WindowOwner::Vm(1),
             super::super::WindowId::from_raw(7).unwrap(),
         );
-        assert_eq!(registry.toggle(frame, 3), Ok(true));
+        assert!(registry.toggle(frame, 3).unwrap().is_some());
         let old = registry.grants[0];
-        assert_eq!(registry.toggle(frame, 3), Ok(false));
+        assert_eq!(registry.toggle(frame, 3), Ok(None));
         assert!(!registry.contains(old));
-        assert_eq!(registry.toggle(frame, 3), Ok(true));
+        assert!(registry.toggle(frame, 3).unwrap().is_some());
         assert!(!registry.contains(old));
         assert_ne!(registry.grants[0].serial, old.serial);
         registry.grants.clear();

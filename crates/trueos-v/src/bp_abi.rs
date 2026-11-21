@@ -609,6 +609,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_lumen_restore_commit() -> i32;
     pub fn trueos_cabi_lumen_close() -> i32;
     pub fn trueos_cabi_spirit_emotion_play(idea_ptr: *const u8, idea_len: usize) -> i32;
+    pub fn trueos_cabi_spirit_contextual_play_v1(word_ptr: *const u8, word_len: usize) -> i32;
     pub fn trueos_cabi_spirit_response_present(
         turn: u64,
         text_ptr: *const u8,

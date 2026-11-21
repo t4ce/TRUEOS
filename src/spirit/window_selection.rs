@@ -1,11 +1,13 @@
 //! Spirit-owned UI4 window selection choreography.
 //!
-//! UI4 publishes an ordered event only after a new window's first composed
-//! frame crosses plane SURFLIVE. This one task maps that trusted window name
-//! to a Spirit background, flies Spirit's tagged *software* vCursor to the
-//! frame, and invokes UI4 focus directly without synthesizing a mouse click.
+//! UI4 publishes an ordered event after a new window's first composed frame
+//! crosses plane SURFLIVE. This task handles first-presentation effects and
+//! explicit frame shares using direct UI4 focus and Spirit's software cursor.
 
+use spin::Mutex;
 use trueos_time::{Duration, Instant, Timer, with_timeout};
+
+use crate::ui4::spirit_access::{self, Permit};
 
 use super::spirit_vfx::SpiritVfxBackgroundEffect;
 
@@ -14,6 +16,55 @@ const CURSOR_SETTLE_POLL_MS: u64 = 8;
 const INPUT_BROKER_SETTLE_MS: u64 = 24;
 const CURSOR_SETTLE_GRACE_MS: u64 = 250;
 const CURSOR_REGISTRATION_RETRY_MS: u64 = 50;
+
+static SHARED_FRAME_TO_FOCUS: Mutex<Option<Permit>> = Mutex::new(None);
+
+pub(crate) fn request_shared_frame_focus(permit: Permit) {
+    *SHARED_FRAME_TO_FOCUS.lock() = Some(permit);
+}
+
+fn focus_pending_shared_frame(source: crate::ui4::Ui4CursorSource) {
+    if SHARED_FRAME_TO_FOCUS.lock().is_none() {
+        return;
+    }
+    let Some((width, height)) = crate::ui4::output_dimensions() else {
+        return;
+    };
+    if width == 0 || height == 0 {
+        return;
+    }
+    let Ok(io) = super::ui4_interaction::try_acquire_native_io() else {
+        return;
+    };
+    let Some(keyboard) = io.keyboard() else {
+        return;
+    };
+    let permit = SHARED_FRAME_TO_FOCUS.lock().take();
+    let Some(permit) = permit else {
+        return;
+    };
+    let Some(window) = spirit_access::shared_window(permit) else {
+        return;
+    };
+    let placement = window.presentation_placement;
+    if !window.placement.visible || !placement.visible {
+        return;
+    }
+    let center_x = i64::from(placement.x) + i64::from(placement.width) / 2;
+    let center_y = i64::from(placement.y) + i64::from(placement.height) / 2;
+    let x = center_x.clamp(0, i64::from(width - 1)) as u32;
+    let y = center_y.clamp(0, i64::from(height - 1)) as u32;
+    if !spirit_access::bind_native_input(source, keyboard.slot_id, permit) {
+        return;
+    }
+    if crate::ui4::select_window_for_cursor_at(source, window.owner, window.id, x, y).is_ok()
+        && let Err(error) = super::lilly_cursor::move_to_shared_frame(x, y)
+    {
+        crate::log_warn!(target: "gfx";
+            "trueos-spirit: shared frame cursor move failed owner={:?} window={} error={:?}\n",
+            window.owner, window.id.raw(), error);
+    }
+}
 
 #[derive(Copy, Clone)]
 struct WindowVfxProfile {
@@ -55,7 +106,18 @@ pub(crate) async fn spirit_window_selection_task() {
     super::paper_demo::run().await;
 
     let mut owned_selection: Option<SpiritWindowSelection> = None;
+    let mut sound_selection = None;
     loop {
+        focus_pending_shared_frame(source);
+
+        let selected = selected_vm_window(source);
+        if selected != sound_selection {
+            sound_selection = selected;
+            super::lilly_protocol::set_window_sound(
+                selected.is_some_and(|(_, vm, run)| is_lico_vm(vm, run)),
+            );
+        }
+
         if let Some(selection) = owned_selection
             && !selection_is_owned(source, selection.key)
         {
@@ -81,6 +143,15 @@ pub(crate) async fn spirit_window_selection_task() {
         let Some(profile) = profile_for_window(window) else {
             continue;
         };
+        let key = crate::ui4::CursorFrameKey::new(window.owner, window.id);
+        if !spirit_access::cursor_target_allowed(source, key) {
+            continue;
+        }
+        if selection_is_owned(source, key) {
+            super::spirit_vfx::set_window_background_vfx(Some(profile.effect));
+            owned_selection = Some(SpiritWindowSelection { key, profile });
+            continue;
+        }
         let Some((screen_width, screen_height)) = crate::intel::active_scanout_dimensions() else {
             crate::log_warn!(
                 target: "gfx";
@@ -171,7 +242,6 @@ pub(crate) async fn spirit_window_selection_task() {
                 continue;
             }
         };
-        let key = crate::ui4::CursorFrameKey::new(window.owner, window.id);
         if !selection_is_owned(source, key) {
             crate::log_warn!(
                 target: "gfx";
@@ -207,6 +277,30 @@ fn selection_is_owned(
     key: crate::ui4::CursorFrameKey,
 ) -> bool {
     crate::ui4::selected_frame_for_source(source) == Some(key)
+}
+
+fn selected_vm_window(
+    source: crate::ui4::Ui4CursorSource,
+) -> Option<(crate::ui4::CursorFrameKey, u8, u64)> {
+    let key = crate::ui4::selected_frame_for_source(source)?;
+    if !spirit_access::cursor_target_allowed(source, key) {
+        return None;
+    }
+    // Shell3 owns the broker frame. Resolve its currently displayed VM just
+    // as UI4 does for application drops, even if the frame itself stays selected.
+    let crate::ui4::WindowOwner::Vm(vm) = crate::ui4::drag_drop::recipient(key) else {
+        return None;
+    };
+    let run = crate::hv::vm_run_generation(vm).filter(|run| *run != 0)?;
+    Some((key, vm, run))
+}
+
+fn is_lico_vm(vm: u8, run: u64) -> bool {
+    crate::hv::blueprint_current_run_archive(vm, run).is_some_and(|archive| {
+        archive.rsplit('/').next().is_some_and(|name| {
+            name.eq_ignore_ascii_case("lico.bp") || name.eq_ignore_ascii_case("lico")
+        })
+    })
 }
 
 fn profile_for_window(window: crate::ui4::WindowSnapshot) -> Option<WindowVfxProfile> {

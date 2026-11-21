@@ -85,22 +85,6 @@ struct ActivePrompt {
     launch: Option<ColdLaunch>,
 }
 
-/// Capture an existing receiver before asynchronous frame preparation.
-pub(crate) fn request_open(source: Ui4CursorSource, anchor: (u32, u32)) {
-    let mut pending = OPEN_REQUEST.lock();
-    if pending.is_some() {
-        return;
-    }
-    *pending = Some(OpenRequest {
-        source,
-        anchor,
-        target: codex::current_target(),
-        paths: Vec::new(),
-        previews: Vec::new(),
-    });
-    OPEN_SIGNAL.signal(());
-}
-
 // The installer and Codex each keep their Matrix slot through the exit
 // callback. Take the result before admitting the next launch on the UI task.
 #[derive(Default)]
@@ -267,8 +251,7 @@ pub(crate) async fn ui4_codex_prompt_service_task() {
     let mut active: Option<ActivePrompt> = None;
     let mut detached: Option<ColdLaunch> = None;
     loop {
-        // Closed is the usual state: consume no timer/CPU work until a live
-        // context-menu action queues an actual request.
+        // Sleep while closed until a request arrives.
         if active.is_none() && detached.is_none() {
             OPEN_SIGNAL.wait().await;
         }

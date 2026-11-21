@@ -1417,12 +1417,8 @@ pub(crate) fn play_failed_vfx() {
     if SPIRIT_FAILURE_FLASH_ENABLED {
         FAILED_SPRITE_VFX.lock().start(now_ms, duration_ms);
     }
-    if let Err(error) = super::lilly_protocol::schedule_failed_reaction(now_ms, duration_ms) {
-        crate::log_warn!(target: "spirit";
-            "trueos-spirit: failed gesture unavailable error={:?}\n",
-            error,
-        );
-    }
+    crate::log_warn!(target: "spirit";
+        "trueos-spirit: deprecated failed gesture signal action=ignored\n");
     CONTROL_PANEL_REVISION.fetch_add(1, Ordering::AcqRel);
 }
 

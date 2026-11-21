@@ -250,6 +250,7 @@ pub const OP_BP_LUMEN_RESTORE_COMMIT: u32 = 0x108;
 pub const OP_BP_LUMEN_CLOSE: u32 = 0x109;
 pub const OP_BP_LUMEN_PROMPT_SUBMIT_WITH_NO_ARGUMENT_TOOL_V1: u32 = 0x155;
 pub const OP_BP_SPIRIT_EMOTION_PLAY: u32 = 0x10A;
+pub const OP_BP_SPIRIT_CONTEXTUAL_PLAY_V1: u32 = 0x25D;
 pub const OP_BP_SPIRIT_RESPONSE_PRESENT: u32 = 0x10B;
 pub const OP_BP_SPIRIT_MOVE: u32 = 0x10C;
 pub const OP_BP_UI4_WINDOW_STATE_V1: u32 = 0x20A;
@@ -1164,6 +1165,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         .map(|_| 0)
                         .unwrap_or(-5)
                 })
+                .unwrap_or(-3);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SPIRIT_CONTEXTUAL_PLAY_V1 => {
+            let rc = request_payload(vm_id, req_len)
+                .map(crate::ai::spirit_abi::spirit_contextual_play)
                 .unwrap_or(-3);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume

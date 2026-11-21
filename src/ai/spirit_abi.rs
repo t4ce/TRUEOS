@@ -65,6 +65,46 @@ pub unsafe extern "C" fn trueos_cabi_spirit_emotion_play(
         .unwrap_or(ERROR_UNAVAILABLE)
 }
 
+pub(crate) fn spirit_contextual_play(word: &[u8]) -> i32 {
+    if word.is_empty() || word.len() > 16 {
+        return ERROR_BAD_INPUT;
+    }
+    let Ok(word) = core::str::from_utf8(word) else {
+        return ERROR_BAD_INPUT;
+    };
+    match crate::spirit::enqueue_contextual_word(word) {
+        Ok(()) => 0,
+        Err(crate::spirit::lilly_protocol::LillyProtocolError::UnknownContext) => ERROR_BAD_INPUT,
+        Err(_) => ERROR_UNAVAILABLE,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_spirit_contextual_play_v1(
+    word_ptr: *const u8,
+    word_len: usize,
+) -> i32 {
+    if word_ptr.is_null() || word_len == 0 || word_len > 16 {
+        return ERROR_BAD_INPUT;
+    }
+    let word = unsafe { core::slice::from_raw_parts(word_ptr, word_len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_SPIRIT_CONTEXTUAL_PLAY_V1,
+            0,
+            0,
+            word,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            data as i64 as i32
+        } else {
+            ERROR_TRANSPORT
+        };
+    }
+    spirit_contextual_play(word)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_spirit_text_present_silent(
     turn: u64,

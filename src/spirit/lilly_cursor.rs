@@ -8,7 +8,8 @@ use spin::Mutex;
 
 use crate::r::services::mouse_motion_service::{
     MOUSE_CONTROL_EASING_LINEAR, MOUSE_CONTROL_EASING_NATURAL, MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
-    MOUSE_CONTROL_OPCODE_BUTTONS, MOUSE_CONTROL_OPCODE_STROKE, MOUSE_CONTROL_PATH_LINE,
+    MOUSE_CONTROL_OPCODE_BUTTONS, MOUSE_CONTROL_OPCODE_STROKE, MOUSE_CONTROL_OPCODE_TELEPORT,
+    MOUSE_CONTROL_PATH_LINE,
     MOUSE_CONTROL_PATH_QUADRATIC, MouseControlCommand, MouseControlCursor, MouseControlError,
     MouseControlPrincipal,
 };
@@ -73,6 +74,24 @@ pub(super) fn selection_source() -> Result<crate::ui4::Ui4CursorSource, MouseCon
         ep_target: 0,
         hid_kind: crate::r::cursor::HID_KIND_VIRTUAL_CURSOR,
     })
+}
+
+pub(super) fn move_to_shared_frame(x: u32, y: u32) -> Result<(), MouseControlError> {
+    let mut state = LILLY_CURSOR.lock();
+    let cursor = state.ensure_cursor()?;
+    crate::r::services::mouse_motion_service::submit_command(
+        MouseControlPrincipal::Kernel,
+        cursor.handle,
+        MouseControlCommand {
+            opcode: MOUSE_CONTROL_OPCODE_TELEPORT,
+            flags: MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
+            x: x as i32,
+            y: y as i32,
+            ..MouseControlCommand::default()
+        },
+    )?;
+    state.initial_outline_queued = true;
+    Ok(())
 }
 
 /// Replace Lilly's pending software-cursor choreography with one natural

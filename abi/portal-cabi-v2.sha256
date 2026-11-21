@@ -1,3 +1,4 @@
+# Additive Lily contextual playback v1; all existing signatures unchanged.
 # Additive progressive HTTP audio stream v1; all 373 existing signatures unchanged.
 # Additive complete-clip HTTP playback handoff v1; all 372 existing signatures unchanged.
 # Intentional retirement of all 17 legacy audio playback/monitor exports; surviving signatures unchanged.
@@ -56,4 +57,4 @@
 # Additive bounded subdocument fetch with host-applied Referer context; all previous signatures verified unchanged.
 # Additive non-consuming final GET URL metadata; all 369 previous signatures verified unchanged.
 # Intentional retirement of the QJS-only mouse stream; every surviving signature verified unchanged.
-8382548b4c294a41ae611ed9c0b32aa33ecdb763f90687d90410deec977ccbdd
+6dedbd87cf22fffa9d4b36c05aaabefeddb0c0e39909c975817091509ec1f5df

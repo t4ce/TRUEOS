@@ -40,7 +40,7 @@ def menu_source():
     ))
     result += "mod tests { use super::*;\n#[test]\n"
     result += block((ROOT / broker).read_text(),
-                    "fn desktop_context_menu_exposes_codex_directly_below_link()")
+                    "fn desktop_context_menu_exposes_appdb_directly_below_link()")
     result += """
     #[test]
     fn last_menu_row_fits_at_the_screen_corner() {
@@ -50,7 +50,8 @@ def menu_source():
             assert!(menu.y+menu.height <= height);
             let x=menu.x+menu.width/2;
             let y=menu.y+DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX
-                +5*CONTEXT_MENU_ROW_HEIGHT_PX+CONTEXT_MENU_ROW_HEIGHT_PX/2;
+                +(DESKTOP_CONTEXT_MENU_ENTRY_COUNT-1)*CONTEXT_MENU_ROW_HEIGHT_PX
+                +CONTEXT_MENU_ROW_HEIGHT_PX/2;
             assert_eq!(desktop_context_menu_action_at(menu,x,y),
                 Some(DesktopContextMenuAction::AppDb));
             assert_eq!(desktop_context_menu_action_at(menu,menu.x+menu.width,y),None);

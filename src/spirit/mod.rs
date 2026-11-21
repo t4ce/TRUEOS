@@ -32,6 +32,7 @@ mod background_cache;
 pub(crate) use codex_drop::{introduce_attachments, attachment_intro_input, poll_attachment_intro, cancel_attachment_intro};
 pub(crate) use paper_demo::{GREETING_GRID_HEIGHT_MM, GREETING_GRID_SCALE, GREETING_GRID_WIDTH_MM};
 pub(crate) mod lilly_protocol;
+mod lilly_sequencer;
 pub(crate) mod spirit_thoughts;
 
 #[path = "Spirit_VFX.rs"]
@@ -39,9 +40,11 @@ pub(crate) mod spirit_vfx;
 mod window_selection;
 
 #[allow(unused_imports)]
-pub(crate) use lilly_protocol::{LillyEmotion, enqueue_emotion_words, enqueue_emotions, enqueue_presentation_word};
+pub(crate) use lilly_protocol::{enqueue_contextual_word, enqueue_presentation_word, idle_mode, set_idle_mode};
+#[allow(unused_imports)]
+pub(crate) use lilly_sequencer::{IdleMode, TalkMoods};
 
-pub(crate) use window_selection::spirit_window_selection_task;
+pub(crate) use window_selection::{request_shared_frame_focus, spirit_window_selection_task};
 
 pub(crate) fn marker_anchor() -> Option<(u32, u32, i32, i32, u32, u32)> {
     intel_cursor::spirit_cursor_geometry(active_spirit_fence()?.0)
@@ -1438,6 +1441,9 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
             (Some(paused_at), None) => {
                 let paused = package_now.saturating_duration_since(paused_at);
                 codex_handoff::shift_deadlines(paused.as_millis());
+                if id == SpiritFenceId::FENCE_0 {
+                    lilly_protocol::shift_deadlines(paused.as_millis());
+                }
                 package_next_boundary = package_next_boundary + paused;
                 package_started = package_started + paused;
                 stream_next_deadline = stream_next_deadline + paused;
@@ -1894,11 +1900,12 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     continue;
                 }
                 let source_frame = package_active
-                    .and_then(|scheduled| {
+                    .as_ref()
+                    .map(|scheduled| {
                         let elapsed_ms = Instant::now()
                             .saturating_duration_since(package_started)
                             .as_millis();
-                        scheduled.frame_at_elapsed(elapsed_ms).map(|part| part.surface)
+                        scheduled.frame_at_elapsed(elapsed_ms)
                     })
                     .or_else(|| {
                         // A clip boundary cannot interrupt the native tile.

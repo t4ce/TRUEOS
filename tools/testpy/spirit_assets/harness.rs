@@ -69,6 +69,18 @@ mod gpu {
 #[path = "@TRUEOS_ROOT@/src/spirit/lilly.rs"]
 mod lilly;
 
+#[cfg(test)]
+mod tyche {
+    pub struct SoftRng;
+    impl SoftRng {
+        pub fn usize_below(&mut self, _: usize) -> usize { 0 }
+        pub fn bool(&mut self) -> bool { false }
+    }
+}
+#[cfg(test)]
+#[path = "@TRUEOS_ROOT@/src/spirit/lilly_sequencer.rs"]
+mod lilly_sequencer;
+
 #[test]
 fn full_pack_upload_alignment_and_legacy_playback_contract() {
     assert!(lilly::prepare_resident_once());
@@ -76,6 +88,10 @@ fn full_pack_upload_alignment_and_legacy_playback_contract() {
     let bytes = include_bytes!("@TRUEOS_ROOT@/tools/Lilly.lpak");
     let decoded = trueos_lily_pack::decode(bytes).unwrap();
     assert_eq!(decoded.frames.len(), 607);
+    let paths: std::collections::HashSet<_> = decoded.frames.iter().map(|entry| entry.path.as_str()).collect();
+    for path in lilly_sequencer::frame_paths() {
+        assert!(paths.contains(path), "sequencer frame missing from the embedded pack: {path}");
+    }
     assert_eq!(WRITES.load(Ordering::SeqCst), 607);
     assert_eq!(FLUSHES.load(Ordering::SeqCst), 1);
     assert_eq!(BUFFERS.lock().unwrap().len(), 1);

@@ -587,7 +587,7 @@ mod tests {
         let lease = access::bind_kernel_owned_input(cursor, keys.slot_id, key, 1, 7).unwrap();
         let old_pointer = access::stamp_cursor(cursor, key).unwrap();
         let old_keyboard = access::stamp_keyboard(&keys, key).unwrap();
-        assert_eq!(access::toggle_from_human(human, key), Ok(true));
+        assert!(access::toggle_from_human(human, key).unwrap().is_some());
         assert!(!access::stamp_valid(old_pointer, key));
         assert!(!access::stamp_valid(old_keyboard, key));
         let permit = access::authorize(key).unwrap();
@@ -786,7 +786,7 @@ mod tests {
         assert!(access::cursor_event_allowed(cursor, 11));
         assert!(access::keyboard_event_allowed(&keys));
         assert!(matches!(access::stamp_cursor(cursor, key), Some(access::InputStamp::Remote { .. })));
-        assert_eq!(access::toggle_from_human(cursor, key), Ok(true));
+        assert!(access::toggle_from_human(cursor, key).unwrap().is_some());
         access::frame_closed(key);
     }
 
@@ -907,7 +907,7 @@ mod tests {
         assert!(!access::keyboard_target_allowed(&ai_keys, key));
         assert_eq!(access::toggle_from_human(ai, key), Err(()));
         assert!(!access::is_granted(key));
-        assert_eq!(access::toggle_from_human(human, key), Ok(true));
+        assert!(access::toggle_from_human(human, key).unwrap().is_some());
         assert!(access::cursor_target_allowed(ai, key));
         assert!(access::keyboard_target_allowed(&ai_keys, key));
         assert_eq!(world(|w| w.notifications), 1);
@@ -994,11 +994,11 @@ mod tests {
         assert!(access::bind_input(ai, keys.slot_id, old, 1, 7));
         assert!(access::cursor_target_allowed(ai, key));
         assert!(access::keyboard_target_allowed(&keys, key));
-        assert_eq!(access::toggle_from_human(human, key), Ok(false));
+        assert_eq!(access::toggle_from_human(human, key), Ok(None));
         assert!(!access::valid(old));
         assert!(!access::cursor_target_allowed(ai, key));
         assert!(!access::keyboard_target_allowed(&keys, key));
-        assert_eq!(access::toggle_from_human(human, key), Ok(true));
+        assert!(access::toggle_from_human(human, key).unwrap().is_some());
         assert!(!access::valid(old));
         assert!(!access::bind_input(ai, keys.slot_id, old, 1, 7));
         assert!(!access::cursor_target_allowed(ai, key));
@@ -1008,6 +1008,41 @@ mod tests {
         assert!(access::cursor_target_allowed(ai, key));
         assert!(access::keyboard_target_allowed(&keys, key));
         access::frame_closed(key);
+    }
+
+    #[test]
+    fn native_share_focus_replaces_the_previous_binding_using_the_exact_grant() {
+        let (previous, human, _) = setup(550);
+        let shared = frame(551);
+        world(|w| w.windows.push(window(shared, 3)));
+        let (cursor, mut keys) = kernel_ai_pair(550);
+        let previous_permit = access::toggle_from_human(human, previous).unwrap().unwrap();
+        assert!(access::bind_input(cursor, keys.slot_id, previous_permit, 1, 7));
+        let permit = access::toggle_from_human(human, shared).unwrap().unwrap();
+        assert_eq!(access::shared_window(permit).unwrap().id, shared.window);
+        assert!(!access::cursor_target_allowed(cursor, shared));
+
+        world(|w| {
+            w.cursor_frontier = 20;
+            w.keyboard_frontiers = (10, 10);
+        });
+        assert!(access::bind_native_input(cursor, keys.slot_id, permit));
+        assert!(!access::cursor_target_allowed(cursor, previous));
+        assert!(access::cursor_target_allowed(cursor, shared));
+        assert!(!access::cursor_sequence_allowed(cursor, shared, 20));
+        assert!(access::cursor_sequence_allowed(cursor, shared, 21));
+        keys.seq = 10;
+        assert!(access::stamp_keyboard(&keys, shared).is_none());
+        keys.seq = 11;
+        assert!(access::stamp_keyboard(&keys, shared).is_some());
+
+        assert_eq!(access::toggle_from_human(human, shared), Ok(None));
+        assert!(access::toggle_from_human(human, shared).unwrap().is_some());
+        assert!(access::shared_window(permit).is_none());
+        assert!(!access::bind_native_input(cursor, keys.slot_id, permit));
+        assert!(!access::cursor_target_allowed(cursor, shared));
+        access::frame_closed(previous);
+        access::frame_closed(shared);
     }
 
     #[test]
@@ -1084,7 +1119,7 @@ mod tests {
         assert!(!access::keyboard_target_allowed(&keys, key));
         // Broker reclamation can replace a session without the explicit close
         // hook; admission must prune the retired grant before toggling.
-        assert_eq!(access::toggle_from_human(human, key), Ok(true));
+        assert!(access::toggle_from_human(human, key).unwrap().is_some());
         assert!(!access::valid(old));
         assert!(!access::cursor_target_allowed(ai, key));
         access::frame_closed(key);
