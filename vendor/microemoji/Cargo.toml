@@ -1,0 +1,8 @@
+[package]
+name = "microemoji"
+version = "0.1.0"
+edition = "2024"
+description = "Allocation-free color glyph outlines, SVG export, and raster edges"
+
+[dev-dependencies]
+ttf-parser = { version = "0.25.1", default-features = false, features = ["std"] }

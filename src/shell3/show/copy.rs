@@ -53,10 +53,9 @@ pub(super) async fn present(
             return Err("shell3-show-copy-destination-view");
         }
     };
-    // Matrix and reveal tiles contain the ordinary shell face. Edit's page
-    // selects a face per cell, so paint it directly instead of copying those
-    // raster-only tiles over the page. Retain them for returning to the shell.
-    let use_raster_caches = surface.hex_region.is_none();
+    // Matrix and reveal tiles contain the ordinary shell face. Edit and the
+    // emoji specimen select a face per cell and use the direct paint path.
+    let use_raster_caches = surface.hex_region.is_none() && surface.emoji_masks.is_none();
     super::super::presentation_probe::stage(13);
     let using_pan =
         match super::pan::PanBuffer::prepare(
@@ -304,6 +303,7 @@ fn glyphs_for_update(
             height,
             (character, update.colors.get(column).copied().flatten()),
             surface.scale,
+            surface.emoji_mask(row, character),
         )?);
     }
     Ok(())
@@ -319,7 +319,7 @@ pub(super) fn glyph_for_cell(
 ) -> Result<crate::intel::GucBcs0RgbaCopy, &'static str> {
     glyph_for_cell_with_face(
         crate::r::services::shell3_font_service::FontFace::Raster,
-        x, y, width, height, cell, scale,
+        x, y, width, height, cell, scale, None,
     )
 }
 
@@ -331,20 +331,24 @@ pub(super) fn glyph_for_cell_with_face(
     height: u32,
     cell: (char, Option<super::super::RgbaColor>),
     scale: u32,
+    emoji_mask: Option<&[u8]>,
 ) -> Result<crate::intel::GucBcs0RgbaCopy, &'static str> {
     let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)
         .ok_or("shell3-font-physical-size-unavailable")?;
-    let mut copy = crate::r::services::shell3_font_service::glyph_with_face(
-        face,
-        cell.0,
-        cell_width,
-        cell_height,
-        cell.1.unwrap_or(super::FOREGROUND).rgba(),
-        cell.1
-            .and_then(super::super::RgbaColor::background)
-            .unwrap_or(super::BACKGROUND),
-        cell.1.is_some_and(super::super::RgbaColor::underline),
-    )?;
+    let foreground = cell.1.unwrap_or(super::FOREGROUND).rgba();
+    let background = cell.1
+        .and_then(super::super::RgbaColor::background)
+        .unwrap_or(super::BACKGROUND);
+    let underline = cell.1.is_some_and(super::super::RgbaColor::underline);
+    let mut copy = if let Some(mask) = emoji_mask {
+        crate::r::services::shell3_font_service::emoji_glyph(
+            cell.0, cell_width, cell_height, foreground, background, underline, mask,
+        )
+    } else {
+        crate::r::services::shell3_font_service::glyph_with_face(
+            face, cell.0, cell_width, cell_height, foreground, background, underline,
+        )
+    }?;
     copy.destination_x = x;
     copy.destination_y = y;
     copy.width = copy.width.min(width);

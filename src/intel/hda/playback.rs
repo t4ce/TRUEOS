@@ -56,6 +56,7 @@ mod verb {
     pub const GET_PARAMETER: u32 = 0xf00;
     pub const GET_CONNECTION_LIST: u32 = 0xf02;
     pub const GET_POWER: u32 = 0xf05;
+    pub const GET_PIN_SENSE: u32 = 0xf09;
     pub const GET_PIN_CONFIG: u32 = 0xf1c;
     pub const SET_CONNECT: u32 = 0x701;
     pub const SET_POWER: u32 = 0x705;
@@ -83,6 +84,7 @@ const PCM_FORMAT: u16 = 0x0011; // 48 kHz, signed 16-bit stereo
 const STREAM_TAG: u8 = 1;
 const MAX_POLL_GAP_US: u64 = 20_000;
 const CURSOR_STALL_US: u64 = 100_000;
+const JACK_POLL_INTERVAL_US: u64 = 4_000_000;
 
 const NODE_COUNT: u8 = 0x04;
 const FUNCTION_TYPE: u8 = 0x05;
@@ -93,6 +95,12 @@ const PIN_CAPS: u8 = 0x0c;
 const INPUT_AMP: u8 = 0x0d;
 const CONNECTION_LIST_LEN: u8 = 0x0e;
 const OUTPUT_AMP: u8 = 0x12;
+
+const DIGITAL_WIDGET: u32 = 1 << 9;
+const PIN_PRESENCE_DETECT: u32 = 1 << 2;
+const PIN_OUTPUT_CAPABLE: u32 = 1 << 4;
+const JACK_DETECT_OVERRIDE: u32 = 1 << 8;
+const PIN_SENSE_PRESENT: u32 = 1 << 31;
 
 #[repr(C)]
 struct BufferDescriptor {
@@ -125,6 +133,13 @@ struct Output {
     priority: u8,
 }
 
+struct Jack {
+    codec: u8,
+    nid: u8,
+    name: &'static str,
+    present: Option<bool>,
+}
+
 pub(super) struct Playback {
     device: PciDevice,
     mmio: usize,
@@ -137,6 +152,9 @@ pub(super) struct Playback {
     last_poll: Option<u64>,
     last_position: usize,
     last_progress: u64,
+    jacks: Vec<Jack>,
+    next_jack: usize,
+    next_jack_poll: u64,
 }
 
 impl Playback {
@@ -170,6 +188,9 @@ impl Playback {
             last_poll: None,
             last_position: 0,
             last_progress: 0,
+            jacks: Vec::new(),
+            next_jack: 0,
+            next_jack_poll: 0,
         };
         let caps = playback.read::<u16>(reg::GCAP);
         if playback.read::<u8>(reg::VMAJ) != 1 || caps >> 12 == 0 {
@@ -405,7 +426,23 @@ impl Playback {
             let (pin_caps, pin_priority) = if kind == 4 {
                 let config = self.verb(codec, nid, verb::GET_PIN_CONFIG, 0)?;
                 let pin_caps = self.parameter(codec, nid, PIN_CAPS)?;
-                let priority = match ((config >> 30) & 3, (config >> 20) & 0xf) {
+                let port = config >> 30;
+                let device = (config >> 20) & 0xf;
+                if caps & DIGITAL_WIDGET == 0
+                    && pin_caps & (PIN_PRESENCE_DETECT | PIN_OUTPUT_CAPABLE)
+                        == PIN_PRESENCE_DETECT | PIN_OUTPUT_CAPABLE
+                    && config & JACK_DETECT_OVERRIDE == 0
+                    && matches!(port, 0 | 3)
+                    && let Some(&name) = ["line-out", "speaker", "headphone"].get(device as usize)
+                {
+                    self.jacks.push(Jack {
+                        codec,
+                        nid,
+                        name,
+                        present: None,
+                    });
+                }
+                let priority = match (port, device) {
                     (1, _) => u8::MAX,
                     (_, 1) => 1, // Speaker
                     (_, 0) => 2, // Line out
@@ -433,6 +470,47 @@ impl Playback {
             });
         }
         Ok(widgets)
+    }
+
+    /// Check one jack per service tick, with a four-second interval between sweeps.
+    pub(super) fn poll_jack(&mut self) {
+        let now = embassy_time_driver::now();
+        if now < self.next_jack_poll {
+            return;
+        }
+        let Some(jack) = self.jacks.get(self.next_jack) else {
+            return;
+        };
+        let (codec, nid, name) = (jack.codec, jack.nid, jack.name);
+        let sense = match self.verb(codec, nid, verb::GET_PIN_SENSE, 0) {
+            Ok(sense) => sense,
+            Err(error) => {
+                // A late response could be mistaken for a subsequent codec query.
+                self.jacks.clear();
+                crate::log_warn!(target: "global";
+                    "hda: jack polling stopped codec={} pin=0x{:02x}: {}\n", codec, nid, error
+                );
+                return;
+            }
+        };
+        let present = sense & PIN_SENSE_PRESENT != 0;
+        if self.jacks[self.next_jack]
+            .present
+            .replace(present)
+            .is_some_and(|previous| previous != present)
+        {
+            let dev = &self.device;
+            crate::log_info!(target: "global";
+                "hda: {} jack {} bdf={:02X}:{:02X}.{} codec={} pin=0x{:02x}\n",
+                name, if present { "plugged" } else { "unplugged" },
+                dev.bus, dev.slot, dev.function, codec, nid
+            );
+        }
+        self.next_jack += 1;
+        if self.next_jack == self.jacks.len() {
+            self.next_jack = 0;
+            self.next_jack_poll = now + ticks_for_us(JACK_POLL_INTERVAL_US);
+        }
     }
 
     fn connections(&mut self, codec: u8, nid: u8) -> Result<Vec<u8>, &'static str> {

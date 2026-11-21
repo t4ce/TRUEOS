@@ -541,6 +541,9 @@ pub struct TrueosUi4FontSpriteStatusV1 {
     pub origin_y: i32,
 }
 
+/// Microemoji coverage for the UI4 font sprite requests.
+pub const UI4_FONT_SPRITE_MICROEMOJI: u32 = 5;
+
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct TrueosUi4FontMetricsV1 {

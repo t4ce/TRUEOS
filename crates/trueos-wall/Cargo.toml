@@ -3,6 +3,3 @@ name = "trueos-wall"
 version = "0.1.0"
 edition = "2024"
 description = "Static socket and packet firewall policy for TRUEOS"
-
-[build-dependencies]
-serde_json = { workspace = true, features = ["std"] }

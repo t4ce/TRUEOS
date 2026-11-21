@@ -9,7 +9,12 @@ mod reveal;
 mod edit_life;
 
 use super::RgbaColor;
-use super::update::RenderedLine;
+use super::update::{MatrixAreaSnapshot, RenderedLine};
+use crate::r::services::{microemoji_mask_service as emoji, shell3_font_service};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 use crate::ui4::{
     DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId,
     PremultipliedRgba8, ScanoutFormat, Ui4FrameEscapeKeyAction, Ui4InputEvent, WindowCreate,
@@ -23,6 +28,49 @@ use crate::ui4::{
 const OWNER: WindowOwner = WindowOwner::SHELL3_SERVICE;
 const BACKGROUND: [u8; 4] = super::update::MATRIX_BACKGROUND;
 const FOREGROUND: RgbaColor = RgbaColor::White;
+
+type EmojiMasks = BTreeMap<char, Arc<[u8]>>;
+
+async fn prepare_microemoji(
+    masks: &mut Option<EmojiMasks>,
+    lines: &[&[(char, Option<RgbaColor>)]],
+    area: Option<&MatrixAreaSnapshot>,
+    scale: u32,
+) -> Result<(), &'static str> {
+    if !area.is_some_and(|area| super::MatrixSlots::is_microemoji_specimen(area.identity.1)) {
+        *masks = None;
+        return Ok(());
+    }
+    let masks = masks.get_or_insert_with(BTreeMap::new);
+    let mut pending: BTreeSet<_> = lines
+        .iter()
+        .skip(3)
+        .flat_map(|line| line.iter().map(|&(ch, _)| ch))
+        .filter(|ch| !masks.contains_key(ch) && emoji::has_glyph(*ch))
+        .collect();
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let (width, height) = shell3_font_service::cell_extent(scale)
+        .ok_or("shell3-font-physical-size-unavailable")?;
+    let size = width.min(height);
+    // Do the cold requests before acquiring a writable frame. Keep retrieved
+    // masks while this specimen is visible, even if the global cache evicts.
+    loop {
+        pending.retain(|&ch| match emoji::glyph(ch, size) {
+            Ok(mask) => {
+                masks.insert(ch, mask);
+                false
+            }
+            Err(emoji::Error::Pending) => true,
+            Err(_) => false,
+        });
+        if pending.is_empty() {
+            return Ok(());
+        }
+        trueos_time::Timer::after(trueos_time::Duration::from_millis(5)).await;
+    }
+}
 
 /// Edit may select its embedded Hex font and Conway effect on every output.
 fn bitmap_edit_settings(
@@ -74,6 +122,7 @@ struct Ui4Surface {
     scale: u32,
     clear_buffers: [bool; 2],
     hex_region: Option<HexRegion>,
+    emoji_masks: Option<EmojiMasks>,
     edit_life: Option<trueos_terminal::edit_life::EditLife>,
     edit_life_page: Option<alloc::sync::Arc<crate::ui4::edit_life::Page>>,
 }
@@ -96,6 +145,13 @@ impl Ui4Surface {
         } else {
             crate::r::services::shell3_font_service::FontFace::Raster
         }
+    }
+
+    fn emoji_mask(&self, row: u32, ch: char) -> Option<&[u8]> {
+        if row < 3 {
+            return None;
+        }
+        self.emoji_masks.as_ref()?.get(&ch).map(AsRef::as_ref)
     }
 }
 
@@ -188,6 +244,7 @@ impl Show {
                     .map_err(|_| "shell3-show-scale-minimum")?;
             }
             surface.scale = scale;
+            surface.emoji_masks = None;
             surface.broker_resized = true;
             surface.frame_contents = [None, None];
             surface.clear_buffers = [true; 2];
@@ -251,6 +308,8 @@ impl Show {
         if (placement.width, placement.height) == (current.width, current.height) {
             return Ok(());
         }
+        let mut emoji_masks = current.emoji_masks.clone();
+        prepare_microemoji(&mut emoji_masks, lines, area, self.font_scale).await?;
         let replacement = create_surface_frames(placement.width, placement.height, self.backend)?;
         let mut staged = Ui4Surface {
             frame: replacement,
@@ -265,6 +324,7 @@ impl Show {
             scale: self.font_scale,
             clear_buffers: [false; 2],
             hex_region: HexRegion::from_settings(edit_life),
+            emoji_masks,
             edit_life: None,
             edit_life_page: None,
         };
@@ -398,7 +458,14 @@ impl Show {
                 Some(create_surface(width, height, self.backend, self.initial_geometry)?);
             self.surface.as_mut().unwrap().scale = self.font_scale;
         }
-        self.surface.as_mut().ok_or("shell3-show-surface-missing")?.set_hex_region(edit_life);
+        let surface = self.surface.as_mut().ok_or("shell3-show-surface-missing")?;
+        surface.set_hex_region(edit_life);
+        let was_emoji = surface.emoji_masks.is_some();
+        prepare_microemoji(&mut surface.emoji_masks, lines, area, self.font_scale).await?;
+        if was_emoji != surface.emoji_masks.is_some() {
+            surface.frame_contents = [None, None];
+            surface.clear_buffers = [true; 2];
+        }
         if !recreate_surface
             && batch.segments.is_empty()
             && self
@@ -573,6 +640,7 @@ fn create_surface(
         scale: 1,
         clear_buffers: [false; 2],
         hex_region: None,
+        emoji_masks: None,
         edit_life: None,
         edit_life_page: None,
     })

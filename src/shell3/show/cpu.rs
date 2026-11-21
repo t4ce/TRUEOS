@@ -103,6 +103,7 @@ fn paint_segment(
             surface.font_face((segment.offset + column) as u32, row as u32),
             x, y, cell_width.min(view.width - x), cell_height.min(view.height - y),
             (character, segment.colors.get(column).copied().flatten()), surface.scale,
+            surface.emoji_mask(row as u32, character),
         ).map_err(|_| ())?);
     }
     if copies.is_empty() {

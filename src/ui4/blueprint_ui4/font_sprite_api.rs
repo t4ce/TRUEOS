@@ -1,11 +1,12 @@
-//! Window-owned glyph sprites sampled from the existing shared Microfont atlas.
+//! Window-owned glyph sprites sampled from the shared font mask services.
 //! No font rasterizer or mask bytes cross the Blueprint boundary.
 use super::{
     ERROR_BUSY, ERROR_CONTEXT, ERROR_INVALID, ERROR_NOT_FOUND, ERROR_UI4, SURFACES, WindowOwner,
     blueprint_owner, hull_image_api, surface_mut,
 };
+use crate::r::services::{microemoji_mask_service, shell3_font_service};
 use alloc::vec;
-use v::bp_abi::TrueosUi4FontSpriteStatusV1;
+use v::bp_abi::{TrueosUi4FontSpriteStatusV1, UI4_FONT_SPRITE_MICROEMOJI};
 
 pub(super) struct Sprite {
     key: [u32; 5],
@@ -33,10 +34,11 @@ pub(crate) fn request(owner: WindowOwner, window: u32, bytes: &[u8]) -> Result<u
     let key = [font, scalar, pixels, color, extra.to_bits()];
     let height = f32::from_bits(pixels);
     let character = char::from_u32(scalar).ok_or(ERROR_INVALID)?;
-    if font != 1
+    let emoji = font == UI4_FONT_SPRITE_MICROEMOJI;
+    if (font != 1 && !emoji)
         || !height.is_finite()
         || !(11.0..=256.0).contains(&height)
-        || (extra != 0.0 && height > 128.0)
+        || (extra != 0.0 && (emoji || height > 128.0))
     {
         return Err(ERROR_INVALID);
     }
@@ -56,27 +58,47 @@ pub(crate) fn request(owner: WindowOwner, window: u32, bytes: &[u8]) -> Result<u
         }
     }
     let height = height as u32;
-    let width = (height * 6 + 5) / 11;
+    let mask = if emoji {
+        Some(
+            microemoji_mask_service::glyph(character, height).map_err(|error| match error {
+                microemoji_mask_service::Error::InvalidSize => ERROR_INVALID,
+                microemoji_mask_service::Error::MissingGlyph => ERROR_NOT_FOUND,
+                microemoji_mask_service::Error::Pending => ERROR_BUSY,
+                microemoji_mask_service::Error::Build(_) => ERROR_UI4,
+            })?,
+        )
+    } else {
+        None
+    };
+    let width = if emoji { height } else { (height * 6 + 5) / 11 };
     let mut rgba = vec![0; (width * height * 4) as usize];
-    crate::r::services::shell3_font_service::with_styled_cell_coverage(
-        character,
-        width,
-        height,
-        color.to_le_bytes(),
-        extra,
-        |x, y, alpha, ink| {
-            let at = ((y * width + x) * 4) as usize;
-            rgba[at..at + 3].copy_from_slice(&ink[..3]);
-            rgba[at + 3] = ((u32::from(alpha) * u32::from(ink[3]) + 127) / 255) as u8;
-        },
-    )
-    .map_err(|reason| {
-        if matches!(reason, "shell3-font-not-ready" | "microfont-style-pending") {
-            ERROR_BUSY
-        } else {
-            ERROR_UI4
+    let mut paint = |index, alpha, ink: [u8; 4]| {
+        let at = index * 4;
+        rgba[at..at + 3].copy_from_slice(&ink[..3]);
+        rgba[at + 3] = ((u32::from(alpha) * u32::from(ink[3]) + 127) / 255) as u8;
+    };
+    let ink = color.to_le_bytes();
+    if let Some(mask) = mask {
+        for (index, &alpha) in mask.iter().enumerate() {
+            paint(index, alpha, ink);
         }
-    })?;
+    } else {
+        shell3_font_service::with_styled_cell_coverage(
+            character,
+            width,
+            height,
+            ink,
+            extra,
+            |x, y, alpha, ink| paint((y * width + x) as usize, alpha, ink),
+        )
+        .map_err(|reason| {
+            if matches!(reason, "shell3-font-not-ready" | "microfont-style-pending") {
+                ERROR_BUSY
+            } else {
+                ERROR_UI4
+            }
+        })?;
+    }
     let mut prepared = hull_image_api::prepare_rgba(width, height, &rgba)?;
     let id =
         hull_image_api::install_prepared(u32::from(vm), window, incarnation, 0, &mut prepared)?;

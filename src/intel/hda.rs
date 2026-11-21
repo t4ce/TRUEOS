@@ -76,6 +76,7 @@ pub(crate) async fn service() {
         }) {
             break error;
         }
+        playback.poll_jack();
         Timer::after_millis(2).await;
     };
     vhda::set_available(false);

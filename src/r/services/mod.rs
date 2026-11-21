@@ -17,6 +17,7 @@ mod hull_svg_policy;
 pub(crate) mod image_open_service;
 pub mod keyboard_control_service;
 pub mod media_service;
+pub(crate) mod microemoji_mask_service;
 mod microfont_line_overlap;
 pub(crate) mod microfont_mask_service;
 pub mod mouse_motion_service;

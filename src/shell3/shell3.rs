@@ -208,6 +208,7 @@ struct MatrixSlotsState {
     ids: Vec<String>,
     lifetimes: Vec<(String, u64)>,
     next_lifetime: u64,
+    microemoji_specimens: Vec<u64>,
     attachments: Vec<(MatrixSlotLease, alloc::sync::Arc<dyn matrix_target::MatrixSlotAttachment>)>,
     background_active: Vec<MatrixSlotLease>,
     echoes: Vec<(Option<String>, VecDeque<String>)>,
@@ -220,6 +221,7 @@ impl MatrixSlotsState {
             ids: Vec::new(),
             lifetimes: Vec::new(),
             next_lifetime: 1,
+            microemoji_specimens: Vec::new(),
             attachments: Vec::new(),
             background_active: Vec::new(),
             echoes: Vec::new(),
@@ -321,7 +323,7 @@ impl MatrixSlots {
         let preferred = peer_port
             .filter(|port| *port != 0)
             .map(|port| port.to_string());
-        Self::allocate_slot(preferred, "sh")
+        Self::allocate_slot(preferred, "sh", false)
     }
 
     /// Blueprint identities use the archive basename without its package suffix.
@@ -330,10 +332,20 @@ impl MatrixSlots {
         let stem = basename.strip_suffix(".bp").unwrap_or(basename);
         let prefix: String = stem.chars().take(4).collect();
         let prefix = if prefix.is_empty() { "app" } else { &prefix };
-        Self::allocate_slot(Some(prefix.to_string()), prefix)
+        Self::allocate_slot(Some(prefix.to_string()), prefix, false)
     }
 
-    fn allocate_slot(preferred: Option<String>, prefix: &str) -> (String, u64) {
+    fn allocate_font_specimen(name: &str, microemoji: bool) -> (String, u64) {
+        Self::allocate_slot(Some(name.to_string()), name, microemoji)
+    }
+
+    fn is_microemoji_specimen(lifetime: Option<u64>) -> bool {
+        lifetime.is_some_and(|lifetime| {
+            matrix_slots().lock().microemoji_specimens.contains(&lifetime)
+        })
+    }
+
+    fn allocate_slot(preferred: Option<String>, prefix: &str, microemoji: bool) -> (String, u64) {
         let mut slots = matrix_slots().lock();
         let mut number = 1u64;
         let name = loop {
@@ -350,6 +362,9 @@ impl MatrixSlots {
         slots.next_lifetime = slots.next_lifetime.wrapping_add(1);
         slots.ids.push(name.clone());
         slots.lifetimes.push((name.clone(), lifetime));
+        if microemoji {
+            slots.microemoji_specimens.push(lifetime);
+        }
         slots.generation = slots.generation.wrapping_add(1);
         drop(slots);
         service::notify_work();
@@ -379,6 +394,14 @@ impl MatrixSlots {
             if !slots.ids.iter().any(|id| id == name) {
                 return false;
             }
+            let removed = slots
+                .lifetimes
+                .iter()
+                .find(|(id, _)| id == name)
+                .map(|(_, lifetime)| *lifetime);
+            slots
+                .microemoji_specimens
+                .retain(|&lifetime| Some(lifetime) != removed);
             slots.ids.retain(|id| id != name);
             slots.lifetimes.retain(|(id, _)| id != name);
         }

@@ -202,8 +202,19 @@ fn native_boot_preflight() -> Result<(), &'static str> {
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+enum CachedFace {
+    Text(FontFace),
+    Emoji,
+}
+
+enum CellSource<'a> {
+    Text(FontFace),
+    Emoji(&'a [u8]),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 struct CellKey {
-    face: FontFace,
+    face: CachedFace,
     character: char,
     width: u32,
     height: u32,
@@ -302,10 +313,61 @@ pub(crate) fn glyph_with_face(
     background: [u8; 4],
     underline: bool,
 ) -> Result<GucBcs0RgbaCopy, &'static str> {
+    cached_glyph(
+        CellSource::Text(face),
+        character,
+        cell_width,
+        cell_height,
+        foreground,
+        background,
+        underline,
+    )
+}
+
+/// Tint a prewarmed square R8 mask in the current shell cell.
+pub(crate) fn emoji_glyph(
+    character: char,
+    cell_width: u32,
+    cell_height: u32,
+    foreground: [u8; 4],
+    background: [u8; 4],
+    underline: bool,
+    mask: &[u8],
+) -> Result<GucBcs0RgbaCopy, &'static str> {
+    cached_glyph(
+        CellSource::Emoji(mask),
+        character,
+        cell_width,
+        cell_height,
+        foreground,
+        background,
+        underline,
+    )
+}
+
+fn cached_glyph(
+    source: CellSource<'_>,
+    character: char,
+    cell_width: u32,
+    cell_height: u32,
+    foreground: [u8; 4],
+    background: [u8; 4],
+    underline: bool,
+) -> Result<GucBcs0RgbaCopy, &'static str> {
     let font = FONT.get().ok_or("shell3-font-not-ready")?;
     if cell_width == 0 || cell_height == 0 || cell_width > 256 || cell_height > 256 {
         return Err("shell3-font-cell-size");
     }
+    let face = match source {
+        CellSource::Text(face) => CachedFace::Text(face),
+        CellSource::Emoji(mask) => {
+            let side = cell_width.min(cell_height) as usize;
+            if mask.len() != side * side {
+                return Err("shell3-emoji-mask-size");
+            }
+            CachedFace::Emoji
+        }
+    };
     let key = CellKey { face, character, width: cell_width, height: cell_height, foreground, background, underline };
     let mut cache = font.cache.lock();
     if let Some(copy) = cache.cells.get(&key) { return Ok(*copy); }
@@ -324,7 +386,10 @@ pub(crate) fn glyph_with_face(
     let top = (page.used / PAGE_COLUMNS) * cell_height;
     let s = page.backing.surface();
     let destination = crate::phys::phys_to_virt(s.phys as usize) as *mut u8;
-    let (mask, foreground) = resolved_face(font, face, character, foreground)?;
+    let (mask, foreground) = match source {
+        CellSource::Text(face) => resolved_face(font, face, character, foreground)?,
+        CellSource::Emoji(mask) => (CellMask::Emoji(mask), foreground),
+    };
     let mut first_pixel = None;
     let mut uniform = true;
     for y in 0..cell_height {
@@ -425,7 +490,12 @@ pub(crate) fn with_cell_coverage_with_face(
 }
 
 #[derive(Clone, Copy)]
-enum CellMask<'a> { Raster(&'a [u8]), Hex(u32), TabLabel(hex::tab_label_cell::TabLabelCell) }
+enum CellMask<'a> {
+    Raster(&'a [u8]),
+    Hex(u32),
+    TabLabel(hex::tab_label_cell::TabLabelCell),
+    Emoji(&'a [u8]),
+}
 
 fn resolved_face(font: &Font, face: FontFace, character: char, foreground: [u8; 4])
     -> Result<(CellMask<'_>, [u8; 4]), &'static str> {
@@ -449,6 +519,19 @@ fn sample_face(font: &Font, mask: CellMask<'_>, x: u32, y: u32,
             let Some((character, px, py, w, h)) = label.point(x, y, width, height) else { return 0; };
             font.alpha.glyph(character).map_or(0, |mask| sample_native(font.alpha, mask, px, py, w, h))
         }
+        CellMask::Emoji(mask) => {
+            if underline && is_underline_row(y, height) {
+                return 255;
+            }
+            let side = width.min(height);
+            let x = x.wrapping_sub((width - side) / 2);
+            let y = y.wrapping_sub((height - side) / 2);
+            if x < side && y < side {
+                mask[(y * side + x) as usize]
+            } else {
+                0
+            }
+        }
     }
 }
 
@@ -463,11 +546,15 @@ fn resolved_glyph(font: &Font, character: char, foreground: [u8; 4])
 
 fn sample_cell(atlas: &OwnedAlphaAtlas, mask: &[u8], x: u32, y: u32,
     width: u32, height: u32, underline: bool) -> u8 {
-    if underline && y * microfont::FHEIGHT as u32 / height == microfont::FHEIGHT as u32 - 1 {
+    if underline && is_underline_row(y, height) {
         255
     } else {
         sample_native(atlas, mask, x, y, width, height)
     }
+}
+
+fn is_underline_row(y: u32, height: u32) -> bool {
+    y * microfont::FHEIGHT as u32 / height == microfont::FHEIGHT as u32 - 1
 }
 
 fn sample_native(atlas: &OwnedAlphaAtlas, mask: &[u8],
