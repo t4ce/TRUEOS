@@ -2,7 +2,7 @@
 use alloc::{format, string::String};
 use zeroize::Zeroizing;
 
-use crate::{disc::block::DeviceHandle, efi::acpi::tpm2::Crb, r::fs::trueosfs};
+use crate::{disc::block::DeviceHandle, efi::acpi::tpm2::Device, r::fs::trueosfs};
 
 const DIR: &str = "testTpm";
 const PATH: &str = "testTpm/bringupUser";
@@ -12,7 +12,7 @@ fn failure(stage: &str, error: impl core::fmt::Debug) -> String {
     format!("{stage}: {error:?}")
 }
 
-async fn round_trip(crb: &Crb, disk: DeviceHandle) -> Result<()> {
+async fn round_trip(device: &Device, disk: DeviceHandle) -> Result<()> {
     let mut first = Zeroizing::new([0; 32]);
     let mut second = Zeroizing::new([0; 32]);
     if !crate::tyche::fill_bytes(&mut *first)
@@ -22,7 +22,7 @@ async fn round_trip(crb: &Crb, disk: DeviceHandle) -> Result<()> {
         return Err("could not generate two distinct dummy keys".into());
     }
     for expected in [&first, &second] {
-        let blob = super::sealed::seal(crb, expected).await?;
+        let blob = super::sealed::seal(device, expected).await?;
         if !trueosfs::file_write_all_async(disk, PATH, &blob)
             .await
             .map_err(|e| failure("write sealed file", e))?
@@ -33,14 +33,14 @@ async fn round_trip(crb: &Crb, disk: DeviceHandle) -> Result<()> {
             .await
             .map_err(|e| failure("read sealed file", e))?
             .ok_or_else(|| String::from("sealed file missing"))?;
-        if super::sealed::unseal(crb, &saved).await? != *expected {
+        if super::sealed::unseal(device, &saved).await? != *expected {
             return Err("unsealed payload mismatch".into());
         }
     }
     Ok(())
 }
 
-pub(super) async fn run(crb: &Crb) -> Result<()> {
+pub(super) async fn run(device: &Device) -> Result<()> {
     let disk = trueosfs::primary_root_handle()
         .filter(|disk| !disk.info().is_read_only())
         .ok_or_else(|| String::from("writable primary TRUEOSFS root required"))?;
@@ -57,7 +57,7 @@ pub(super) async fn run(crb: &Crb) -> Result<()> {
     {
         return Err("could not create testTpm".into());
     }
-    let work = round_trip(crb, disk).await;
+    let work = round_trip(device, disk).await;
     let deleted = trueosfs::file_delete_async(disk, PATH)
         .await
         .map_err(|e| failure("delete sealed file", e))?;

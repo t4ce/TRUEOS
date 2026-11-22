@@ -10,7 +10,7 @@ use trueos_time::{Duration, Timer};
 use zeroize::Zeroizing;
 
 use crate::{
-    efi::acpi::tpm2::{Crb, Error},
+    efi::acpi::tpm2::{Device, Error},
     wait::EmbassySpinRawMutex,
 };
 
@@ -18,7 +18,7 @@ use crate::{
 enum Probe {
     Pending,
     Running,
-    Complete(Result<(u64, [u8; 4]), Error>),
+    Complete(Result<((&'static str, u64), [u8; 4]), Error>),
 }
 
 static PROBE: Mutex<Probe> = Mutex::new(Probe::Pending);
@@ -79,17 +79,17 @@ fn format_status(probe: Probe) -> String {
     match probe {
         Probe::Pending => "TPM 2.0 capability probe pending".into(),
         Probe::Running => "TPM2_GetCapability running".into(),
-        Probe::Complete(Ok((control, manufacturer))) => {
+        Probe::Complete(Ok(((interface, address), manufacturer))) => {
             let vendor = core::str::from_utf8(&manufacturer).unwrap_or("unknown");
             let vendor = vendor.trim_end_matches('\0');
             let raw = u32::from_be_bytes(manufacturer);
             format!(
-                "TPM2_GetCapability OK · CRB 0x{control:08X} · manufacturer {vendor} (0x{raw:08X})"
+                "TPM2_GetCapability OK · {interface} 0x{address:08X} · manufacturer {vendor} (0x{raw:08X})"
             )
         }
         Probe::Complete(Err(Error::NoAcpiTable)) => "TPM2 ACPI table unavailable".into(),
         Probe::Complete(Err(Error::UnsupportedStartMethod(method))) => {
-            format!("TPM2 ACPI start method {method} unsupported by the CRB probe")
+            format!("TPM2 ACPI start method {method} unsupported by the TPM driver")
         }
         Probe::Complete(Err(Error::TpmResponse(code))) => {
             format!("TPM2_GetCapability returned TPM error 0x{code:08X}")
@@ -101,7 +101,7 @@ fn format_status(probe: Probe) -> String {
 #[trueos_executor::task]
 pub(crate) async fn tpm_service_task() {
     Timer::after(Duration::from_secs(5)).await;
-    let device = Crb::discover();
+    let device = Device::discover();
     let mut request = Request::Capability;
     loop {
         match request {
@@ -119,7 +119,7 @@ pub(crate) async fn tpm_service_task() {
                     Ok(device) => device
                         .get_manufacturer()
                         .await
-                        .map(|vendor| (device.control_address(), vendor)),
+                        .map(|vendor| (device.interface(), vendor)),
                     Err(error) => Err(*error),
                 };
                 if let Request::StorageTest = request {

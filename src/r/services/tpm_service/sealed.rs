@@ -16,7 +16,7 @@ use tpm2_protocol::{
 };
 use zeroize::Zeroizing;
 
-use crate::efi::acpi::tpm2::{Crb, MAX_FRAME_BYTES};
+use crate::efi::acpi::tpm2::{Device, MAX_FRAME_BYTES};
 
 const MAGIC: &[u8] = b"TRUEOS-TPM-KEY1";
 const OWNER: u32 = 0x4000_0001;
@@ -27,7 +27,7 @@ fn failure(stage: &str, error: impl core::fmt::Debug) -> String {
     format!("{stage}: {error:?}")
 }
 
-async fn primary(crb: &Crb, auth: &[TpmsAuthCommand]) -> Result<TpmHandle> {
+async fn primary(device: &Device, auth: &[TpmsAuthCommand]) -> Result<TpmHandle> {
     let request = TpmCreatePrimaryCommand {
         handles: [OWNER.into()],
         in_public: TpmtPublic {
@@ -55,15 +55,15 @@ async fn primary(crb: &Crb, auth: &[TpmsAuthCommand]) -> Result<TpmHandle> {
         .into(),
         ..Default::default()
     };
-    let response: TpmCreatePrimaryResponse = crb
+    let response: TpmCreatePrimaryResponse = device
         .execute(&request, auth)
         .await
         .map_err(|e| failure("CreatePrimary", e))?;
     Ok(response.handles[0])
 }
 
-async fn flush(crb: &Crb, handle: TpmHandle) -> Result<()> {
-    let _: TpmFlushContextResponse = crb
+async fn flush(device: &Device, handle: TpmHandle) -> Result<()> {
+    let _: TpmFlushContextResponse = device
         .execute(
             &TpmFlushContextCommand {
                 handles: [],
@@ -77,7 +77,7 @@ async fn flush(crb: &Crb, handle: TpmHandle) -> Result<()> {
 }
 
 async fn create(
-    crb: &Crb,
+    device: &Device,
     auth: &[TpmsAuthCommand],
     parent: TpmHandle,
     data: &[u8; 32],
@@ -107,7 +107,7 @@ async fn create(
         outside_info: Default::default(),
         creation_pcr: Default::default(),
     };
-    let response: TpmCreateResponse = crb
+    let response: TpmCreateResponse = device
         .execute(&request, auth)
         .await
         .map_err(|e| failure("Create", e))?;
@@ -122,7 +122,7 @@ async fn create(
 }
 
 async fn load(
-    crb: &Crb,
+    device: &Device,
     auth: &[TpmsAuthCommand],
     parent: TpmHandle,
     blob: &[u8],
@@ -137,7 +137,7 @@ async fn load(
     if !rest.is_empty() {
         return Err("unexpected data after sealed object".into());
     }
-    let response: TpmLoadResponse = crb
+    let response: TpmLoadResponse = device
         .execute(
             &TpmLoadCommand {
                 handles: [parent],
@@ -149,10 +149,10 @@ async fn load(
         .await
         .map_err(|e| failure("Load", e))?;
     let handle = response.handles[0];
-    let unsealed = crb
+    let unsealed = device
         .execute::<TpmUnsealResponse>(&TpmUnsealCommand { handles: [handle] }, auth)
         .await;
-    let cleanup = flush(crb, handle).await;
+    let cleanup = flush(device, handle).await;
     let response = unsealed.map_err(|e| failure("Unseal", e))?;
     cleanup?;
     let recovered = Zeroizing::new(
@@ -169,21 +169,21 @@ fn password_session() -> [TpmsAuthCommand; 1] {
     }]
 }
 
-pub(super) async fn seal(crb: &Crb, data: &[u8; 32]) -> Result<Vec<u8>> {
+pub(super) async fn seal(device: &Device, data: &[u8; 32]) -> Result<Vec<u8>> {
     let auth = password_session();
-    let parent = primary(crb, &auth).await?;
-    let result = create(crb, &auth, parent, data).await;
-    let cleanup = flush(crb, parent).await;
+    let parent = primary(device, &auth).await?;
+    let result = create(device, &auth, parent, data).await;
+    let cleanup = flush(device, parent).await;
     let blob = result?;
     cleanup?;
     Ok(blob)
 }
 
-pub(super) async fn unseal(crb: &Crb, blob: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
+pub(super) async fn unseal(device: &Device, blob: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
     let auth = password_session();
-    let parent = primary(crb, &auth).await?;
-    let result = load(crb, &auth, parent, blob).await;
-    let cleanup = flush(crb, parent).await;
+    let parent = primary(device, &auth).await?;
+    let result = load(device, &auth, parent, blob).await;
+    let cleanup = flush(device, parent).await;
     let key = result?;
     cleanup?;
     Ok(key)

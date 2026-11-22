@@ -1,4 +1,5 @@
-//! Native TPM 2.0 CRB transport for ACPI start method 7.
+//! TPM 2.0 command codec and ACPI CRB/FIFO transport discovery.
+mod fifo;
 use core::{
     ptr::NonNull,
     sync::atomic::{Ordering, compiler_fence},
@@ -14,6 +15,7 @@ use tpm2_protocol::{
 };
 use trueos_time::{Duration, Instant, Timer};
 
+const FIFO_START_METHOD: u32 = 6;
 const CRB_START_METHOD: u32 = 7;
 const LOCALITY_BYTES: usize = 4096;
 const CONTROL_OFFSET: u64 = 0x40;
@@ -40,6 +42,7 @@ const COMMAND_READY: u32 = 1;
 const GO_IDLE: u32 = 2;
 const START: u32 = 1;
 const DEVICE_ERROR: u32 = 1;
+const POLL_INTERVAL: Duration = Duration::from_millis(1);
 const REGISTER_TIMEOUT: Duration = Duration::from_millis(750);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -53,6 +56,8 @@ pub(crate) enum Error {
     UnsupportedStartMethod(u32),
     InvalidControlAddress,
     MmioMap,
+    DeviceNotPresent,
+    FifoBurstTimeout,
     InvalidLocalityState,
     LocalityTimeout,
     CommandBusy,
@@ -67,12 +72,14 @@ pub(crate) enum Error {
     ReleaseTimeout,
 }
 
-pub(crate) struct Crb {
-    base: u64,
-    registers: NonNull<u8>,
+pub(crate) struct Device(Transport);
+
+enum Transport {
+    Crb(Crb),
+    Fifo(fifo::Fifo),
 }
 
-impl Crb {
+impl Device {
     pub(crate) fn discover() -> Result<Self, Error> {
         let tables = super::ensure_tables().ok_or(Error::NoAcpiTable)?;
         let (phys, _) = tables
@@ -83,11 +90,99 @@ impl Crb {
         if table.len() < 52 || table.iter().copied().fold(0u8, u8::wrapping_add) != 0 {
             return Err(Error::InvalidTable);
         }
+        let address = u64::from_le_bytes(table[40..48].try_into().unwrap());
         let method = u32::from_le_bytes(table[48..52].try_into().unwrap());
-        if method != CRB_START_METHOD {
-            return Err(Error::UnsupportedStartMethod(method));
+        let transport = match method {
+            CRB_START_METHOD => Transport::Crb(Crb::map(address)?),
+            FIFO_START_METHOD => {
+                let base = if address == 0 {
+                    fifo::STANDARD_BASE
+                } else {
+                    address
+                };
+                Transport::Fifo(fifo::Fifo::map(base)?)
+            }
+            _ => return Err(Error::UnsupportedStartMethod(method)),
+        };
+        Ok(Self(transport))
+    }
+
+    pub(crate) fn interface(&self) -> (&'static str, u64) {
+        match &self.0 {
+            Transport::Crb(device) => ("CRB", device.base + CONTROL_OFFSET),
+            Transport::Fifo(device) => ("FIFO", device.address()),
         }
-        let control = u64::from_le_bytes(table[40..48].try_into().unwrap());
+    }
+
+    async fn transact(&self, command: &[u8], response: &mut [u8]) -> Result<usize, Error> {
+        match &self.0 {
+            Transport::Crb(device) => device.transact(command, response).await,
+            Transport::Fifo(device) => device.transact(command, response).await,
+        }
+    }
+    pub(crate) async fn execute<R: TpmUnmarshalBody>(
+        &self,
+        request: &impl TpmFrame,
+        sessions: &[TpmsAuthCommand],
+    ) -> Result<R, Error> {
+        let tag = if sessions.is_empty() {
+            TpmSt::NoSessions
+        } else {
+            TpmSt::Sessions
+        };
+        let mut command = zeroize::Zeroizing::new([0; MAX_FRAME_BYTES]);
+        let mut writer = TpmWriter::new(&mut *command);
+        tpm_marshal_command(request, tag, sessions, &mut writer)
+            .map_err(|_| Error::CommandEncoding)?;
+        let mut response = zeroize::Zeroizing::new([0; MAX_FRAME_BYTES]);
+        let length = self.transact(writer.as_bytes(), &mut *response).await?;
+        let frame = TpmResponse::cast(&response[..length]).map_err(|_| Error::InvalidResponse)?;
+        let code = frame.rc().map_err(|_| Error::InvalidResponse)?.value();
+        if code != 0 {
+            return Err(Error::TpmResponse(code));
+        }
+        if frame.tag().map_err(|_| Error::InvalidResponse)? != tag {
+            return Err(Error::InvalidResponse);
+        }
+        frame.unmarshal().map_err(|_| Error::InvalidResponse)
+    }
+
+    pub(crate) async fn get_manufacturer(&self) -> Result<[u8; 4], Error> {
+        let request = TpmGetCapabilityCommand {
+            handles: [],
+            cap: TpmCap::TpmProperties,
+            property: TpmPt::Manufacturer.value().into(),
+            property_count: 1u32.into(),
+        };
+        let response: TpmGetCapabilityResponse = self.execute(&request, &[]).await?;
+        let TpmuCapabilities::TpmProperties(properties) = response.capability_data.data else {
+            return Err(Error::InvalidResponse);
+        };
+        let [property] = &*properties else {
+            return Err(Error::InvalidResponse);
+        };
+        if property.property != TpmPt::Manufacturer {
+            return Err(Error::InvalidResponse);
+        }
+        Ok(property.value.value().to_be_bytes())
+    }
+}
+
+fn response_length(response: &[u8]) -> Result<usize, Error> {
+    let length = u32::from_be_bytes(response[2..6].try_into().unwrap()) as usize;
+    if !(HEADER_BYTES..=response.len()).contains(&length) {
+        return Err(Error::InvalidResponse);
+    }
+    Ok(length)
+}
+
+struct Crb {
+    base: u64,
+    registers: NonNull<u8>,
+}
+
+impl Crb {
+    fn map(control: u64) -> Result<Self, Error> {
         let base = control & !(LOCALITY_BYTES as u64 - 1);
         if base == 0 || control - base != CONTROL_OFFSET || base >= 1 << 52 {
             return Err(Error::InvalidControlAddress);
@@ -95,10 +190,6 @@ impl Crb {
         let registers = crate::pci::mmio::map_mmio_region_exact(base, LOCALITY_BYTES)
             .map_err(|_| Error::MmioMap)?;
         Ok(Self { base, registers })
-    }
-
-    pub(crate) fn control_address(&self) -> u64 {
-        self.base + CONTROL_OFFSET
     }
 
     fn read(&self, offset: usize) -> u32 {
@@ -131,7 +222,7 @@ impl Crb {
             if Instant::now() >= deadline {
                 return false;
             }
-            Timer::after(Duration::from_millis(1)).await;
+            Timer::after(POLL_INTERVAL).await;
         }
     }
 
@@ -187,67 +278,15 @@ impl Crb {
         for (offset, byte) in response[..HEADER_BYTES].iter_mut().enumerate() {
             *byte = unsafe { rsp.as_ptr().add(offset).read_volatile() };
         }
-        let length = u32::from_be_bytes(response[2..6].try_into().unwrap()) as usize;
+        let length = response_length(response)?;
         if length > rsp_size {
             return Err(Error::InvalidResponse);
         }
-        let Some(frame) = response
-            .get_mut(..length)
-            .filter(|frame| frame.len() >= HEADER_BYTES)
-        else {
-            return Err(Error::InvalidResponse);
-        };
+        let frame = &mut response[..length];
         for (offset, byte) in frame.iter_mut().enumerate().skip(HEADER_BYTES) {
             *byte = unsafe { rsp.as_ptr().add(offset).read_volatile() };
         }
         Ok(length)
-    }
-
-    pub(crate) async fn execute<R: TpmUnmarshalBody>(
-        &self,
-        request: &impl TpmFrame,
-        sessions: &[TpmsAuthCommand],
-    ) -> Result<R, Error> {
-        let tag = if sessions.is_empty() {
-            TpmSt::NoSessions
-        } else {
-            TpmSt::Sessions
-        };
-        let mut command = zeroize::Zeroizing::new([0; MAX_FRAME_BYTES]);
-        let mut writer = TpmWriter::new(&mut *command);
-        tpm_marshal_command(request, tag, sessions, &mut writer)
-            .map_err(|_| Error::CommandEncoding)?;
-        let mut response = zeroize::Zeroizing::new([0; MAX_FRAME_BYTES]);
-        let length = self.transact(writer.as_bytes(), &mut *response).await?;
-        let frame = TpmResponse::cast(&response[..length]).map_err(|_| Error::InvalidResponse)?;
-        let code = frame.rc().map_err(|_| Error::InvalidResponse)?.value();
-        if code != 0 {
-            return Err(Error::TpmResponse(code));
-        }
-        if frame.tag().map_err(|_| Error::InvalidResponse)? != tag {
-            return Err(Error::InvalidResponse);
-        }
-        frame.unmarshal().map_err(|_| Error::InvalidResponse)
-    }
-
-    pub(crate) async fn get_manufacturer(&self) -> Result<[u8; 4], Error> {
-        let request = TpmGetCapabilityCommand {
-            handles: [],
-            cap: TpmCap::TpmProperties,
-            property: TpmPt::Manufacturer.value().into(),
-            property_count: 1u32.into(),
-        };
-        let response: TpmGetCapabilityResponse = self.execute(&request, &[]).await?;
-        let TpmuCapabilities::TpmProperties(properties) = response.capability_data.data else {
-            return Err(Error::InvalidResponse);
-        };
-        let [property] = &*properties else {
-            return Err(Error::InvalidResponse);
-        };
-        if property.property != TpmPt::Manufacturer {
-            return Err(Error::InvalidResponse);
-        }
-        Ok(property.value.value().to_be_bytes())
     }
 
     async fn transact(&self, command: &[u8], response: &mut [u8]) -> Result<usize, Error> {
