@@ -697,6 +697,9 @@ pub(super) fn frame_opened(
 
 pub(super) fn frame_closed(owner: WindowOwner, window: WindowId) {
     super::button_outline::remove_window(owner, window);
+    if owner == WindowOwner::SHELL3_SERVICE {
+        super::terminal_outlines::clear(window);
+    }
     super::drag_drop::frame_closed(CursorFrameKey::new(owner, window));
     if CURSOR_FRAME_RIG
         .lock()
@@ -1292,6 +1295,8 @@ pub(super) fn frame_visual_changed(owner: WindowOwner, window: WindowId) {
 pub(super) fn selection_strip_stack_changed() {
     if !CURSOR_FRAME_RIG.lock().selecting_cursors.is_empty() {
         signal_visual_change();
+    } else if super::terminal_outlines::has_active() {
+        super::input_broker::notify_slot4_visual_change();
     }
 }
 

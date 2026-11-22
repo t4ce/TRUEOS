@@ -3861,6 +3861,9 @@ pub(crate) fn blueprint_process_file_tree_text(vm_id: u8, requested: &str) -> Op
 
 
 pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
+    if trueos_terminal::cell_outlines::is_wire_report(data) {
+        return blueprint_console_raw_write(vm_id, data);
+    }
     blueprint_console_text_lines(vm_id, None, data);
     let Some(target) = blueprint_console_target(vm_id) else {
         return data.len();

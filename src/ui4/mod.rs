@@ -44,6 +44,7 @@ mod screenshot;
 pub(crate) mod spirit_access;
 pub(crate) use screenshot::writable_capture_root_handle;
 mod slot4_service;
+pub(crate) mod terminal_outlines;
 mod button_outline;
 mod button_outline_geometry;
 pub(crate) mod text_area;

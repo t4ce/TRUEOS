@@ -16,7 +16,8 @@ use stall_deadline::{StallAction, StallDeadline};
 const REALTEK_VENDOR_ID: u16 = 0x10EC;
 const RTL8125_DEVICE_ID: u16 = 0x8125;
 
-const RX_DESC_COUNT: usize = 64;
+// Buffer packet bursts between polls while keeping each poll's work bounded.
+const RX_DESC_COUNT: usize = 256;
 const TX_DESC_COUNT: usize = 64;
 const RX_BUF_SIZE: usize = 2048;
 const TX_BUF_SIZE: usize = 2048;

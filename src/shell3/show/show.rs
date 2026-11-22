@@ -9,6 +9,7 @@ mod reveal;
 mod edit_life;
 
 use super::RgbaColor;
+use super::tui::TerminalEffects;
 use super::update::{MatrixAreaSnapshot, RenderedLine};
 use crate::r::services::{microemoji_mask_service as emoji, shell3_font_service};
 use alloc::{
@@ -157,6 +158,27 @@ impl Ui4Surface {
     }
 }
 
+fn present_effects(
+    surface: &mut Ui4Surface,
+    lines: &[&[(char, Option<RgbaColor>)]],
+    effects: &TerminalEffects,
+    source_changed: bool,
+) {
+    edit_life::present(surface, lines, effects.edit_life.as_ref(), source_changed);
+    if let Some(report) = &effects.outlines
+        && let Some(cell_size) = shell3_font_service::cell_extent(surface.scale)
+        && report.publish_if_current(|| {
+            crate::ui4::terminal_outlines::publish(
+                surface.window, surface.session, surface.frame, cell_size,
+                (surface.width, surface.height), report.cells,
+            );
+        })
+    {
+        return;
+    }
+    crate::ui4::terminal_outlines::clear(surface.window);
+}
+
 /// Per-show backend selection and UI4 publication state.
 pub struct Show {
     backend: Backend,
@@ -298,8 +320,9 @@ impl Show {
         &mut self,
         lines: &[&[(char, Option<RgbaColor>)]],
         area: Option<&super::update::MatrixAreaSnapshot>,
-        edit_life: Option<&trueos_terminal::edit_life::EditLife>,
+        effects: &TerminalEffects,
     ) -> Result<(), &'static str> {
+        let edit_life = effects.edit_life.as_ref();
         if self.poisoned {
             return Err("shell3-show-bcs0-allocation-pinned");
         }
@@ -359,6 +382,7 @@ impl Show {
             return Err(error);
         }
         crate::ui4::edit_life::remove(staged.window);
+        crate::ui4::terminal_outlines::clear(staged.window);
         let commit = commit_window_frame_replacement(
             OWNER,
             staged.window,
@@ -376,10 +400,10 @@ impl Show {
             .replace(staged)
             .ok_or("shell3-show-surface-missing")?;
         retire_frame_when_released(old.frame);
-        edit_life::present(
+        present_effects(
             self.surface.as_mut().ok_or("shell3-show-surface-missing")?,
             lines,
-            edit_life,
+            effects,
             true,
         );
         Ok(())
@@ -427,8 +451,9 @@ impl Show {
         batch: &super::UpdateBatch,
         reveals: &[super::update::StripReveal],
         area: Option<&super::update::MatrixAreaSnapshot>,
-        edit_life: Option<&trueos_terminal::edit_life::EditLife>,
+        effects: &TerminalEffects,
     ) -> Result<(), &'static str> {
+        let edit_life = effects.edit_life.as_ref();
         if !matches!(self.backend, Backend::Copy | Backend::Cpu) {
             return Err("shell3-show-backend-not-implemented");
         }
@@ -476,7 +501,7 @@ impl Show {
                 .is_some_and(|surface| !surface.clear_buffers.iter().any(|clear| *clear))
         {
             let surface = self.surface.as_mut().ok_or("shell3-show-surface-missing")?;
-            edit_life::present(surface, lines, edit_life, false);
+            present_effects(surface, lines, effects, false);
             return Ok(());
         }
         let surface = self.surface.as_mut().ok_or("shell3-show-surface-missing")?;
@@ -524,7 +549,7 @@ impl Show {
         super::presentation_probe::stage(19);
         publish_window_frame(OWNER, surface.window, damage)
             .map_err(|_| "shell3-show-window-publish")?;
-        edit_life::present(surface, lines, edit_life, true);
+        present_effects(surface, lines, effects, true);
         Ok(())
     }
 
@@ -536,6 +561,7 @@ impl Show {
             return;
         };
         crate::ui4::edit_life::remove(surface.window);
+        crate::ui4::terminal_outlines::clear(surface.window);
         retire_frame_when_released(surface.frame);
         if !surface.closing {
             let _ = finish_window_session_with_request(

@@ -18,7 +18,9 @@ const UAS_XHCI_OUT_STREAMS_ENABLED: bool = true;
 // arming data-out. Pre-post data-out on the tagged stream, then consume status.
 const SKHYNIX_PREPOST_WRITE_DATA_OUT: bool = true;
 const SKHYNIX_UAS_MAX_TRANSFER_BYTES: usize = 8 * 1024 * 1024;
-const SKHYNIX_UAS_WRITE_TRANSFER_BYTES: usize = 512 * 1024;
+// Use 1 MiB to amortize command completion overhead. A 2 MiB WRITE(10)
+// timed out on the X31 rig.
+const SKHYNIX_UAS_WRITE_TRANSFER_BYTES: usize = 1024 * 1024;
 const UAS_TRACE_STARTUP_OPS: u64 = 4;
 const UAS_TRACE_SAMPLE_EVERY: u64 = 64;
 const SKHYNIX_UAS_STARTUP_PHASE_YIELD_MS: u64 = 1;

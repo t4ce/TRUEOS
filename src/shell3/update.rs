@@ -2,7 +2,7 @@
 
 use alloc::{string::String, vec::Vec};
 
-use super::{MetaFmtStr, RgbaColor, SpecialRows, StripSide};
+use super::{MetaFmtStr, RgbaColor, SpecialRows, StripSide, tui::TerminalEffects};
 
 /// One visible cell: Unicode character and optional foreground/background style.
 pub(super) type RenderedLine = Vec<(char, Option<RgbaColor>)>;
@@ -116,7 +116,7 @@ pub(super) struct Snapshot {
     matrix_generation: u64,
     tui_revision: u64,
     terminal_active: bool,
-    edit_life: Option<trueos_terminal::edit_life::EditLife>,
+    terminal_effects: TerminalEffects,
     blink_phase: Option<bool>,
     matrix_area: Option<MatrixAreaSnapshot>,
     reveals: Vec<StripReveal>,
@@ -135,7 +135,7 @@ impl Snapshot {
             matrix_generation: 0,
             tui_revision: 0,
             terminal_active: false,
-            edit_life: None,
+            terminal_effects: TerminalEffects::default(),
             blink_phase: None,
             matrix_area: None,
             reveals: Vec::new(),
@@ -308,7 +308,7 @@ impl Snapshot {
         layout_generation: usize,
         lines: Vec<RenderedLine>,
         revision: u64,
-        edit_life: Option<trueos_terminal::edit_life::EditLife>,
+        terminal_effects: TerminalEffects,
     ) -> Self {
         Self {
             size,
@@ -320,7 +320,7 @@ impl Snapshot {
             matrix_generation: 0,
             tui_revision: revision,
             terminal_active: true,
-            edit_life,
+            terminal_effects,
             blink_phase: None,
             matrix_area: None,
             reveals: Vec::new(),
@@ -337,8 +337,8 @@ impl Snapshot {
         self.terminal_active
     }
 
-    pub(super) fn edit_life(&self) -> Option<&trueos_terminal::edit_life::EditLife> {
-        self.edit_life.as_ref()
+    pub(super) fn terminal_effects(&self) -> &TerminalEffects {
+        &self.terminal_effects
     }
 
     pub(super) fn blink_phase(&self) -> Option<bool> {

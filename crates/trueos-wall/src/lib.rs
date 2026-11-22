@@ -176,6 +176,26 @@ mod tests {
     }
 
     #[test]
+    fn lico_accepts_piano_datagrams_and_keeps_mcp_local() {
+        let lico = Principal::Blueprint("lico");
+        assert!(permits_inbound(lico, Udp, Network, 9_696));
+        assert!(allows_inbound(Udp, Network, 9_696));
+        assert!(!permits_inbound(lico, Udp, Network, 9_697));
+        assert!(!permits_inbound(lico, Tcp, Network, 9_696));
+        assert!(!permits_outbound(lico, Udp, Network, 9_696));
+        assert!(!permits_outbound(lico, Udp, Local, 9_696));
+        assert!(!permits_inbound(Principal::Kernel, Udp, Network, 9_696));
+        assert!(!permits_inbound(
+            Principal::Blueprint("cubesrv"),
+            Udp,
+            Network,
+            9_696
+        ));
+        assert!(permits_inbound(lico, Tcp, Local, 42_127));
+        assert!(!permits_inbound(lico, Tcp, Network, 42_127));
+    }
+
+    #[test]
     fn buildin_and_blueprint_identities_have_distinct_profiles() {
         if BUILDINS.contains(&"share") {
             assert!(permits_inbound(

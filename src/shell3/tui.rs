@@ -51,11 +51,49 @@ impl RemoteInputAuthority {
         match self.owner { RemoteInputOwner::NativeSsh { session } => Some(session), _ => None }
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Owner {
     vm: u8,
     run: u64,
 }
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct TerminalEffects {
+    pub(super) edit_life: Option<trueos_terminal::edit_life::EditLife>,
+    pub(super) outlines: Option<OutlineReport>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct OutlineReport {
+    frontend: u64,
+    lease: MatrixSlotLease,
+    owner: Owner,
+    generation: u64,
+    dimensions: (usize, usize),
+    pub(super) cells: trueos_terminal::cell_outlines::CellOutlines,
+}
+
+impl OutlineReport {
+    // Revalidate while holding the route lock, since pixel presentation may
+    // have yielded to a resize, release, or newer output since capture.
+    pub(super) fn publish_if_current(&self, publish: impl FnOnce()) -> bool {
+        let routes = ROUTES.lock();
+        if !routes.routes.iter().any(|route| {
+            route.frontend == Some(self.frontend)
+                && route.selected
+                && route.lease == self.lease
+                && route.owner == Some(self.owner)
+                && route.surface_generation == self.generation
+                && route.screen.dimensions() == self.dimensions
+                && route.screen.cell_outlines() == self.cells
+        }) {
+            return false;
+        }
+        publish();
+        true
+    }
+}
+
 struct Native {
     active: bool,
     painted: bool,
@@ -413,6 +451,7 @@ pub(crate) fn bind_vm(target: &MatrixTarget, vm: u8) {
     {
         route.vm = None;
         route.owner = None;
+        route.screen.clear_cell_outlines();
         route.context_menu = None;
         route.remote_input_origin = None;
         route.remote_input_frontiers = None;
@@ -543,7 +582,9 @@ pub(crate) fn release(target: &MatrixTarget, vm: u8) -> Option<bool> {
     }
     let frontend = route.frontend;
     let was_owned = route.owner.is_some();
+    let was_selected = was_owned && route.selected;
     route.owner = None;
+    route.screen.clear_cell_outlines();
     route.context_menu = None;
     route.program_status.reset();
     route.codex_starting = false;
@@ -563,6 +604,9 @@ pub(crate) fn release(target: &MatrixTarget, vm: u8) -> Option<bool> {
         .iter()
         .find(|entry| Some(entry.0) == frontend)
         .map(|entry| entry.1);
+    if was_selected && let Some(window) = window {
+        crate::ui4::terminal_outlines::clear(window);
+    }
     drop(routes);
     crate::ui4::blueprint_ui4::collapse_api::release_terminal(crate::ui4::WindowOwner::Vm(vm));
     if let Some(window) = window {
@@ -650,6 +694,9 @@ fn write_inner(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize> {
             .iter_mut()
             .find(|entry| Some(entry.0) == frontend)
         {
+            if trueos_terminal::cell_outlines::is_wire_report(bytes) {
+                return Some(bytes.len());
+            }
             let written = output.write_at(bytes, crate::r::input_timing::now_ms());
             // Observe only accepted bytes, preserving partial writes and the
             // peer's original stream. SSH bypasses the local cell renderer.
@@ -1363,7 +1410,7 @@ pub(super) fn snapshot(frontend: u64, name: Option<&str>) -> Option<Vec<Rendered
 
 /// Capture terminal cells and their effect metadata under the same route lock.
 pub(super) fn snapshot_with_effect(frontend: u64, name: Option<&str>)
-    -> Option<(Vec<RenderedLine>, Option<trueos_terminal::edit_life::EditLife>)> {
+    -> Option<(Vec<RenderedLine>, TerminalEffects)> {
     let routes = ROUTES.lock();
     let route = routes.routes.iter().find(|route| {
         route.frontend == Some(frontend)
@@ -1432,7 +1479,20 @@ pub(super) fn snapshot_with_effect(frontend: u64, name: Option<&str>)
                 rendered
             })
             .collect(),
-        route.screen.edit_life().cloned(),
+        TerminalEffects {
+            edit_life: route.screen.edit_life().cloned(),
+            outlines: route.owner.and_then(|owner| {
+                let cells = route.screen.cell_outlines();
+                (!cells.as_slice().is_empty()).then(|| OutlineReport {
+                    frontend,
+                    lease: route.lease.clone(),
+                    owner,
+                    generation: route.surface_generation,
+                    dimensions: route.screen.dimensions(),
+                    cells,
+                })
+            }),
+        },
     ))
 }
 

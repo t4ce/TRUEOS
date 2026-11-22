@@ -663,6 +663,7 @@ fn software_cursor_scene() -> Slot4Scene {
     }
 
     super::button_outline::append(&mut rects, screen_w, screen_h);
+    super::terminal_outlines::append(&mut rects, screen_w, screen_h);
 
     if let Some(menu) = super::context_menu::visual() {
         push_requested_context_menu(&mut rects, &menu, screen_w, screen_h);
@@ -1403,10 +1404,16 @@ fn push_rect_border(
     thickness: u32,
     color: crate::graphics::primitives::Rgba8,
 ) {
-    let thickness = thickness.min(rect.width).min(rect.height);
-    if thickness == 0 {
-        return;
+    for part in rect_border_parts(rect, thickness) {
+        push_visual_rect(rects, part, color);
     }
+}
+
+pub(super) fn rect_border_parts(
+    rect: super::Ui4VisualRect,
+    thickness: u32,
+) -> [super::Ui4VisualRect; 4] {
+    let thickness = thickness.min(rect.width).min(rect.height);
 
     // Partition the border instead of overlapping its four corners. Damage
     // regions conservatively union overlapping rectangles into their bounding
@@ -1422,26 +1429,21 @@ fn push_rect_border(
     let left_width = thickness;
     let right_width = thickness.min(rect.width.saturating_sub(left_width));
 
-    push_overlay_rect(rects, rect.x, rect.y, rect.width, top_height, color);
-    push_overlay_rect(
-        rects,
-        rect.x,
-        rect.y
-            .saturating_add(rect.height.saturating_sub(bottom_height)),
-        rect.width,
-        bottom_height,
-        color,
-    );
-    push_overlay_rect(rects, rect.x, middle_y, left_width, middle_height, color);
-    push_overlay_rect(
-        rects,
-        rect.x
-            .saturating_add(rect.width.saturating_sub(right_width)),
-        middle_y,
-        right_width,
-        middle_height,
-        color,
-    );
+    [
+        super::Ui4VisualRect { height: top_height, ..rect },
+        super::Ui4VisualRect {
+            y: rect.y.saturating_add(rect.height.saturating_sub(bottom_height)),
+            height: bottom_height,
+            ..rect
+        },
+        super::Ui4VisualRect { x: rect.x, y: middle_y, width: left_width, height: middle_height },
+        super::Ui4VisualRect {
+            x: rect.x.saturating_add(rect.width.saturating_sub(right_width)),
+            y: middle_y,
+            width: right_width,
+            height: middle_height,
+        },
+    ]
 }
 
 fn push_overlay_rect(

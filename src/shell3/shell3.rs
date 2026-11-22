@@ -965,7 +965,7 @@ impl Shell3 {
                     &batch,
                     snapshot.reveals(),
                     snapshot.matrix_area(),
-                    snapshot.edit_life(),
+                    snapshot.terminal_effects(),
                 )
                 .await?;
             presentation_probe::stage(6);
@@ -1026,7 +1026,7 @@ impl Shell3 {
         let lines = snapshot.rendered_lines();
         let line_refs: Vec<_> = lines.iter().map(|line| line.as_slice()).collect();
         self.show
-            .resize_to_current(&line_refs, snapshot.matrix_area(), snapshot.edit_life())
+            .resize_to_current(&line_refs, snapshot.matrix_area(), snapshot.terminal_effects())
             .await
     }
 
@@ -2164,7 +2164,7 @@ impl Shell3 {
         {
             return self.update_baseline.clone().with_tui_revision(revision);
         }
-        if let Some((lines, edit_life)) =
+        if let Some((lines, terminal_effects)) =
             tui::snapshot_with_effect(self.tui_frontend, self.active_matrix_slot_name().as_deref())
         {
             return update::Snapshot::terminal(
@@ -2172,7 +2172,7 @@ impl Shell3 {
                 self.layout_generation,
                 lines,
                 revision,
-                edit_life,
+                terminal_effects,
             );
         }
         self.capture_matrix_snapshot()

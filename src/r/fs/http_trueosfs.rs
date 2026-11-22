@@ -68,7 +68,7 @@ const HTTP_TRUEOSFS_MAX_ENTRIES: usize = 1024;
 const HTTP_TRUEOSFS_MAX_REQUEST_BYTES: usize = 2 * 1024 * MIB + 64 * 1024;
 // Keep a streamed filesystem response below the r8125 hardware RX-ring burst
 // boundary. A 1 MiB window fills the TCP TX buffer in one turn and produces an
-// ACK burst that can exhaust the controller's 64 RX descriptors before its
+// ACK burst that can exhaust the controller's RX descriptors before its
 // service task runs again. 64 KiB remains efficient for TRUEOSFS/UAS while
 // giving the network lane a chance to recycle descriptors between windows.
 const HTTP_TRUEOSFS_STREAM_MAX_BYTES: usize = 64 * 1024;

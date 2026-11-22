@@ -3,6 +3,7 @@
 extern crate alloc;
 
 pub mod program_status;
+pub mod cell_outlines;
 pub mod edit_life;
 mod font_scale;
 pub mod tab_label_cell;
@@ -119,6 +120,7 @@ struct SynchronizedScreen {
     cells: Vec<Cell>,
     cursor: Cursor,
     edit_life: Option<edit_life::EditLife>,
+    cell_outlines: cell_outlines::CellOutlines,
     font_scale: Option<u32>,
     tab_labels: Vec<tab_labels::TabLabel>,
 }
@@ -147,6 +149,7 @@ pub struct Terminal {
     osc_buf: Vec<u8>,
     osc_overflow: bool,
     edit_life: Option<edit_life::EditLife>,
+    cell_outlines: cell_outlines::CellOutlines,
     font_scale: Option<u32>,
     tab_labels: Vec<tab_labels::TabLabel>,
     synchronized: Option<SynchronizedScreen>,
@@ -185,6 +188,7 @@ impl Terminal {
             osc_buf: Vec::new(),
             osc_overflow: false,
             edit_life: None,
+            cell_outlines: cell_outlines::CellOutlines::default(),
             font_scale: None,
             tab_labels: Vec::new(),
             synchronized: None,
@@ -214,6 +218,20 @@ impl Terminal {
         match self.synchronized.as_ref() {
             Some(screen) => screen.edit_life.as_ref(),
             None => self.edit_life.as_ref(),
+        }
+    }
+
+    pub fn cell_outlines(&self) -> cell_outlines::CellOutlines {
+        self.synchronized.as_ref().map_or(self.cell_outlines, |screen| screen.cell_outlines)
+    }
+
+    pub fn clear_cell_outlines(&mut self) {
+        if !self.cell_outlines.as_slice().is_empty() {
+            self.cell_outlines = cell_outlines::CellOutlines::default();
+            self.dirty = true;
+        }
+        if let Some(screen) = &mut self.synchronized {
+            screen.cell_outlines = cell_outlines::CellOutlines::default();
         }
     }
 
@@ -337,6 +355,7 @@ impl Terminal {
         self.scroll_bottom = rows - 1;
         self.reset_parser();
         self.edit_life = None;
+        self.clear_cell_outlines();
         self.synchronized = None;
         self.tab_labels.clear();
         self.dirty = true;
@@ -345,6 +364,7 @@ impl Terminal {
     /// Clear the screen and all parser/cursor state without changing its size.
     pub fn reset(&mut self) {
         self.edit_life = None;
+        self.clear_cell_outlines();
         self.tab_labels.clear();
         self.font_scale = None;
         self.synchronized = None;
@@ -536,6 +556,13 @@ impl Terminal {
             self.edit_life = Some(report);
             self.dirty = true;
         }
+        if !self.osc_overflow
+            && let Some(report) = cell_outlines::parse(&self.osc_buf, self.cols, self.rows)
+            && self.cell_outlines != report
+        {
+            self.cell_outlines = report;
+            self.dirty = true;
+        }
         self.osc_buf.clear();
         self.osc_overflow = false;
     }
@@ -714,6 +741,7 @@ impl Terminal {
                 47 | 1047 | 1049 if !enabled => {
                     if !self.tab_labels.is_empty() { self.dirty = true; self.tab_labels.clear(); }
                     if self.edit_life.take().is_some() { self.dirty = true; }
+                    self.clear_cell_outlines();
                     if self.font_scale.take().is_some() { self.dirty = true; }
                     self.synchronized = None;
                 }
@@ -723,6 +751,7 @@ impl Terminal {
                             cells: self.cells.clone(),
                             cursor: self.cursor(),
                             edit_life: self.edit_life.clone(),
+                            cell_outlines: self.cell_outlines,
                             font_scale: self.font_scale,
                             tab_labels: self.tab_labels.clone(),
                         });
@@ -1696,6 +1725,34 @@ mod tests {
 
         terminal.feed(b"\x1b[?1006l\x1b[?1015l\x1b[?1002l\x1b[?1000l");
         assert_eq!(terminal.mouse_button(MouseButton::Left, true, 4, 2), None);
+    }
+
+    #[test]
+    fn cell_outlines_follow_the_committed_screen_and_clear_on_exit_or_resize() {
+        let mut terminal = Terminal::new(10, 5);
+        terminal.feed(b"\x1b[?1049h\x1b[?2026hA\x1b]777;cell-outlines;");
+        terminal.feed(b"1;1;6;2;4;1\x07");
+        assert_eq!(terminal.cells()[0].glyph, ' ');
+        assert!(terminal.cell_outlines().as_slice().is_empty());
+        assert!(!terminal.take_dirty());
+
+        terminal.feed(b"\x1b[?2026l");
+        assert_eq!(terminal.cells()[0].glyph, 'A');
+        assert_eq!(terminal.cell_outlines().as_slice(), &[cell_outlines::CellRect {
+            column: 6, row: 2, width: 4, height: 1,
+        }]);
+        assert!(terminal.take_dirty());
+
+        terminal.feed(b"\x1b]777;cell-outlines;1;1;6;2;5;1\x07");
+        assert_eq!(terminal.cell_outlines().as_slice().len(), 1);
+        assert!(!terminal.take_dirty(), "invalid metadata must not redraw");
+        terminal.resize(8, 4);
+        assert!(terminal.cell_outlines().as_slice().is_empty());
+
+        terminal.feed(b"\x1b]777;cell-outlines;1;1;2;2;4;1\x07");
+        assert_eq!(terminal.cell_outlines().as_slice().len(), 1);
+        terminal.feed(b"\x1b[?1049l");
+        assert!(terminal.cell_outlines().as_slice().is_empty());
     }
 
     #[test]

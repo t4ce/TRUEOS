@@ -144,7 +144,10 @@ pub(crate) const BLUEPRINT_PROFILES: &[AppProfile] = &[
     service("hello_world_replicatable", &[tcp(Network, &[48_080], &[])]),
     service("idedit_htmlbuild_srv", &[tcp(Local, &[IDEDIT_HTML], &[])]),
     service("ipp-printer", &[tcp(Network, &[], &[631])]),
-    service("lico", &[tcp(Local, &[42_127], &[])]),
+    service(
+        "lico",
+        &[tcp(Local, &[42_127], &[]), udp(Network, &[9_696], &[])],
+    ),
     service("lily2vec", &[tcp(Local, &[9771], &[])]),
     service("lweb", &[tcp(Local, &[8787], &[])]),
     service("monaco", &[tcp(Network, &[1011], &[])]),
