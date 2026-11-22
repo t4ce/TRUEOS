@@ -1,7 +1,7 @@
 //! Standard HDA link playback using a cyclic DMA buffer.
 //! Register and codec definitions follow Intel HDA Specification rev. 1.0a, §§3 and 7.
 
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
 use core::{
     ptr::{copy_nonoverlapping, read_volatile, write_bytes, write_volatile},
     sync::atomic::{Ordering, fence},
@@ -56,6 +56,7 @@ mod verb {
     pub const GET_PARAMETER: u32 = 0xf00;
     pub const GET_CONNECTION_LIST: u32 = 0xf02;
     pub const GET_POWER: u32 = 0xf05;
+    pub const GET_PIN_CONTROL: u32 = 0xf07;
     pub const GET_PIN_SENSE: u32 = 0xf09;
     pub const GET_PIN_CONFIG: u32 = 0xf1c;
     pub const SET_CONNECT: u32 = 0x701;
@@ -84,7 +85,7 @@ const PCM_FORMAT: u16 = 0x0011; // 48 kHz, signed 16-bit stereo
 const STREAM_TAG: u8 = 1;
 const MAX_POLL_GAP_US: u64 = 20_000;
 const CURSOR_STALL_US: u64 = 100_000;
-const JACK_POLL_INTERVAL_US: u64 = 4_000_000;
+const JACK_POLL_INTERVAL_US: u64 = 100_000;
 
 const NODE_COUNT: u8 = 0x04;
 const FUNCTION_TYPE: u8 = 0x05;
@@ -98,9 +99,12 @@ const OUTPUT_AMP: u8 = 0x12;
 
 const DIGITAL_WIDGET: u32 = 1 << 9;
 const PIN_PRESENCE_DETECT: u32 = 1 << 2;
+const PIN_HEADPHONE_DRIVE: u32 = 1 << 3;
 const PIN_OUTPUT_CAPABLE: u32 = 1 << 4;
 const JACK_DETECT_OVERRIDE: u32 = 1 << 8;
 const PIN_SENSE_PRESENT: u32 = 1 << 31;
+const PIN_ENABLE_OUTPUT: u8 = 1 << 6;
+const PIN_ENABLE_HEADPHONE: u8 = 1 << 7;
 
 #[repr(C)]
 struct BufferDescriptor {
@@ -109,6 +113,7 @@ struct BufferDescriptor {
     flags: u32,
 }
 
+#[derive(Clone)]
 struct Widget {
     nid: u8,
     caps: u32,
@@ -116,7 +121,7 @@ struct Widget {
     output_amp: u16,
     connections: Vec<u8>,
     pin_caps: u32,
-    pin_priority: u8,
+    jack_kind: Option<JackKind>,
     pcm_output: bool,
 }
 
@@ -126,18 +131,56 @@ impl Widget {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum JackKind {
+    LineOut,
+    Headphone,
+}
+
+impl JackKind {
+    fn from_pin(widget_caps: u32, pin_caps: u32, config: u32) -> Option<Self> {
+        let port = config >> 30;
+        let chassis = (config >> 28) & 3;
+        let required = PIN_PRESENCE_DETECT | PIN_OUTPUT_CAPABLE;
+        // Firmware describes an external jack on the primary chassis as 0/0.
+        if port != 0
+            || chassis != 0
+            || widget_caps & DIGITAL_WIDGET != 0
+            || pin_caps & required != required
+            || config & JACK_DETECT_OVERRIDE != 0
+        {
+            return None;
+        }
+        match (config >> 20) & 0xf {
+            0 => Some(Self::LineOut),
+            2 => Some(Self::Headphone),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::LineOut => "line-out",
+            Self::Headphone => "headphone",
+        }
+    }
+}
+
 struct Output {
     codec: u8,
-    path: Vec<usize>,
-    widgets: Vec<Widget>,
-    priority: u8,
+    kind: JackKind,
+    path: Vec<Widget>,
+}
+
+impl Output {
+    fn pin(&self) -> &Widget {
+        &self.path[0]
+    }
 }
 
 struct Jack {
-    codec: u8,
-    nid: u8,
-    name: &'static str,
-    present: Option<bool>,
+    output: Arc<Output>,
+    present: bool,
 }
 
 pub(super) struct Playback {
@@ -153,6 +196,7 @@ pub(super) struct Playback {
     last_position: usize,
     last_progress: u64,
     jacks: Vec<Jack>,
+    active_jack: Option<usize>,
     next_jack: usize,
     next_jack_poll: u64,
 }
@@ -189,6 +233,7 @@ impl Playback {
             last_position: 0,
             last_progress: 0,
             jacks: Vec::new(),
+            active_jack: None,
             next_jack: 0,
             next_jack_poll: 0,
         };
@@ -199,11 +244,10 @@ impl Playback {
         playback.stream = reg::SD_BASE + usize::from((caps >> 8) & 0xf) * reg::SD_STRIDE;
         let codecs = playback.reset_controller()?;
         playback.configure_command_dma()?;
-        let output = playback
-            .find_output(codecs)?
-            .ok_or("no analog HDA PCM output route")?;
-        playback.configure_output(&output)?;
-        playback.program_stream()?;
+        playback.discover_jacks(codecs)?;
+        if playback.jacks.is_empty() {
+            return Err("no detectable analog HDA output jack with a PCM route");
+        }
         Ok(playback)
     }
 
@@ -351,8 +395,7 @@ impl Playback {
         }
     }
 
-    fn find_output(&mut self, codecs: u16) -> Result<Option<Output>, &'static str> {
-        let mut best: Option<Output> = None;
+    fn discover_jacks(&mut self, codecs: u16) -> Result<(), &'static str> {
         for codec in (0..15).filter(|codec| codecs & (1 << codec) != 0) {
             let groups = node_range(self.parameter(codec, 0, NODE_COUNT)?);
             for group in groups {
@@ -361,31 +404,31 @@ impl Playback {
                 }
                 self.power_on(codec, group)?;
                 let widgets = self.read_widgets(codec, group)?;
-                let Some((path, priority)) = find_route(&widgets) else {
-                    continue;
-                };
-                if priority == 1 {
-                    return Ok(Some(Output {
-                        codec,
-                        path,
-                        widgets,
-                        priority,
-                    }));
-                }
-                if best
-                    .as_ref()
-                    .is_none_or(|output| priority < output.priority)
-                {
-                    best = Some(Output {
-                        codec,
-                        path,
-                        widgets,
-                        priority,
-                    });
+                for (index, widget) in widgets.iter().enumerate() {
+                    let Some(kind) = widget.jack_kind else {
+                        continue;
+                    };
+                    let mut path = Vec::new();
+                    if trace_output(&widgets, index, &mut [false; 128], &mut path) {
+                        self.jacks.push(Jack {
+                            output: Arc::new(Output {
+                                codec,
+                                kind,
+                                path: path
+                                    .into_iter()
+                                    .map(|index| widgets[index].clone())
+                                    .collect(),
+                            }),
+                            present: false,
+                        });
+                    }
                 }
             }
         }
-        Ok(best)
+        self.jacks.sort_unstable_by_key(|jack| {
+            (jack.output.kind, jack.output.codec, jack.output.pin().nid)
+        });
+        Ok(())
     }
 
     fn read_widgets(&mut self, codec: u8, group: u8) -> Result<Vec<Widget>, &'static str> {
@@ -423,35 +466,20 @@ impl Playback {
             } else {
                 false
             };
-            let (pin_caps, pin_priority) = if kind == 4 {
+            let (pin_caps, jack_kind) = if kind == 4 {
                 let config = self.verb(codec, nid, verb::GET_PIN_CONFIG, 0)?;
                 let pin_caps = self.parameter(codec, nid, PIN_CAPS)?;
-                let port = config >> 30;
-                let device = (config >> 20) & 0xf;
-                if caps & DIGITAL_WIDGET == 0
-                    && pin_caps & (PIN_PRESENCE_DETECT | PIN_OUTPUT_CAPABLE)
-                        == PIN_PRESENCE_DETECT | PIN_OUTPUT_CAPABLE
-                    && config & JACK_DETECT_OVERRIDE == 0
-                    && matches!(port, 0 | 3)
-                    && let Some(&name) = ["line-out", "speaker", "headphone"].get(device as usize)
-                {
-                    self.jacks.push(Jack {
-                        codec,
-                        nid,
-                        name,
-                        present: None,
-                    });
+                let jack_kind = JackKind::from_pin(caps, pin_caps, config);
+                if jack_kind.is_some() && caps & (1 << 10) != 0 {
+                    self.power_on(codec, nid)?;
                 }
-                let priority = match (port, device) {
-                    (1, _) => u8::MAX,
-                    (_, 1) => 1, // Speaker
-                    (_, 0) => 2, // Line out
-                    (_, 2) => 3, // Headphone
-                    _ => u8::MAX,
-                };
-                (pin_caps, priority)
+                // Close any firmware-enabled analog pin before a converter can play.
+                if caps & DIGITAL_WIDGET == 0 && pin_caps & PIN_OUTPUT_CAPABLE != 0 {
+                    self.disable_pin_output(codec, nid)?;
+                }
+                (pin_caps, jack_kind)
             } else {
-                (0, u8::MAX)
+                (0, None)
             };
             let connections = if caps & (1 << 8) != 0 {
                 self.connections(codec, nid)?
@@ -463,7 +491,7 @@ impl Playback {
                 caps,
                 connections,
                 pin_caps,
-                pin_priority,
+                jack_kind,
                 pcm_output,
                 input_amp: unity_gain(input),
                 output_amp: unity_gain(output),
@@ -472,45 +500,70 @@ impl Playback {
         Ok(widgets)
     }
 
-    /// Check one jack per service tick, with a four-second interval between sweeps.
-    pub(super) fn poll_jack(&mut self) {
+    /// Check one jack per tick and select a route after a full presence sweep.
+    pub(super) fn poll_jacks(&mut self) -> Result<bool, &'static str> {
         let now = embassy_time_driver::now();
-        if now < self.next_jack_poll {
-            return;
-        }
-        let Some(jack) = self.jacks.get(self.next_jack) else {
-            return;
-        };
-        let (codec, nid, name) = (jack.codec, jack.nid, jack.name);
-        let sense = match self.verb(codec, nid, verb::GET_PIN_SENSE, 0) {
-            Ok(sense) => sense,
-            Err(error) => {
-                // A late response could be mistaken for a subsequent codec query.
-                self.jacks.clear();
-                crate::log_warn!(target: "global";
-                    "hda: jack polling stopped codec={} pin=0x{:02x}: {}\n", codec, nid, error
+        if now >= self.next_jack_poll {
+            let output = &self.jacks[self.next_jack].output;
+            let (codec, nid, kind) = (output.codec, output.pin().nid, output.kind);
+            let present = self.verb(codec, nid, verb::GET_PIN_SENSE, 0)? & PIN_SENSE_PRESENT != 0;
+            let jack = &mut self.jacks[self.next_jack];
+            if present != jack.present {
+                jack.present = present;
+                let dev = &self.device;
+                crate::log_info!(target: "global";
+                    "hda: {} jack {} bdf={:02X}:{:02X}.{} codec={} pin=0x{:02x}\n",
+                    kind.name(), if present { "plugged" } else { "unplugged" },
+                    dev.bus, dev.slot, dev.function, codec, nid
                 );
-                return;
             }
-        };
-        let present = sense & PIN_SENSE_PRESENT != 0;
-        if self.jacks[self.next_jack]
-            .present
-            .replace(present)
-            .is_some_and(|previous| previous != present)
-        {
-            let dev = &self.device;
+            if !present && self.active_jack == Some(self.next_jack) {
+                self.set_active_jack(None)?;
+            }
+            self.next_jack += 1;
+            if self.next_jack == self.jacks.len() {
+                self.next_jack = 0;
+                self.next_jack_poll = now + ticks_for_us(JACK_POLL_INTERVAL_US);
+                let next =
+                    select_jack(self.active_jack, self.jacks.iter().map(|jack| jack.present));
+                self.set_active_jack(next)?;
+            }
+        }
+        Ok(self.active_jack.is_some())
+    }
+
+    fn set_active_jack(&mut self, next: Option<usize>) -> Result<(), &'static str> {
+        if self.active_jack == next {
+            return Ok(());
+        }
+        if let Some(index) = self.active_jack.take() {
+            self.stop_stream()?;
+            let output = Arc::clone(&self.jacks[index].output);
+            self.disable_pin_output(output.codec, output.pin().nid)?;
+            if let Some(converter) = output.path.last() {
+                self.verb(output.codec, converter.nid, verb::SET_STREAM, 0)?;
+            }
             crate::log_info!(target: "global";
-                "hda: {} jack {} bdf={:02X}:{:02X}.{} codec={} pin=0x{:02x}\n",
-                name, if present { "plugged" } else { "unplugged" },
-                dev.bus, dev.slot, dev.function, codec, nid
+                "hda: analog PCM output disabled codec={} pin=0x{:02x}\n",
+                output.codec, output.pin().nid
             );
         }
-        self.next_jack += 1;
-        if self.next_jack == self.jacks.len() {
-            self.next_jack = 0;
-            self.next_jack_poll = now + ticks_for_us(JACK_POLL_INTERVAL_US);
+        if let Some(index) = next {
+            self.program_stream()?;
+            let output = Arc::clone(&self.jacks[index].output);
+            self.configure_output(&output)?;
+            self.active_jack = Some(index);
         }
+        Ok(())
+    }
+
+    fn disable_pin_output(&mut self, codec: u8, nid: u8) -> Result<(), &'static str> {
+        let control = self.verb(codec, nid, verb::GET_PIN_CONTROL, 0)? as u8;
+        let disabled = control & !(PIN_ENABLE_OUTPUT | PIN_ENABLE_HEADPHONE);
+        if disabled != control {
+            self.verb(codec, nid, verb::SET_PIN_CONTROL, disabled)?;
+        }
+        Ok(())
     }
 
     fn connections(&mut self, codec: u8, nid: u8) -> Result<Vec<u8>, &'static str> {
@@ -539,20 +592,17 @@ impl Playback {
 
     fn configure_output(&mut self, output: &Output) -> Result<(), &'static str> {
         let codec = output.codec;
-        for &index in &output.path {
-            let widget = &output.widgets[index];
+        for widget in &output.path {
             if widget.caps & (1 << 10) != 0 {
                 self.power_on(codec, widget.nid)?;
             }
         }
-        for (position, &index) in output.path.iter().enumerate() {
-            let widget = &output.widgets[index];
-            if let Some(&next) = output.path.get(position + 1) {
-                let next_nid = output.widgets[next].nid;
+        for (position, widget) in output.path.iter().enumerate() {
+            if let Some(next) = output.path.get(position + 1) {
                 let input = widget
                     .connections
                     .iter()
-                    .position(|&nid| nid == next_nid)
+                    .position(|&nid| nid == next.nid)
                     .ok_or("HDA route is missing a connection")?;
                 if widget.kind() != 2 && widget.connections.len() > 1 {
                     self.verb(codec, widget.nid, verb::SET_CONNECT, input as u8)?;
@@ -580,13 +630,19 @@ impl Playback {
                 self.command(codec, widget.nid, verb::SET_FORMAT | u32::from(PCM_FORMAT))?;
             }
         }
-        let pin = &output.widgets[output.path[0]];
-        let headphone_amp = if pin.pin_priority == 3 && pin.pin_caps & (1 << 3) != 0 {
-            0x80
-        } else {
-            0
-        };
-        self.verb(codec, pin.nid, verb::SET_PIN_CONTROL, 0x40 | headphone_amp)?;
+        let pin = output.pin();
+        let headphone_amp =
+            if output.kind == JackKind::Headphone && pin.pin_caps & PIN_HEADPHONE_DRIVE != 0 {
+                PIN_ENABLE_HEADPHONE
+            } else {
+                0
+            };
+        self.verb(
+            codec,
+            pin.nid,
+            verb::SET_PIN_CONTROL,
+            PIN_ENABLE_OUTPUT | headphone_amp,
+        )?;
         if pin.pin_caps & (1 << 16) != 0 {
             self.verb(codec, pin.nid, verb::SET_EAPD, 2)?;
         }
@@ -595,12 +651,18 @@ impl Playback {
         Ok(())
     }
 
-    fn program_stream(&mut self) -> Result<(), &'static str> {
+    fn stop_stream(&self) -> Result<(), &'static str> {
         let control = self.stream + sd::CTL;
         self.write(control, 0u8);
         if !wait_us(1_000, || self.read::<u8>(control) & sd::RUN == 0) {
             return Err("HDA playback stream failed to stop");
         }
+        Ok(())
+    }
+
+    fn program_stream(&mut self) -> Result<(), &'static str> {
+        self.stop_stream()?;
+        let control = self.stream + sd::CTL;
         self.write(control, sd::RESET);
         if !wait_us(1_000, || self.read::<u8>(control) & sd::RESET != 0) {
             return Err("HDA playback stream failed to enter reset");
@@ -742,20 +804,17 @@ fn unity_gain(caps: u32) -> u16 {
     ((caps & 0x7f).min((caps >> 8) & 0x7f)) as u16
 }
 
-fn find_route(widgets: &[Widget]) -> Option<(Vec<usize>, u8)> {
-    for priority in 1..=3 {
-        for (index, widget) in widgets.iter().enumerate() {
-            if widget.pin_priority != priority || widget.pin_caps & (1 << 4) == 0 {
-                continue;
+fn select_jack(active: Option<usize>, present: impl Iterator<Item = bool>) -> Option<usize> {
+    let mut fallback = None;
+    for (index, connected) in present.enumerate() {
+        if connected {
+            if active == Some(index) {
+                return active;
             }
-            let mut visited = [false; 128];
-            let mut path = Vec::new();
-            if trace_output(widgets, index, &mut visited, &mut path) {
-                return Some((path, priority));
-            }
+            fallback.get_or_insert(index);
         }
     }
-    None
+    fallback
 }
 
 fn trace_output(
