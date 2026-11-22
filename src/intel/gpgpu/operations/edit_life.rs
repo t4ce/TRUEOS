@@ -307,7 +307,6 @@ impl EditLifeState {
     }
 
     pub(crate) fn extent(&self) -> (u32, u32) { (self.width, self.height) }
-    pub(crate) fn viewport(&self) -> GpgpuRect { self.viewport }
 
     /// Gutter changes often move or slightly shrink the editor viewport while
     /// its page extent stays fixed. Reuse the retained storage when it fits;

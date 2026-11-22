@@ -6092,9 +6092,15 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
 
     // A single opaque crop which overwrites the whole lease is a blit, with
     // no clear, sampling, alpha arithmetic or EU dispatch required.
+    // Explicit copies must already be within the destination. The implicit
+    // optimization can also use a crop clipped by the sprite geometry code.
     if !render_overlay
         && let [quad] = upload.quads.as_slice()
-        && quad.flags & SPRITE_QUAD_FLAG_BCS0_COPY == 0
+        && (quad.flags & SPRITE_QUAD_FLAG_BCS0_COPY == 0
+            || (quad.c0_x == 0.0
+                && quad.c0_y == 0.0
+                && quad.c2_x == destination.width as f32
+                && quad.c2_y == destination.height as f32))
         && let Some((_, BlueprintSpriteSource::Uploaded(source))) =
             surface.sprites.iter().find(|(id, _)| *id == quad.sprite_id)
         && source.opaque
@@ -6104,6 +6110,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         && rect.dst_xy == 0
         && rect.size == (destination.width | (destination.height << 16))
     {
+        let explicit_bcs_copy = quad.flags & SPRITE_QUAD_FLAG_BCS0_COPY != 0;
         let src = source.surface;
         let bcs_surface = |s: GpgpuRgba8Surface| crate::intel::GucBcs0RgbaSurface {
             phys: s.phys,
@@ -6159,6 +6166,17 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                 );
                 return ERROR_UI4;
             }
+            Err(crate::intel::GucBcs0CopySubmitError::Busy) => {
+                // The copy engine accepted no work. Keep the current front
+                // and let the caller acquire a fresh lease for the next view.
+                crate::log_trace!(target: "ui4/blueprint-frame";
+                    "opaque viewport deferred owner={:?} window={} frame={} extent={}x{} backend=bcs0 explicit={} reason=admission-busy action=retry-frame\n",
+                    owner, window_id, lease.frame.raw(), destination.width, destination.height,
+                    explicit_bcs_copy,
+                );
+                cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                return ERROR_BUSY;
+            }
             Err(crate::intel::GucBcs0CopySubmitError::SubmitFailed) => {
                 quarantine_blueprint_sprite_submission(
                     surface,
@@ -6171,8 +6189,21 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                 );
                 return ERROR_UI4;
             }
-            // No blit was accepted. The existing shader path can still render.
-            Err(_) => {}
+            Err(
+                error @ (crate::intel::GucBcs0CopySubmitError::Unavailable
+                | crate::intel::GucBcs0CopySubmitError::InvalidRequest),
+            ) => {
+                crate::log_trace!(target: "ui4/blueprint-frame";
+                    "opaque viewport admission failed owner={:?} window={} frame={} extent={}x{} source_pitch={} destination_pitch={} reason={:?} action={}\n",
+                    owner, window_id, lease.frame.raw(), destination.width, destination.height,
+                    src.pitch_bytes, destination.pitch_bytes, error,
+                    if explicit_bcs_copy { "reject-explicit-copy" } else { "fallback-shader" },
+                );
+                if explicit_bcs_copy {
+                    cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                    return ERROR_UI4;
+                }
+            }
         }
     }
 

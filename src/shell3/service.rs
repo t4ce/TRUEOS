@@ -25,11 +25,6 @@ pub(super) fn microfont_scale() -> u32 {
     DEFAULT_MICROFONT_SCALE
 }
 
-pub(crate) fn ui4_cell_extent() -> Option<(i32, i32)> {
-    let (width, height) = crate::r::services::shell3_font_service::cell_extent(microfont_scale())?;
-    Some((i32::try_from(width).ok()?, i32::try_from(height).ok()?))
-}
-
 struct ShellOwnership {
     worker_slots: Vec<u32>,
     shells_by_slot: [usize; crate::percpu::CPU_SLOT_LIMIT],

@@ -326,11 +326,6 @@ pub(super) fn release_owner_registrations(owner: WindowOwner) -> usize {
     before.saturating_sub(menus.len())
 }
 
-/// Drop one window's standing menu at window teardown.
-pub(super) fn release_window_registration(owner: WindowOwner, window: WindowId) -> bool {
-    clear_window_menu(owner, window)
-}
-
 pub(super) fn open(
     source: Ui4CursorSource,
     owner: WindowOwner,

@@ -170,12 +170,6 @@ pub fn utc_offset_seconds(unix_seconds: u64) -> i32 {
     }
 }
 
-#[inline]
-pub fn timezone_is_dst(unix_seconds: u64) -> bool {
-    current_timezone_id() == TIMEZONE_EUROPE_BERLIN
-        && berlin_utc_offset_seconds(unix_seconds) == 2 * 3_600
-}
-
 /// Short display name for the configured zone at this UTC instant.
 ///
 /// The kernel clock remains UTC; this only describes the civil-time view.

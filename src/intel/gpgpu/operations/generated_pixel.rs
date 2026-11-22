@@ -29,9 +29,6 @@ pub(crate) struct GeneratedPixelProgram {
 }
 
 impl GeneratedPixelProgram {
-    pub(crate) fn code_len(&self) -> usize {
-        self.body_bytes
-    }
     pub(crate) fn code_hash(&self) -> [u8; 32] {
         self.digest
     }

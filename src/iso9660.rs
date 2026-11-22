@@ -149,41 +149,6 @@ pub fn looks_like_iso9660(iso: &[u8]) -> bool {
     pvd.first() == Some(&1u8) && pvd.get(1..6) == Some(b"CD001") && pvd.get(6) == Some(&1u8)
 }
 
-/// Locate an ISO9660 image embedded inside a larger blob.
-///
-/// Scans for the Primary Volume Descriptor signature and validates it.
-pub fn find_embedded_iso9660_start(blob: &[u8]) -> Option<usize> {
-    // PVD signature is at ISO offset 16*2048 and begins with: 0x01 "CD001" 0x01
-    const SIG: &[u8; 7] = b"\x01CD001\x01";
-    let pvd_off = PVD_SECTOR * ISO_SECTOR_BYTES;
-
-    if blob.len() < pvd_off + SIG.len() {
-        return None;
-    }
-
-    // Naive scan is fine at ~40MB.
-    let mut i = 0usize;
-    while i + SIG.len() <= blob.len() {
-        if &blob[i..i + SIG.len()] == SIG {
-            // Candidate ISO start.
-            if i >= pvd_off {
-                let start = i - pvd_off;
-                // Prefer sector alignment.
-                if start.is_multiple_of(ISO_SECTOR_BYTES) && looks_like_iso9660(&blob[start..]) {
-                    return Some(start);
-                }
-                // Fallback: accept unaligned starts if validation passes.
-                if looks_like_iso9660(&blob[start..]) {
-                    return Some(start);
-                }
-            }
-            // Continue searching; false positives are possible.
-        }
-        i += 1;
-    }
-    None
-}
-
 fn find_in_dir<'a>(dir: &'a [u8], want_upper: &str) -> Option<DirRec<'a>> {
     let mut off = 0usize;
     while off < dir.len() {

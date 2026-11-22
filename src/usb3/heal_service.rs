@@ -361,14 +361,6 @@ pub(crate) fn take_rescan_requested(index: usize) -> bool {
         .unwrap_or(false)
 }
 
-pub fn latest_report() -> Option<HealServiceReport> {
-    REPORTS
-        .lock()
-        .iter()
-        .find(|report| report.controller_index == 0)
-        .cloned()
-}
-
 pub(crate) fn claim_backend(
     dev: crate::pci::PciDevice,
     publish_selection: bool,
