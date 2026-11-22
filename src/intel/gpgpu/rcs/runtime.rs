@@ -565,6 +565,7 @@ fn font_rcs_init_ppgtt_once(state: DirectRcsState) -> bool {
 }
 
 fn direct_rcs_rebuild_ppgtt(state: DirectRcsState) -> bool {
+    invalidate_system_rcs_ppgtt_generation(state);
     let pml4_off = DIRECT_RCS_PPGTT_PML4_OFFSET;
     let pdp_off = DIRECT_RCS_PPGTT_PDPT_OFFSET;
     let pd_off = DIRECT_RCS_PPGTT_PD_OFFSET;
@@ -698,6 +699,12 @@ fn direct_rcs_flush_ppgtt_pte_range(state: DirectRcsState, gpu: u64, len: usize)
 
 fn direct_rcs_ppgtt_pte_flags() -> u64 {
     super::GEN8_PAGE_PRESENT | GEN8_PAGE_RW
+}
+
+fn invalidate_system_rcs_ppgtt_generation(state: DirectRcsState) {
+    if state.gpu_va == DIRECT_RCS_GPU_VA {
+        DIRECT_RCS_PPGTT_GENERATION.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 
@@ -909,6 +916,7 @@ fn direct_rcs_map_ppgtt_pages_and_publish(
         return true;
     }
 
+    invalidate_system_rcs_ppgtt_generation(state);
     for (page, phys) in pages.iter().copied().enumerate() {
         let Some(pte_off) = exact_ppgtt_pte_offset(gpu, page) else {
             return false;
@@ -994,6 +1002,7 @@ fn direct_rcs_update_ppgtt_region(
     if !changed {
         return DirectRcsPpgttMapResult::Unchanged;
     }
+    invalidate_system_rcs_ppgtt_generation(state);
     for page in 0..pages {
         let va_page = (gpu >> 12) + page as u64;
         let pd_index = (va_page >> 9) as usize;
@@ -1147,6 +1156,7 @@ fn direct_rcs_unmap_ppgtt_region_exact(
         }
     }
 
+    invalidate_system_rcs_ppgtt_generation(state);
     for page in 0..pages {
         let va_page = (gpu >> 12) + page as u64;
         let pd_index = (va_page >> 9) as usize;
