@@ -283,30 +283,38 @@ pub(super) fn registered_request(
 ) -> Option<ContextMenuRequest> {
     let collapse = super::collapse::menu_entry(owner, window);
     let collapsed = super::window_broker::collapse_state(owner, window) == Some(true);
-    let menus = WINDOW_MENUS.lock();
-    let app = menus
-        .iter()
-        .find(|menu| menu.owner == owner && menu.window == window);
-    if collapsed || app.is_none() {
-        return collapse.map(|entry| ContextMenuRequest {
-            dynamic: false,
-            entries: alloc::vec![entry],
-            context: 0,
-            callback: super::collapse::ignore_menu,
-        });
+    let mut request = if collapsed {
+        None
+    } else {
+        let app = WINDOW_MENUS
+            .lock()
+            .iter()
+            .find(|menu| menu.owner == owner && menu.window == window)
+            .map(|menu| ContextMenuRequest {
+                dynamic: menu.dynamic,
+                entries: menu.entries.clone(),
+                context: menu.context,
+                callback: menu.callback,
+            });
+        app.or_else(|| {
+            if owner == WindowOwner::SHELL3_SERVICE {
+                crate::shell3::tui::context_menu::request(window)
+            } else {
+                None
+            }
+        })
+    };
+    if let Some(menu) = &mut request {
+        if !menu.dynamic && let Some(entry) = collapse {
+            menu.entries.push(entry);
+        }
+        return request;
     }
-    let menu = app?;
-    let mut entries = menu.entries.clone();
-    if !menu.dynamic
-        && let Some(entry) = collapse
-    {
-        entries.push(entry);
-    }
-    Some(ContextMenuRequest {
-        dynamic: menu.dynamic,
-        entries,
-        context: menu.context,
-        callback: menu.callback,
+    collapse.map(|entry| ContextMenuRequest {
+        dynamic: false,
+        entries: alloc::vec![entry],
+        context: 0,
+        callback: super::collapse::ignore_menu,
     })
 }
 

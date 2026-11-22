@@ -13,6 +13,7 @@ use trueos_terminal::program_status::{ProgramStatus, ProgramStatusParser};
 use trueos_terminal::{Terminal, TerminalColor};
 mod remote;
 mod accounts;
+pub(crate) mod context_menu;
 pub(crate) use remote::Drain as RemoteDrain;
 
 #[derive(Clone, Copy)]
@@ -78,6 +79,7 @@ struct Route {
     surface_generation: u64,
     suppressed_text: Option<(u32, u32, u32)>,
     stdout_pending: Vec<u8>,
+    context_menu: Option<context_menu::Registration>,
 }
 impl Route {
     fn active(&self) -> bool {
@@ -381,6 +383,7 @@ fn create_route(frontend: Option<Frontend>, target: &MatrixTarget) -> Result<(),
             surface_generation: 1,
             suppressed_text: None,
             stdout_pending: Vec::new(),
+            context_menu: None,
         });
         routes.changed(frontend_id);
     }
@@ -413,6 +416,7 @@ pub(crate) fn bind_vm(target: &MatrixTarget, vm: u8) {
     {
         route.vm = None;
         route.owner = None;
+        route.context_menu = None;
         route.remote_input_origin = None;
         route.remote_input_frontiers = None;
         route.program_status.reset();
@@ -543,6 +547,7 @@ pub(crate) fn release(target: &MatrixTarget, vm: u8) -> Option<bool> {
     let frontend = route.frontend;
     let was_owned = route.owner.is_some();
     route.owner = None;
+    route.context_menu = None;
     route.program_status.reset();
     route.codex_starting = false;
     route.suppressed_text = None;
@@ -1308,6 +1313,7 @@ pub(super) fn detach(frontend: u64) {
             route.frontend = None;
             route.selected = true;
             route.owner = None;
+            route.context_menu = None;
             route.program_status.reset();
             route.codex_starting = false;
         }

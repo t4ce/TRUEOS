@@ -291,6 +291,10 @@ pub struct TrueosUi4ResizeEvent {
     pub height: u32,
 }
 
+/// Select the calling Blueprint's current terminal lease for fixed context
+/// menu registration and action polling. UI4 scene window handles are nonzero.
+pub const UI4_CONTEXT_MENU_TERMINAL_WINDOW_ID: u32 = 0;
+
 /// One row of a frame-owned context menu. `enabled` is 0 for a greyed
 /// label which reports no action, non-zero for a selectable row.
 #[repr(C)]

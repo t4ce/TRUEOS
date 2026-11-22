@@ -872,6 +872,9 @@ impl Terminal {
             self.pending_wrap = true;
         } else {
             self.cursor_col += 1;
+            if ch == '🥁' {
+                self.put_char(' ');
+            }
         }
         self.dirty = true;
     }
@@ -1116,6 +1119,14 @@ mod tests {
         terminal.feed(b"3HZ");
 
         assert_eq!(rows(&terminal), ["\u{2603}abc    ", "  Z     "]);
+    }
+
+    #[test]
+    fn drum_emoji_occupies_two_editor_columns() {
+        let mut terminal = Terminal::new(8, 1);
+        terminal.feed("~🥁:x".as_bytes());
+        assert_eq!(rows(&terminal), ["~🥁 :x   "]);
+        assert_eq!(terminal.cursor().col, 5);
     }
 
     #[test]

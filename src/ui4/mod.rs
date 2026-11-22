@@ -105,7 +105,7 @@ pub(crate) use codex_prompt::ui4_codex_prompt_service_task;
 pub(crate) use compositor_service::ui4_compositor_service_task;
 pub(crate) use context_menu::{
     ContextMenuCloseReason, ContextMenuEntry,
-    ContextMenuResult, MAX_CONTEXT_MENU_ENTRIES, clear_window_menu as clear_window_context_menu,
+    ContextMenuRequest, ContextMenuResult, MAX_CONTEXT_MENU_ENTRIES, clear_window_menu as clear_window_context_menu,
     register_window_menu as register_window_context_menu,
 };
 

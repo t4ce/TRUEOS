@@ -37,17 +37,19 @@ async fn prepare_microemoji(
     area: Option<&MatrixAreaSnapshot>,
     scale: u32,
 ) -> Result<(), &'static str> {
-    if !area.is_some_and(|area| super::MatrixSlots::is_microemoji_specimen(area.identity.1)) {
-        *masks = None;
-        return Ok(());
-    }
-    let masks = masks.get_or_insert_with(BTreeMap::new);
+    let specimen = area.is_some_and(|area| super::MatrixSlots::is_microemoji_specimen(area.identity.1));
     let mut pending: BTreeSet<_> = lines
         .iter()
         .skip(3)
         .flat_map(|line| line.iter().map(|&(ch, _)| ch))
-        .filter(|ch| !masks.contains_key(ch) && emoji::has_glyph(*ch))
+        .filter(|&ch| (specimen || ch == '🥁') && emoji::has_glyph(ch))
         .collect();
+    if !specimen && pending.is_empty() {
+        *masks = None;
+        return Ok(());
+    }
+    let masks = masks.get_or_insert_with(BTreeMap::new);
+    pending.retain(|ch| !masks.contains_key(ch));
     if pending.is_empty() {
         return Ok(());
     }

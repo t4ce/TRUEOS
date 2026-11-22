@@ -175,11 +175,18 @@ mod tests {
     #[test]
     fn microemoji_specimen_shows_every_bundle_glyph_once() {
         let glyphs = microemoji_mask_service::characters().unwrap();
-        assert_eq!(glyphs.len(), 256);
+        let count = glyphs.len();
+        assert_eq!(count, 287);
         let lines = specimen(EMOJI_PART).unwrap();
-        assert_eq!(lines.len(), 18);
+        assert_eq!(lines.len(), 2 + count.div_ceil(16));
         assert_eq!(lines[0], "Microemoji");
-        assert!(lines[2..].iter().all(|row| row.chars().count() == 31));
+        let row_widths = (0..count).step_by(16).map(|i| 2 * (count - i).min(16) - 1);
+        assert!(
+            lines[2..]
+                .iter()
+                .map(|row| row.chars().count())
+                .eq(row_widths)
+        );
         assert!(
             lines[2..]
                 .iter()

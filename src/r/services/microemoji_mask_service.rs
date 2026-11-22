@@ -14,7 +14,6 @@ use microemoji::{
 mod native;
 
 const SOURCE_BYTES: &[u8] = include_bytes!("../../../vendor/microemoji/data/outline-alpha.bin.lz4");
-// Enough for any 256 standalone glyphs from the supplied Twemoji font.
 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 const MAX_SIZE: u32 = 256;
 const MAX_PENDING: usize = 8;

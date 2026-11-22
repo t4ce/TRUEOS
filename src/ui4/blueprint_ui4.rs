@@ -2130,6 +2130,16 @@ unsafe fn context_menu_register(
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
+    if window_id == v::bp_abi::UI4_CONTEXT_MENU_TERMINAL_WINDOW_ID {
+        let WindowOwner::Vm(vm) = owner else {
+            return ERROR_CONTEXT;
+        };
+        if dynamic || serial != 0 || menu_entries.iter().any(|entry| entry.label.trim().is_empty()) {
+            return ERROR_INVALID;
+        }
+        return crate::shell3::tui::context_menu::register(vm, menu_entries)
+            .map_or(ERROR_NOT_FOUND, |()| 0);
+    }
     let window = {
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
@@ -2194,6 +2204,20 @@ pub unsafe extern "C" fn trueos_cabi_ui4_context_menu_event_take(
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
+    if window_id == v::bp_abi::UI4_CONTEXT_MENU_TERMINAL_WINDOW_ID {
+        let WindowOwner::Vm(vm) = owner else {
+            return ERROR_CONTEXT;
+        };
+        return match crate::shell3::tui::context_menu::take(vm) {
+            Ok(Some(event)) => {
+                // SAFETY: the non-null output points to one writable ABI event.
+                unsafe { out.write(event) };
+                0
+            }
+            Ok(None) => 1,
+            Err(()) => ERROR_NOT_FOUND,
+        };
+    }
     let window = {
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {

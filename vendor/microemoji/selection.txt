@@ -1,4 +1,4 @@
-# Initial selection from the supplied Twemoji font, in Unicode order.
+# Shipped selection from the supplied Twemoji font, in Unicode order.
 U+00A9
 U+00AE
 U+203C
@@ -255,3 +255,34 @@ U+1F317
 U+1F318
 U+1F319
 U+1F31A
+U+1F399
+U+1F39A
+U+1F39B
+U+1F3A4
+U+1F3A7
+U+1F3B5
+U+1F3B6
+U+1F3B7
+U+1F3B8
+U+1F3B9
+U+1F3BA
+U+1F3BB
+U+1F3BC
+U+1F3C3
+U+1F4E2
+U+1F4E3
+U+1F4EF
+U+1F4FB
+U+1F507
+U+1F508
+U+1F509
+U+1F50A
+U+1F514
+U+1F515
+U+1F941
+U+1FA87
+U+1FA88
+U+1FA89
+U+1FA95
+U+1FA97
+U+1FA98

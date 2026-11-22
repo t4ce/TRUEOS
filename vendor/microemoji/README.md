@@ -5,7 +5,7 @@ Microemoji reads a borrowed binary of filled color glyph outlines. Like
 geometry for a renderer. The library is `#![no_std]` and needs no allocator or
 dependencies. The TrueType reader runs in the host exporter.
 
-## Export the initial set
+## Export the shipped set
 
 From the TRUEOS root, with a sibling TRUEOS-Blueprints checkout, run this on
 Ubuntu with the host Rust toolchain.
@@ -17,11 +17,12 @@ cargo +1.95.0 run --target x86_64-unknown-linux-gnu -p microemoji --example expo
 ```
 
 The exporter writes `microemoji.bin` and one standalone SVG per selected
-scalar. Use a fresh or empty output directory. The starting selection contains
-the first 256 COLR-backed single-codepoint glyphs in Unicode order. Edit
-`selection.txt` to hand-select glyphs with one `U+HEX` entry per line. Blank
-lines and `#` comments are accepted. Omitting `--selection` uses the first 256
-directly. Pass the font path followed by `--list-default` to print that list.
+scalar. Use a fresh or empty output directory. The shipped selection contains
+the first 256 COLR-backed single-codepoint glyphs, 30 music, instrument, and
+sound glyphs, and the runner. Edit `selection.txt` to hand-select glyphs with
+one `U+HEX` entry per line. Blank lines and `#` comments are accepted.
+Omitting `--selection` uses the first 256 directly. Pass the font path followed
+by `--list-default` to print that list.
 
 The host exporter reads COLR v0 with the first CPAL palette. The bundle indexes
 individual Unicode scalars. Source glyphs composed through font shaping, such
