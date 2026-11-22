@@ -303,7 +303,7 @@ fn glyphs_for_update(
             height,
             (character, update.colors.get(column).copied().flatten()),
             surface.scale,
-            surface.emoji_mask(row, character),
+            surface.emoji_mask(character),
         )?);
     }
     Ok(())
@@ -331,7 +331,7 @@ pub(super) fn glyph_for_cell_with_face(
     height: u32,
     cell: (char, Option<super::super::RgbaColor>),
     scale: u32,
-    emoji_mask: Option<&[u8]>,
+    emoji_mask: Option<(char, u32, &[u8])>,
 ) -> Result<crate::intel::GucBcs0RgbaCopy, &'static str> {
     let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)
         .ok_or("shell3-font-physical-size-unavailable")?;
@@ -340,13 +340,14 @@ pub(super) fn glyph_for_cell_with_face(
         .and_then(super::super::RgbaColor::background)
         .unwrap_or(super::BACKGROUND);
     let underline = cell.1.is_some_and(super::super::RgbaColor::underline);
-    let mut copy = if let Some(mask) = emoji_mask {
+    let mut copy = if let Some((ch, half, mask)) = emoji_mask {
         crate::r::services::shell3_font_service::emoji_glyph(
-            cell.0, cell_width, cell_height, foreground, background, underline, mask,
+            ch, cell_width, cell_height, foreground, background, underline, mask, half,
         )
     } else {
         crate::r::services::shell3_font_service::glyph_with_face(
-            face, cell.0, cell_width, cell_height, foreground, background, underline,
+            face, trueos_terminal::emoji_cell::plain_character(cell.0),
+            cell_width, cell_height, foreground, background, underline,
         )
     }?;
     copy.destination_x = x;

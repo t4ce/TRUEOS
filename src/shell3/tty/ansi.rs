@@ -244,6 +244,7 @@ impl Terminal {
                     run.text.clear();
                     run.color = color;
                 }
+                let ch = trueos_terminal::emoji_cell::plain_character(ch);
                 run.text.push(if ch.is_control() { ' ' } else { ch });
             }
             self.write_meta(&run);

@@ -5,6 +5,7 @@ extern crate alloc;
 pub mod program_status;
 pub mod cell_outlines;
 pub mod edit_life;
+pub mod emoji_cell;
 mod font_scale;
 pub mod tab_label_cell;
 pub mod tab_labels;
@@ -315,7 +316,7 @@ impl Terminal {
             rendered.push(
                 self.cells()[start..end]
                     .iter()
-                    .map(|cell| cell.glyph)
+                    .map(|cell| emoji_cell::plain_character(cell.glyph))
                     .collect(),
             );
         }
@@ -886,6 +887,19 @@ impl Terminal {
             for &cell in cells { self.put_char(cell); }
             return;
         }
+        if ch == '🥁'
+            && self.cols >= 2
+            && let Some(cells) = emoji_cell::cells(ch)
+        {
+            // Start on the next row if the drum cannot fit on this one.
+            if self.cursor_col == self.cols - 1 {
+                self.pending_wrap = true;
+            }
+            for cell in cells {
+                self.put_char(cell);
+            }
+            return;
+        }
 
         if self.pending_wrap {
             self.cursor_col = 0;
@@ -901,9 +915,6 @@ impl Terminal {
             self.pending_wrap = true;
         } else {
             self.cursor_col += 1;
-            if ch == '🥁' {
-                self.put_char(' ');
-            }
         }
         self.dirty = true;
     }
@@ -1153,9 +1164,31 @@ mod tests {
     #[test]
     fn drum_emoji_occupies_two_editor_columns() {
         let mut terminal = Terminal::new(8, 1);
-        terminal.feed("~🥁:x".as_bytes());
+        terminal.feed("\x1b[47m~🥁:x".as_bytes());
         assert_eq!(rows(&terminal), ["~🥁 :x   "]);
+        let cells = terminal.cells();
+        assert_eq!(emoji_cell::decode(cells[1].glyph), Some(('🥁', 0)));
+        assert_eq!(emoji_cell::decode(cells[2].glyph), Some(('🥁', 1)));
+        assert_eq!(cells[1].style, cells[0].style);
+        assert_eq!(cells[2].style, cells[0].style);
         assert_eq!(terminal.cursor().col, 5);
+    }
+
+    #[test]
+    fn drum_emoji_wraps_as_one_glyph() {
+        let mut terminal = Terminal::new(4, 2);
+        terminal.feed("abc🥁x".as_bytes());
+        assert_eq!(rows(&terminal), ["abc ", "🥁 x "]);
+        assert_eq!(terminal.cursor().col, 3);
+        assert_eq!(terminal.cursor().row, 1);
+    }
+
+    #[test]
+    fn drum_emoji_falls_back_to_its_scalar_on_a_one_column_screen() {
+        let mut terminal = Terminal::new(1, 2);
+        terminal.feed("🥁x".as_bytes());
+        assert_eq!(rows(&terminal), ["🥁", "x"]);
+        assert_eq!(terminal.cells()[0].glyph, '🥁');
     }
 
     #[test]

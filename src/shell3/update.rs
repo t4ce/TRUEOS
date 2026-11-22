@@ -1,11 +1,30 @@
 //! Visible strip snapshots and incremental update generation for Shell3.
 
 use alloc::{string::String, vec::Vec};
+use trueos_terminal::emoji_cell;
 
 use super::{MetaFmtStr, RgbaColor, SpecialRows, StripSide, tui::TerminalEffects};
 
 /// One visible cell: Unicode character and optional foreground/background style.
 pub(super) type RenderedLine = Vec<(char, Option<RgbaColor>)>;
+
+fn matrix_characters(text: &str, emoji_specimen: bool) -> impl Iterator<Item = char> + '_ {
+    text.chars().flat_map(move |ch| {
+        let cells = if ch == '🥁'
+            || (emoji_specimen && crate::r::services::microemoji_mask_service::has_glyph(ch))
+        {
+            emoji_cell::cells(ch)
+        } else {
+            None
+        };
+        let (first, second) = cells.map_or((ch, None), |[left, right]| (left, Some(right)));
+        core::iter::once(first).chain(second)
+    })
+}
+
+pub(super) fn matrix_columns(text: &str, emoji_specimen: bool) -> usize {
+    matrix_characters(text, emoji_specimen).count()
+}
 
 // Shell-owned cells share one opaque palette before pixel/ANSI rendering.
 pub(super) const MATRIX_BACKGROUND: [u8; 4] = [24, 24, 24, 255];
@@ -223,7 +242,7 @@ impl Snapshot {
         offset: usize,
         guard: usize,
     ) -> Self {
-        self.with_matrix_pan(lines, generation, 0, offset, guard)
+        self.with_matrix_pan(lines, generation, 0, offset, guard, false)
     }
 
     pub(super) fn with_matrix_pan(
@@ -233,6 +252,7 @@ impl Snapshot {
         column: usize,
         offset: usize,
         guard: usize,
+        emoji_specimen: bool,
     ) -> Self {
         self.matrix_generation = generation;
         let count = self.size.1.saturating_sub(3);
@@ -244,7 +264,7 @@ impl Snapshot {
             .min(lines.len());
         let maximum_column = lines
             .iter()
-            .map(|line| line.chars().count())
+            .map(|line| matrix_columns(line, emoji_specimen))
             .max()
             .unwrap_or(0)
             .saturating_sub(self.size.0);
@@ -254,8 +274,7 @@ impl Snapshot {
         let cells: Vec<_> = lines[start.min(end)..end]
             .iter()
             .map(|text| {
-                let mut row: RenderedLine = text
-                    .chars()
+                let mut row: RenderedLine = matrix_characters(text, emoji_specimen)
                     .skip(first_column)
                     .take(width)
                     .map(|ch| (ch, None))

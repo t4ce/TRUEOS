@@ -25,6 +25,7 @@ use crate::ui4::{
     finish_window_session_with_request, publish_window_frame, retire_frame_when_released,
     set_window_escape_key_action, window_resize_state,
 };
+use trueos_terminal::emoji_cell;
 
 const OWNER: WindowOwner = WindowOwner::SHELL3_SERVICE;
 const BACKGROUND: [u8; 4] = super::update::MATRIX_BACKGROUND;
@@ -41,9 +42,8 @@ async fn prepare_microemoji(
     let specimen = area.is_some_and(|area| super::MatrixSlots::is_microemoji_specimen(area.identity.1));
     let mut pending: BTreeSet<_> = lines
         .iter()
-        .skip(3)
-        .flat_map(|line| line.iter().map(|&(ch, _)| ch))
-        .filter(|&ch| (specimen || ch == '🥁') && emoji::has_glyph(ch))
+        .flat_map(|line| line.iter())
+        .filter_map(|&(cell, _)| emoji_cell::decode(cell).map(|(ch, _)| ch))
         .collect();
     if !specimen && pending.is_empty() {
         *masks = None;
@@ -56,7 +56,7 @@ async fn prepare_microemoji(
     }
     let (width, height) = shell3_font_service::cell_extent(scale)
         .ok_or("shell3-font-physical-size-unavailable")?;
-    let size = width.min(height);
+    let size = shell3_font_service::emoji_mask_size(width, height);
     // Do the cold requests before acquiring a writable frame. Keep retrieved
     // masks while this specimen is visible, even if the global cache evicts.
     loop {
@@ -150,11 +150,10 @@ impl Ui4Surface {
         }
     }
 
-    fn emoji_mask(&self, row: u32, ch: char) -> Option<&[u8]> {
-        if row < 3 {
-            return None;
-        }
-        self.emoji_masks.as_ref()?.get(&ch).map(AsRef::as_ref)
+    fn emoji_mask(&self, cell: char) -> Option<(char, u32, &[u8])> {
+        let (ch, half) = emoji_cell::decode(cell)?;
+        let mask = self.emoji_masks.as_ref()?.get(&ch)?;
+        Some((ch, half, mask.as_ref()))
     }
 }
 

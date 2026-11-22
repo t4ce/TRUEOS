@@ -34,6 +34,52 @@ outlines and palette as a binary and SVG representation.
 [Mozilla font notice](https://github.com/mozilla/twemoji-colr/blob/v0.7.0/LICENSE.md) ·
 [Twemoji graphics license](https://github.com/twitter/twemoji/blob/v14.0.2/LICENSE-GRAPHICS)
 
+## Review monochrome line candidates
+
+The host-side reducer reads the TTF-derived color MEOJ bundle directly. It
+resolves paint order, merges equal fills, retains the silhouette and holes,
+and uses local contrast to select interior features. Then it fits visible
+features to dots, centerlines, circles, or arcs where the geometry allows.
+It chooses a chord count for each circle or arc at the requested tile size
+and checks the resulting lines against the input geometry. Color is used
+during feature selection. The resulting geometry carries coordinates,
+stroke widths, and dot diameters for monochrome coverage. SVG export is
+available for side-by-side review. The geometry operations use Shapely.
+[Shapely installation](https://shapely.readthedocs.io/en/stable/installation.html)
+
+Use `--binary-only` to export the color bundle for the shipped selection,
+or pass the `microemoji.bin` from an existing SVG export. Run from the TRUEOS root.
+
+```sh
+cargo +1.95.0 run --target x86_64-unknown-linux-gnu -p microemoji --example export -- \
+  ../TRUEOS-Blueprints/apps/lico/assets/twemoji.ttf \
+  --binary-only tgt/microemoji-color.bin --selection vendor/microemoji/selection.txt
+python3 -m venv tgt/microemoji-review-venv
+tgt/microemoji-review-venv/bin/python -m pip install 'shapely>=2.1,<2.3'
+tgt/microemoji-review-venv/bin/python -B vendor/microemoji/tools/reduce.py \
+  tgt/microemoji-color.bin tgt/microemoji-review.json --size 17
+```
+
+Each glyph reports the source outline command count, candidate strip segments,
+vertex and index counts, dots, and review reasons. Coordinates are tile pixels
+with Y down. A strip records its visible vertices, width, closure, and
+`adjacency_indices` for an independent adjacency draw. Closed strips wrap
+their neighbors across the seam. Open strips repeat the first and last
+indices for adjacency. A dot carries its center and diameter.
+
+When a circle or arc fits, `circular_parts` describes its range in the strip
+with `first_vertex` and `segment_count`. Angles are in radians in Y-down
+tile coordinates. A closed strip wraps from the last vertex back to the first.
+The explicit strip vertices and adjacency are also present for geometry checks
+and line rendering.
+
+`candidate` means the pass produced geometry without a review flag.
+`review` identifies retained or omitted seams that can affect recognition.
+`unsupported` records input that the pass cannot reduce, including
+translucent paint. The JSON is an offline review artifact. Geometry alone
+does not establish whether a glyph reads clearly, and fit widths can differ
+from the kernel's current fixed stroke width.
+
 ## Use the binary
 
 Call `Bundle::parse(bytes)` once to validate the image. Look up scalars with
@@ -70,8 +116,10 @@ request reports busy while its job runs. Tint is applied at sprite creation
 and is independent of the shared R8 mask.
 
 In Shell3, choose **Microemoji** from the `font` menu. Its Matrix specimen
-shows the bundled glyphs in Unicode order, 16 per row, fitted to the shell's
-current cells.
+shows the bundled glyphs in Unicode order, 16 per row. Each glyph advances
+two 6×11 virtual text cells. The renderer fills an 11×11 square starting at
+the left edge of the 12×11 space and leaves the final column clear. The
+inline drum uses the same layout.
 
 ## Binary format v1
 

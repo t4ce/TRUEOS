@@ -1,4 +1,4 @@
-//! Convert a COLR v0 font to a microemoji bundle and export its glyphs as SVG.
+//! Convert a COLR v0 font to a microemoji bundle with optional SVG exports.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -14,11 +14,11 @@ use ttf_parser::{Face, GlyphId, OutlineBuilder, RgbaColor, Tag, Transform};
 const DEFAULT_GLYPH_COUNT: usize = 256;
 const HEADER_LEN: usize = 16;
 const INDEX_ENTRY_LEN: usize = 16;
-const USAGE: &str = "Usage\n  export <font.ttf> <output-dir> [--selection <file>]\n  export <font.ttf> --alpha-bundle <output.bin> [--selection <file>]\n  export <font.ttf> --list-default\nThe output directory must be new or empty. The alpha bundle must be a new file.";
+const USAGE: &str = "Usage\n  export <font.ttf> <output-dir> [--selection <file>]\n  export <font.ttf> --binary-only <output.bin> [--selection <file>]\n  export <font.ttf> --alpha-bundle <output.bin> [--selection <file>]\n  export <font.ttf> --list-default\nThe output directory must be new or empty. The output bundle must be a new file.";
 
 enum Output<'a> {
     Svg(&'a Path),
-    AlphaBundle(&'a Path),
+    Bundle { path: &'a Path, alpha_only: bool },
     List,
 }
 
@@ -31,29 +31,27 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let (font, output, selection) = match args.as_slice() {
+    let (args, selection) = match args.as_slice() {
+        [args @ .., flag, selection] if args.len() >= 2 && flag == "--selection" => {
+            (args, Some(selection))
+        }
+        args => (args, None),
+    };
+    let (font, output) = match args {
         [help] if help == "--help" || help == "-h" => {
             println!("{USAGE}");
             return Ok(());
         }
-        [font, list] if list == "--list-default" => (font, Output::List, None),
-        [font, option, output] if option == "--alpha-bundle" => {
-            (font, Output::AlphaBundle(Path::new(output)), None)
-        }
-        [font, option, output, flag, selection]
-            if option == "--alpha-bundle" && flag == "--selection" =>
-        {
-            (
-                font,
-                Output::AlphaBundle(Path::new(output)),
-                Some(selection),
-            )
-        }
-        [font, output] if output != "--alpha-bundle" => {
-            (font, Output::Svg(Path::new(output)), None)
-        }
-        [font, output, flag, selection] if output != "--alpha-bundle" && flag == "--selection" => {
-            (font, Output::Svg(Path::new(output)), Some(selection))
+        [font, list] if list == "--list-default" && selection.is_none() => (font, Output::List),
+        [font, option, path] if option == "--alpha-bundle" || option == "--binary-only" => (
+            font,
+            Output::Bundle {
+                path: Path::new(path),
+                alpha_only: option == "--alpha-bundle",
+            },
+        ),
+        [font, path] if path != "--alpha-bundle" && path != "--binary-only" => {
+            (font, Output::Svg(Path::new(path)))
         }
         _ => return Err(USAGE.into()),
     };
@@ -68,7 +66,9 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     match output {
         Output::Svg(path) => write_outputs(path, &pack(&face, &selected, false)?),
-        Output::AlphaBundle(path) => write_alpha_bundle(path, &pack(&face, &selected, true)?),
+        Output::Bundle { path, alpha_only } => {
+            write_bundle(path, &pack(&face, &selected, alpha_only)?)
+        }
         Output::List => {
             let mut out = io::stdout().lock();
             for codepoint in selected {
@@ -277,7 +277,7 @@ impl OutlineBuilder for Outline {
     }
 }
 
-fn write_alpha_bundle(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+fn write_bundle(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     Bundle::parse(bytes)?;
     let mut file = File::create_new(path)?;
     let result = file.write_all(bytes);

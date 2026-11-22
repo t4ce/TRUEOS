@@ -69,7 +69,7 @@ fn specimen(index: usize) -> Result<Vec<String>, microemoji_mask_service::Error>
     for row in characters(index)?.chunks(16) {
         let mut line = String::new();
         for &ch in row {
-            if !line.is_empty() {
+            if index != EMOJI_PART && !line.is_empty() {
                 line.push(' ');
             }
             line.push(if ch.is_control() { ' ' } else { ch });
@@ -180,18 +180,13 @@ mod tests {
         let lines = specimen(EMOJI_PART).unwrap();
         assert_eq!(lines.len(), 2 + count.div_ceil(16));
         assert_eq!(lines[0], "Microemoji");
-        let row_widths = (0..count).step_by(16).map(|i| 2 * (count - i).min(16) - 1);
+        let row_lengths = (0..count).step_by(16).map(|i| (count - i).min(16));
         assert!(
             lines[2..]
                 .iter()
                 .map(|row| row.chars().count())
-                .eq(row_widths)
+                .eq(row_lengths)
         );
-        assert!(
-            lines[2..]
-                .iter()
-                .flat_map(|row| row.chars().step_by(2))
-                .eq(glyphs)
-        );
+        assert!(lines[2..].iter().flat_map(|row| row.chars()).eq(glyphs));
     }
 }

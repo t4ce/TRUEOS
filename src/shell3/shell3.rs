@@ -2003,9 +2003,10 @@ impl Shell3 {
         } else {
             previous.saturating_sub(rows.unsigned_abs() as usize)
         };
+        let emoji_specimen = MatrixSlots::is_microemoji_specimen(self.active_matrix_lifetime);
         let maximum_column = lines
             .iter()
-            .map(|line| line.chars().count())
+            .map(|line| update::matrix_columns(line, emoji_specimen))
             .max()
             .unwrap_or(0)
             .saturating_sub(self.columns);
@@ -2066,6 +2067,7 @@ impl Shell3 {
                 self.matrix_column,
                 self.matrix_scroll,
                 crate::allcaps::shell3::PANBUFFER_GUARD_CELLS as usize,
+                MatrixSlots::is_microemoji_specimen(self.active_matrix_lifetime),
             )
             .with_matrix_identity(self.active_matrix_slot.clone(), self.active_matrix_lifetime)
     }

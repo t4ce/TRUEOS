@@ -111,12 +111,12 @@ fn native_boot_preflight() -> Result<(), &'static str> {
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 enum CachedFace {
     Text(FontFace),
-    Emoji,
+    Emoji(u32),
 }
 
 enum CellSource<'a> {
     Text(FontFace),
-    Emoji(&'a [u8]),
+    Emoji { mask: &'a [u8], half: u32 },
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
@@ -230,7 +230,14 @@ pub(crate) fn glyph_with_face(
     )
 }
 
-/// Tint a prewarmed square R8 mask in the current shell cell.
+/// Square R8 tile within the two-cell advance, with one virtual column of spacing.
+pub(crate) fn emoji_mask_size(cell_width: u32, cell_height: u32) -> u32 {
+    let virtual_width = microfont::FWIDTH as u32;
+    let separator = (cell_width.saturating_add(virtual_width / 2) / virtual_width).max(1);
+    cell_height.min(cell_width.saturating_mul(2).saturating_sub(separator))
+}
+
+/// Tint one half of a prewarmed two-cell emoji in the ordinary cell cache.
 pub(crate) fn emoji_glyph(
     character: char,
     cell_width: u32,
@@ -239,9 +246,10 @@ pub(crate) fn emoji_glyph(
     background: [u8; 4],
     underline: bool,
     mask: &[u8],
+    half: u32,
 ) -> Result<GucBcs0RgbaCopy, &'static str> {
     cached_glyph(
-        CellSource::Emoji(mask),
+        CellSource::Emoji { mask, half },
         character,
         cell_width,
         cell_height,
@@ -266,12 +274,15 @@ fn cached_glyph(
     }
     let face = match source {
         CellSource::Text(face) => CachedFace::Text(face),
-        CellSource::Emoji(mask) => {
-            let side = cell_width.min(cell_height) as usize;
+        CellSource::Emoji { mask, half } => {
+            if half >= 2 {
+                return Err("shell3-emoji-cell-half");
+            }
+            let side = emoji_mask_size(cell_width, cell_height) as usize;
             if mask.len() != side * side {
                 return Err("shell3-emoji-mask-size");
             }
-            CachedFace::Emoji
+            CachedFace::Emoji(half)
         }
     };
     let key = CellKey { face, character, width: cell_width, height: cell_height, foreground, background, underline };
@@ -294,7 +305,14 @@ fn cached_glyph(
     let destination = crate::phys::phys_to_virt(s.phys as usize) as *mut u8;
     let (mask, foreground) = match source {
         CellSource::Text(face) => resolved_face(font, face, character, foreground)?,
-        CellSource::Emoji(mask) => (CellMask::Emoji(mask), foreground),
+        CellSource::Emoji { mask, half } => (
+            CellMask::Emoji {
+                mask,
+                side: emoji_mask_size(cell_width, cell_height),
+                left: half * cell_width,
+            },
+            foreground,
+        ),
     };
     let mut first_pixel = None;
     let mut uniform = true;
@@ -400,7 +418,7 @@ enum CellMask<'a> {
     Raster(&'a [u8]),
     Hex(u32),
     TabLabel(hex::tab_label_cell::TabLabelCell),
-    Emoji(&'a [u8]),
+    Emoji { mask: &'a [u8], side: u32, left: u32 },
 }
 
 fn resolved_face(font: &Font, face: FontFace, character: char, foreground: [u8; 4])
@@ -425,19 +443,24 @@ fn sample_face(font: &Font, mask: CellMask<'_>, x: u32, y: u32,
             let Some((character, px, py, w, h)) = label.point(x, y, width, height) else { return 0; };
             font.alpha.glyph(character).map_or(0, |mask| sample_native(font.alpha, mask, px, py, w, h))
         }
-        CellMask::Emoji(mask) => {
-            if underline && is_underline_row(y, height) {
-                return 255;
-            }
-            let side = width.min(height);
-            let x = x.wrapping_sub((width - side) / 2);
-            let y = y.wrapping_sub((height - side) / 2);
-            if x < side && y < side {
-                mask[(y * side + x) as usize]
-            } else {
-                0
-            }
+        CellMask::Emoji { mask, side, left } => {
+            sample_emoji(mask, side, left + x, y, height, underline)
         }
+    }
+}
+
+fn sample_emoji(mask: &[u8], side: u32, x: u32, y: u32, height: u32, underline: bool) -> u8 {
+    if x >= side {
+        return 0;
+    }
+    if underline && is_underline_row(y, height) {
+        return 255;
+    }
+    let y = y.wrapping_sub((height - side) / 2);
+    if y < side {
+        mask[(y * side + x) as usize]
+    } else {
+        0
     }
 }
 
@@ -535,5 +558,39 @@ pub(crate) async fn microfont_warm_task() {
                 trueos_time::Timer::after(trueos_time::Duration::from_millis(100)).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn emoji_tile_reserves_one_virtual_column() {
+        for (width, height, side, separator) in [
+            (6, 11, 11, 1),
+            (12, 22, 22, 2),
+            (17, 31, 31, 3),
+            (27, 49, 49, 5),
+            (2, 4, 3, 1),
+            (1, 1, 1, 1),
+        ] {
+            assert_eq!(emoji_mask_size(width, height), side);
+            assert_eq!(width * 2 - side, separator);
+        }
+    }
+
+    #[test]
+    fn emoji_tiles_sample_across_the_cell_seam() {
+        let mask: Vec<u8> = (1..=121).collect();
+        let row: Vec<u8> = (0..2)
+            .flat_map(|half| (0..6).map(move |x| half * 6 + x))
+            .map(|x| sample_emoji(&mask, 11, x, 0, 11, false))
+            .collect();
+        assert_eq!(row, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0]);
+        assert_eq!(sample_emoji(&mask, 11, 10, 10, 11, true), 255);
+        assert_eq!(sample_emoji(&mask, 11, 11, 10, 11, true), 0);
+        assert_eq!(sample_emoji(&mask, 11, 0, 0, 13, false), 0);
+        assert_eq!(sample_emoji(&mask, 11, 0, 1, 13, false), 1);
     }
 }
