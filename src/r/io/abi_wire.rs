@@ -11,6 +11,7 @@ use crate::r::keyboard::TrueosKeyboardOutputEvent as KernelKeyboardOutputEvent;
 use crate::ui4::blueprint_ui4::{
     BlueprintImageSourceInfo, TrueosUi4ContextMenuEvent as KernelUi4ContextMenuEvent,
     TrueosUi4ContextMenuEventV2 as KernelUi4ContextMenuEventV2,
+    TrueosUi4CursorKeyboardEventV1 as KernelUi4CursorKeyboardEventV1,
     TrueosUi4CursorSource as KernelUi4CursorSource, TrueosUi4CursorStep as KernelUi4CursorStep,
     TrueosUi4InputRouteState as KernelUi4InputRouteState,
     TrueosUi4KeyboardState as KernelUi4KeyboardState, TrueosUi4PanEvent as KernelUi4PanEvent,
@@ -21,9 +22,9 @@ use v::bp_abi::{
     GamepadControlCommand, GamepadControlDeviceInfo, GamepadControlSnapshot,
     KeyboardControlCommand, KeyboardControlDeviceInfo, MouseMotionCommand, MouseMotionCursorInfo,
     TrueosHidCursorEvent, TrueosKeyboardOutputEvent, TrueosUi4ContextMenuEvent,
-    TrueosUi4ContextMenuEventV2, TrueosUi4CursorSource, TrueosUi4CursorStep,
-    TrueosUi4InputRouteState, TrueosUi4KeyboardState, TrueosUi4PanEvent, TrueosUi4PointerEvent,
-    TrueosUi4ResizeEvent, TrueosUi4WindowStateV1,
+    TrueosUi4ContextMenuEventV2, TrueosUi4CursorKeyboardEventV1, TrueosUi4CursorSource,
+    TrueosUi4CursorStep, TrueosUi4InputRouteState, TrueosUi4KeyboardState, TrueosUi4PanEvent,
+    TrueosUi4PointerEvent, TrueosUi4ResizeEvent, TrueosUi4WindowStateV1,
 };
 
 /// A fixed-layout value with an explicit little-endian wire representation.
@@ -144,7 +145,7 @@ macro_rules! wire_record {
             ];
 
             fn decode(bytes: &[u8]) -> Option<Self> {
-                if bytes.len() < Self::WIRE_SIZE {
+                if bytes.len() < <Self as WireRecord>::WIRE_SIZE {
                     return None;
                 }
                 Some(Self {
@@ -153,10 +154,10 @@ macro_rules! wire_record {
             }
 
             fn encode(&self, bytes: &mut [u8]) -> bool {
-                if bytes.len() < Self::WIRE_SIZE {
+                if bytes.len() < <Self as WireRecord>::WIRE_SIZE {
                     return false;
                 }
-                bytes[..Self::WIRE_SIZE].fill(0);
+                bytes[..<Self as WireRecord>::WIRE_SIZE].fill(0);
                 $(if !<$field_ty as WireField>::encode(self.$field, bytes, offset_of!($record, $field)) {
                     return false;
                 })+
@@ -417,6 +418,45 @@ wire_record!(KernelKeyboardOutputEvent {
     codepoint: u32,
     utf8: [u8; 4],
     flags: u32,
+});
+
+macro_rules! nested_wire_fields {
+    ($($record:ty),+ $(,)?) => {
+        $(
+            impl WireField for $record {
+                const WIRE_SIZE: usize = <Self as WireRecord>::WIRE_SIZE;
+
+                fn decode(bytes: &[u8], offset: usize) -> Option<Self> {
+                    let end = offset.checked_add(<Self as WireField>::WIRE_SIZE)?;
+                    <Self as WireRecord>::decode(bytes.get(offset..end)?)
+                }
+
+                fn encode(self, bytes: &mut [u8], offset: usize) -> bool {
+                    offset
+                        .checked_add(<Self as WireField>::WIRE_SIZE)
+                        .and_then(|end| bytes.get_mut(offset..end))
+                        .is_some_and(|field| <Self as WireRecord>::encode(&self, field))
+                }
+            }
+        )+
+    };
+}
+
+nested_wire_fields!(
+    TrueosUi4CursorSource,
+    TrueosKeyboardOutputEvent,
+    KernelUi4CursorSource,
+    KernelKeyboardOutputEvent,
+);
+
+wire_record!(TrueosUi4CursorKeyboardEventV1 {
+    cursor: TrueosUi4CursorSource,
+    event: TrueosKeyboardOutputEvent,
+});
+
+wire_record!(KernelUi4CursorKeyboardEventV1 {
+    cursor: KernelUi4CursorSource,
+    event: KernelKeyboardOutputEvent,
 });
 
 // The kernel owns parallel UI4 records rather than re-exporting the guest ABI

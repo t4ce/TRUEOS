@@ -128,7 +128,7 @@ pub(crate) const BLUEPRINT_PROFILES: &[AppProfile] = &[
         "codex-cli",
         &[
             WEB,
-            tcp(Local, &[1455, 1457], &[1455, 1457, 42_116, 42_127]),
+            tcp(Local, &[1455, 1457], &[1455, 1457, 9773, 42_116, 42_127]),
         ],
     ),
     service(

@@ -417,9 +417,11 @@ fn handle_request(vnet: &VNet, session: &mut AudioHttpSession, active_streams: u
 fn status_response(listeners: usize) -> Vec<u8> {
     let sink = SINK.lock();
     let clip_id = sink.snapshot().map_or(0, |clip| clip.id);
+    let source_ids = sink.active_ids().into_iter().flatten()
+        .map(|id| format!("\"{}\"", id)).collect::<Vec<_>>().join(",");
     let body = format!(
-        "{{\"listeners\":{},\"capacity\":{},\"clip_id\":\"{}\",\"playing\":{},\"producers\":{},\"producer_capacity\":{}}}\n",
-        listeners, MAX_STREAM_CLIENTS, clip_id, sink.busy(), sink.active_count(), sink::MAX_PRODUCERS
+        "{{\"listeners\":{},\"capacity\":{},\"clip_id\":\"{}\",\"playing\":{},\"producers\":{},\"producer_capacity\":{},\"source_ids\":[{}]}}\n",
+        listeners, MAX_STREAM_CLIENTS, clip_id, sink.busy(), sink.active_count(), sink::MAX_PRODUCERS, source_ids
     );
     response_with_body(
         "HTTP/1.1 200 OK\r\n",

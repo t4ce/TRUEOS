@@ -4,13 +4,14 @@
 use alloc::vec::Vec;
 
 use crate::r::io::abi_wire::WireRecord;
+use crate::ui4::MAX_CURSOR_ROUTES;
 
 use super::{
     BlueprintImageSourceInfo, CONTEXT_MENU_ENTRY_WIRE_HEADER_BYTES, CONTEXT_MENU_WIRE_HEADER_BYTES,
     ERROR_INVALID, ERROR_UI4, IMAGE_SOURCE_READ_CHUNK_BYTES, MAX_CONTEXT_MENU_LABEL_BYTES,
-    MAX_INPUT_ROUTES, TrueosUi4ContextMenuEntry, TrueosUi4ContextMenuEvent,
-    TrueosUi4InputRouteState, TrueosUi4KeyboardState, TrueosUi4PanEvent, TrueosUi4PointerEvent,
-    TrueosUi4ResizeEvent,
+    TrueosUi4ContextMenuEntry, TrueosUi4ContextMenuEvent,
+    TrueosUi4CursorKeyboardEventV1, TrueosUi4InputRouteState, TrueosUi4KeyboardState,
+    TrueosUi4PanEvent, TrueosUi4PointerEvent, TrueosUi4ResizeEvent,
 };
 
 /// Fetch and decode one fixed-layout value without exposing caller pointers.
@@ -174,6 +175,20 @@ pub(super) fn guest_keyboard_event_take(
     )
 }
 
+pub(super) fn guest_cursor_keyboard_event_take_v1(
+    window_id: u32,
+) -> Result<TrueosUi4CursorKeyboardEventV1, i32> {
+    guest_record::<
+        TrueosUi4CursorKeyboardEventV1,
+        { core::mem::size_of::<TrueosUi4CursorKeyboardEventV1>() },
+    >(
+        trueos_vm::vmcall::OP_BP_UI4_SCENE_CURSOR_KEYBOARD_EVENT_TAKE_V1,
+        window_id as u64,
+        0,
+        &[],
+    )
+}
+
 pub(super) fn guest_keyboard_event_take_v1(
     window_id: u32,
 ) -> Result<crate::r::keyboard::TrueosKeyboardOutputEvent, i32> {
@@ -220,10 +235,10 @@ pub(super) unsafe fn guest_input_routes(
     out: *mut TrueosUi4InputRouteState,
     out_cap: u32,
 ) -> isize {
-    let response_cap = (out_cap as usize).min(MAX_INPUT_ROUTES);
-    let mut response =
-        alloc::vec![0u8; response_cap * core::mem::size_of::<TrueosUi4InputRouteState>()];
-    let (status, data) = trueos_vm::vmcall::call_with_payload(
+    let response_cap = (out_cap as usize).min(MAX_CURSOR_ROUTES);
+    let record_size = TrueosUi4InputRouteState::WIRE_SIZE;
+    let mut response = alloc::vec![0u8; response_cap * record_size];
+    let (status, data, response_len) = trueos_vm::vmcall::call_with_payload_reported_len(
         trueos_vm::vmcall::OP_BP_UI4_SCENE_INPUT_ROUTES,
         window_id as u64,
         response_cap as u64,
@@ -238,6 +253,9 @@ pub(super) unsafe fn guest_input_routes(
         return result as isize;
     }
     let copied = (result as usize).min(response_cap);
+    if response_len != copied * record_size {
+        return ERROR_UI4 as isize;
+    }
     if copied != 0 {
         // SAFETY: out_cap covers response_cap records and the vmcall copied
         // exactly the initialized response bytes for `copied` records.
@@ -245,7 +263,7 @@ pub(super) unsafe fn guest_input_routes(
             core::ptr::copy_nonoverlapping(
                 response.as_ptr(),
                 out.cast::<u8>(),
-                copied * core::mem::size_of::<TrueosUi4InputRouteState>(),
+                response_len,
             );
         }
     }

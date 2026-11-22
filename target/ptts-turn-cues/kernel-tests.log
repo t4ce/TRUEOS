@@ -1,0 +1,22 @@
+
+running 17 tests
+test crossfade_endpoint_preserves_two_synchronized_producer_slots ... ok
+test fragmented_get_waits_and_non_get_cannot_ingest_pcm ... ok
+test local_output_keeps_the_connected_jack_until_unplugged ... ok
+test listeners_are_bounded_and_slow_listeners_close ... ok
+test local_output_requires_a_detectable_mainboard_line_or_headphone_jack ... ok
+test listeners_receive_pcm_wav_without_microphone_or_upload_routes ... ok
+test sink::tests::invalid_or_oversized_clips_never_claim_the_sink ... ok
+test sink::tests::last_sample_releases_ownership_and_caller_memory_is_not_borrowed ... ok
+test sink::tests::local_only_playback_frees_slots_and_does_not_drop_retained_clips ... ok
+test sink::tests::ownership_abort_and_expiry_preserve_the_previous_completed_clip ... ok
+test sink::tests::local_and_http_each_consume_the_same_live_and_finished_frames ... ok
+test sink::tests::source_ids_follow_live_and_finished_audio_until_its_own_drain ... ok
+test sink::tests::two_clips_play_and_a_third_is_discarded ... ok
+test sink::tests::streams_after_prebuffer_and_keeps_all_pcm_for_final_snapshot ... ok
+test sink::tests::two_live_producers_prebuffer_independently_and_keep_their_slots ... ok
+test finite_wav_starts_at_byte_zero_after_clock_advance_and_snapshot_replacement ... ok
+test sink::tests::completed_utterance_longer_than_the_old_half_second_buffer_is_lossless ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

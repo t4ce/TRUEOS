@@ -145,7 +145,7 @@ pub(crate) fn rdp_media_unsubscribe(_: u64) {}
 pub(crate) fn rdp_media_take_packet(_: u64) -> Option<alloc::vec::Vec<u8>> { None }
 
 pub(crate) use input_broker::{
-    Ui4InputEvent, Ui4KeyboardEvent, Ui4PanEvent, Ui4PanPhase, Ui4PointerEvent,
+    MAX_CURSOR_ROUTES, Ui4InputEvent, Ui4KeyboardEvent, Ui4PanEvent, Ui4PanPhase, Ui4PointerEvent,
     Ui4ResizeEvent, Ui4VisualRect, focused_keyboard_state, notify_cursor_visual_change,
     reselect_window_for_cursor, reselect_window_for_keyboard, select_window_for_cursor,
     select_window_for_cursor_at, software_cursor_visuals, take_owner_input_events,

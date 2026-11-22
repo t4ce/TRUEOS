@@ -176,6 +176,19 @@ mod tests {
     }
 
     #[test]
+    fn codex_can_submit_speech_to_local_ptts() {
+        for name in ["codex", "codex-cli"] {
+            let codex = Principal::Blueprint(name);
+            assert!(permits_outbound(codex, Tcp, Local, 9773));
+            assert!(!permits_outbound(codex, Tcp, Network, 9773));
+            assert!(!permits_inbound(codex, Tcp, Local, 9773));
+        }
+        let ptts = Principal::Blueprint("ptts");
+        assert!(permits_inbound(ptts, Tcp, Local, 9773));
+        assert!(!permits_inbound(ptts, Tcp, Network, 9773));
+    }
+
+    #[test]
     fn lico_accepts_piano_datagrams_and_keeps_mcp_local() {
         let lico = Principal::Blueprint("lico");
         assert!(permits_inbound(lico, Udp, Network, 9_696));

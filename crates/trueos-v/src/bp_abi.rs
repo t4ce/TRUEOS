@@ -342,6 +342,14 @@ pub struct TrueosUi4CursorSource {
     pub hid_kind: u32,
 }
 
+/// A logical keyboard event and the exact cursor route UI4 used to deliver it.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4CursorKeyboardEventV1 {
+    pub cursor: TrueosUi4CursorSource,
+    pub event: TrueosKeyboardOutputEvent,
+}
+
 /// Version 1 owned RGBA8 cursor registration. Pixels are straight-alpha, top-down.
 /// IDs are frame-local 1..=16; dimensions 1..=64; hotspot lies inside the image.
 #[repr(C)]
@@ -923,6 +931,11 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_scene_keyboard_event_take(
         window_id: u32,
         out: *mut TrueosKeyboardOutputEvent,
+    ) -> i32;
+    /// Take one logical keyboard event from the same queue, with its UI4 cursor.
+    pub fn trueos_cabi_ui4_scene_cursor_keyboard_event_take_v1(
+        window_id: u32,
+        out: *mut TrueosUi4CursorKeyboardEventV1,
     ) -> i32;
     /// Open an owner-scoped UI4 connection; zero indicates failure.
     pub fn trueos_cabi_ui4_display_open_v1() -> u64;

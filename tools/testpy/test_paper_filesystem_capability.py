@@ -35,7 +35,7 @@ def harness(package_dir: Path | None = None) -> str:
         "BLUEPRINT_HEADER_LEN", "BLUEPRINT_PAYLOAD_MASK", "BLUEPRINT_PAYLOAD_RAW",
         "BLUEPRINT_PAYLOAD_TAR_LZ4", "BLUEPRINT_CAP_REPLICATABLE",
         "BLUEPRINT_CAP_ARGV_ENTRY_V1", "BLUEPRINT_CAP_FILESYSTEM_INDEPENDENT",
-        "BLUEPRINT_CAP_TRUEOSFS_SCOPE",
+        "BLUEPRINT_CAP_TRUEOSFS_SCOPE", "BLUEPRINT_CAP_PREFER_PERFORMANCE_CORE",
     ))
     declarations += "\n" + item(BLUEPRINT, "BlueprintModule")
     declarations += "\n" + source_item(blueprint, "impl BlueprintModule<'_>")
@@ -44,7 +44,7 @@ def harness(package_dir: Path | None = None) -> str:
     ))
     readiness = "\n".join(constant("src/r/readiness.rs", name) for name in (
         "BACKGROUND_AP_WORKER_READY", "TRUEOSFS_REQUEST_BROKER_READY", "TRUEOSFS_ROOT_MOUNTED", "RAYON_READY",
-        "NET_ANY_CONFIGURED", "NET_SOCKET_READY", "TLS_SOCKET_SERVICE_READY", "INTEL_HDA_READY",
+        "NET_ANY_CONFIGURED", "NET_SOCKET_READY", "TLS_SOCKET_SERVICE_READY",
     ))
     guest = (ROOT / "src/hv/guest_run.rs").read_text()
     bootstrap = guest[guest.index("    if module.is_filesystem_independent()"):

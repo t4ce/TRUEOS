@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 V_ABI = ROOT / "crates/trueos-v/src/bp_abi.rs"
 KERNEL_ABI = ROOT / "src/r/keyboard.rs"
 UI4_ABI = ROOT / "src/ui4/blueprint_ui4.rs"
+INPUT_BROKER = ROOT / "src/ui4/input_broker.rs"
 WINDOW_ABI = ROOT / "src/ui4/blueprint_ui4/window_api.rs"
 CODEC = ROOT / "src/r/io/abi_wire.rs"
 GUEST_TRANSPORT = ROOT / "src/ui4/blueprint_ui4/guest_transport.rs"
@@ -20,6 +21,7 @@ RECORDS = [
     "TrueosUi4ContextMenuEvent",
     "TrueosUi4ContextMenuEventV2",
     "TrueosUi4CursorSource",
+    "TrueosUi4CursorKeyboardEventV1",
     "TrueosUi4CursorStep",
     "TrueosUi4WindowStateV1",
     "TrueosUi4PanEvent",
@@ -42,6 +44,7 @@ LOCAL_UI4_RECORDS = [
     "TrueosUi4ContextMenuEvent",
     "TrueosUi4ContextMenuEventV2",
     "TrueosUi4CursorSource",
+    "TrueosUi4CursorKeyboardEventV1",
     "TrueosUi4CursorStep",
     "TrueosUi4PanEvent",
     "TrueosUi4ResizeEvent",
@@ -87,7 +90,7 @@ def extract_struct(source: str, name: str) -> str:
             depth -= 1
             if depth == 0:
                 body = source[start : index + 1]
-                return repr_attr + "\n" + body
+                return source[repr_start:start] + body
     raise RuntimeError(f"unterminated struct {name}")
 
 
@@ -121,12 +124,12 @@ def main() -> None:
             "ERROR_INVALID",
             "ERROR_UI4",
             "IMAGE_SOURCE_READ_CHUNK_BYTES",
-            "MAX_INPUT_ROUTES",
             "MAX_CONTEXT_MENU_LABEL_BYTES",
             "CONTEXT_MENU_WIRE_HEADER_BYTES",
             "CONTEXT_MENU_ENTRY_WIRE_HEADER_BYTES",
         ]
     )
+    input_route_limit = extract_constant(INPUT_BROKER.read_text(), "MAX_CURSOR_ROUTES")
     vm_ops = sorted(set(re.findall(r"trueos_vm::vmcall::(OP_[A-Z0-9_]+)", guest_transport_source)))
     vm_constants = "\n".join(
         re.search(rf"^pub const {name}: u32 = [^;]+;", vm_call_source, re.M).group(0)
@@ -171,7 +174,7 @@ pub mod vmcall {{
     pub const STATUS_BAD_ARG: u32 = 2;
     pub const PAYLOAD_CAP: usize = 160 * 1024 - 56;
     {vm_constants}
-    const RESPONSE_CAP: usize = 256;
+    const RESPONSE_CAP: usize = 8 * 1024;
     static STATUS: AtomicU32 = AtomicU32::new(STATUS_OK);
     static DATA: AtomicU64 = AtomicU64::new(0);
     static RESPONSE_LEN: AtomicUsize = AtomicUsize::new(0);
@@ -233,6 +236,7 @@ pub mod r {{
 }}
 
 pub mod ui4 {{
+{input_route_limit}
     pub mod blueprint_ui4 {{
 {local_ui4}
 {context_menu_entry}
@@ -255,10 +259,18 @@ pub mod ui4 {{
         ) -> Result<TrueosUi4PointerEvent, i32> {{
             guest_transport::guest_pointer_event_take(window_id)
         }}
+        pub(crate) fn test_guest_cursor_keyboard_event_take(
+            window_id: u32,
+        ) -> Result<TrueosUi4CursorKeyboardEventV1, i32> {{
+            guest_transport::guest_cursor_keyboard_event_take_v1(window_id)
+        }}
         pub(crate) fn test_guest_context_menu_event_take(
             window_id: u32,
         ) -> Result<TrueosUi4ContextMenuEvent, i32> {{
             guest_transport::guest_context_menu_event_take(window_id)
+        }}
+        pub(crate) fn test_guest_input_routes(out: &mut [TrueosUi4InputRouteState]) -> isize {{
+            unsafe {{ guest_transport::guest_input_routes(1, out.as_mut_ptr(), out.len() as u32) }}
         }}
         pub mod window_api {{
 {window_state}
@@ -279,6 +291,7 @@ mod tests {{
         BlueprintImageSourceInfo,
         TrueosUi4ContextMenuEvent as LocalContextMenuEvent,
         TrueosUi4ContextMenuEventV2 as LocalContextMenuEventV2,
+        TrueosUi4CursorKeyboardEventV1 as LocalCursorKeyboardEventV1,
         TrueosUi4CursorSource as LocalCursorSource,
         TrueosUi4CursorStep as LocalCursorStep,
         TrueosUi4InputRouteState as LocalInputRouteState,
@@ -325,7 +338,8 @@ mod tests {{
         macro_rules! check {{ ($($ty:ty),+ $(,)?) => {{ $(arbitrary_round_trip::<$ty>();)+ }} }}
         check!(
             TrueosUi4ContextMenuEvent, TrueosUi4ContextMenuEventV2,
-            TrueosUi4CursorSource, TrueosUi4CursorStep, TrueosUi4WindowStateV1,
+            TrueosUi4CursorSource, TrueosUi4CursorKeyboardEventV1,
+            TrueosUi4CursorStep, TrueosUi4WindowStateV1,
             TrueosUi4PanEvent, TrueosUi4ResizeEvent, TrueosUi4PointerEvent,
             TrueosUi4KeyboardState, TrueosUi4InputRouteState,
             MouseMotionCursorInfo, MouseMotionCommand, KeyboardControlDeviceInfo,
@@ -333,7 +347,7 @@ mod tests {{
             GamepadControlSnapshot, TrueosHidCursorEvent, TrueosKeyboardOutputEvent,
             KernelKeyboardOutputEvent,
             LocalContextMenuEvent, LocalContextMenuEventV2,
-            LocalCursorSource, LocalCursorStep, LocalWindowStateV1,
+            LocalCursorSource, LocalCursorKeyboardEventV1, LocalCursorStep, LocalWindowStateV1,
             LocalPanEvent, LocalResizeEvent, LocalPointerEvent,
             LocalKeyboardState, LocalInputRouteState, BlueprintImageSourceInfo,
         );
@@ -437,11 +451,38 @@ mod tests {{
     }}
 
     #[test]
+    fn input_routes_include_all_broker_routes_and_reject_a_short_response() {{
+        let _lock = super::TEST_LOCK.lock().unwrap();
+        use super::ui4::MAX_CURSOR_ROUTES;
+        use super::ui4::blueprint_ui4::test_guest_input_routes;
+        let mut response = vec![0; MAX_CURSOR_ROUTES * LocalInputRouteState::WIRE_SIZE];
+        for (index, bytes) in response.chunks_exact_mut(LocalInputRouteState::WIRE_SIZE).enumerate() {{
+            let state = LocalInputRouteState {{
+                cursor_slot_id: index as u32 + 1,
+                ..Default::default()
+            }};
+            assert!(state.encode(bytes));
+        }}
+        let status = super::vmcall::STATUS_OK;
+        let count = MAX_CURSOR_ROUTES as u64;
+        let mut routes = [LocalInputRouteState::default(); MAX_CURSOR_ROUTES];
+        super::vmcall::configure(status, count, &response, response.len());
+        assert_eq!(test_guest_input_routes(&mut routes), count as isize);
+        assert_eq!(routes.last().unwrap().cursor_slot_id, count as u32);
+
+        super::vmcall::configure(status, count, &response, response.len() / 2);
+        assert_eq!(test_guest_input_routes(&mut routes), -6);
+        super::vmcall::configure(status, count, &[], 0);
+        assert_eq!(test_guest_input_routes(&mut []), count as isize);
+    }}
+
+    #[test]
     fn compiled_guest_transport_wrappers_use_real_types_and_preserve_errors() {{
         let _lock = super::TEST_LOCK.lock().unwrap();
         use super::abi_wire::WireRecord;
         use super::ui4::blueprint_ui4::{{
-            test_guest_context_menu_event_take, test_guest_pointer_event_take,
+            test_guest_context_menu_event_take, test_guest_cursor_keyboard_event_take,
+            test_guest_pointer_event_take,
             TrueosUi4ContextMenuEvent, TrueosUi4PointerEvent,
         }};
 
@@ -475,6 +516,18 @@ mod tests {{
         assert_eq!(decoded.controller_id, 7);
         assert_eq!(decoded.local_x, -3);
         assert_eq!(decoded.vcursor, 1);
+
+        let keyboard = LocalCursorKeyboardEventV1 {{
+            cursor: LocalCursorSource {{ slot_id: 89, ..Default::default() }},
+            event: KernelKeyboardOutputEvent {{ slot_id: 12, codepoint: 65, ..Default::default() }},
+        }};
+        let mut bytes = [0u8; LocalCursorKeyboardEventV1::WIRE_SIZE];
+        assert!(keyboard.encode(&mut bytes));
+        super::vmcall::configure(super::vmcall::STATUS_OK, 0, &bytes, bytes.len());
+        let decoded = test_guest_cursor_keyboard_event_take(55).unwrap();
+        assert_eq!(decoded.cursor.slot_id, 89);
+        assert_eq!(decoded.event.slot_id, 12);
+        assert_eq!(decoded.event.codepoint, 65);
 
         super::vmcall::configure(super::vmcall::STATUS_OK, (-12i64) as u64, &[], 0);
         assert!(matches!(test_guest_context_menu_event_take(55), Err(-12)));

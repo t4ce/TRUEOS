@@ -140,6 +140,14 @@ impl Sink {
         self.slots.iter().flatten().count()
     }
 
+    pub(super) fn active_ids(&self) -> [Option<u64>; MAX_PRODUCERS] {
+        self.slots.each_ref().map(|slot| match slot {
+            Some(Source::Live(stream)) => Some(stream.id),
+            Some(Source::Clip { clip, .. }) => Some(clip.id),
+            None => None,
+        })
+    }
+
     pub(super) fn busy(&self) -> bool {
         self.active_count() != 0
     }
@@ -544,6 +552,23 @@ pub(super) fn validate_append_size(bytes: usize) -> Result<(), i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_ids_follow_live_and_finished_audio_until_its_own_drain() {
+        let mut sink = Sink::new();
+        let owner = Owner::Host;
+        let speech = sink.begin(owner, 0).unwrap();
+        sink.append(owner, speech, &[1; 4], 0).unwrap();
+        sink.submit(&[2; 8]).unwrap();
+        let other = sink.snapshot().unwrap().id;
+        assert_eq!(sink.active_ids(), [Some(speech), Some(other)]);
+        sink.finish(owner, speech).unwrap();
+        assert_eq!(sink.active_ids(), [Some(speech), Some(other)]);
+        sink.render(&mut [0; 4]);
+        assert_eq!(sink.active_ids(), [None, Some(other)]);
+        sink.render(&mut [0; 4]);
+        assert_eq!(sink.active_ids(), [None, None]);
+    }
 
     #[test]
     fn two_clips_play_and_a_third_is_discarded() {

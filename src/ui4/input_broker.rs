@@ -21,7 +21,7 @@ use super::{
 };
 
 // Keep the existing input allowance alongside the trusted 32-marker budget.
-const MAX_CURSOR_ROUTES: usize = 64;
+pub(crate) const MAX_CURSOR_ROUTES: usize = 64;
 const MAX_OWNER_QUEUES: usize = 64;
 const MAX_OWNER_EVENTS: usize = 256;
 const _: () = assert!(MAX_OWNER_EVENTS >= super::window_broker::MAX_WINDOWS);
@@ -110,11 +110,9 @@ pub(crate) struct Ui4PointerEvent {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct Ui4KeyboardEvent {
-    
+    pub(crate) source: Ui4CursorSource,
     pub(crate) window: WindowId,
     pub(crate) event: crate::r::keyboard::TrueosKeyboardOutputEvent,
-    
-    
 }
 
 
@@ -1756,8 +1754,13 @@ impl InputBroker {
         let (combo_id, vcursor) = cursor_hut_metadata(source);
         let key = WindowTarget::from(target).cursor_frame_key();
         if !super::spirit_access::cursor_sequence_allowed(source, key, ring_sequence) { return; }
-        if pressed != 0 && self.select_frame(index, Some(WindowTarget::from(target)), combo_id, vcursor) {
-            self.cursors[index].absorb_select = true;
+        if pressed != 0 {
+            let changed = self.select_frame(index, Some(WindowTarget::from(target)), combo_id, vcursor);
+            let primary_activation = target.interaction.primary_activation
+                && buttons_down == PRIMARY_BUTTON_MASK;
+            if absorb_selection_gesture(changed, pressed, primary_activation) {
+                self.cursors[index].absorb_select = true;
+            }
         }
         if self.cursors[index].absorb_select {
             if buttons_down == 0 { self.cursors[index].absorb_select = false; }
@@ -1805,7 +1808,14 @@ impl InputBroker {
         let Some(window) = window_snapshot_for_target(WindowTarget::from(frame)) else { return; };
         if !window.interaction.receives_input { return; }
         self.cursors[index].keyboard_source = Some(event.into());
-        enqueue_owner_event(frame.owner, Ui4InputEvent::Keyboard(Ui4KeyboardEvent { window: frame.window, event }));
+        enqueue_owner_event(
+            frame.owner,
+            Ui4InputEvent::Keyboard(Ui4KeyboardEvent {
+                source: self.cursors[index].source,
+                window: frame.window,
+                event,
+            }),
+        );
     }
 
     fn retire_keyboard_source(
@@ -2089,11 +2099,9 @@ impl InputBroker {
         enqueue_owner_event(
             target.owner,
             Ui4InputEvent::Keyboard(Ui4KeyboardEvent {
-                
+                source: route_source,
                 window: target.window,
                 event,
-                
-                
             }),
         );
     }
@@ -2159,11 +2167,9 @@ impl InputBroker {
             super::blueprint_ui4::clipboard_api::trusted_paste(key.owner, key.window);
         }
         let routed = Ui4KeyboardEvent {
-            
+            source: route_source,
             window: key.window,
             event,
-            
-            
         };
         // Retain the press destination: focus changes must never deliver its
         // release to a different application or leave the old one holding it.

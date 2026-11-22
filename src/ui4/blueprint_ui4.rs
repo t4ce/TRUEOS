@@ -53,8 +53,9 @@ use crate::intel::gpgpu::{
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec,
     FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4CursorIcon, Ui4CursorSource,
-    Ui4CursorStep, Ui4InputEvent, WindowBrokerError, WindowCreate, WindowId, WindowOwner,
-    WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer,
+    Ui4CursorStep, Ui4InputEvent, Ui4KeyboardEvent, WindowBrokerError, WindowCreate, WindowId,
+    WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId,
+    acquire_frame_buffer,
     begin_additional_window_session, cancel_frame_buffer, commit_window_frame_refresh,
     commit_window_frame_replacement, create_frame, create_gpu_full_overwrite_frame,
     destroy_frame, finish_window_session, finish_window_session_with_request,
@@ -105,7 +106,6 @@ fn blueprint_frame_extent_admitted(width: u32, height: u32) -> bool {
 const MAX_PENDING_POINTER_EVENTS: usize = 256;
 const MAX_PENDING_PAN_EVENTS: usize = 256;
 const MAX_PENDING_KEYBOARD_EVENTS: usize = 256;
-const MAX_INPUT_ROUTES: usize = 32;
 /// Keep the flattened solid scene inside one proven compositor submission.
 /// Larger or noncanonical scenes retain the arbitrary-quad fallback.
 const UI4_SOLID_FAST_RECT_LIMIT: usize = 256;
@@ -280,6 +280,16 @@ pub struct TrueosUi4CursorSource {
 }
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4CursorSource>() == 4 * 4);
+
+/// A logical keyboard event and the exact cursor route UI4 used to deliver it.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4CursorKeyboardEventV1 {
+    pub cursor: TrueosUi4CursorSource,
+    pub event: crate::r::keyboard::TrueosKeyboardOutputEvent,
+}
+
+const _: () = assert!(core::mem::size_of::<TrueosUi4CursorKeyboardEventV1>() == 15 * 4);
 
 /// Static frame-local spacing for presentation-only cursor stepping. Advances
 /// are 1/1024 pixel units; pointer input remains continuous and unmodified.
@@ -561,8 +571,8 @@ struct BlueprintSceneSurface {
     pending_pan_events: VecDeque<TrueosUi4PanEvent>,
     pending_resize_events: VecDeque<BlueprintResizeEvent>,
     taken_resize_event: Option<BlueprintResizeEvent>,
-    pending_keyboard_events: VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
-    pending_keyboard_burst: VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
+    pending_keyboard_events: VecDeque<Ui4KeyboardEvent>,
+    pending_keyboard_burst: VecDeque<Ui4KeyboardEvent>,
     pending_physical_keyboard: VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
     pending_physical_burst: VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
 }
@@ -2264,27 +2274,59 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_keyboard_event_take(
             Err(error) => error,
         };
     }
-    let Some(owner) = blueprint_owner() else {
-        return ERROR_CONTEXT;
-    };
-    {
-        let mut surfaces = SURFACES.lock();
-        if surface_mut(&mut surfaces, owner, window_id).is_none() {
-            return ERROR_NOT_FOUND;
+    match take_window_keyboard_event(window_id) {
+        Ok(value) => {
+            // SAFETY: the caller supplies writable, non-null output storage.
+            unsafe { out.write(value.event) };
+            0
         }
+        Err(error) => error,
     }
+}
 
+/// Take from the same routed logical keyboard queue, including its cursor.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_cursor_keyboard_event_take_v1(
+    window_id: u32,
+    out: *mut TrueosUi4CursorKeyboardEventV1,
+) -> i32 {
+    if out.is_null() {
+        return ERROR_INVALID;
+    }
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_transport::guest_cursor_keyboard_event_take_v1(window_id)
+    } else {
+        take_window_keyboard_event(window_id).map(|value| TrueosUi4CursorKeyboardEventV1 {
+            cursor: TrueosUi4CursorSource {
+                controller_id: value.source.controller_id,
+                slot_id: value.source.slot_id,
+                ep_target: value.source.ep_target,
+                hid_kind: u32::from(value.source.hid_kind),
+            },
+            event: value.event,
+        })
+    };
+    match result {
+        Ok(value) => {
+            // SAFETY: the caller supplies writable, non-null output storage.
+            unsafe { out.write(value) };
+            0
+        }
+        Err(error) => error,
+    }
+}
+
+fn take_window_keyboard_event(window_id: u32) -> Result<Ui4KeyboardEvent, i32> {
+    let owner = blueprint_owner().ok_or(ERROR_CONTEXT)?;
+    if surface_mut(&mut SURFACES.lock(), owner, window_id).is_none() {
+        return Err(ERROR_NOT_FOUND);
+    }
     route_owner_input_events(owner);
     let mut surfaces = SURFACES.lock();
-    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-        return ERROR_NOT_FOUND;
-    };
-    let Some(event) = surface.pending_keyboard_events.pop_front() else {
-        return 1;
-    };
-    // SAFETY: the non-null output points to one writable ABI event.
-    unsafe { out.write(event) };
-    0
+    surface_mut(&mut surfaces, owner, window_id)
+        .ok_or(ERROR_NOT_FOUND)?
+        .pending_keyboard_events
+        .pop_front()
+        .ok_or(1)
 }
 
 pub unsafe extern "C" fn trueos_cabi_ui4_scene_window_state_get_v1(
@@ -2902,12 +2944,14 @@ fn route_owner_input_events(owner: WindowOwner) {
                         &mut surface.pending_physical_keyboard,
                         &mut surface.pending_physical_burst,
                         event.event,
+                        |event| event,
                     );
                 }
                 enqueue_window_keyboard_event(
                     &mut surface.pending_keyboard_events,
                     &mut surface.pending_keyboard_burst,
-                    event.event,
+                    event,
+                    |event| event.event,
                 );
             }
             _ => {}
@@ -2931,18 +2975,20 @@ fn enqueue_physical_keyboard_event(
     pending.push_back(event);
 }
 
-fn enqueue_window_keyboard_event(
-    pending: &mut VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
-    burst: &mut VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
-    event: crate::r::keyboard::TrueosKeyboardOutputEvent,
+fn enqueue_window_keyboard_event<T: Copy>(
+    pending: &mut VecDeque<T>,
+    burst: &mut VecDeque<T>,
+    input: T,
+    raw_event: impl Fn(T) -> crate::r::keyboard::TrueosKeyboardOutputEvent,
 ) {
+    let event = raw_event(input);
     let burst_member = event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST != 0;
     if !burst_member {
         // A non-burst transition after a truncated burst proves that END was
         // lost. Discard the unpublished prefix, then preserve the transition.
         burst.clear();
         if pending.len() < MAX_PENDING_KEYBOARD_EVENTS {
-            pending.push_back(event);
+            pending.push_back(input);
         }
         return;
     }
@@ -2963,6 +3009,7 @@ fn enqueue_window_keyboard_event(
             // This is a tail whose START was lost upstream.
             return;
         };
+        let previous = raw_event(previous);
         let same_burst = event.device_seq == previous.device_seq
             && event.controller_id == previous.controller_id
             && event.slot_id == previous.slot_id
@@ -2978,7 +3025,7 @@ fn enqueue_window_keyboard_event(
         burst.clear();
         return;
     }
-    burst.push_back(event);
+    burst.push_back(input);
     if !burst_end {
         return;
     }
@@ -8004,22 +8051,32 @@ mod tests {
     fn keyboard_text_burst_is_hidden_until_complete() {
         let mut pending = VecDeque::new();
         let mut burst = VecDeque::new();
+        let source = Ui4CursorSource {
+            controller_id: 2,
+            slot_id: 3,
+            ep_target: 4,
+            hid_kind: 1,
+        };
+        let queued = |seq, flags| (source, keyboard_event(seq, 3, flags));
 
         enqueue_window_keyboard_event(
             &mut pending,
             &mut burst,
-            keyboard_event(10, 3, crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START),
+            queued(10, crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START),
+            |(_, event)| event,
         );
-        enqueue_window_keyboard_event(&mut pending, &mut burst, keyboard_event(11, 3, 0));
+        enqueue_window_keyboard_event(&mut pending, &mut burst, queued(11, 0), |(_, event)| event);
         assert!(pending.is_empty());
         assert_eq!(burst.len(), 2);
 
         enqueue_window_keyboard_event(
             &mut pending,
             &mut burst,
-            keyboard_event(12, 3, crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END),
+            queued(12, crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END),
+            |(_, event)| event,
         );
         assert_eq!(pending.len(), 3);
+        assert!(pending.iter().all(|(cursor, _)| *cursor == source));
         assert!(burst.is_empty());
     }
 
@@ -8032,11 +8089,13 @@ mod tests {
             &mut pending,
             &mut burst,
             keyboard_event(20, 4, crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START),
+            |event| event,
         );
         enqueue_window_keyboard_event(
             &mut pending,
             &mut burst,
             keyboard_event(22, 4, crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END),
+            |event| event,
         );
 
         assert!(pending.is_empty());

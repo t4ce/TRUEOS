@@ -262,6 +262,7 @@ pub const OP_BP_UI4_DISPLAY_VALIDATE_WINDOW_V1: u32 = 0x20F;
 
 pub const OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE_V1: u32 = 0x209;
 pub const OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE: u32 = 0x111; // arg0 window -> rc + routed KeyboardOutputEvent payload
+pub const OP_BP_UI4_SCENE_CURSOR_KEYBOARD_EVENT_TAKE_V1: u32 = 0x25E;
 pub const OP_BP_SPIRIT_TEXT_PRESENT_SILENT: u32 = 0x112; // arg0 turn,payload display-safe UTF-8 -> rc
 pub const OP_BP_FETCH_POST_JSON_BYTES_START: u32 = 0x113; // arg0 timeout,arg1 hi32 bearer/lo32 URL,payload URL||bearer||JSON
 pub const OP_BP_DOBBY_UI4_WINDOWS: u32 = 0x114; // arg0 cap -> compact live-window JSON
@@ -3129,6 +3130,25 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
             DispatchOutcome::Resume
         }
+        OP_BP_UI4_SCENE_CURSOR_KEYBOARD_EVENT_TAKE_V1 => {
+            use crate::ui4::blueprint_ui4::{
+                TrueosUi4CursorKeyboardEventV1, trueos_cabi_ui4_scene_cursor_keyboard_event_take_v1,
+            };
+            if arg0 > u32::MAX as u64 || arg1 != 0 || req_len != 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let mut event = TrueosUi4CursorKeyboardEventV1::default();
+            let rc = unsafe {
+                trueos_cabi_ui4_scene_cursor_keyboard_event_take_v1(arg0 as u32, &mut event)
+            };
+            if rc == 0 {
+                write_control_record_response(vm_id, seq, 0, &event);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
         OP_BP_UI4_WINDOW_STATE_V1 => {
             use crate::ui4::blueprint_ui4::{
                 TrueosUi4WindowStateV1, trueos_cabi_ui4_scene_window_state_get_v1,
@@ -3278,10 +3298,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_INPUT_ROUTES => {
-            const MAX_ROUTES: usize = 32;
-            let cap = (arg1 as usize).min(MAX_ROUTES);
-            let mut routes =
-                [crate::ui4::blueprint_ui4::TrueosUi4InputRouteState::default(); MAX_ROUTES];
+            use crate::ui4::{MAX_CURSOR_ROUTES, blueprint_ui4::TrueosUi4InputRouteState};
+            const _: () =
+                assert!(MAX_CURSOR_ROUTES * TrueosUi4InputRouteState::WIRE_SIZE <= PAYLOAD_CAP);
+            let cap = (arg1 as usize).min(MAX_CURSOR_ROUTES);
+            let mut routes = alloc::vec![TrueosUi4InputRouteState::default(); cap];
             let count = unsafe {
                 crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_input_routes(
                     arg0 as u32,
