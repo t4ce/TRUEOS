@@ -40,7 +40,8 @@ use crate::intel::gpgpu::{
     GpgpuAlphaBlendWorklistDesc, GpgpuOwnedParticleCraftState,
     GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence, GpgpuRgba8Surface, GpgpuSolidRect,
     GpgpuSubmissionOutcome,
-    ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION, ShaderToyFrameParams, ShaderToyRuntimeState,
+    LICO_ANALYSIS_WORDS, ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION, SHADERTOY_SHADER_LICO,
+    ShaderToyFrameParams, ShaderToyRuntimeState,
     SkyboxSampleRgb565Params, Ui4CompositorCompletion, Ui4CompositorSubmission,
     Ui4CompositorSubmitError, Ui4SpriteSceneCompletion, alpha_blend_worklist_max_descs,
     fill_solid_rects_rgba8_scanout_result, particle_craft_rgba8_frame, poll_ui4_bcs0_sprite_copy,
@@ -477,6 +478,10 @@ pub struct TrueosUi4ShadertoyParamsV1 {
 }
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4ShadertoyParamsV1>() == 16 * 4);
+const SHADERTOY_HEADER_BYTES: usize = core::mem::size_of::<TrueosUi4ShadertoyParamsV1>();
+const SHADERTOY_AUDIO_BYTES: usize = LICO_ANALYSIS_WORDS * 4;
+const SHADERTOY_AUDIO_VERSION: u32 = 2;
+const _: () = assert!(SHADERTOY_HEADER_BYTES + SHADERTOY_AUDIO_BYTES <= trueos_vm::vmcall::PAYLOAD_CAP);
 
 /// One ordered RGBA sprite operation. Sprite id zero selects
 /// the frame-owned one-pixel white source and therefore represents a solid
@@ -4461,7 +4466,8 @@ pub(crate) fn write_shadertoy_package_chunk(
 }
 
 /// Execute one registered, authenticated ShaderToy artifact over the complete
-/// visual-mode UI4 back buffer. Uniforms remain a pointer-free control block.
+/// visual-mode UI4 back buffer. Version 2 appends fixed-size Lico analysis
+/// values immediately after the version 1 header.
 pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
     window_id: u32,
     params: *const TrueosUi4ShadertoyParamsV1,
@@ -4469,13 +4475,16 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
     if params.is_null() {
         return ERROR_INVALID;
     }
+    let header = unsafe { params.read_unaligned() };
+    let bytes = match header.version {
+        SHADERTOY_PARAMS_VERSION if header.shader_id != SHADERTOY_SHADER_LICO => SHADERTOY_HEADER_BYTES,
+        SHADERTOY_AUDIO_VERSION if header.shader_id == SHADERTOY_SHADER_LICO => {
+            SHADERTOY_HEADER_BYTES + SHADERTOY_AUDIO_BYTES
+        }
+        _ => return ERROR_INVALID,
+    };
+    let payload = unsafe { core::slice::from_raw_parts(params.cast::<u8>(), bytes) };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let payload = unsafe {
-            core::slice::from_raw_parts(
-                params.cast::<u8>(),
-                core::mem::size_of::<TrueosUi4ShadertoyParamsV1>(),
-            )
-        };
         return guest_status(
             trueos_vm::vmcall::OP_BP_UI4_SCENE_SHADERTOY_RENDER,
             window_id as u64,
@@ -4483,31 +4492,59 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
             payload,
         );
     }
-    let wire = unsafe { *params };
-    let params = ShaderToyFrameParams {
-        version: wire.version,
-        shader_id: wire.shader_id,
-        frame: wire.frame,
-        flags: wire.flags,
-        time_seconds: wire.time_seconds,
-        delta_seconds: wire.delta_seconds,
-        frame_rate: wire.frame_rate,
-        sample_rate: wire.sample_rate,
-        mouse_x: wire.mouse_x,
-        mouse_y: wire.mouse_y,
-        click_x: wire.click_x,
-        click_y: wire.click_y,
-        date_year: wire.date_year,
-        date_month: wire.date_month,
-        date_day: wire.date_day,
-        date_seconds: wire.date_seconds,
-    };
-    if params.version != SHADERTOY_PARAMS_VERSION || !params.is_valid() {
-        return ERROR_INVALID;
-    }
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
+    render_shadertoy_wire(owner, window_id, payload)
+}
+
+pub(crate) fn render_shadertoy_wire(owner: WindowOwner, window_id: u32, payload: &[u8]) -> i32 {
+    let Some((header, extra)) = payload.split_at_checked(SHADERTOY_HEADER_BYTES) else {
+        return ERROR_INVALID;
+    };
+    let mut words = [0u32; 16];
+    for (word, bytes) in words.iter_mut().zip(header.chunks_exact(4)) {
+        *word = u32::from_le_bytes(bytes.try_into().unwrap());
+    }
+    let shader_id = words[1];
+    let Some(program) = shadertoy_program_id(shader_id) else {
+        return ERROR_INVALID;
+    };
+    let mut analysis = [0.0; LICO_ANALYSIS_WORDS];
+    let audio = match (words[0], shader_id, extra.len()) {
+        (SHADERTOY_PARAMS_VERSION, id, 0) if id != SHADERTOY_SHADER_LICO => None,
+        (SHADERTOY_AUDIO_VERSION, SHADERTOY_SHADER_LICO, SHADERTOY_AUDIO_BYTES) => {
+            for (value, bytes) in analysis.iter_mut().zip(extra.chunks_exact(4)) {
+                *value = f32::from_le_bytes(bytes.try_into().unwrap());
+                if !(-1.0..=1.0).contains(value) {
+                    return ERROR_INVALID;
+                }
+            }
+            Some(&analysis)
+        }
+        _ => return ERROR_INVALID,
+    };
+    let params = ShaderToyFrameParams {
+        version: SHADERTOY_PARAMS_VERSION,
+        shader_id,
+        frame: words[2],
+        flags: words[3],
+        time_seconds: f32::from_bits(words[4]),
+        delta_seconds: f32::from_bits(words[5]),
+        frame_rate: f32::from_bits(words[6]),
+        sample_rate: f32::from_bits(words[7]),
+        mouse_x: f32::from_bits(words[8]),
+        mouse_y: f32::from_bits(words[9]),
+        click_x: f32::from_bits(words[10]),
+        click_y: f32::from_bits(words[11]),
+        date_year: f32::from_bits(words[12]),
+        date_month: f32::from_bits(words[13]),
+        date_day: f32::from_bits(words[14]),
+        date_seconds: f32::from_bits(words[15]),
+    };
+    if !params.is_valid() {
+        return ERROR_INVALID;
+    }
     let (lease, destination, mut state) = {
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
@@ -4516,9 +4553,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
         if surface.visual_cadence.is_none() {
             return ERROR_INVALID;
         }
-        if surface.shadertoy_registered & (1u32 << shadertoy_program_id(params.shader_id).unwrap())
-            == 0
-        {
+        if surface.shadertoy_registered & (1u32 << program) == 0 {
             return ERROR_STATE;
         }
         if surface.gpu_submission_unretired {
@@ -4538,7 +4573,10 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
         surface.gpu_submission_unretired = true;
         (lease, destination, state)
     };
-    let rendered = state.render(destination, params);
+    let rendered = match audio {
+        Some(analysis) => state.render_lico(destination, params, analysis),
+        None => state.render(destination, params),
+    };
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;

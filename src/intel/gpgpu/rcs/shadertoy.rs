@@ -4,6 +4,7 @@ fn shadertoy_contract(shader_id: u32) -> Option<&'static GpgpuKernelAbiContract>
         SHADERTOY_SHADER_CUBE_FIELD => Some(&SHADERTOY_CUBE_FIELD_ADLS_CPP_ABI_CONTRACT),
         SHADERTOY_SHADER_NGUYEN => Some(&SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT),
         SHADERTOY_SHADER_MANDELBOX => Some(&SHADERTOY_MANDELBOX_ADLS_CPP_ABI_CONTRACT),
+        SHADERTOY_SHADER_LICO => Some(&SHADERTOY_LICO_ADLS_CPP_ABI_CONTRACT),
         SHADERTOY_SHADER_PALETTE_GRID => Some(&SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT),
         SHADERTOY_SHADER_COSMIC_STRANDS => Some(&SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT),
         SHADERTOY_SHADER_PROTEAN_CLOUDS => Some(&SHADERTOY_PROTEAN_CLOUDS_ADLS_CPP_ABI_CONTRACT),
@@ -17,6 +18,7 @@ fn shadertoy_text_offset(shader_id: u32) -> Option<u64> {
         SHADERTOY_SHADER_CUBE_FIELD => Some(SHADERTOY_CUBE_FIELD_TEXT_OFFSET_BYTES),
         SHADERTOY_SHADER_NGUYEN => Some(SHADERTOY_NGUYEN_TEXT_OFFSET_BYTES),
         SHADERTOY_SHADER_MANDELBOX => Some(SHADERTOY_MANDELBOX_TEXT_OFFSET_BYTES),
+        SHADERTOY_SHADER_LICO => Some(SHADERTOY_LICO_TEXT_OFFSET_BYTES),
         SHADERTOY_SHADER_PALETTE_GRID => Some(SHADERTOY_PALETTE_GRID_TEXT_OFFSET_BYTES),
         SHADERTOY_SHADER_COSMIC_STRANDS => Some(SHADERTOY_COSMIC_STRANDS_TEXT_OFFSET_BYTES),
         SHADERTOY_SHADER_PROTEAN_CLOUDS => Some(SHADERTOY_PROTEAN_CLOUDS_TEXT_OFFSET_BYTES),
@@ -24,20 +26,36 @@ fn shadertoy_text_offset(shader_id: u32) -> Option<u64> {
     }
 }
 
+fn shadertoy_uniform_range(shader_id: u32) -> (usize, usize) {
+    if shader_id == SHADERTOY_SHADER_LICO {
+        (LICO_UNIFORMS_OFFSET_BYTES, LICO_UNIFORMS_BYTES)
+    } else {
+        (SHADERTOY_UNIFORMS_OFFSET_BYTES, SHADERTOY_UNIFORMS_BYTES)
+    }
+}
+
+// Round the last state block up to a whole GPU page so command and state
+// fetches stay within the initialized prefix of the shared batch allocation.
+const SHADERTOY_BATCH_USED_BYTES: usize =
+    (SHADERTOY_UNIFORMS_OFFSET_BYTES + SHADERTOY_UNIFORMS_BYTES).next_multiple_of(4096);
+const _: () = assert!(SHADERTOY_BATCH_USED_BYTES <= DIRECT_RCS_BATCH_BYTES);
+
 fn direct_rcs_write_shadertoy_payload(
     state: DirectRcsState,
     dst: GpgpuRgba8Surface,
     params: ShaderToyFrameParams,
-    pass: ShaderToyPass,
+    pass: ShaderToyPass<'_>,
     first_row: u32,
 ) -> bool {
     let Some(contract) = shadertoy_contract(params.shader_id) else {
         return false;
     };
+    let (uniforms_offset, uniforms_bytes) = shadertoy_uniform_range(params.shader_id);
     if contract.cross_thread_data_bytes as usize != SHADERTOY_CROSS_THREAD_BYTES
         || contract.per_thread_data_bytes as usize != SHADERTOY_PER_THREAD_BYTES
-        || SHADERTOY_PAYLOAD_OFFSET_BYTES + SHADERTOY_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES
-        || SHADERTOY_UNIFORMS_OFFSET_BYTES + SHADERTOY_UNIFORMS_BYTES > DIRECT_RCS_BATCH_BYTES
+        || SHADERTOY_PAYLOAD_OFFSET_BYTES + SHADERTOY_INDIRECT_BYTES > SHADERTOY_BATCH_USED_BYTES
+        || uniforms_offset + uniforms_bytes > SHADERTOY_BATCH_USED_BYTES
+        || (params.shader_id == SHADERTOY_SHADER_LICO) != pass.lico_analysis.is_some()
     {
         return false;
     }
@@ -46,7 +64,7 @@ fn direct_rcs_write_shadertoy_payload(
     if !shadertoy_payload_layout_matches(contract, source_abi) {
         return false;
     }
-    let uniforms_gpu = DIRECT_RCS_GPU_VA_BATCH_BASE + SHADERTOY_UNIFORMS_OFFSET_BYTES as u64;
+    let uniforms_gpu = DIRECT_RCS_GPU_VA_BATCH_BASE + uniforms_offset as u64;
     unsafe {
         let payload = state.batch_virt.add(SHADERTOY_PAYLOAD_OFFSET_BYTES);
         core::ptr::write_bytes(payload, 0, SHADERTOY_INDIRECT_BYTES);
@@ -103,8 +121,8 @@ fn direct_rcs_write_shadertoy_payload(
             params.sample_rate,
             params.frame as f32,
         ];
-        let uniforms = state.batch_virt.add(SHADERTOY_UNIFORMS_OFFSET_BYTES) as *mut u32;
-        core::ptr::write_bytes(uniforms, 0, SHADERTOY_UNIFORMS_BYTES / 4);
+        let uniforms = state.batch_virt.add(uniforms_offset) as *mut u32;
+        core::ptr::write_bytes(uniforms, 0, uniforms_bytes / 4);
         for (index, value) in values.into_iter().enumerate() {
             core::ptr::write_volatile(uniforms.add(index), value.to_bits());
         }
@@ -122,6 +140,12 @@ fn direct_rcs_write_shadertoy_payload(
         for (i, value) in pass.focus.into_iter().enumerate() {
             core::ptr::write_volatile(uniforms.add(20 + i), value.to_bits());
         }
+        if let Some(analysis) = pass.lico_analysis {
+            let analysis_out = uniforms.add(SHADERTOY_UNIFORMS_BYTES / 4);
+            for (index, value) in analysis.iter().enumerate() {
+                core::ptr::write_volatile(analysis_out.add(index), value.to_bits());
+            }
+        }
     }
     true
 }
@@ -131,7 +155,7 @@ fn direct_rcs_encode_shadertoy_batch(
     upload: UploadedKernelArtifact,
     dst: GpgpuRgba8Surface,
     params: ShaderToyFrameParams,
-    pass: ShaderToyPass,
+    pass: ShaderToyPass<'_>,
     first_row: u32,
     rows: u32,
 ) -> bool {
@@ -151,6 +175,7 @@ fn direct_rcs_encode_shadertoy_batch(
         SHADERTOY_SHADER_CUBE_FIELD => SHADERTOY_CUBE_FIELD_ADLS_ARTIFACT,
         SHADERTOY_SHADER_NGUYEN => SHADERTOY_NGUYEN_ADLS_ARTIFACT,
         SHADERTOY_SHADER_MANDELBOX => SHADERTOY_MANDELBOX_ADLS_ARTIFACT,
+        SHADERTOY_SHADER_LICO => SHADERTOY_LICO_ADLS_ARTIFACT,
         SHADERTOY_SHADER_PALETTE_GRID => SHADERTOY_PALETTE_GRID_ADLS_ARTIFACT,
         SHADERTOY_SHADER_COSMIC_STRANDS => SHADERTOY_COSMIC_STRANDS_ADLS_ARTIFACT,
         SHADERTOY_SHADER_PROTEAN_CLOUDS => SHADERTOY_PROTEAN_CLOUDS_ADLS_ARTIFACT,
@@ -179,7 +204,7 @@ fn direct_rcs_encode_shadertoy_batch(
     }
 
     unsafe {
-        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.batch_virt, 0, SHADERTOY_BATCH_USED_BYTES);
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
     }
 
@@ -227,7 +252,8 @@ fn direct_rcs_encode_shadertoy_batch(
             return false;
         }
     }
-    let uniforms_gpu = DIRECT_RCS_GPU_VA_BATCH_BASE + SHADERTOY_UNIFORMS_OFFSET_BYTES as u64;
+    let (uniforms_offset, uniforms_bytes) = shadertoy_uniform_range(params.shader_id);
+    let uniforms_gpu = DIRECT_RCS_GPU_VA_BATCH_BASE + uniforms_offset as u64;
     if !direct_rcs_write_buffer_surface_state(
         state,
         SHADERTOY_DST_SURFACE_STATE_OFFSET_BYTES,
@@ -238,14 +264,15 @@ fn direct_rcs_encode_shadertoy_batch(
             state,
             SHADERTOY_UNIFORMS_SURFACE_STATE_OFFSET_BYTES,
             uniforms_gpu,
-            SHADERTOY_UNIFORMS_BYTES,
+            uniforms_bytes,
         ))
         || !direct_rcs_write_shadertoy_payload(state, dst, params, pass, first_row)
     {
         return false;
     }
 
-    let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
+    let command_limit = SHADERTOY_IDD_OFFSET_BYTES.min(uniforms_offset);
+    let batch_len = command_limit / core::mem::size_of::<u32>();
     let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
     let mut cursor = 0usize;
     let mut ok = true;
@@ -307,7 +334,7 @@ fn direct_rcs_encode_shadertoy_batch(
         return false;
     }
 
-    super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
+    super::dma_flush(state.batch_virt, SHADERTOY_BATCH_USED_BYTES);
     super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
     true
 }

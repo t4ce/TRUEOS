@@ -30,7 +30,11 @@ impl ShaderToyRuntimeState {
         dst: GpgpuRgba8Surface,
         params: ShaderToyFrameParams,
     ) -> GpgpuRgba8KernelResult {
-        if !dst.is_valid() || !params.is_valid() || direct_rcs_context_is_quarantined() {
+        if !dst.is_valid()
+            || !params.is_valid()
+            || params.shader_id == SHADERTOY_SHADER_LICO
+            || direct_rcs_context_is_quarantined()
+        {
             return GpgpuRgba8KernelResult::default();
         }
         let Some(program) = shadertoy_package::program_id(params.shader_id) else {
@@ -109,5 +113,31 @@ impl ShaderToyRuntimeState {
             }
             _ => GpgpuRgba8KernelResult::default(),
         }
+    }
+
+    pub(crate) fn render_lico(
+        &mut self,
+        dst: GpgpuRgba8Surface,
+        params: ShaderToyFrameParams,
+        analysis: &[f32; LICO_ANALYSIS_WORDS],
+    ) -> GpgpuRgba8KernelResult {
+        if !dst.is_valid()
+            || params.shader_id != SHADERTOY_SHADER_LICO
+            || !params.is_valid()
+            || analysis.iter().any(|value| !value.is_finite())
+            || direct_rcs_context_is_quarantined()
+            || upload_shadertoy_kernel(SHADERTOY_SHADER_LICO).is_none()
+        {
+            return GpgpuRgba8KernelResult::default();
+        }
+        let pass = ShaderToyPass {
+            lico_analysis: Some(analysis),
+            ..ShaderToyPass::native(dst)
+        };
+        let mut result = shadertoy_render_pass(dst, params, pass);
+        if result.ok {
+            result.release = Some(gpgpu_rgba8_release(dst));
+        }
+        result
     }
 }

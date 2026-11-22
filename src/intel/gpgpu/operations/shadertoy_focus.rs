@@ -108,15 +108,16 @@ fn shadertoy_protean_focus(
 }
 
 #[derive(Copy, Clone, Debug)]
-struct ShaderToyPass {
+struct ShaderToyPass<'a> {
     phase: u32, // 0 native, 1 shade sample atlas, 2 reconstruct full output
     width: u32,
     height: u32,
     source: GpgpuRgba8Surface,
     focus: [f32; 4],
+    lico_analysis: Option<&'a [f32; LICO_ANALYSIS_WORDS]>,
 }
 
-impl ShaderToyPass {
+impl ShaderToyPass<'_> {
     fn native(dst: GpgpuRgba8Surface) -> Self {
         Self {
             phase: 0,
@@ -124,6 +125,7 @@ impl ShaderToyPass {
             height: dst.height,
             source: dst,
             focus: [0.0, 0.0, 1.0, 1.0],
+            lico_analysis: None,
         }
     }
 }

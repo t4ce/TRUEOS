@@ -150,6 +150,11 @@ fn shadertoy_artifact_slot(
             SHADERTOY_MANDELBOX_ADLS_GPU,
             &SHADERTOY_MANDELBOX_UPLOAD,
         ),
+        SHADERTOY_SHADER_LICO => (
+            SHADERTOY_LICO_ADLS_ARTIFACT,
+            SHADERTOY_LICO_ADLS_GPU,
+            &SHADERTOY_LICO_UPLOAD,
+        ),
         SHADERTOY_SHADER_PALETTE_GRID => (
             SHADERTOY_PALETTE_GRID_ADLS_ARTIFACT,
             SHADERTOY_PALETTE_GRID_ADLS_GPU,

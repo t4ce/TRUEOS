@@ -16,6 +16,7 @@ pub(crate) struct ShaderToyPackageContract {
 
 include!("shadertoy_packages.rs");
 include!("shadertoy_mandelbox_package.rs");
+include!("shadertoy_lico_package.rs");
 
 pub(crate) const SKYBOX_SAMPLE_RGB565_PACKAGE: ShaderToyPackageContract =
     ShaderToyPackageContract {
@@ -28,6 +29,7 @@ pub(crate) const SKYBOX_SAMPLE_RGB565_PACKAGE: ShaderToyPackageContract =
 pub(crate) fn program_id(shader_id: u32) -> Option<u32> {
     match shader_id {
         1..=6 | 15 | 16 => Some(shader_id),
+        super::SHADERTOY_SHADER_LICO => Some(shader_id),
         8..=14 => Some(8),
         _ => None,
     }
@@ -40,6 +42,7 @@ pub(crate) fn contract(shader_id: u32) -> Option<ShaderToyPackageContract> {
         2 => SHADERTOY_CUBE_FIELD_PACKAGE,
         3 => SHADERTOY_NGUYEN_PACKAGE,
         16 => SHADERTOY_MANDELBOX_PACKAGE,
+        super::SHADERTOY_SHADER_LICO => SHADERTOY_LICO_PACKAGE,
         4 => SHADERTOY_PALETTE_GRID_PACKAGE,
         5 => SHADERTOY_COSMIC_STRANDS_PACKAGE,
         6 => SHADERTOY_PROTEAN_CLOUDS_PACKAGE,

@@ -9,6 +9,7 @@ static SHADERTOY_MANDELBROT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mute
 static SHADERTOY_CUBE_FIELD_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_NGUYEN_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_MANDELBOX_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static SHADERTOY_LICO_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_PALETTE_GRID_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_COSMIC_STRANDS_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_PROTEAN_CLOUDS_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
@@ -51,6 +52,9 @@ static UI4_COMPOSITOR_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> =
 static RECT_WORKLIST_DESC_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 
 static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
+// Sampled only while holding the submit lock. This lets a multi-strip pass
+// reuse its PPGTT setup across retirements if no other writer changed it.
+static DIRECT_RCS_PPGTT_GENERATION: AtomicU64 = AtomicU64::new(0);
 static DIRECT_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
 // Font Engine is an independently scheduled GuC client. This lock protects
 // only its own encoder state; it never serializes Helio, Spirit, UI4, or the

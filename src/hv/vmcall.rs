@@ -281,7 +281,7 @@ pub const OP_BP_UI4_NATIVE_COMPUTE_FIELDS_UPLOAD_V1: u32 = 0x241;
 pub const OP_BP_UI4_NATIVE_COMPUTE_FIELDS_RENDER_V1: u32 = 0x242;
 pub const OP_BP_UI4_NATIVE_COMPUTE_DISPATCH_V1: u32 = 0x238;
 pub const OP_BP_MATRIX_COMPUTE_V1: u32 = 0x245;
-pub const OP_BP_UI4_SCENE_SHADERTOY_RENDER: u32 = 0x11D; // arg0 window,payload ShadertoyParamsV1 -> rc
+pub const OP_BP_UI4_SCENE_SHADERTOY_RENDER: u32 = 0x11D; // arg0 window, versioned ShaderToy payload -> rc
 pub const OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN: u32 = 0x11E; // arg0 window -> kernel-deadline wait + acquired back buffer
 pub const OP_BP_UI4_CONTEXT_MENU_REGISTER: u32 = 0x11F; // arg0 window,payload labelled entries -> rc
 pub const OP_BP_UI4_CONTEXT_MENU_EVENT_TAKE: u32 = 0x120; // arg0 window -> rc + TrueosUi4ContextMenuEvent payload
@@ -2443,38 +2443,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let mut words = [0u32; 16];
-            if payload.len() != words.len() * core::mem::size_of::<u32>() {
-                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                return DispatchOutcome::Resume;
-            }
-            for (word, bytes) in words.iter_mut().zip(payload.chunks_exact(4)) {
-                *word = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-            }
-            let params = crate::ui4::blueprint_ui4::TrueosUi4ShadertoyParamsV1 {
-                version: words[0],
-                shader_id: words[1],
-                frame: words[2],
-                flags: words[3],
-                time_seconds: f32::from_bits(words[4]),
-                delta_seconds: f32::from_bits(words[5]),
-                frame_rate: f32::from_bits(words[6]),
-                sample_rate: f32::from_bits(words[7]),
-                mouse_x: f32::from_bits(words[8]),
-                mouse_y: f32::from_bits(words[9]),
-                click_x: f32::from_bits(words[10]),
-                click_y: f32::from_bits(words[11]),
-                date_year: f32::from_bits(words[12]),
-                date_month: f32::from_bits(words[13]),
-                date_day: f32::from_bits(words[14]),
-                date_seconds: f32::from_bits(words[15]),
-            };
-            let rc = unsafe {
-                crate::ui4::blueprint_ui4::trueos_cabi_ui4_scene_shadertoy_render(
-                    arg0 as u32,
-                    &params,
-                )
-            };
+            let rc = crate::ui4::blueprint_ui4::render_shadertoy_wire(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+                payload,
+            );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

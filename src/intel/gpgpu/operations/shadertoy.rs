@@ -1,4 +1,6 @@
 pub(crate) const SHADERTOY_SHADER_MANDELBOX: u32 = 16;
+pub(crate) const SHADERTOY_SHADER_LICO: u32 = 18;
+pub(crate) const LICO_ANALYSIS_WORDS: usize = 128;
 pub(crate) const SHADERTOY_SHADER_MANDELBROT: u32 = 1;
 pub(crate) const SHADERTOY_SHADER_CUBE_FIELD: u32 = 2;
 pub(crate) const SHADERTOY_SHADER_NGUYEN: u32 = 3;
@@ -34,7 +36,7 @@ pub(crate) struct ShaderToyFrameParams {
 impl ShaderToyFrameParams {
     pub(crate) fn is_valid(self) -> bool {
         self.version == SHADERTOY_PARAMS_VERSION
-            && (1..=16).contains(&self.shader_id)
+            && ((1..=16).contains(&self.shader_id) || self.shader_id == SHADERTOY_SHADER_LICO)
             && (self.flags == 0
                 || (self.shader_id == SHADERTOY_SHADER_PROTEAN_CLOUDS
                     && self.flags == SHADERTOY_FLAG_NATIVE_RESOLUTION)
@@ -139,6 +141,7 @@ fn shadertoy_render_focused(
         height: dst.height,
         source: scratch,
         focus,
+        lico_analysis: None,
     };
     let mut result = shadertoy_render_pass(scratch, params, pass);
     if result.ok {
@@ -154,10 +157,13 @@ fn shadertoy_render_focused(
 fn shadertoy_render_pass(
     dst: GpgpuRgba8Surface,
     params: ShaderToyFrameParams,
-    pass: ShaderToyPass,
+    pass: ShaderToyPass<'_>,
 ) -> GpgpuRgba8KernelResult {
     let start_tick = direct_rcs_now_tick();
     let mut first_row = 0;
+    let mut ppgtt_generation = None;
+    let mut timing = (params.shader_id == SHADERTOY_SHADER_LICO && params.frame.is_multiple_of(120))
+        .then(ShaderToyDispatchTiming::default);
     while first_row < dst.height {
         let Some(rows) =
             shadertoy_dispatch_rows(params.shader_id, pass.phase, dst.width, dst.height, first_row)
@@ -166,7 +172,15 @@ fn shadertoy_render_pass(
         };
         // Each call releases the submit lock after proven retirement. Never
         // read the atlas or publish output while a previous batch is unretired.
-        let outcome = submit_shadertoy_rgba8_rows(dst, params, pass, first_row, rows);
+        let outcome = submit_shadertoy_rgba8_rows(
+            dst,
+            params,
+            pass,
+            first_row,
+            rows,
+            &mut ppgtt_generation,
+            timing.as_mut(),
+        );
         if outcome.observed != SHADERTOY_POST_MARKER {
             return GpgpuRgba8KernelResult {
                 ok: false,
@@ -178,6 +192,14 @@ fn shadertoy_render_pass(
         }
         first_row += rows;
     }
+    if let Some(timing) = timing {
+        crate::log_info!(target: "gpgpu";
+            "lico visualizer render frame={} extent={}x{} strips={} reused_ppgtt={} lock_wait_us={} prepare_us={} submit_to_retire_us={} total_us={} frame_interval_us={}\n",
+            params.frame, dst.width, dst.height, timing.strips, timing.reused_ppgtt,
+            timing.lock_wait_us, timing.prepare_us, timing.submit_to_retire_us,
+            direct_rcs_elapsed_us_since(start_tick), (params.delta_seconds * 1_000_000.0) as u64,
+        );
+    }
     GpgpuRgba8KernelResult {
         ok: true,
         submitted: true,
@@ -185,6 +207,15 @@ fn shadertoy_render_pass(
         submit_ms: direct_rcs_elapsed_ms_since(start_tick),
         release: None,
     }
+}
+
+#[derive(Default)]
+struct ShaderToyDispatchTiming {
+    strips: u32,
+    reused_ppgtt: u32,
+    lock_wait_us: u64,
+    prepare_us: u64,
+    submit_to_retire_us: u64,
 }
 
 struct ShaderToyFocusScratch {
@@ -223,9 +254,11 @@ impl ShaderToyFocusScratch {
 fn submit_shadertoy_rgba8_rows(
     dst: GpgpuRgba8Surface,
     params: ShaderToyFrameParams,
-    pass: ShaderToyPass,
+    pass: ShaderToyPass<'_>,
     first_row: u32,
     rows: u32,
+    ppgtt_generation: &mut Option<u64>,
+    mut timing: Option<&mut ShaderToyDispatchTiming>,
 ) -> DirectRcsDispatchOutcome {
     if !dst.is_valid()
         || !params.is_valid()
@@ -234,7 +267,12 @@ fn submit_shadertoy_rgba8_rows(
     {
         return DirectRcsDispatchOutcome::default();
     }
+    let lock_started = timing.is_some().then(direct_rcs_now_tick);
     let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let prepare_started = timing.as_deref_mut().zip(lock_started).map(|(timing, start)| {
+        timing.lock_wait_us += direct_rcs_elapsed_us_since(start);
+        direct_rcs_now_tick()
+    });
     let Some(dev) = super::claimed_device() else {
         return DirectRcsDispatchOutcome::default();
     };
@@ -247,11 +285,19 @@ fn submit_shadertoy_rgba8_rows(
 
     let forcewake_ok = direct_rcs_forcewake(dev);
     let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
-    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
+    // Every strip in this pass uses the same pinned destination and kernel.
+    // A shared-lane writer can run between strips. Its PTE changes invalidate
+    // the generation before we resume, forcing the usual rebuild and remap.
+    let reuse_ppgtt = ppgtt_generation.is_some_and(|generation| {
+        generation == DIRECT_RCS_PPGTT_GENERATION.load(Ordering::Relaxed)
+    });
+    let ppgtt_ok = mapped_ok && (reuse_ppgtt || direct_rcs_init_ppgtt(state));
     let kernel_ppgtt_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
+        && (reuse_ppgtt
+            || direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes));
     let dst_ppgtt_ok = kernel_ppgtt_ok
-        && direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, pass.phase != 1);
+        && (reuse_ppgtt
+            || direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, pass.phase != 1));
     let source_ppgtt_ok = dst_ppgtt_ok
         && (pass.phase != 2
             || direct_rcs_map_ppgtt_kernel(
@@ -260,10 +306,22 @@ fn submit_shadertoy_rgba8_rows(
                 pass.source.phys,
                 pass.source.bytes,
             ));
+    if source_ppgtt_ok && params.shader_id == SHADERTOY_SHADER_LICO {
+        *ppgtt_generation = Some(DIRECT_RCS_PPGTT_GENERATION.load(Ordering::Relaxed));
+    }
     let batch_ok = source_ppgtt_ok
         && direct_rcs_encode_shadertoy_batch(state, upload, dst, params, pass, first_row, rows);
-    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
-    let observed = if submitted {
+    let submit_started = timing.as_deref_mut().zip(prepare_started).map(|(timing, start)| {
+        timing.prepare_us += direct_rcs_elapsed_us_since(start);
+        direct_rcs_now_tick()
+    });
+    let submission = if batch_ok {
+        direct_rcs_submit_batch_state(dev, state)
+    } else {
+        DirectRcsSubmissionState::Rejected
+    };
+    let submitted = submission.may_have_submitted();
+    let observed = if submission.can_poll() {
         direct_rcs_poll_result_slot_timeout_ms(
             state,
             SHADERTOY_POST_MARKER_SLOT,
@@ -273,8 +331,13 @@ fn submit_shadertoy_rgba8_rows(
     } else {
         0
     };
+    if let Some((timing, start)) = timing.zip(submit_started) {
+        timing.strips += 1;
+        timing.reused_ppgtt += u32::from(reuse_ppgtt);
+        timing.submit_to_retire_us += direct_rcs_elapsed_us_since(start);
+    }
     if observed != SHADERTOY_POST_MARKER {
-        if submitted {
+        if submission.can_poll() {
             quarantine_direct_rcs_context("shadertoy-marker-timeout");
         }
         crate::log_error!(target: "gpgpu";
