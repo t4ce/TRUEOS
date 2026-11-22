@@ -1,5 +1,4 @@
 mod admin;
-mod audio;
 #[path = "system/gpu.rs"]
 mod gpu;
 #[path = "system/font.rs"]
@@ -22,6 +21,8 @@ pub(crate) mod tlb;
 mod vcpy;
 pub(crate) use os::matrix_target_interrupted;
 pub(crate) mod capture;
+#[path = "capture/camera.rs"]
+mod camera;
 #[path = "system/cry.rs"]
 mod cry;
 #[path = "system/disc.rs"]
@@ -71,6 +72,7 @@ pub use metafmtstr::MetaFmtStr;
 pub use show::{Backend as ShowBackend, Show};
 pub use update::{SegmentUpdate, UpdateBatch, UpdateCallback};
 
+use crate::r::keyboard::TrueosKeyboardOutputEvent;
 use alloc::{
     collections::VecDeque,
     string::{String, ToString},
@@ -705,6 +707,7 @@ pub struct Shell3 {
     pending_presentation: Option<(update::Snapshot, UpdateBatch, Vec<update::RenderedLine>)>,
     pending_startup: Option<startup::Startup>,
     local_account: Option<local_account::Bootstrap>,
+    camera_preview: Option<camera::Preview>,
     show: Show,
 }
 
@@ -853,6 +856,7 @@ impl Shell3 {
             pending_presentation: None,
             pending_startup: None,
             local_account: None,
+            camera_preview: None,
             show: Show::default(),
         }
     }
@@ -891,6 +895,27 @@ impl Shell3 {
 
     pub(super) fn show_handles_window(&self, window: crate::ui4::WindowId) -> bool {
         self.show.handles_window(window)
+    }
+
+    fn open_camera_preview(&mut self, event: &TrueosKeyboardOutputEvent) -> Result<(), &'static str> {
+        let shell_window = self.show.window().ok_or("cam: a UI4 shell is required")?;
+        self.reap_camera_preview();
+        let preview = match self.camera_preview.as_ref() {
+            Some(preview) => preview,
+            None => self.camera_preview.insert(camera::Preview::open()?),
+        };
+        preview.select_from(shell_window, event);
+        Ok(())
+    }
+
+    pub(super) fn reap_camera_preview(&mut self) {
+        if self
+            .camera_preview
+            .as_ref()
+            .is_some_and(camera::Preview::is_closed)
+        {
+            self.camera_preview = None;
+        }
     }
 
     /// Publish the current title, status, and prompt strips through UI4.
@@ -1338,6 +1363,10 @@ impl Shell3 {
     /// UI typing. The first latch consumes the submission; its remaining input
     /// is discarded. Stop early when the prompt cannot become a valid name.
     pub(super) fn replay_terminal_line(&mut self, line: &str) {
+        self.replay_terminal_line_from(line, &TrueosKeyboardOutputEvent::default());
+    }
+
+    fn replay_terminal_line_from(&mut self, line: &str, origin: &TrueosKeyboardOutputEvent) {
         use crate::r::keyboard::*;
         if self.active_vmx_app().is_some() && !line.starts_with(OPERATOR) && !self.parse_name(line)
         {
@@ -1349,14 +1378,17 @@ impl Shell3 {
         for ch in line.chars() {
             let mut utf8 = [0; 4];
             let utf8_len = ch.encode_utf8(&mut utf8).len() as u8;
-            let (changed, latched) = self.handle_keyboard_with_latch(&TrueosKeyboardOutputEvent {
-                kind: KEYBOARD_OUTPUT_KIND_TEXT,
-                codepoint: ch as u32,
-                utf8,
-                utf8_len,
-                flags: KEYBOARD_OUTPUT_FLAG_PRESS,
-                ..Default::default()
-            });
+            let (changed, latched) = self.handle_keyboard_with_origin(
+                &TrueosKeyboardOutputEvent {
+                    kind: KEYBOARD_OUTPUT_KIND_TEXT,
+                    codepoint: ch as u32,
+                    utf8,
+                    utf8_len,
+                    flags: KEYBOARD_OUTPUT_FLAG_PRESS,
+                    ..Default::default()
+                },
+                origin,
+            );
             if latched || !changed {
                 return;
             }
@@ -1375,17 +1407,20 @@ impl Shell3 {
     }
 
     /// UI editing with immediate exact-name recognition and AppDB/AKA launch.
-    pub(super) fn handle_keyboard(
-        &mut self,
-        event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
-    ) -> bool {
+    pub(super) fn handle_keyboard(&mut self, event: &TrueosKeyboardOutputEvent) -> bool {
         self.handle_keyboard_with_latch(event).0
     }
 
     /// (Input changed the view or reached a TUI, exact name latched.)
-    fn handle_keyboard_with_latch(
+    fn handle_keyboard_with_latch(&mut self, event: &TrueosKeyboardOutputEvent) -> (bool, bool) {
+        self.handle_keyboard_with_origin(event, event)
+    }
+
+    // History replay keeps its synthetic input while carrying the key that invoked it.
+    fn handle_keyboard_with_origin(
         &mut self,
-        event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
+        event: &TrueosKeyboardOutputEvent,
+        origin: &TrueosKeyboardOutputEvent,
     ) -> (bool, bool) {
         use crate::r::keyboard::*;
         if event.flags & KEYBOARD_OUTPUT_FLAG_PRESS == 0 {
@@ -1422,7 +1457,7 @@ impl Shell3 {
                     if self.command_history.cursor.is_some() {
                         let input = self.prompt.text.clone();
                         self.command_history.end_recall();
-                        self.replay_terminal_line(&input);
+                        self.replay_terminal_line_from(&input, origin);
                         return (true, true);
                     }
                     let submitted = self.submit_app_prompt() || self.submit_operator_prompt();
@@ -1430,7 +1465,7 @@ impl Shell3 {
                 }
                 KEYBOARD_KEY_TAB => {
                     let changed = self.set_mode(self.get_mode() % 3 + 1);
-                    let latched = changed && self.latch_prompt_prefix();
+                    let latched = changed && self.latch_prompt_prefix(origin);
                     return (changed, latched);
                 }
                 KEYBOARD_KEY_BACKSPACE => {
@@ -1480,7 +1515,7 @@ impl Shell3 {
         self.prompt.colors.resize(self.prompt.char_len() - 1, None);
         self.prompt.colors.insert(self.prompt.cursor, None);
         self.prompt.cursor += 1;
-        let latched = self.echo_recognized_prompt();
+        let latched = self.echo_recognized_prompt(origin);
         self.refresh_prompt_strip();
         (true, latched)
     }
@@ -1612,7 +1647,7 @@ impl Shell3 {
 
     /// A mode switch can make an existing prefix executable. Consume only
     /// the first recognized name; trailing input never reaches echo or history.
-    fn latch_prompt_prefix(&mut self) -> bool {
+    fn latch_prompt_prefix(&mut self, origin: &TrueosKeyboardOutputEvent) -> bool {
         self.sync_aka_names();
         if self.prompt().starts_with(OPERATOR) {
             return false;
@@ -1627,12 +1662,12 @@ impl Shell3 {
         };
         let name = self.prompt()[..end].to_string();
         self.set_prompt(&name);
-        let latched = self.echo_recognized_prompt();
+        let latched = self.echo_recognized_prompt(origin);
         self.refresh_prompt_strip();
         latched
     }
 
-    fn echo_recognized_prompt(&mut self) -> bool {
+    fn echo_recognized_prompt(&mut self, origin: &TrueosKeyboardOutputEvent) -> bool {
         self.sync_aka_names();
         if self.prompt.text.starts_with(OPERATOR) || !self.parse_name(&self.prompt.text) {
             return false;
@@ -1677,7 +1712,7 @@ impl Shell3 {
         } else if self.mode == Mode::ADM
             && matches!(
                 text.as_str(),
-                "cry" | "disc" | "ram" | "smp" | "net" | "gpu" | "vcpy" | "tlb" | "font" | "link" | "keys" | "audio"
+                "cry" | "disc" | "ram" | "smp" | "net" | "gpu" | "vcpy" | "tlb" | "font" | "link" | "keys"
             )
         {
             let frontend = self.tui_frontend();
@@ -1692,7 +1727,6 @@ impl Shell3 {
                 "font" => font::start(frontend),
                 "link" => link::start(frontend),
                 "keys" => keys::start(frontend),
-                "audio" => audio::start(frontend),
                 _ => {
                     let origin = output::DumpTarget(
                         self.active_matrix_slot
@@ -1773,6 +1807,14 @@ impl Shell3 {
                     self.active_matrix_slot.as_deref(),
                     self.active_matrix_lifetime,
                     error,
+                );
+            }
+        } else if self.mode == Mode::ADM && text == "cam" {
+            if let Err(error) = self.open_camera_preview(origin) {
+                MatrixSlots::echo(
+                    self.active_matrix_slot.as_deref(),
+                    self.active_matrix_lifetime,
+                    error.into(),
                 );
             }
         } else if self.mode == Mode::ADM && capture::recognizes(&text) {

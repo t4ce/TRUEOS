@@ -826,11 +826,11 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
         // Keep each owner alive through UI4's close animation, then drop the
         // Shell3 and its leased frame on the same AP.
         for index in (0..owned_shells.len()).rev() {
-            let closed = owned_shells
-                .get(index)
-                .is_some_and(super::Shell3::show_is_closed);
-            if closed {
-                owned_shells.drop_shell(index);
+            if let Some(shell) = owned_shells.get_mut(index) {
+                shell.reap_camera_preview();
+                if shell.show_is_closed() {
+                    owned_shells.drop_shell(index);
+                }
             }
         }
 

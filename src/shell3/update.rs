@@ -489,6 +489,21 @@ pub(super) fn diff_rendered_lines(
     previous: Option<&[RenderedLine]>,
     current: &[RenderedLine],
 ) -> Vec<SegmentUpdate> {
+    diff_lines(previous, current, false)
+}
+
+pub(super) fn diff_paint_lines(
+    previous: Option<&[RenderedLine]>,
+    current: &[RenderedLine],
+) -> Vec<SegmentUpdate> {
+    diff_lines(previous, current, true)
+}
+
+fn diff_lines(
+    previous: Option<&[RenderedLine]>,
+    current: &[RenderedLine],
+    skip_unchanged_cells: bool,
+) -> Vec<SegmentUpdate> {
     let mut updates = Vec::new();
     let count = current.len().max(previous.map_or(0, |lines| lines.len()));
     for index in 0..count {
@@ -524,11 +539,36 @@ pub(super) fn diff_rendered_lines(
                 start = end;
             }
         } else {
-            // Existing pixels must still be erased when text/rows disappear.
             let old = previous
                 .and_then(|lines| lines.get(index))
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
+            if skip_unchanged_cells && old.len() == line.len() {
+                // Pixel painting uses independent cells. Keep unchanged cells
+                // between live regions out of the raster submission.
+                let mut start = 0;
+                while start < line.len() {
+                    if old[start] == line[start] {
+                        start += 1;
+                        continue;
+                    }
+                    let mut end = start + 1;
+                    while end < line.len() && old[end] != line[end] {
+                        end += 1;
+                    }
+                    updates.push(SegmentUpdate {
+                        row,
+                        side: StripSide::Left,
+                        offset: start,
+                        remove: end - start,
+                        text: line[start..end].iter().map(|cell| cell.0).collect(),
+                        colors: line[start..end].iter().map(|cell| cell.1).collect(),
+                    });
+                    start = end;
+                }
+                continue;
+            }
+            // Preserve the terminal's contiguous writes and erase removed cells.
             if let Some(update) = diff_visible_segment(row, StripSide::Left, old, line) {
                 updates.push(update);
             }

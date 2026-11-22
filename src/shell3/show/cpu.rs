@@ -12,16 +12,13 @@ use super::{Ui4Surface, rendered_lines};
 pub(super) fn present(
     surface: &mut Ui4Surface,
     lines: &[&[(char, Option<super::super::RgbaColor>)]],
-    fallback_segments: &[super::super::SegmentUpdate],
+    front_updates: &[super::super::SegmentUpdate],
 ) -> Result<Option<crate::ui4::DamageRect>, &'static str> {
     let lease = acquire_frame_buffer(surface.frame).map_err(|_| "shell3-show-cpu-frame-busy")?;
     let index = lease.buffer_index as usize;
     let previous = surface.frame_contents[index].clone();
     let current = rendered_lines(lines);
-    let mut segments = super::super::update::diff_rendered_lines(previous.as_deref(), &current);
-    if segments.is_empty() && previous.is_some() {
-        segments.extend_from_slice(fallback_segments);
-    }
+    let segments = super::super::update::diff_paint_lines(previous.as_deref(), &current);
     let view = match writable_rgba_view(lease) {
         Ok(view) => view,
         Err(_) => {
@@ -56,7 +53,13 @@ pub(super) fn present(
     let damage = if clearing || (previous.is_none() && segments.is_empty()) {
         Some(crate::ui4::DamageRect::FULL)
     } else {
-        super::damage_for_segments(&segments, surface.width, surface.height, surface.scale)
+        super::damage_for_segments(
+            &segments,
+            front_updates,
+            surface.width,
+            surface.height,
+            surface.scale,
+        )
     };
     Ok(damage)
 }

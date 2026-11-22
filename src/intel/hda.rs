@@ -1,9 +1,8 @@
 //! Intel High Definition Audio ownership and shared PCM playback.
 
 mod playback;
-pub(crate) mod vhda;
 
-use trueos_time::Timer;
+use trueos_time::{Duration, Instant, Timer};
 
 use crate::r::services::audio_http;
 
@@ -12,6 +11,8 @@ const HDA_SUBCLASS: u8 = 0x03;
 const MULTIMEDIA_AUDIO_SUBCLASS: u8 = 0x01;
 // LPJB: Tiger Lake-LP Smart Sound can expose the DSP-style 04:01 class.
 const TIGER_LAKE_LP_SMART_SOUND: u16 = 0xA0C8;
+const IDLE_PCM_INTERVAL: Duration = Duration::from_millis(10);
+const IDLE_PCM_FRAMES: usize = 480; // 10 ms at 48 kHz.
 
 fn open_playback() -> Option<playback::Playback> {
     let mut claimed = 0usize;
@@ -37,7 +38,7 @@ fn open_playback() -> Option<playback::Playback> {
                         Ok(output) => {
                             playback = Some(output);
                             crate::log_info!(target: "global";
-                                "hda: PCM playback ready bdf={:02X}:{:02X}.{}\n",
+                                "hda: analog jack monitoring ready bdf={:02X}:{:02X}.{}\n",
                                 device.bus, device.slot, device.function
                             );
                         }
@@ -68,18 +69,31 @@ pub(crate) async fn service() {
         return;
     };
     audio_http::set_local_playback(true);
-    vhda::set_available(true);
+    let mut next_idle_pcm = Instant::now();
     let error = loop {
-        if let Err(error) = playback.refill(|block| {
-            audio_http::render_local(block);
-            vhda::mix(block);
-        }) {
-            break error;
+        match playback.poll_jacks() {
+            Ok(true) => {
+                if let Err(error) = playback.refill(audio_http::render_local) {
+                    break error;
+                }
+                next_idle_pcm = Instant::now() + IDLE_PCM_INTERVAL;
+            }
+            Ok(false) => {
+                let now = Instant::now();
+                if now >= next_idle_pcm {
+                    // With no jack, keep the sink's PCM clock running in software.
+                    audio_http::render_local(&mut [[0; 2]; IDLE_PCM_FRAMES]);
+                    next_idle_pcm += IDLE_PCM_INTERVAL;
+                    if now >= next_idle_pcm {
+                        next_idle_pcm = now + IDLE_PCM_INTERVAL;
+                    }
+                }
+            }
+            Err(error) => break error,
         }
-        playback.poll_jack();
         Timer::after_millis(2).await;
     };
-    vhda::set_available(false);
+    drop(playback);
     audio_http::set_local_playback(false);
     crate::log_warn!(target: "global"; "hda: playback stopped: {}\n", error);
 }

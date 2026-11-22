@@ -44,7 +44,7 @@ def main() -> None:
     assert challenge.index("if self.pending_startup.is_some()") < challenge.index("admin::start_login(")
     window_spawn = method(service, "pub(crate) fn blueprint_window_spawn(")
     assert "access_account: crate::access_key_db::principal_for_vm(vm_id)" in window_spawn
-    command = method(shell, "fn echo_recognized_prompt(&mut self)")
+    command = method(shell, "fn echo_recognized_prompt(")
     sh3 = command[command.index('self.mode == Mode::ADM && text == "sh3"'):
                   command.index('self.mode == Mode::HV && text == "status"')]
     assert "match tui::guest_frontend_account(self.tui_frontend())" in sh3

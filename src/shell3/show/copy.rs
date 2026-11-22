@@ -13,7 +13,7 @@ static REPORTED_VIRGL_COPY: AtomicBool = AtomicBool::new(false);
 pub(super) async fn present(
     surface: &mut Ui4Surface,
     lines: &[&[(char, Option<super::super::RgbaColor>)]],
-    fallback_segments: &[super::super::SegmentUpdate],
+    front_updates: &[super::super::SegmentUpdate],
     poisoned: &mut bool,
     pan: &mut Option<super::pan::PanBuffer>,
     budget: &crate::ui4::text_area::RasterBudget,
@@ -45,7 +45,7 @@ pub(super) async fn present(
     let index = lease.buffer_index as usize;
     let previous = surface.frame_contents[index].clone();
     let current = rendered_lines(lines);
-    let updates = super::super::update::diff_rendered_lines(previous.as_deref(), &current);
+    let updates = super::super::update::diff_paint_lines(previous.as_deref(), &current);
     let view = match writable_rgba_view(lease) {
         Ok(view) => view,
         Err(_) => {
@@ -228,14 +228,15 @@ pub(super) async fn present(
         crate::log_info!(target:"apps";"shell3/present: ap={} glyphs={} cpu_glyphs={} using_pan={} wall_ns={}\n",
             crate::percpu::current_slot(),glyph_count,if cpu_paint {glyph_count} else {0},using_pan,ns);
     }
-    let segments = if updates.is_empty() {
-        fallback_segments
-    } else {
-        &updates
-    };
+    let damage = super::damage_for_segments(
+        &updates,
+        front_updates,
+        surface.width,
+        surface.height,
+        surface.scale,
+    );
     Ok(
-        super::damage_for_segments(segments, surface.width, surface.height, surface.scale)
-            .or_else(|| previous.is_none().then_some(crate::ui4::DamageRect::FULL))
+        damage.or_else(|| previous.is_none().then_some(crate::ui4::DamageRect::FULL))
             .map(|damage| {
                 if clearing {
                     crate::ui4::DamageRect::FULL

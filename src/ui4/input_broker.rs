@@ -2952,6 +2952,29 @@ pub(crate) fn reselect_window_for_cursor(
     Ok(broker.select_frame(index, Some(WindowTarget { owner, window }), combo_id, vcursor))
 }
 
+/// Transfer the launching keyboard's cursor selection without moving it.
+pub(crate) fn reselect_window_for_keyboard(
+    event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
+    from: CursorFrameKey,
+    to: CursorFrameKey,
+) {
+    let (combo_id, _) = keyboard_hut_metadata(event);
+    let mut broker = INPUT_BROKER.lock();
+    let Some(index) = broker.keyboard_route_index(event, combo_id, true) else {
+        return;
+    };
+    let source = broker.cursors[index].source;
+    if super::selected_frame_for_source(source) != Some(from)
+        || !super::spirit_access::keyboard_target_allowed(event, to)
+        || !super::window_broker::window_snapshot(to.owner, to.window)
+            .is_some_and(|window| window.state == WindowState::Ready && window.placement.visible)
+    {
+        return;
+    }
+    let (_, vcursor) = cursor_hut_metadata(source);
+    broker.select_frame(index, Some(WindowTarget::from(to)), combo_id, vcursor);
+}
+
 /// Programmatically focus a ready frame while retaining a known cursor
 /// position. Context-menu actions use their captured anchor so opening a
 /// service frame never teleports the software cursor to the frame origin.

@@ -680,14 +680,18 @@ pub(super) fn rendered_lines(
 }
 
 fn damage_for_segments(
-    segments: &[super::SegmentUpdate],
+    painted: &[super::SegmentUpdate],
+    front_updates: &[super::SegmentUpdate],
     width: u32,
     height: u32,
     scale: u32,
 ) -> Option<DamageRect> {
     let (cell_width, cell_height) = crate::r::services::shell3_font_service::cell_extent(scale)?;
-    segments
+    // The acquired buffer can already contain pixels that differ from the
+    // displayed front. Publish those differences even when no paint was needed.
+    painted
         .iter()
+        .chain(front_updates)
         .filter_map(|segment| {
             let row = match segment.row {
                 super::SpecialRows::TitleRow => 0,

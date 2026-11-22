@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise PCM mixing and HTTP playback with a recording TCP stub."""
+"""Exercise PCM mixing, HTTP playback, and HDA jack policy on the host."""
 from pathlib import Path
 import re
 import subprocess
@@ -29,10 +29,18 @@ def main():
                             'include_bytes!(r"' + str(ROOT/'src/r/services/audio_http/player.html') + '")')
         bodies.append(body)
     constants = '\n'.join(re.findall(r'^const .+;$', source, re.M))
+    hda_source = (ROOT / 'src/intel/hda/playback.rs').read_text()
+    pin_constants = re.findall(
+        r'^const (?:DIGITAL_WIDGET|PIN_PRESENCE_DETECT|PIN_OUTPUT_CAPABLE|JACK_DETECT_OVERRIDE):.+;$',
+        hda_source, re.M,
+    )
+    hda_policy = '\n'.join([
+        *pin_constants,
+        *(item(hda_source, marker) for marker in ('enum JackKind', 'impl JackKind', 'fn select_jack(')),
+    ])
     harness = r'''
 #![allow(dead_code)]
 extern crate alloc;
-extern crate self as spin;
 use alloc::{format, vec::Vec};
 use std::cell::{RefCell, Cell};
 #[macro_export] macro_rules! log { ($($t:tt)*) => {}; }
@@ -65,11 +73,8 @@ impl VNet {
 }
 @CONSTANTS@
 @PRODUCTION@
+@HDA_POLICY@
 #[path="@SINK@"] mod sink;
-#[path="@VHDA@"] mod vhda;
-mod allocators {
-    pub fn with_host_alloc_domain_strong<T>(f: impl FnOnce() -> T) -> T { f() }
-}
 use sink::Sink;
 struct Mutex<T>(std::sync::Mutex<T>);
 impl<T> Mutex<T> {
@@ -168,7 +173,53 @@ fn request(path:&str)->(VNet,AudioHttpSession) {
     assert!(stale.bytes.borrow().starts_with(b"HTTP/1.1 409"));
     assert_eq!(clip_request_id("/audio/clip.wav?id=1&id=2"),None);
 }
-'''.replace('@CONSTANTS@',constants).replace('@PRODUCTION@','\n'.join(bodies)).replace('@SINK@',str(ROOT / 'src/r/services/audio_http/sink.rs')).replace('@VHDA@',str(ROOT / 'src/intel/hda/vhda.rs'))
+
+#[test]
+fn local_output_requires_a_detectable_mainboard_line_or_headphone_jack() {
+    const PIN_WIDGET: u32 = 4 << 20;
+    const DETECTABLE_OUTPUT: u32 = PIN_PRESENCE_DETECT | PIN_OUTPUT_CAPABLE;
+    const REAR_LINE_OUT: u32 = 0x01014010;
+    const FRONT_HEADPHONE: u32 = 0x02214020;
+    assert!(matches!(
+        JackKind::from_pin(PIN_WIDGET, DETECTABLE_OUTPUT, REAR_LINE_OUT),
+        Some(JackKind::LineOut),
+    ));
+    assert!(matches!(
+        JackKind::from_pin(PIN_WIDGET, DETECTABLE_OUTPUT, FRONT_HEADPHONE),
+        Some(JackKind::Headphone),
+    ));
+
+    for config in [
+        REAR_LINE_OUT | (1 << 20), // Speaker
+        REAR_LINE_OUT | (4 << 20), // S/PDIF
+        REAR_LINE_OUT | (1 << 28), // Internal location
+        REAR_LINE_OUT | (1 << 30), // Port without a physical jack
+        REAR_LINE_OUT | (2 << 30), // Fixed port
+        REAR_LINE_OUT | (3 << 30), // Combined jack and fixed port
+        REAR_LINE_OUT | JACK_DETECT_OVERRIDE,
+    ] {
+        assert!(JackKind::from_pin(PIN_WIDGET, DETECTABLE_OUTPUT, config).is_none());
+    }
+    assert!(JackKind::from_pin(PIN_WIDGET | DIGITAL_WIDGET, DETECTABLE_OUTPUT, REAR_LINE_OUT).is_none());
+    assert!(JackKind::from_pin(PIN_WIDGET, PIN_PRESENCE_DETECT, REAR_LINE_OUT).is_none());
+    assert!(JackKind::from_pin(PIN_WIDGET, PIN_OUTPUT_CAPABLE, FRONT_HEADPHONE).is_none());
+}
+
+#[test]
+fn local_output_keeps_the_connected_jack_until_unplugged() {
+    assert_eq!(select_jack(None, [].into_iter()), None);
+    assert_eq!(select_jack(None, [false, false].into_iter()), None);
+    assert_eq!(select_jack(None, [true, true].into_iter()), Some(0));
+    assert_eq!(select_jack(None, [false, true].into_iter()), Some(1));
+    assert_eq!(select_jack(Some(1), [true, true].into_iter()), Some(1));
+    assert_eq!(select_jack(Some(1), [true, false].into_iter()), Some(0));
+    assert_eq!(select_jack(Some(0), [false, false].into_iter()), None);
+}
+'''
+    harness = (harness.replace('@CONSTANTS@', constants)
+               .replace('@PRODUCTION@', '\n'.join(bodies))
+               .replace('@HDA_POLICY@', hda_policy)
+               .replace('@SINK@', str(ROOT / 'src/r/services/audio_http/sink.rs')))
     with tempfile.TemporaryDirectory(prefix='trueos-audio-http-') as work:
         source_path=Path(work)/'test.rs'; binary=Path(work)/'test'
         source_path.write_text(harness)
