@@ -1,15 +1,13 @@
 //! Spirit-owned UI4 window selection choreography.
 //!
 //! UI4 publishes an ordered event after a new window's first composed frame
-//! crosses plane SURFLIVE. This task handles first-presentation effects and
+//! crosses plane SURFLIVE. This task handles first-presentation focus and
 //! explicit frame shares using direct UI4 focus and Spirit's software cursor.
 
 use spin::Mutex;
 use trueos_time::{Duration, Instant, Timer, with_timeout};
 
 use crate::ui4::spirit_access::{self, Permit};
-
-use super::spirit_vfx::SpiritVfxBackgroundEffect;
 
 const SELECTION_MONITOR_MS: u64 = 16;
 const CURSOR_SETTLE_POLL_MS: u64 = 8;
@@ -66,18 +64,6 @@ fn focus_pending_shared_frame(source: crate::ui4::Ui4CursorSource) {
     }
 }
 
-#[derive(Copy, Clone)]
-struct WindowVfxProfile {
-    app: &'static str,
-    effect: SpiritVfxBackgroundEffect,
-}
-
-#[derive(Copy, Clone)]
-struct SpiritWindowSelection {
-    key: crate::ui4::CursorFrameKey,
-    profile: WindowVfxProfile,
-}
-
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn spirit_window_selection_task() {
     let source = loop {
@@ -96,7 +82,7 @@ pub(crate) async fn spirit_window_selection_task() {
     };
     crate::log_info!(
         target: "gfx";
-        "trueos-spirit: window selector online cursor={}:{}:{} kind={} cursor_plane=ui4-slot4 trigger=first-frame-post-surflive selection=direct-ui4-focus/no-click hardware_cur_pos=unchanged mappings=weather:nebula-smoke,vid:bokeh-field\n",
+        "trueos-spirit: window selector online cursor={}:{}:{} kind={} cursor_plane=ui4-slot4 trigger=first-frame-post-surflive selection=direct-ui4-focus/no-click hardware_cur_pos=unchanged apps=weather,vid\n",
         source.controller_id,
         source.slot_id,
         source.ep_target,
@@ -105,7 +91,6 @@ pub(crate) async fn spirit_window_selection_task() {
 
     super::paper_demo::run().await;
 
-    let mut owned_selection: Option<SpiritWindowSelection> = None;
     let mut sound_selection = None;
     loop {
         focus_pending_shared_frame(source);
@@ -118,20 +103,6 @@ pub(crate) async fn spirit_window_selection_task() {
             );
         }
 
-        if let Some(selection) = owned_selection
-            && !selection_is_owned(source, selection.key)
-        {
-            super::spirit_vfx::set_window_background_vfx(None);
-            owned_selection = None;
-            crate::log_info!(
-                target: "gfx";
-                "trueos-spirit: window selection released owner={:?} window={} app={} action=restore-idle-vfx\n",
-                selection.key.owner,
-                selection.key.window.raw(),
-                selection.profile.app,
-            );
-        }
-
         let Ok(window) = with_timeout(
             Duration::from_millis(SELECTION_MONITOR_MS),
             crate::ui4::wait_for_window_first_presentation(),
@@ -140,7 +111,7 @@ pub(crate) async fn spirit_window_selection_task() {
         else {
             continue;
         };
-        let Some(profile) = profile_for_window(window) else {
+        let Some(app) = auto_focus_app(window) else {
             continue;
         };
         let key = crate::ui4::CursorFrameKey::new(window.owner, window.id);
@@ -148,22 +119,20 @@ pub(crate) async fn spirit_window_selection_task() {
             continue;
         }
         if selection_is_owned(source, key) {
-            super::spirit_vfx::set_window_background_vfx(Some(profile.effect));
-            owned_selection = Some(SpiritWindowSelection { key, profile });
             continue;
         }
         let Some((screen_width, screen_height)) = crate::intel::active_scanout_dimensions() else {
             crate::log_warn!(
                 target: "gfx";
                 "trueos-spirit: window selection deferred app={} owner={:?} window={} reason=no-active-scanout\n",
-                profile.app,
+                app,
                 window.owner,
                 window.id.raw(),
             );
             continue;
         };
         // Explicit app input owns Lilly's entire paired cursor/keyboard combo.
-        // Do not steal its selection for automatic first-presentation effects.
+        // Do not steal its selection for automatic first-presentation focus.
         // The guard also protects this choreography across its await points.
         let _io = match super::ui4_interaction::try_acquire_native_io() {
             Ok(io) => io,
@@ -180,7 +149,7 @@ pub(crate) async fn spirit_window_selection_task() {
                 crate::log_warn!(
                     target: "gfx";
                     "trueos-spirit: window selection deferred app={} owner={:?} window={} reason=software-cursor-approach error={:?}\n",
-                    profile.app,
+                    app,
                     window.owner,
                     window.id.raw(),
                     error,
@@ -202,7 +171,7 @@ pub(crate) async fn spirit_window_selection_task() {
                     crate::log_warn!(
                         target: "gfx";
                         "trueos-spirit: window selection deferred app={} owner={:?} window={} reason=software-cursor-status error={:?}\n",
-                        profile.app,
+                        app,
                         window.owner,
                         window.id.raw(),
                         error,
@@ -215,7 +184,7 @@ pub(crate) async fn spirit_window_selection_task() {
             crate::log_warn!(
                 target: "gfx";
                 "trueos-spirit: window selection deferred app={} owner={:?} window={} reason=software-cursor-timeout approach_ms={} grace_ms={}\n",
-                profile.app,
+                app,
                 window.owner,
                 window.id.raw(),
                 approach_ms,
@@ -234,7 +203,7 @@ pub(crate) async fn spirit_window_selection_task() {
                 crate::log_warn!(
                     target: "gfx";
                     "trueos-spirit: window selection rejected app={} owner={:?} window={} error={:?} action=retain-current-selection\n",
-                    profile.app,
+                    app,
                     window.owner,
                     window.id.raw(),
                     error,
@@ -246,24 +215,21 @@ pub(crate) async fn spirit_window_selection_task() {
             crate::log_warn!(
                 target: "gfx";
                 "trueos-spirit: window selection rejected app={} owner={:?} window={} reason=selection-ownership-not-latched\n",
-                profile.app,
+                app,
                 window.owner,
                 window.id.raw(),
             );
             continue;
         }
 
-        super::spirit_vfx::set_window_background_vfx(Some(profile.effect));
-        owned_selection = Some(SpiritWindowSelection { key, profile });
         crate::log_info!(
             target: "gfx";
-            "trueos-spirit: window selected app={} producer={} owner={:?} window={} publish_serial={} vfx={} changed={} cursor={}:{}:{} selection=direct-ui4-focus/no-click first_frame=post-surflive hardware_cur_pos=unchanged\n",
-            profile.app,
+            "trueos-spirit: window selected app={} producer={} owner={:?} window={} publish_serial={} changed={} cursor={}:{}:{} selection=direct-ui4-focus/no-click first_frame=post-surflive hardware_cur_pos=unchanged\n",
+            app,
             window.producer_name,
             window.owner,
             window.id.raw(),
             window.publish_serial,
-            profile.effect.ui_name(),
             changed,
             source.controller_id,
             source.slot_id,
@@ -303,15 +269,12 @@ fn is_lico_vm(vm: u8, run: u64) -> bool {
     })
 }
 
-fn profile_for_window(window: crate::ui4::WindowSnapshot) -> Option<WindowVfxProfile> {
+fn auto_focus_app(window: crate::ui4::WindowSnapshot) -> Option<&'static str> {
     if window.owner == crate::ui4::WindowOwner::VIDEO_PLAYER
         || window.producer_name.eq_ignore_ascii_case("video-player")
         || window.producer_name.eq_ignore_ascii_case("vid")
     {
-        return Some(WindowVfxProfile {
-            app: "vid",
-            effect: SpiritVfxBackgroundEffect::BokehField,
-        });
+        return Some("vid");
     }
     let crate::ui4::WindowOwner::Vm(vm_id) = window.owner else {
         return None;
@@ -320,10 +283,7 @@ fn profile_for_window(window: crate::ui4::WindowSnapshot) -> Option<WindowVfxPro
     if contains_ascii_case_insensitive(archive.as_str(), "weather")
         || contains_ascii_case_insensitive(archive.as_str(), "frog")
     {
-        return Some(WindowVfxProfile {
-            app: "weather",
-            effect: SpiritVfxBackgroundEffect::NebulaSmoke,
-        });
+        return Some("weather");
     }
     None
 }

@@ -453,6 +453,7 @@ pub(crate) fn broker_ui4_indexed_batch_submit(
             rgba8_srgb: draw.rgba8_srgb,
             topology: crate::intel::render::ResidentScenePrimitiveTopology::TriangleList,
             point_width_px: 0,
+            line_width_1px: false,
         })
         .collect();
     let completed = vgpu::submit_ui4_indexed_batch(
@@ -569,6 +570,8 @@ mod primitive_topology_tests {
 fn decode_indexed_batch_v2(
     batch: &v::vgpu::IndexedDrawBatchV2,
 ) -> Result<alloc::vec::Vec<vgpu::Ui4IndexedBatchDrawDescriptor>, i32> {
+    use v::vgpu::{INDEXED_BATCH_V2_LINE_WIDTH_1PX, INDEXED_BATCH_V2_LOAD_COLOR};
+
     let draw_count = usize::try_from(batch.draw_count).map_err(|_| -22)?;
     if draw_count == 0
         || draw_count > v::vgpu::MAX_INDEXED_BATCH_V2_SUBMIT_DRAWS
@@ -576,10 +579,13 @@ fn decode_indexed_batch_v2(
             .iter()
             .enumerate()
             .any(|(index, draw)| {
-                let width = draw.reserved & !v::vgpu::INDEXED_BATCH_V2_LOAD_COLOR;
-                (index != 0 && draw.reserved & v::vgpu::INDEXED_BATCH_V2_LOAD_COLOR != 0)
-                    || width > v::vgpu::MAX_INDEXED_DRAW_POINT_WIDTH_PX
-                    || (width != 0 && draw.topology != v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST)
+                let point_width = draw.reserved
+                    & !(INDEXED_BATCH_V2_LOAD_COLOR | INDEXED_BATCH_V2_LINE_WIDTH_1PX);
+                (index != 0 && draw.reserved & INDEXED_BATCH_V2_LOAD_COLOR != 0)
+                    || point_width > v::vgpu::MAX_INDEXED_DRAW_POINT_WIDTH_PX
+                    || (point_width != 0 && draw.topology != v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST)
+                    || (draw.reserved & INDEXED_BATCH_V2_LINE_WIDTH_1PX != 0
+                        && draw.topology != v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST)
             })
         || batch.draws[draw_count..]
             .iter()
@@ -596,7 +602,9 @@ fn decode_indexed_batch_v2(
                 base_vertex: draw.base_vertex,
                 rgba8_srgb: draw.rgba8_srgb,
                 topology: broker_primitive_topology(draw.topology)?,
-                point_width_px: draw.reserved & !v::vgpu::INDEXED_BATCH_V2_LOAD_COLOR,
+                point_width_px: draw.reserved
+                    & !(INDEXED_BATCH_V2_LOAD_COLOR | INDEXED_BATCH_V2_LINE_WIDTH_1PX),
+                line_width_1px: draw.reserved & INDEXED_BATCH_V2_LINE_WIDTH_1PX != 0,
             })
         })
         .collect::<Result<_, i32>>()
@@ -679,6 +687,31 @@ mod indexed_batch_v2_tests {
         assert!(decode_indexed_batch_v2(&batch).is_err());
         batch.draw_count = v::vgpu::MAX_INDEXED_BATCH_V2_DRAWS as u32 + 1;
         assert!(decode_indexed_batch_v2(&batch).is_err());
+    }
+
+    #[test]
+    fn one_pixel_width_is_opt_in_for_line_lists() {
+        use v::vgpu::{INDEXED_BATCH_V2_LINE_WIDTH_1PX, INDEXED_BATCH_V2_LOAD_COLOR};
+
+        let mut batch = batch();
+        batch.draws[0].topology = v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST;
+        assert!(!decode_indexed_batch_v2(&batch).unwrap()[0].line_width_1px);
+        batch.draws[0].reserved = INDEXED_BATCH_V2_LOAD_COLOR | INDEXED_BATCH_V2_LINE_WIDTH_1PX;
+        let draws = decode_indexed_batch_v2(&batch).unwrap();
+        assert!(draws[0].line_width_1px);
+        assert_eq!(draws[0].point_width_px, 0);
+
+        batch.draws[0].reserved |= 1;
+        assert!(decode_indexed_batch_v2(&batch).is_err());
+        batch.draws[0].reserved = INDEXED_BATCH_V2_LINE_WIDTH_1PX;
+        for topology in [
+            v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST,
+            v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LOOP,
+            v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        ] {
+            batch.draws[0].topology = topology;
+            assert!(decode_indexed_batch_v2(&batch).is_err());
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 //! Lilly-owned procedural Codex arrival. UI4 never writes the cursor surface.
-//! Native logo stamping uses the completed back buffer under Spirit's ordered
-//! GPU-then-CPU producer barrier, independently of the resident sprite frames.
+//! The cursor producer stamps the native tile after copying the resident sprite
+//! into its writable back buffer.
 use super::lilly::{self, LillyResidentFrame};
 use crate::ui4::{WindowId, WindowOwner};
 use spin::Mutex;
@@ -62,7 +62,7 @@ impl Stamp {
             .pending
             .is_some_and(|(seq, v)| seq == self.sequence && v == self.visual)
         {
-            return true; // canceled or replaced while the GPU was producing
+            return true; // canceled or replaced before the tile was stamped
         }
         let pitch = layout.pitch_bytes as usize;
         if layout.width != 256
@@ -78,9 +78,8 @@ impl Stamp {
         if let Some((_, _, cx, cy, 256, 256)) = anchor
             && let Some(a) = s.active.as_ref().filter(|a| a.key == visual.key)
         {
-            // Sample the native tile after the GPU has finished Lily's frame,
-            // so GPU time does not age its motion before cursor presentation.
-            // The software half must commit this exact pose at SURFLIVE too.
+            // Sample as close as possible to cursor presentation. The
+            // software half commits this exact pose at SURFLIVE too.
             visual.pose = geometry::slide(
                 a.start,
                 Point { x: cx, y: cy },
@@ -312,26 +311,8 @@ pub(super) fn shift_deadlines(paused_ms: u64) {
     }
 }
 
-/// Called by the single normal Spirit producer after its previous GPU read.
+/// Select the resident sprite and tile stamp for this copy.
 pub(super) fn source(default: LillyResidentFrame, sequence: u64) -> Option<Source> {
-    source_inner(default, sequence, None)
-}
-
-/// Sample the native tile independently of the asynchronously rendered Lily
-/// frame. Only the static Codex source underneath its final fade must match.
-pub(super) fn cached_source(
-    default: LillyResidentFrame,
-    sequence: u64,
-    rendered: LillyResidentFrame,
-) -> Option<Source> {
-    source_inner(default, sequence, Some(rendered))
-}
-
-fn source_inner(
-    default: LillyResidentFrame,
-    sequence: u64,
-    rendered: Option<LillyResidentFrame>,
-) -> Option<Source> {
     let now = trueos_time::Instant::now().as_millis();
     let (_, _, cx, cy, 256, 256) = super::marker_anchor()? else {
         return None;
@@ -349,7 +330,7 @@ fn source_inner(
     }
     a.entered = true;
     // Stage the static Codex chest under the complete tile. Its first visible
-    // presentation starts the fade clock; GPU latency cannot consume the fade.
+    // presentation starts the fade clock.
     let mut path = revealing.then_some(WISH_PATHS[0]);
     if let Some(wish) = wish {
         path = None;
@@ -385,10 +366,6 @@ fn source_inner(
         Some(path) => lilly::resident_frame(path)?,
         None => default,
     };
-    // A queued static Codex render is not proof that it is underneath this
-    // tile yet. Keep the complete tile visible until those pixels are copied
-    // into a presented frame. Ordinary movement accepts every Lily state.
-    let revealing = revealing && (wish.is_some() || rendered.is_none_or(|frame| frame == surface));
     let visual = Visual {
         key,
         pose,

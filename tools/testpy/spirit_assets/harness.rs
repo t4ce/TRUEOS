@@ -1,71 +1,11 @@
-//! Exercise the production cold loader and catalog; only DMA/cache operations
-//! are mocked. No tar/PNG decoder or legacy archive exists in this harness.
+//! Exercise the production cold loader, cursor copy, and playback catalog.
 #![allow(dead_code)]
 extern crate alloc;
-use std::sync::atomic::AtomicUsize;
-#[cfg(test)]
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
-static BUFFERS: Mutex<Vec<Arc<Mutex<Vec<u8>>>>> = Mutex::new(Vec::new());
-static WRITES: AtomicUsize = AtomicUsize::new(0);
-static FLUSHES: AtomicUsize = AtomicUsize::new(0);
 #[macro_export]
 macro_rules! log_info {
     (target: $target:expr; $($arg:tt)*) => { let _ = format_args!($($arg)*); };
 }
 pub use log_info as log_error;
-mod intel {
-    pub const fn align_up(n: usize, a: usize) -> Option<usize> {
-        match n.checked_add(a - 1) {
-            Some(v) => Some(v & !(a - 1)),
-            None => None,
-        }
-    }
-    pub mod gpgpu {
-        pub const DIRECT_RCS_PPGTT_LIMIT_BYTES: u64 = 0x1_0000_0000;
-    }
-}
-mod gpu {
-    pub mod resident {
-        pub struct ResidentDmaBuffer {
-            data: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
-        }
-        impl ResidentDmaBuffer {
-            pub fn allocate_zeroed(n: usize, a: usize) -> Option<Self> {
-                assert_eq!(a, 4096);
-                assert_eq!(n % 4096, 0);
-                let data = std::sync::Arc::new(std::sync::Mutex::new(vec![0; n]));
-                crate::BUFFERS.lock().unwrap().push(data.clone());
-                Some(Self { data })
-            }
-            pub fn phys(&self) -> u64 {
-                0x1000_0000
-            }
-            pub fn bytes(&self) -> usize {
-                self.data.lock().unwrap().len()
-            }
-            pub fn write(&self, offset: usize, src: &[u8]) -> bool {
-                assert_eq!(offset % 4096, 0);
-                assert_eq!(src.len(), 256 * 256 * 4);
-                let mut data = self.data.lock().unwrap();
-                let Some(dst) = data.get_mut(offset..offset + src.len()) else {
-                    return false;
-                };
-                dst.copy_from_slice(src);
-                crate::WRITES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                true
-            }
-            pub fn read(&self, offset:usize, dst:&mut [u8])->bool {
-                let data=self.data.lock().unwrap();
-                let Some(src)=data.get(offset..offset+dst.len()) else{return false;};
-                dst.copy_from_slice(src); true
-            }
-            pub fn flush(&self) {
-                crate::FLUSHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-        }
-    }
-}
 #[path = "@TRUEOS_ROOT@/src/spirit/lilly.rs"]
 mod lilly;
 
@@ -82,7 +22,7 @@ mod tyche {
 mod lilly_sequencer;
 
 #[test]
-fn full_pack_upload_alignment_and_legacy_playback_contract() {
+fn full_pack_cursor_copy_and_legacy_playback_contract() {
     assert!(lilly::prepare_resident_once());
     assert!(lilly::prepare_resident_once());
     let bytes = include_bytes!("@TRUEOS_ROOT@/tools/Lilly.lpak");
@@ -92,48 +32,32 @@ fn full_pack_upload_alignment_and_legacy_playback_contract() {
     for path in lilly_sequencer::frame_paths() {
         assert!(paths.contains(path), "sequencer frame missing from the embedded pack: {path}");
     }
-    assert_eq!(WRITES.load(Ordering::SeqCst), 607);
-    assert_eq!(FLUSHES.load(Ordering::SeqCst), 1);
-    assert_eq!(BUFFERS.lock().unwrap().len(), 1);
     assert_eq!(lilly::resident_frame_count(), 490);
-    let buffers = BUFFERS.lock().unwrap();
-    let data = buffers[0].lock().unwrap();
-    assert_eq!(data.len(), 607 * 256 * 256 * 4);
+    let mut cursor = vec![0; 256 * 256 * 4];
     for (i, info) in decoded.frames.iter().enumerate() {
         let surface = lilly::resident_frame(&info.path).unwrap();
         assert_eq!(
             surface,
             lilly::resident_frame(&format!("Lilly/{}", info.path)).unwrap()
         );
-        assert_eq!(
-            (
-                surface.width,
-                surface.height,
-                surface.pitch_bytes,
-                surface.bytes
-            ),
-            (256, 256, 1024, 262144)
-        );
-        let offset = i * 262144;
-        assert_eq!(surface.phys, 0x1000_0000 + offset as u64);
-        assert_eq!(surface.gpu, 0x3000_0000 + offset as u64);
-        assert!(surface.gpu + surface.bytes as u64 <= 0x4000_0000);
-        let upload = &data[offset..offset + 262144];
+        assert!(lilly::copy_frame(surface, &mut cursor));
         let crop = decoded.cropped_rgba8(i).unwrap();
         let [_, _, w, h] = info.rect.map(usize::from);
         let left = (256 - w) / 2;
         let top = 256 - h;
         for y in 0..256 {
-            let row = &upload[y * 1024..(y + 1) * 1024];
+            let row = &cursor[y * 1024..(y + 1) * 1024];
             if y < top {
                 assert!(row.iter().all(|&v| v == 0));
                 continue;
             }
             assert!(row[..left * 4].iter().all(|&v| v == 0));
-            assert_eq!(
-                &row[left * 4..(left + w) * 4],
-                &crop[(y - top) * w * 4..(y - top + 1) * w * 4]
-            );
+            let rgba = &crop[(y - top) * w * 4..(y - top + 1) * w * 4];
+            let bgra = &row[left * 4..(left + w) * 4];
+            for (&[r, g, b, a], pixel) in rgba.as_chunks::<4>().0.iter().zip(bgra.as_chunks::<4>().0) {
+                let scale = |color| (f32::from(color) * f32::from(a) / 255.0).round() as u8;
+                assert_eq!(*pixel, [scale(b), scale(g), scale(r), a]);
+            }
             assert!(row[(left + w) * 4..].iter().all(|&v| v == 0));
         }
     }
@@ -233,6 +157,10 @@ fn full_pack_upload_alignment_and_legacy_playback_contract() {
     }
     assert_eq!(count, 70);
     assert!(lilly::resident_frame("Static_up/codex.png").is_some());
+    let frame = lilly::resident_frame("Static_up/codex.png").unwrap();
+    let mut short = [12; 32];
+    assert!(!lilly::copy_frame(frame, &mut short));
+    assert_eq!(short, [12; 32]);
     for n in 2..=8 {
         assert!(lilly::resident_frame(&format!("Static_up/wish-c/frame_{n:02}.png")).is_some());
     }
@@ -242,6 +170,6 @@ fn full_pack_upload_alignment_and_legacy_playback_contract() {
     let loader = include_str!("@TRUEOS_ROOT@/src/spirit/lilly.rs");
     assert!(!loader.contains("Lilly.tar.lz4"));
     println!(
-        "607 exact bottom-centered DMA uploads; all 70 legacy keys and 490 logical frame slots retain metadata/timing/repeats; no legacy archive dependency"
+        "607 exact bottom-centered cursor copies in premultiplied BGRA; all 70 legacy keys and 490 logical frame slots retain metadata/timing/repeats"
     );
 }

@@ -126,12 +126,11 @@ mod spirit {
     pub fn source(seq: u64) -> Option<codex_handoff::Source> {
         codex_handoff::source(lilly::resident_frame("Static_up/static.png")?, seq)
     }
-    pub fn cached_source(
+    pub fn source_for(
         default: lilly::LillyResidentFrame,
         seq: u64,
-        rendered: lilly::LillyResidentFrame,
     ) -> Option<codex_handoff::Source> {
-        codex_handoff::cached_source(default, seq, rendered)
+        codex_handoff::source(default, seq)
     }
     pub fn render_ready() {
         codex_handoff::render_ready();
@@ -341,7 +340,7 @@ fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
     let frame = spirit::source(10).unwrap();
     assert_eq!(
         frame.surface.phys, 1,
-        "GPU receives the unmodified Lilly sprite"
+        "the cursor copies the unmodified Lilly sprite"
     );
     let layout = spirit::SpiritSurfaceLayout {
         width: 256,
@@ -355,11 +354,11 @@ fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
     }
     let before = rendered.clone();
     assert!(frame.stamp.unwrap().apply(&mut rendered, layout));
-    assert_ne!(before, rendered, "logo appears after GPU shading");
+    assert_ne!(before, rendered, "logo appears after the tile stamp");
     assert_eq!(
         &rendered[..4],
         &[20, 30, 40, 255],
-        "Lilly VFX pixels away from logo survive"
+        "pixels away from the logo survive"
     );
     assert_eq!(
         a::software_visual().unwrap(),
@@ -400,7 +399,7 @@ fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
             973 - 740,
             320,
         ),
-        "motion samples GPU retirement rather than the older submission time"
+        "motion is sampled while stamping the tile"
     );
     let mut inside_positions = vec![overlap.pose.icon.x];
     for (seq, t) in [(20, 990), (21, 1006), (22, 1023), (23, 1040)] {
@@ -465,7 +464,7 @@ fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
         fade.surface.phys, 2,
         "static Codex chest is present before fading"
     );
-    time(2700); // A slow GPU render cannot consume the fade before display.
+    time(2700); // A late cursor latch cannot consume the fade before display.
     assert!(a::fast_updates());
     let mut pixels = before.clone();
     assert!(fade.stamp.unwrap().apply(&mut pixels, layout));
@@ -568,7 +567,7 @@ fn detached_sprite_settles_and_flies_without_window_or_lilly_frame_updates() {
 }
 
 #[test]
-fn cached_tile_moves_over_every_lily_state_and_waits_for_static_pixels_before_fading() {
+fn tile_moves_over_every_lily_state_and_fades_after_the_static_frame_is_visible() {
     use spirit::codex_handoff as a;
     use spirit::lilly::resident_frame;
     CX.store(500, Ordering::SeqCst);
@@ -598,11 +597,10 @@ fn cached_tile_moves_over_every_lily_state_and_waits_for_static_pixels_before_fa
     {
         time(t);
         let requested = if i % 2 == 0 { native } else { other };
-        let rendered = if i % 2 == 0 { codex } else { native };
-        let source = spirit::cached_source(requested, 100 + i as u64, rendered).unwrap();
+        let source = spirit::source_for(requested, 100 + i as u64).unwrap();
         assert_eq!(
             source.surface, requested,
-            "the GPU may independently update Lily"
+            "each cursor copy selects its own Lily frame"
         );
         assert!(source.stamp.unwrap().apply(&mut base.clone(), layout));
         a::presented(100 + i as u64);
@@ -617,10 +615,10 @@ fn cached_tile_moves_over_every_lily_state_and_waits_for_static_pixels_before_fa
     }
     assert!(
         positions.windows(2).all(|p| p[0] < p[1]),
-        "changing cached Lily frames cannot stop the native knot's slide"
+        "changing Lily frames cannot stop the native knot's slide"
     );
     time(833);
-    let landing = spirit::cached_source(other, 110, native).unwrap();
+    let landing = spirit::source_for(other, 110).unwrap();
     assert!(landing.stamp.unwrap().apply(&mut base.clone(), layout));
     assert!(!a::needs_crossed());
     a::presented(110);
@@ -632,7 +630,7 @@ fn cached_tile_moves_over_every_lily_state_and_waits_for_static_pixels_before_fa
     let gray = (164 * 256 + 121) * 4;
     for (seq, t) in [(111, 900), (112, 1100), (113, 1300)] {
         time(t);
-        let source = spirit::cached_source(native, seq, other).unwrap();
+        let source = spirit::source_for(native, seq).unwrap();
         assert_eq!(
             source.surface, codex,
             "request the authored static Codex frame"
@@ -640,21 +638,20 @@ fn cached_tile_moves_over_every_lily_state_and_waits_for_static_pixels_before_fa
         let mut pixels = base.clone();
         assert!(source.stamp.unwrap().apply(&mut pixels, layout));
         assert_eq!(&pixels[gray..gray + 4], &[60, 66, 72, 255]);
-        a::presented(seq);
         assert!(
             !a::visual().unwrap().hidden,
-            "stale cached character pixels cannot start the fade clock"
+            "the fade clock waits for the static character frame to be visible"
         );
     }
     time(1500);
-    let source = spirit::cached_source(native, 114, codex).unwrap();
+    let source = spirit::source_for(native, 114).unwrap();
     let mut pixels = base.clone();
     assert!(source.stamp.unwrap().apply(&mut pixels, layout));
     assert_eq!(&pixels[gray..gray + 4], &[60, 66, 72, 255]);
     a::presented(114);
     assert!(a::visual().unwrap().hidden);
     time(1600);
-    let source = spirit::cached_source(native, 115, codex).unwrap();
+    let source = spirit::source_for(native, 115).unwrap();
     let mut pixels = base.clone();
     assert!(source.stamp.unwrap().apply(&mut pixels, layout));
     assert!(
@@ -663,17 +660,17 @@ fn cached_tile_moves_over_every_lily_state_and_waits_for_static_pixels_before_fa
     );
     time(1700);
     assert!(
-        spirit::cached_source(native, 116, codex)
+        spirit::source_for(native, 116)
             .unwrap()
             .stamp
             .is_none()
     );
     a::cancel(key.owner, key.window);
-    assert!(spirit::cached_source(native, 117, codex).is_none());
+    assert!(spirit::source_for(native, 117).is_none());
 }
 
 #[test]
-fn late_pristine_render_does_not_consume_the_native_flight_clock() {
+fn late_first_visible_frame_does_not_consume_the_native_flight_clock() {
     use spirit::codex_handoff as a;
     CX.store(500, Ordering::SeqCst);
     CY.store(300, Ordering::SeqCst);
@@ -691,7 +688,7 @@ fn late_pristine_render_does_not_consume_the_native_flight_clock() {
         assert_eq!(
             a::software_visual().unwrap().pose.icon,
             start,
-            "a slow first pristine render must not let the tile's flight expire"
+            "a late first visible frame must not let the tile's flight expire"
         );
         assert!(spirit::source(200).is_none());
         assert!(!a::needs_crossed());
@@ -707,10 +704,10 @@ fn late_pristine_render_does_not_consume_the_native_flight_clock() {
     let mut positions = Vec::new();
     for (i, t) in (1600..=1920).step_by(16).enumerate() {
         time(t);
-        // The worker reports cache readiness every loop; only its first
+        // The worker reports readiness after each visible frame; only its first
         // report may establish the clock, so later frames cannot restart it.
         spirit::render_ready();
-        if let Some(source) = spirit::cached_source(native, 200 + i as u64, native) {
+        if let Some(source) = spirit::source_for(native, 200 + i as u64) {
             assert!(source.stamp.unwrap().apply(&mut base.clone(), layout));
             assert!(
                 !a::needs_crossed(),

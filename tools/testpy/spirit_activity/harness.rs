@@ -37,8 +37,10 @@ mod spirit {
         include!("lilly_types.rs");
 
         pub fn resident_frame(path: &str) -> Option<LillyResidentFrame> {
-            let gpu = path.bytes().fold(0u64, |sum, byte| sum.wrapping_mul(31).wrapping_add(u64::from(byte)));
-            Some(LillyResidentFrame { phys: 0, gpu, bytes: 262144, width: 256, height: 256, pitch_bytes: 1024 })
+            let offset = path.bytes().fold(0usize, |sum, byte| {
+                sum.wrapping_mul(31).wrapping_add(usize::from(byte))
+            });
+            Some(LillyResidentFrame { offset })
         }
     }
     pub mod codex_handoff {

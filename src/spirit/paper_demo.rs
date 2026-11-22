@@ -129,7 +129,7 @@ async fn exercise(
     target: &mut Option<crate::shell3::MatrixTarget>,
     input_lease: &mut Option<crate::ui4::spirit_access::KernelOwnedInput>,
 ) -> Result<(), &'static str> {
-    if crate::r::services::shell3_font_service::laptop_context_bootstrap_enabled() {
+    if crate::r::services::shell3_font_service::laptop_native_font_preflight_required() {
         // This automatic greeting draws and types immediately. Keep its RCS
         // work out of the laptop's isolated font proof; ordinary empty Paper
         // windows do not acquire a font dependency from this diagnostic order.

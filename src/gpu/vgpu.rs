@@ -3067,6 +3067,7 @@ pub(crate) struct Ui4IndexedBatchDrawDescriptor {
     /// Zero selects the resident renderer default. Nonzero is valid only for
     /// PointList and is already bounded by the C-ABI broker.
     pub(crate) point_width_px: u32,
+    pub(crate) line_width_1px: bool,
 }
 
 pub(crate) struct Ui4IndexedBatchDescriptor {
@@ -4205,6 +4206,9 @@ pub(crate) fn submit_ui4_indexed_batch(
                 || (draw.point_width_px != 0
                     && draw.topology
                         != crate::intel::render::ResidentScenePrimitiveTopology::PointList)
+                || (draw.line_width_1px
+                    && draw.topology
+                        != crate::intel::render::ResidentScenePrimitiveTopology::LineList)
         })
     {
         return Err(VgpuError::Unsupported);
@@ -4314,13 +4318,7 @@ pub(crate) fn submit_ui4_indexed_batch(
                     );
                     indices.push(index);
                 }
-                indexed.push((
-                    indices,
-                    draw.rgba8_srgb,
-                    base_vertex,
-                    draw.topology,
-                    draw.point_width_px,
-                ));
+                indexed.push((indices, base_vertex, draw));
             }
             if vertex_count == 0 {
                 return Err(VgpuError::Unsupported);
@@ -4371,9 +4369,9 @@ pub(crate) fn submit_ui4_indexed_batch(
         (window_id, phys, producer_gpu, bytes, width, height, pitch, vertices, indexed)
     };
 
-    for (indices, _, base_vertex, topology, _) in &mut indexed {
-        materialize_ui4_line_loop(indices, *topology);
-        if *topology != crate::intel::render::ResidentScenePrimitiveTopology::TriangleList {
+    for (indices, base_vertex, draw) in &mut indexed {
+        materialize_ui4_line_loop(indices, draw.topology);
+        if draw.topology != crate::intel::render::ResidentScenePrimitiveTopology::TriangleList {
             continue;
         }
         for triangle in indices.chunks_exact_mut(3) {
@@ -4406,7 +4404,7 @@ pub(crate) fn submit_ui4_indexed_batch(
         }
     };
     let mut meshes = Vec::with_capacity(indexed.len());
-    for (indices, _, base_vertex, topology, _) in &indexed {
+    for (indices, base_vertex, draw) in &indexed {
         let local_vertex_count = indices
             .iter()
             .copied()
@@ -4431,7 +4429,7 @@ pub(crate) fn submit_ui4_indexed_batch(
         match crate::intel::render::create_resident_indexed_mesh(
             section_vertices,
             indices,
-            *topology,
+            draw.topology,
         ) {
             Ok(mesh) => meshes.push(mesh),
             Err(_) => {
@@ -4451,18 +4449,18 @@ pub(crate) fn submit_ui4_indexed_batch(
     let scene_draws: Vec<_> = meshes
         .iter()
         .zip(indexed.iter())
-        .map(|(mesh, (_, rgba, _, topology, point_width_px))| {
+        .map(|(mesh, (_, _, draw))| {
             crate::intel::render::ResidentSceneDraw {
                 depth_flags: None,
                 mesh,
-                rgba: rgba.to_le_bytes(),
+                rgba: draw.rgba8_srgb.to_le_bytes(),
                 sampled_texture: None,
                 fragment_contract:
                     crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
                 viewport_translation_px: [0.0, 0.0],
-                topology: *topology,
-                point_width_px: *point_width_px,
-                line_width_px: 0.0,
+                topology: draw.topology,
+                point_width_px: draw.point_width_px,
+                line_width_px: if draw.line_width_1px { 1.0 } else { 0.0 },
                 clip_adjacency: false,
             }
         })

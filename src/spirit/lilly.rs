@@ -4,7 +4,7 @@ extern crate alloc;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use spin::Mutex;
+use spin::Once;
 
 const LILLY_PACK: &[u8] = include_bytes!("../../tools/Lilly.lpak");
 const LILLY_SOURCES: &str = include_str!("../../tools/Lilly.sources");
@@ -13,26 +13,13 @@ const LILLY_EXPECTED_ASSETS: usize = 70;
 const LILLY_FRAMES_PER_ASSET: usize = 7;
 const LILLY_EXPECTED_LOGICAL_FRAMES: usize = LILLY_EXPECTED_ASSETS * LILLY_FRAMES_PER_ASSET;
 const LILLY_IDENTITY_SOURCE_MAP: [u8; LILLY_FRAMES_PER_ASSET] = [1, 2, 3, 4, 5, 6, 7];
-const GPU_PAGE_BYTES: usize = 4096;
-const LILLY_EXECUTION_GPU_BASE: u64 = 0x3000_0000;
-// Final256KiB is reserved for the single producer's procedural source.
-const LILLY_EXECUTION_GPU_LIMIT: u64 = 0x3ffc_0000;
-const _: () = assert!(LILLY_EXECUTION_GPU_BASE.is_multiple_of(GPU_PAGE_BYTES as u64));
-const _: () = assert!(LILLY_EXECUTION_GPU_LIMIT.is_multiple_of(GPU_PAGE_BYTES as u64));
-const _: () = assert!(LILLY_EXECUTION_GPU_BASE < LILLY_EXECUTION_GPU_LIMIT);
-const _: () =
-    assert!(LILLY_EXECUTION_GPU_LIMIT <= crate::intel::gpgpu::DIRECT_RCS_PPGTT_LIMIT_BYTES);
+const FRAME_BYTES: usize = 256 * 256 * 4;
 
-static LILLY_RESIDENT: Mutex<Option<LillyResidentAssets>> = Mutex::new(None);
+static LILLY_RESIDENT: Once<LillyResidentAssets> = Once::new();
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LillyResidentFrame {
-    pub(crate) phys: u64,
-    pub(crate) gpu: u64,
-    pub(crate) bytes: usize,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) pitch_bytes: u32,
+    offset: usize,
 }
 
 /// Default sequencing behavior described by the reviewed Lilly catalog.
@@ -107,10 +94,9 @@ struct LillyFrameEntry {
 }
 
 struct LillyResidentAssets {
-    allocation: crate::gpu::resident::ResidentDmaBuffer,
+    pixels: Vec<u8>,
     frames: Vec<LillyFrameEntry>,
     semantic_assets: Vec<LillyResidentAsset>,
-    rgba_bytes: usize,
 }
 
 #[derive(Copy, Clone)]
@@ -129,26 +115,29 @@ enum LillyLoadError {
     PackShape,
     Catalog(&'static str),
     AddressOverflow,
-    Resident(&'static str),
-    ResidentWrite,
+    ResidentAllocation,
 }
 
-/// Spirit's cold first job. The pack, aligned RGBA8 frames, DMA allocation, and
-/// engine-neutral DMA storage are established before continuous frame work.
-/// The Spirit execution PPGTT maps the physical pages under its own VA when
-/// the VFX context starts; Render is not part of this cold path.
+/// Decode into immutable cursor pixels before continuous playback.
 pub(super) fn prepare_resident_once() -> bool {
-    if LILLY_RESIDENT.lock().is_some() {
-        return true;
-    }
-
-    crate::log_info!(
-        target: "gfx";
-        "trueos-spirit: first-job start job=lilly-resident-assets source=embedded-lillyds-pack pack_bytes=0x{:X} decode=rust-xz+shared-tiles+palette-rgba8 placement=bottom-center-256x256 target=spirit-execution-ppgtt lifetime=runtime render_dependency=0\n",
-        LILLY_PACK.len(),
-    );
-    let assets = match load_resident_assets() {
-        Ok(assets) => assets,
+    match LILLY_RESIDENT.try_call_once(|| {
+        crate::log_info!(
+            target: "gfx";
+            "trueos-spirit: first-job start job=lilly-resident-assets source=embedded-lillyds-pack pack_bytes=0x{:X} decode=rust-xz+shared-tiles+palette placement=bottom-center-256x256 format=premultiplied-bgra8\n",
+            LILLY_PACK.len(),
+        );
+        let assets = load_resident_assets()?;
+        crate::log_info!(
+            target: "gfx";
+            "trueos-spirit: first-job complete job=lilly-resident-assets logical_frames={} decoded_frames={} animations={} resident_bytes=0x{:X} format=premultiplied-bgra8 storage=host lifetime=runtime\n",
+            LILLY_EXPECTED_LOGICAL_FRAMES,
+            assets.frames.len(),
+            assets.semantic_assets.len(),
+            assets.pixels.len(),
+        );
+        Ok::<_, LillyLoadError>(assets)
+    }) {
+        Ok(_) => true,
         Err(error) => {
             crate::log_error!(
                 target: "gfx";
@@ -156,29 +145,15 @@ pub(super) fn prepare_resident_once() -> bool {
                 error,
                 LILLY_PACK.len(),
             );
-            return false;
+            false
         }
-    };
-    crate::log_info!(
-        target: "gfx";
-        "trueos-spirit: first-job complete job=lilly-resident-assets logical_frames={} decoded_frames={} animations={} rgba_bytes=0x{:X} resident_bytes=0x{:X} phys=0x{:X} gpu=0x{:X} ppgtt=spirit-execution pat=0 cache=wb cpu_uploads=1 persistent=1 render_dependency=0\n",
-        LILLY_EXPECTED_LOGICAL_FRAMES,
-        assets.frames.len(),
-        assets.semantic_assets.len(),
-        assets.rgba_bytes,
-        assets.allocation.bytes(),
-        assets.allocation.phys(),
-        LILLY_EXECUTION_GPU_BASE,
-    );
-    *LILLY_RESIDENT.lock() = Some(assets);
-    true
+    }
 }
 
 /// Resolve one decoded frame without exposing the CPU mapping or allocation
 /// owner. Both archive-relative and `Lilly/`-prefixed names are accepted.
 pub(crate) fn resident_frame(name: &str) -> Option<LillyResidentFrame> {
-    let resident = LILLY_RESIDENT.lock();
-    let frames = &resident.as_ref()?.frames;
+    let frames = &LILLY_RESIDENT.get()?.frames;
     let relative = name.strip_prefix("Lilly/").unwrap_or(name);
     if let Some(frame) = frames.iter().find(|frame| frame.name == relative) {
         return Some(frame.surface);
@@ -187,13 +162,22 @@ pub(crate) fn resident_frame(name: &str) -> Option<LillyResidentFrame> {
     find_source_frame(frames, directory, index).map(|frame| frame.surface)
 }
 
-/// Copy only a frame belonging to this immutable resident allocation.
+/// Copy the already converted frame directly into the cursor back buffer.
 pub(super) fn copy_frame(frame: LillyResidentFrame, destination: &mut [u8]) -> bool {
-    let resident = LILLY_RESIDENT.lock();
-    let Some(resident) = resident.as_ref() else { return false; };
-    if destination.len() != frame.bytes || !resident.frames.iter().any(|f| f.surface == frame) { return false; }
-    let Some(offset) = frame.phys.checked_sub(resident.allocation.phys()).and_then(|v|usize::try_from(v).ok()) else { return false; };
-    resident.allocation.read(offset, destination)
+    if destination.len() != FRAME_BYTES {
+        return false;
+    }
+    let Some(resident) = LILLY_RESIDENT.get() else {
+        return false;
+    };
+    let Some(pixels) = resident
+        .pixels
+        .get(frame.offset..frame.offset + FRAME_BYTES)
+    else {
+        return false;
+    };
+    destination.copy_from_slice(pixels);
+    true
 }
 
 /// Resolve a complete resident asset by semantic identity. This is the normal
@@ -201,8 +185,7 @@ pub(super) fn copy_frame(frame: LillyResidentFrame, destination: &mut [u8]) -> b
 /// detail of the warm loader.
 pub(crate) fn resident_asset(key: &str) -> Option<LillyResidentAsset> {
     LILLY_RESIDENT
-        .lock()
-        .as_ref()?
+        .get()?
         .semantic_assets
         .iter()
         .copied()
@@ -228,8 +211,7 @@ pub(crate) fn resident_animation(key: &str) -> Option<LillyResidentAnimation> {
 
 pub(crate) fn resident_frame_count() -> usize {
     LILLY_RESIDENT
-        .lock()
-        .as_ref()
+        .get()
         .map_or(0, |_| LILLY_EXPECTED_LOGICAL_FRAMES)
 }
 
@@ -240,75 +222,43 @@ fn load_resident_assets() -> Result<LillyResidentAssets, LillyLoadError> {
     let storage_bytes = pack
         .frames
         .len()
-        .checked_mul(frame_storage_bytes(256, 256)?)
+        .checked_mul(FRAME_BYTES)
         .ok_or(LillyLoadError::AddressOverflow)?;
-
-    let storage_bytes_u64 =
-        u64::try_from(storage_bytes).map_err(|_| LillyLoadError::AddressOverflow)?;
-    if LILLY_EXECUTION_GPU_BASE
-        .checked_add(storage_bytes_u64)
-        .is_none_or(|end| end > LILLY_EXECUTION_GPU_LIMIT)
-    {
-        return Err(LillyLoadError::Resident("spirit-execution-va-capacity"));
-    }
-    let allocation =
-        crate::gpu::resident::ResidentDmaBuffer::allocate_zeroed(storage_bytes, GPU_PAGE_BYTES)
-            .ok_or(LillyLoadError::Resident("spirit-resident-dma"))?;
-    let (frames, rgba_bytes) = populate_resident_frames(&allocation, pack, storage_bytes)?;
-    let semantic_assets = build_semantic_assets(frames.as_slice(), catalog.as_slice())?;
-    allocation.flush();
-    Ok(LillyResidentAssets {
-        allocation,
-        frames,
-        semantic_assets,
-        rgba_bytes,
-    })
-}
-
-fn populate_resident_frames(
-    allocation: &crate::gpu::resident::ResidentDmaBuffer,
-    pack: trueos_lily_pack::DecodedPack,
-    expected_storage_bytes: usize,
-) -> Result<(Vec<LillyFrameEntry>, usize), LillyLoadError> {
+    let mut pixels = Vec::new();
+    pixels
+        .try_reserve_exact(storage_bytes)
+        .map_err(|_| LillyLoadError::ResidentAllocation)?;
     let mut frames = Vec::with_capacity(pack.frames.len());
-    let mut offset = 0usize;
-    let frame_bytes = rgba_bytes_for(256, 256)?;
     for (index, entry) in pack.frames.iter().enumerate() {
-        let rgba = pack
+        let mut rgba = pack
             .frame_rgba8_bottom_center(index)
             .map_err(LillyLoadError::Pack)?;
-        if rgba.len() != frame_bytes || !offset.is_multiple_of(GPU_PAGE_BYTES) {
+        if rgba.len() != FRAME_BYTES {
             return Err(LillyLoadError::PackShape);
         }
-        if !allocation.write(offset, &rgba) {
-            return Err(LillyLoadError::ResidentWrite);
+        for pixel in rgba.as_chunks_mut::<4>().0 {
+            let [red, green, blue, alpha] = *pixel;
+            let premultiply = |channel| ((u16::from(channel) * u16::from(alpha) + 127) / 255) as u8;
+            *pixel = [
+                premultiply(blue),
+                premultiply(green),
+                premultiply(red),
+                alpha,
+            ];
         }
-        let phys = allocation
-            .phys()
-            .checked_add(offset as u64)
-            .ok_or(LillyLoadError::AddressOverflow)?;
-        let gpu = LILLY_EXECUTION_GPU_BASE
-            .checked_add(offset as u64)
-            .ok_or(LillyLoadError::AddressOverflow)?;
+        let offset = pixels.len();
+        pixels.extend_from_slice(&rgba);
         frames.push(LillyFrameEntry {
             name: entry.path.clone(),
-            surface: LillyResidentFrame {
-                phys,
-                gpu,
-                bytes: frame_bytes,
-                width: 256,
-                height: 256,
-                pitch_bytes: 1024,
-            },
+            surface: LillyResidentFrame { offset },
         });
-        offset = offset
-            .checked_add(frame_storage_bytes(256, 256)?)
-            .ok_or(LillyLoadError::AddressOverflow)?;
     }
-    if offset != expected_storage_bytes || offset != allocation.bytes() {
-        return Err(LillyLoadError::PackShape);
-    }
-    Ok((frames, offset))
+    let semantic_assets = build_semantic_assets(&frames, &catalog)?;
+    Ok(LillyResidentAssets {
+        pixels,
+        frames,
+        semantic_assets,
+    })
 }
 
 fn replacement_directory(directory: &str) -> Option<&'static str> {
@@ -555,16 +505,4 @@ fn split_frame_name(name: &str) -> Option<(&str, u8)> {
         return None;
     }
     Some((directory, index))
-}
-
-fn rgba_bytes_for(width: u32, height: u32) -> Result<usize, LillyLoadError> {
-    (width as usize)
-        .checked_mul(height as usize)
-        .and_then(|pixels| pixels.checked_mul(4))
-        .ok_or(LillyLoadError::AddressOverflow)
-}
-
-fn frame_storage_bytes(width: u32, height: u32) -> Result<usize, LillyLoadError> {
-    let rgba_bytes = rgba_bytes_for(width, height)?;
-    crate::intel::align_up(rgba_bytes, GPU_PAGE_BYTES).ok_or(LillyLoadError::AddressOverflow)
 }

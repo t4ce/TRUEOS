@@ -26,13 +26,17 @@ def main():
     hull_geometry = (ROOT.parent / 'TRUEOS-Buildins/hull/xxx/mod.rs').read_text()
     renderer = (ROOT / 'src/intel/render/constants.rs').read_text()
     resident_limit = int(re.search(r'RESIDENT_SCENE_MAX_DRAWS: usize = (\d+)', renderer)[1])
-    for facade in [wire, (ROOT.parent / 'TRUEOS-Buildins/vendor/trueos-v/src/vgpu.rs').read_text()]:
+    vendored_wire = (ROOT.parent / 'TRUEOS-Buildins/vendor/trueos-v/src/vgpu.rs').read_text()
+    for facade in [wire, vendored_wire]:
         assert int(re.search(r'MAX_INDEXED_BATCH_V2_SUBMIT_DRAWS: usize = (\d+)', facade)[1]) == resident_limit
+    line_width_flag = r'^pub const INDEXED_BATCH_V2_LINE_WIDTH_1PX: u32 = [^;]+;'
+    assert re.search(line_width_flag, wire, re.M)[0] == re.search(line_width_flag, vendored_wire, re.M)[0]
     gpu = (ROOT / 'src/gpu/vgpu.rs').read_text()
     primary = (ROOT / 'src/intel/render/primary.rs').read_text()
     constants = '\n'.join(re.findall(
         r'^pub const (?:PRIMITIVE_TOPOLOGY_\w+|MAX_INDEXED_BATCH_V2_DRAWS|MAX_INDEXED_BATCH_V2_SUBMIT_DRAWS|'
-        r'MAX_INDEXED_DRAW_POINT_WIDTH_PX|INDEXED_BATCH_V2_LOAD_COLOR):[^;]+;', wire, re.M))
+        r'MAX_INDEXED_DRAW_POINT_WIDTH_PX|INDEXED_BATCH_V2_LOAD_COLOR|INDEXED_BATCH_V2_LINE_WIDTH_1PX):[^;]+;',
+        wire, re.M))
     wire_types = '\n'.join(
         '#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]\n#[repr(C)]\n' + block(wire, f'pub struct {name} {{')
         for name in ['IndexedBatchDrawV2']

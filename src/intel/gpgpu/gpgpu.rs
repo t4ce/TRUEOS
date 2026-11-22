@@ -45,7 +45,6 @@ include!("operations/svg_outline.rs");
 include!("operations/solid_rects.rs");
 include!("operations/ui4.rs");
 include!("operations/surfaces.rs");
-include!("operations/spirit_vfx.rs");
 include!("operations/probes.rs");
 include!("operations/rectangle_dispatch.rs");
 include!("operations/submission_2d.rs");
@@ -73,7 +72,6 @@ include!("rcs/descriptors.rs");
 include!("rcs/commands.rs");
 include!("rcs/context.rs");
 include!("rcs/helio_retained_transform.rs");
-include!("rcs/spirit_vfx.rs");
 
 include!("operations/lz4_blocks.rs");
 include!("rcs/lz4_blocks.rs");

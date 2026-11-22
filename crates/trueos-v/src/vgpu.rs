@@ -278,7 +278,8 @@ pub const MAX_INDEXED_BATCH_V2_SUBMIT_DRAWS: usize = 340;
 /// Other draws must not set this bit. Offscreen submissions reject it.
 /// Lower bits retain the existing POINT_LIST width encoding.
 pub const INDEXED_BATCH_V2_LOAD_COLOR: u32 = 1 << 31;
-
+/// Set in `IndexedBatchDrawV2::reserved` to rasterize a native LINE_LIST at 1 px.
+pub const INDEXED_BATCH_V2_LINE_WIDTH_1PX: u32 = 1 << 30;
 
 /// Largest integer point width accepted through `IndexedBatchDrawV2::reserved`.
 /// Zero selects the renderer default; nonzero values are valid only for
@@ -362,8 +363,9 @@ pub struct IndexedBatchDrawV2 {
     pub rgba8_srgb: u32,
     pub topology: u32,
     /// POINT_LIST integer pixel width in the low bits; zero selects default.
-    /// The first draw may also set INDEXED_BATCH_V2_LOAD_COLOR for the batch.
-    /// Other topologies require zero width. Wire layout is unchanged.
+    /// LINE_LIST may set [`INDEXED_BATCH_V2_LINE_WIDTH_1PX`].
+    /// The first draw may also set [`INDEXED_BATCH_V2_LOAD_COLOR`] for the batch.
+    /// These options share the original reserved word to preserve the V2 wire layout.
     pub reserved: u32,
 }
 

@@ -27,16 +27,12 @@ mod lilly_cursor;
 mod paper_demo;
 mod codex_drop;
 pub(crate) mod codex_handoff;
-mod codex_render;
-mod background_cache;
 pub(crate) use codex_drop::{introduce_attachments, attachment_intro_input, poll_attachment_intro, cancel_attachment_intro};
 pub(crate) use paper_demo::{GREETING_GRID_HEIGHT_MM, GREETING_GRID_SCALE, GREETING_GRID_WIDTH_MM};
 pub(crate) mod lilly_protocol;
 mod lilly_sequencer;
 pub(crate) mod spirit_thoughts;
 
-#[path = "Spirit_VFX.rs"]
-pub(crate) mod spirit_vfx;
 mod window_selection;
 
 #[allow(unused_imports)]
@@ -121,19 +117,12 @@ const SPIRIT_FLIP_POLL_MS: u64 = 1;
 /// application fault.
 const SPIRIT_SURFLIVE_TIMEOUT_MS: u64 = 100;
 const SPIRIT_SURFLIVE_MAX_RETRIES: u8 = 1;
-const SPIRIT_GPU_POLL_MS: u64 = 1;
 const SPIRIT_CURSOR_MOVE_RETRY_MS: u64 = 1;
-const SPIRIT_MOVE_PORTAL_RAMP_MS: u64 = 1_000;
-const SPIRIT_MOVE_PORTAL_HOLD_MS: u64 = 1_000;
-const SPIRIT_MOVE_PORTAL_PRE_MS: u64 = SPIRIT_MOVE_PORTAL_RAMP_MS;
-const SPIRIT_MOVE_PORTAL_POST_MS: u64 = SPIRIT_MOVE_PORTAL_HOLD_MS + SPIRIT_MOVE_PORTAL_RAMP_MS;
-const SPIRIT_MOVE_PORTAL_TOTAL_MS: u64 = SPIRIT_MOVE_PORTAL_PRE_MS + SPIRIT_MOVE_PORTAL_POST_MS;
-const _: () = assert!(SPIRIT_MOVE_PORTAL_TOTAL_MS == 3_000);
 const SPIRIT_BOOT_MOVE_RIGHT_PIXELS: u32 = 512;
 const SPIRIT_RETRY_MS: u64 = 50;
-const SPIRIT_VFX_INITIAL_TRACE_FRAMES: u64 = 30;
-const SPIRIT_VFX_PERIODIC_TRACE_FRAMES: u64 = 60;
-const SPIRIT_VFX_TARGET_HZ: u64 = 30;
+const SPIRIT_LILLY_INITIAL_TRACE_FRAMES: u64 = 30;
+const SPIRIT_LILLY_PERIODIC_TRACE_FRAMES: u64 = 60;
+const SPIRIT_LILLY_TARGET_HZ: u64 = 30;
 const SPIRIT_GPU_LOGGER_TARGET_HZ: u64 = 4;
 const SPIRIT_PRESENT_FPS_WINDOW_MS: u64 = 500;
 
@@ -306,7 +295,7 @@ struct QueuedFrame {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum SpiritFrameProducer {
     External,
-    Vfx,
+    Lilly,
     GpuLogger(u64),
 }
 
@@ -333,14 +322,12 @@ struct SpiritPosition {
 struct SpiritMoveRequest {
     position: SpiritPosition,
     sequence: u64,
-    portal_transition: bool,
 }
 
 impl SpiritMoveRequest {
     const CENTERED: Self = Self {
         position: SpiritPosition::CENTERED,
         sequence: 0,
-        portal_transition: false,
     };
 }
 
@@ -487,9 +474,8 @@ pub(crate) fn write_cpu<R>(
 
 /// Return the exact cursor allocation in its actual hardware byte order.
 ///
-/// The `gpu` field is its permanent display alias; Spirit's execution PPGTT
-/// maps the same physical pages for GPGPU access. Spirit VFX writes
-/// premultiplied B,G,R,A bytes explicitly for colored layers.
+/// The `gpu` field is its permanent display alias. GPU diagnostic producers
+/// map the same physical pages for their own access.
 fn gpgpu_bgra_target(
     lease: SpiritFrameLease,
 ) -> Result<crate::intel::gpgpu::GpgpuRgba8Surface, SpiritSubmitError> {
@@ -505,26 +491,6 @@ fn gpgpu_bgra_target(
         lease.surface.pitch_bytes,
     )
     .ok_or(SpiritSubmitError::HardwareNotReady)
-}
-
-/// Seed the hidden VFX target before the GPU begins. This write is an input
-/// to the GPU producer. The optional post-GPU CPU stamp keeps its own barrier.
-fn seed_background(lease: SpiritFrameLease, sample: &background_cache::Sample) -> bool {
-    let access = {
-        let mailbox = MAILBOXES[lease.fence.id.index()].lock();
-        let Ok(frame) = matching_pending(&mailbox, lease) else {
-            return false;
-        };
-        if frame.producer != SpiritFrameProducer::Vfx
-            || require_unreleased(frame, SpiritBarrierSet::GPU).is_err()
-        {
-            return false;
-        }
-        frame.lease.surface
-    };
-    // The VFX worker owns this hidden lease until submission returns.
-    let dst = unsafe { core::slice::from_raw_parts_mut(access.virt, access.byte_len) };
-    sample.copy_into(dst, lease.layout()) && intel_cursor::spirit_cursor_flush_cpu(access).is_ok()
 }
 
 /// Publish all CPU writes and release the CPU producer bit.
@@ -548,7 +514,7 @@ pub(crate) fn release_cpu(lease: SpiritFrameLease) -> Result<(), SpiritSubmitErr
 fn release_gpgpu(
     lease: SpiritFrameLease,
     release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
-) -> Result<bool, SpiritSubmitError> {
+) -> Result<(), SpiritSubmitError> {
     if !release.matches(lease.surface.phys, lease.surface.byte_len) {
         return Err(SpiritSubmitError::InvalidGpuRelease);
     }
@@ -563,155 +529,32 @@ fn release_gpgpu(
     require_unreleased(pending, SpiritBarrierSet::GPU)?;
     pending.released = pending.released | SpiritBarrierSet::GPU;
     mailbox.last_gpgpu_release_sequence[surface_index] = release.sequence();
-    drop(mailbox);
-    Ok(crate::r::services::shell3_font_service::first_spirit_producer_retired())
+    Ok(())
 }
 
-fn submit_spirit_vfx_frame(
+/// Copy the decoded hardware-format frame into the hidden cursor buffer.
+fn submit_lilly_frame(
     id: SpiritFenceId,
-    present_fps: u32,
     source_frame: lilly::LillyResidentFrame,
-) -> Result<GpuInflight, SpiritSubmitError> {
-    // Capture eligibility before reserving the producer bits. An arrival that
-    // starts concurrently waits one frame rather than receiving a GPU-only
-    // lease for a source that needs a post-VFX CPU stamp.
-    let cpu_required = id == SpiritFenceId::FENCE_0 && codex_handoff::active();
-    let required = if cpu_required {
-        SpiritBarrierSet::CPU_AND_GPU
-    } else {
-        SpiritBarrierSet::GPU
-    };
-    let lease = acquire_frame_for(id, required, SpiritFrameProducer::Vfx)?;
-    let handoff = if cpu_required {
-        codex_handoff::source(source_frame, lease.fence.sequence)
-    } else { None };
-    let stamp = handoff.and_then(|source| source.stamp);
-    let source_frame = handoff.map_or(source_frame, |source| source.surface);
-    let target = match gpgpu_bgra_target(lease) {
-        Ok(target) => target,
-        Err(error) => {
-            cancel_pending(lease);
-            return Err(error);
-        }
-    };
-    let Some(source) = crate::intel::gpgpu::GpgpuRgba8Surface::new(
-        source_frame.phys,
-        source_frame.gpu,
-        source_frame.bytes,
-        source_frame.width,
-        source_frame.height,
-        source_frame.pitch_bytes,
-    ) else {
-        cancel_pending(lease);
-        return Err(SpiritSubmitError::HardwareNotReady);
-    };
-    let mut control = spirit_vfx_control();
-    let Some(first_claim) = crate::r::services::shell3_font_service::claim_first_spirit_producer() else {
-        cancel_pending(lease);
-        return Err(SpiritSubmitError::Busy);
-    };
-    let background = background_cache::select(control, Instant::now().as_millis());
-    let submission = match background {
-        background_cache::Selection::Cached(sample) => {
-            crate::intel::gpgpu::submit_spirit_vfx_frame_with_cached_background(
-                target, source, control, present_fps, || seed_background(lease, &sample),
-            )
-        }
-        background_cache::Selection::Clean | background_cache::Selection::Procedural => {
-            if matches!(background, background_cache::Selection::Clean) {
-                control.background_mode = 0;
-            }
-            crate::intel::gpgpu::submit_spirit_vfx_frame(target, source, control, present_fps)
-        }
-    };
-    let Some(submission) = submission else {
-        crate::r::services::shell3_font_service::cancel_first_spirit_claim(first_claim);
-        cancel_pending(lease);
-        return Err(if background_cache::baking() {
-            SpiritSubmitError::Busy
+) -> Result<SpiritFrameLease, SpiritSubmitError> {
+    let lease = acquire_frame_for(id, SpiritBarrierSet::CPU, SpiritFrameProducer::Lilly)?;
+    let result = (|| {
+        let handoff = if id == SpiritFenceId::FENCE_0 {
+            codex_handoff::source(source_frame, lease.fence.sequence)
         } else {
-            SpiritSubmitError::HardwareNotReady
-        });
-    };
-    Ok(GpuInflight {
-        lease,
-        submission,
-        source_frame,
-        polls: 0,
-        cpu_required,
-        stamp,
-    })
-}
-
-fn spirit_vfx_control() -> crate::intel::gpgpu::SpiritVfxControl {
-    let snapshot = spirit_vfx::gpu_snapshot();
-    crate::intel::gpgpu::SpiritVfxControl {
-        revision: snapshot.revision,
-        background_mode: snapshot.background_mode,
-        clock_seconds_of_day: snapshot.clock_seconds_of_day,
-        background_phase_override: snapshot.background_phase_override,
-        background_scale: snapshot.background_scale,
-        background_opacity: snapshot.opacity,
-        background_speed: snapshot.speed,
-        background_intensity: snapshot.intensity,
-        background_color_a: snapshot.color_a,
-        background_color_b: snapshot.color_b,
-        position_x: snapshot.position_x,
-        position_y: snapshot.position_y,
-        rotation_radians: snapshot.rotation_radians,
-        alpha_cutoff: snapshot.alpha_cutoff,
-        edge_fade_pixels: snapshot.edge_fade_pixels,
-        sampling: snapshot.sampling,
-        shader_mode: snapshot.shader_mode,
-        shader_parameters: snapshot.shader_parameters,
-        fx_color_a: snapshot.fx_color_a,
-        fx_color_b: snapshot.fx_color_b,
-    }
-}
-
-/// The GPU completion is the write-order proof. The CPU bit keeps this back
-/// buffer ineligible for cursor presentation until the hindsight pass flushes.
-fn release_vfx_producers(
-    producing: &GpuInflight,
-    release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
-) -> Result<bool, SpiritSubmitError> {
-    let first_retired = release_gpgpu(producing.lease, release)?;
-    if producing.cpu_required {
-        let stamped = write_cpu(producing.lease, |pixels, layout| {
-            // Capture the clean character once during the detached settlement.
-            // Subsequent native tile samples need no GPU cursor producer.
-            codex_render::capture(producing.source_frame, pixels, layout)
-                && producing.stamp.is_none_or(|stamp| stamp.apply(pixels, layout))
+            None
+        };
+        let source_frame = handoff.map_or(source_frame, |source| source.surface);
+        let copied = write_cpu(lease, |pixels, layout| {
+            lilly::copy_frame(source_frame, pixels)
+                && handoff.and_then(|source| source.stamp)
+                    .is_none_or(|stamp| stamp.apply(pixels, layout))
         })?;
-        if !stamped {
+        if !copied {
             return Err(SpiritSubmitError::InvalidCommand);
         }
-        release_cpu(producing.lease)?;
-    }
-    Ok(first_retired)
-}
-
-/// Compose a native tile sample over the last completed character rendering.
-/// Lily's next GPU job owns separate storage and cannot hold this CPU lease.
-fn submit_codex_cached_frame(
-    id: SpiritFenceId,
-    source_frame: lilly::LillyResidentFrame,
-) -> Result<(SpiritFrameLease, lilly::LillyResidentFrame), SpiritSubmitError> {
-    let lease = acquire_frame_for(id, SpiritBarrierSet::CPU, SpiritFrameProducer::Vfx)?;
-    let result = (|| {
-        let requested = write_cpu(lease, |pixels, layout| {
-            let rendered = codex_render::copy_into(pixels, layout)?;
-            let source = codex_handoff::cached_source(source_frame, lease.fence.sequence, rendered);
-            if let Some(stamp) = source.and_then(|s| s.stamp)
-                && !stamp.apply(pixels, layout)
-            {
-                return None;
-            }
-            Some(source.map_or(source_frame, |s| s.surface))
-        })?
-        .ok_or(SpiritSubmitError::InvalidCommand)?;
         release_cpu(lease)?;
-        Ok((lease, requested))
+        Ok(lease)
     })();
     if result.is_err() {
         cancel_pending(lease);
@@ -917,7 +760,7 @@ async fn run_scanrunmon(id: SpiritFenceId, destination: SpiritPosition) {
 }
 
 /// Queue an absolute Spirit movement without coupling it to either UI4's
-/// software cursors or the 60 Hz VFX producer. Repeated calls are latest-wins;
+/// software cursors or Lilly's frame cadence. Repeated calls are latest-wins;
 /// the returned fence proves that the dedicated task programmed this request
 /// or a newer superseding CUR_POS state.
 pub(crate) fn move_to(
@@ -965,7 +808,6 @@ pub(crate) fn move_by(
         y_normalized: (state.position.y_normalized + delta_y_normalized).clamp(0.0, 1.0),
     };
     state.sequence = state.sequence.saturating_add(1).max(1);
-    state.portal_transition = true;
     let request = *state;
     drop(state);
     Ok(publish_move(id, request))
@@ -994,7 +836,6 @@ fn queue_move(id: SpiritFenceId, position: SpiritPosition) -> SpiritMoveFence {
     let mut state = MOVE_STATES[id.index()].lock();
     state.position = position;
     state.sequence = state.sequence.saturating_add(1).max(1);
-    state.portal_transition = true;
     let request = *state;
     drop(state);
     publish_move(id, request)
@@ -1010,8 +851,7 @@ fn publish_move(id: SpiritFenceId, request: SpiritMoveRequest) -> SpiritMoveFenc
 }
 
 fn resignal_current_move(id: SpiritFenceId) {
-    let mut request = *MOVE_STATES[id.index()].lock();
-    request.portal_transition = MOVE_APPLIED[id.index()].load(Ordering::Acquire) < request.sequence;
+    let request = *MOVE_STATES[id.index()].lock();
     MOVE_SIGNALS[id.index()].signal(request);
 }
 
@@ -1057,19 +897,7 @@ struct Inflight {
     retries: u8,
 }
 
-struct GpuInflight {
-    lease: SpiritFrameLease,
-    submission: crate::intel::gpgpu::SpiritVfxSubmission,
-    source_frame: lilly::LillyResidentFrame,
-    polls: u32,
-    cpu_required: bool,
-    stamp: Option<codex_handoff::Stamp>,
-}
-
-/// Low-cost display-rate feedback for the shader status dot. Only completed
-/// cursor-plane SURFLIVE transitions count; GuC admission and producer-marker
-/// retirement do not. Fixed half-second windows are intentional here: this is
-/// a presentation health hint, not frame-time instrumentation.
+/// Measure visible cursor frames over a half-second window using SURFLIVE.
 struct SpiritPresentationRate {
     window_started: Option<Instant>,
     visible_frames: u32,
@@ -1081,7 +909,7 @@ impl SpiritPresentationRate {
         Self {
             window_started: None,
             visible_frames: 0,
-            estimate_fps: SPIRIT_VFX_TARGET_HZ as u32,
+            estimate_fps: SPIRIT_LILLY_TARGET_HZ as u32,
         }
     }
 
@@ -1112,7 +940,7 @@ impl SpiritPresentationRate {
 }
 
 /// Independent Spirit motion executor. It consumes only Spirit's own
-/// latest-state signal and is deliberately absent from the VFX frame loop and
+/// latest-state signal and is deliberately absent from Lilly's frame loop and
 /// UI4's software-cursor input/presentation path.
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn spirit_cursor_task(worker_index: u8) {
@@ -1157,22 +985,9 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
             let destination = *SCANRUNMON_DESTINATION.lock();
             run_scanrunmon(id, destination).await;
             request.position = destination;
-            request.portal_transition = false;
         }
 
-        // Sequence zero is the boot-time centered state, not a caller-issued
-        // move. Every real request gets the fixed portal transition while
-        // retaining the API's existing latest-wins destination semantics.
-        let portal_transition = request.portal_transition && request.sequence != 0;
-        if portal_transition {
-            spirit_vfx::set_move_portal_transition(true);
-            Timer::after(Duration::from_millis(SPIRIT_MOVE_PORTAL_PRE_MS)).await;
-            while let Some(latest) = MOVE_SIGNALS[id.index()].try_take() {
-                request = latest;
-            }
-        }
-
-        let applied = loop {
+        loop {
             while let Some(latest) = MOVE_SIGNALS[id.index()].try_take() {
                 request = latest;
             }
@@ -1211,7 +1026,7 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
                     if request.sequence <= 30 || request.sequence.is_multiple_of(600) {
                         crate::log_trace!(
                             target: "gfx";
-                            "trueos-spirit: cursor move applied fence={} pipe={} move_sequence={} pos={}x{} normalized={:.5},{:.5} owner=spirit-cursor-task transition={} pre_ms={} post_ms={}\n",
+                            "trueos-spirit: cursor move applied fence={} pipe={} move_sequence={} pos={}x{} normalized={:.5},{:.5} owner=spirit-cursor-task\n",
                             id.index(),
                             pipe_name(id),
                             request.sequence,
@@ -1219,12 +1034,9 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
                             y,
                             request.position.x_normalized,
                             request.position.y_normalized,
-                            portal_transition,
-                            u64::from(portal_transition) * SPIRIT_MOVE_PORTAL_PRE_MS,
-                            u64::from(portal_transition) * SPIRIT_MOVE_PORTAL_POST_MS,
                         );
                     }
-                    break true;
+                    break;
                 }
                 Err(
                     error @ (intel_cursor::SpiritCursorError::HardwareNotReady
@@ -1253,19 +1065,12 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
                         request.sequence,
                         error,
                     );
-                    break false;
+                    break;
                 }
             }
-        };
+        }
 
-        if portal_transition && applied {
-            Timer::after(Duration::from_millis(SPIRIT_MOVE_PORTAL_POST_MS)).await;
-        }
-        if portal_transition {
-            spirit_vfx::set_move_portal_transition(false);
-        }
         if SCANRUNMON_STATE.load(Ordering::Acquire) == 1 {
-            request.portal_transition = false;
             continue;
         }
         // Both signals are consumed by Spirit's single CUR_POS owner. A scan
@@ -1286,8 +1091,6 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
         .await;
         if let Some(next) = next {
             request = next;
-        } else {
-            request.portal_transition = false;
         }
     }
 }
@@ -1314,7 +1117,7 @@ pub(crate) async fn spirit_worker_task(worker_index: u8) {
     WORKER_FENCE_BINDINGS[worker_index as usize].store(id.0, Ordering::Release);
     let lilly_ready = worker_index != 0 || lilly::prepare_resident_once();
     crate::log!(
-        "trueos-spirit: worker={} bound fence={} pipe={} carrier_slot={} expected_carrier_slot={} selection=complete-scanout-1to1-cursor-bank pool-active={} first_job=lilly-resident-assets lilly_ready={} route=guc-spirit-vfx-optional-background+sprite->spirit-cursor-backbuffer->cur-base default=clean-lilly/one-walker producer_release=guc-post-sync display_release=cursor-surflive gpu_admission=guc-context mode=continuous initial_trace_frames={} target_hz={} ui4_publish=0\n",
+        "trueos-spirit: worker={} bound fence={} pipe={} carrier_slot={} expected_carrier_slot={} selection=complete-scanout-1to1-cursor-bank pool-active={} first_job=lilly-resident-assets lilly_ready={} route=decoded-bgra->cpu-copy->spirit-cursor-backbuffer->cur-base background_vfx=0 sprite_vfx=0 producer_release=cpu-cache-flush display_release=cursor-surflive mode=continuous initial_trace_frames={} target_hz={} ui4_publish=0\n",
         worker_index,
         id.index(),
         pipe_name(id),
@@ -1322,8 +1125,8 @@ pub(crate) async fn spirit_worker_task(worker_index: u8) {
         crate::workers::AP1_UI_SERVICE_SLOT,
         SPIRIT_WORKER_POOL_LIMIT,
         lilly_ready as u8,
-        SPIRIT_VFX_INITIAL_TRACE_FRAMES,
-        SPIRIT_VFX_TARGET_HZ,
+        SPIRIT_LILLY_INITIAL_TRACE_FRAMES,
+        SPIRIT_LILLY_TARGET_HZ,
     );
     spirit_cursor_worker_loop(id).await;
 }
@@ -1366,24 +1169,16 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
         );
         Timer::after(Duration::from_millis(SPIRIT_RETRY_MS)).await;
     }
-    if crate::r::services::shell3_font_service::laptop_context_bootstrap_enabled() {
-        crate::log_important!(target: "gfx";
-            "trueos-spirit: context-bootstrap fence={} order=normal-first-producer-then-native-font-then-normal-producers initial_context=restore-inhibited cursor_task=independent input=active\n",
-            fence_index);
-    }
     bringup_diag::stage(id, "waiting-for-resident-source");
 
-    let mut retained_normal: Option<QueuedFrame> = None;
     let mut retained_gpu_logger: Option<QueuedFrame> = None;
     let mut inflight: Option<Inflight> = None;
-    let mut gpu_inflight: Option<GpuInflight> = None;
     let mut rearm_retry: Option<QueuedFrame> = None;
     let mut stream_queued_frames = 0u64;
     let mut stream_next_deadline = Instant::now();
     let mut stream_cadence_phase = 0u64;
     let mut gpu_logger_cadence_phase = 0u64;
     let mut presentation_rate = SpiritPresentationRate::new();
-    let mut stream_aborted = false;
     let mut boot_move_queued = false;
     let mut arm_deferred_polls = 0u32;
     let mut package_next_boundary = Instant::now();
@@ -1393,37 +1188,9 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
     let mut gpu_logger_pause_started: Option<Instant> = None;
     let mut gpu_logger_next_deadline = Instant::now();
     let mut gpu_logger_frames = 0u64;
-    let mut codex_was_active = false;
-    let mut codex_cleanup = false;
     loop {
         let package_now = Instant::now();
         let gpu_logger_snapshot = gpu_logger::active_snapshot();
-        if id == SpiritFenceId::FENCE_0 {
-            let active = codex_handoff::active();
-            if active && !codex_was_active {
-                codex_render::invalidate();
-                codex_cleanup = false;
-            } else if !active && codex_was_active {
-                // Remove the post-pass tile promptly on restore/completion,
-                // even if a character GPU job is still retiring offscreen.
-                codex_cleanup = true;
-            }
-            codex_was_active = active;
-            let staged_pending = codex_render::busy();
-            if let Err(error) = codex_render::poll() {
-                if !stream_aborted {
-                    crate::log_error!(target: "gfx";
-                        "trueos-spirit: Codex character producer failed error={:?} action=retain-last-surflive\n",
-                        error);
-                }
-                stream_aborted = true;
-            }
-            if staged_pending && !codex_render::busy() && !active {
-                // Display the final clean snapshot before returning to the
-                // ordinary direct GPU producer.
-                codex_cleanup = true;
-            }
-        }
         match (gpu_logger_pause_started, gpu_logger_snapshot) {
             (None, Some(snapshot)) => {
                 gpu_logger_pause_started = Some(package_now);
@@ -1432,7 +1199,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                 gpu_logger_frames = 0;
                 crate::log_info!(
                     target: "gfx";
-                    "trueos-spirit: gpu-logger override entering source={:?} generation={} ttl_remaining_ms={} extent=256x256 carrier=hardware-cursor producer=direct-gpu-worklist normal_sprite_vfx=suppressed ui4_publish=0 composition=0\n",
+                    "trueos-spirit: gpu-logger override entering source={:?} generation={} ttl_remaining_ms={} extent=256x256 carrier=hardware-cursor producer=direct-gpu-worklist lilly_copy=paused ui4_publish=0 composition=0\n",
                     snapshot.source,
                     snapshot.generation,
                     snapshot.remaining_ms,
@@ -1451,18 +1218,12 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                 gpu_logger_pause_started = None;
                 crate::log_info!(
                     target: "gfx";
-                    "trueos-spirit: gpu-logger override released frames={} paused_ms={} action=resume-lilly-sprite-vfx state=preserved cadence=deadline-shifted\n",
+                    "trueos-spirit: gpu-logger override released frames={} paused_ms={} action=resume-lilly-copy state=preserved cadence=deadline-shifted\n",
                     gpu_logger_frames,
                     paused.as_millis(),
                 );
             }
             _ => {}
-        }
-        if id == SpiritFenceId::FENCE_0
-            && gpu_logger_snapshot.is_none()
-            && codex_render::ready()
-        {
-            codex_handoff::render_ready();
         }
         if gpu_logger_snapshot.is_none()
             && id == SpiritFenceId::FENCE_0
@@ -1491,104 +1252,18 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
             }
         }
 
-        if let Some(mut producing) = gpu_inflight.take() {
-            match crate::intel::gpgpu::poll_spirit_vfx_submission(producing.submission) {
-                crate::intel::gpgpu::SpiritVfxCompletion::Pending => {
-                    producing.polls = producing.polls.saturating_add(1);
-                    bringup_diag::producer_pending(id, producing.polls);
-                    gpu_inflight = Some(producing);
-                    Timer::after(Duration::from_millis(SPIRIT_GPU_POLL_MS)).await;
-                    continue;
-                }
-                crate::intel::gpgpu::SpiritVfxCompletion::Complete(release) => {
-                    let first_retired = match release_vfx_producers(&producing, release) {
-                        Ok(first_retired) => first_retired,
-                        Err(error) => {
-                            cancel_pending(producing.lease);
-                            gpu_inflight = None;
-                            stream_aborted = true;
-                            bringup_diag::failed(id, "producer-release-rejected");
-                            crate::log_error!(
-                                target: "gfx";
-                                "trueos-spirit: vfx producer release rejected frame={} shader_frame={} tag={} fence={} sequence={} polls={} error={:?} action=abort-stream\n",
-                                stream_queued_frames,
-                                producing.submission.frame(),
-                                producing.submission.tag(),
-                                fence_index,
-                                producing.lease.fence.sequence,
-                                producing.polls,
-                                error,
-                            );
-                            continue;
-                        }
-                    };
-                    if spirit_should_trace_frame(stream_queued_frames) {
-                        crate::log_info!(
-                            target: "gfx";
-                            "trueos-spirit: vfx producer released frame={} shader_frame={} tag={} fence={} sequence={} polls={} cpu_hindsight={} gate=all-required-producers next=cursor-arm\n",
-                            stream_queued_frames,
-                            producing.submission.frame(),
-                            producing.submission.tag(),
-                            fence_index,
-                            producing.lease.fence.sequence,
-                            producing.polls,
-                            producing.cpu_required as u8,
-                        );
-                    }
-                    gpu_inflight = None;
-                    bringup_diag::released(id);
-                    if first_retired {
-                        bringup_diag::stage(id, "waiting-for-native-font-after-first-producer");
-                        crate::log_important!(target: "gfx";
-                            "trueos-spirit: context-bootstrap fence={} first_retired=1 tag={} frame={} proof=normal-producer-marker-plus-saved-head-and-mailbox-release next=native-font\n",
-                            fence_index, producing.submission.tag(), producing.submission.frame());
-                        match crate::r::services::shell3_font_service::prepare().await {
-                            Ok(()) => crate::log_important!(target: "gfx";
-                                "trueos-spirit: context-bootstrap fence={} atlas_ready=1 source=native-r8 resumed=normal-spirit-producers context=existing-persistent-carrier restore_inhibit=see-saved-context-evidence proof_pending=post-atlas-retirement\n",
-                                fence_index),
-                            Err(reason) => {
-                                stream_aborted = true;
-                                bringup_diag::failed(id, "native-font-after-first-producer-failed");
-                                crate::log_important!(target: "gfx";
-                                    "trueos-spirit: context-bootstrap fence={} atlas_ready=0 reason={} resumed=0 action=retain-first-frame-stop-future-compute\n",
-                                    fence_index, reason);
-                            }
-                        }
-                    }
-                    continue;
-                }
-                completion @ (crate::intel::gpgpu::SpiritVfxCompletion::Failed
-                | crate::intel::gpgpu::SpiritVfxCompletion::InvalidSubmission) => {
-                    cancel_pending(producing.lease);
-                    gpu_inflight = None;
-                    stream_aborted = true;
-                    bringup_diag::failed(id, "producer-completion-failed");
-                    crate::log_error!(
-                        target: "gfx";
-                        "trueos-spirit: vfx producer failed frame={} shader_frame={} tag={} fence={} sequence={} polls={} completion={:?} action=abort-stream-retain-last-surflive\n",
-                        stream_queued_frames,
-                        producing.submission.frame(),
-                        producing.submission.tag(),
-                        fence_index,
-                        producing.lease.fence.sequence,
-                        producing.polls,
-                        completion,
-                    );
-                    continue;
-                }
-            }
-        }
-
         if let Some(mut active) = inflight {
             match intel_cursor::spirit_cursor_poll(active.flip) {
                 Ok(intel_cursor::SpiritCursorFlipState::Visible { ctl, base, live }) => {
                     bringup_diag::display(id, true, active.polls, ctl, base, live);
                     if active.completes_fence {
                         complete_frame(active.frame.lease);
-                        if active.frame.producer == SpiritFrameProducer::Vfx {
+                        if active.frame.producer == SpiritFrameProducer::Lilly {
                             presentation_rate.observe_surflive(Instant::now());
-                            codex_handoff::presented(active.frame.lease.fence.sequence);
-                            background_cache::start();
+                            if id == SpiritFenceId::FENCE_0 {
+                                codex_handoff::render_ready();
+                                codex_handoff::presented(active.frame.lease.fence.sequence);
+                            }
                         }
                         if !boot_move_queued {
                             boot_move_queued = true;
@@ -1600,7 +1275,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                                     match move_by(id, delta_x, 0.0) {
                                         Ok(move_fence) => crate::log_info!(
                                             target: "gfx";
-                                            "trueos-spirit: boot move queued fence={} pipe={} move_sequence={} direction=right pixels={} delta_normalized={:.8} trigger=first-cursor-surflive transition=portal-350+150ms\n",
+                                            "trueos-spirit: boot move queued fence={} pipe={} move_sequence={} direction=right pixels={} delta_normalized={:.8} trigger=first-cursor-surflive\n",
                                             id.index(),
                                             pipe_name(id),
                                             move_fence.sequence,
@@ -1627,7 +1302,7 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                                 ),
                             }
                         }
-                        if active.frame.producer == SpiritFrameProducer::Vfx
+                        if active.frame.producer == SpiritFrameProducer::Lilly
                             && spirit_should_trace_frame(stream_queued_frames)
                         {
                             crate::log_info!(
@@ -1644,11 +1319,11 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                                 presentation_rate.estimate_fps(),
                                 SPIRIT_PRESENT_FPS_WINDOW_MS,
                             );
-                            if stream_queued_frames == SPIRIT_VFX_INITIAL_TRACE_FRAMES {
+                            if stream_queued_frames == SPIRIT_LILLY_INITIAL_TRACE_FRAMES {
                                 crate::log!(
-                                    "trueos-spirit: vfx initial window complete frames={} target_hz={} present_fps={} sample_window_ms={} action=continue-streaming final=cursor-plane-surflive pipe={} buffer={}\n",
+                                    "trueos-spirit: Lilly initial window complete frames={} target_hz={} present_fps={} sample_window_ms={} action=continue-streaming final=cursor-plane-surflive pipe={} buffer={}\n",
                                     stream_queued_frames,
-                                    SPIRIT_VFX_TARGET_HZ,
+                                    SPIRIT_LILLY_TARGET_HZ,
                                     presentation_rate.estimate_fps(),
                                     SPIRIT_PRESENT_FPS_WINDOW_MS,
                                     pipe_name(id),
@@ -1659,13 +1334,8 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                     } else {
                         finish_rearm(id);
                     }
-                    match active.frame.producer {
-                        SpiritFrameProducer::GpuLogger(_) => {
-                            retained_gpu_logger = Some(active.frame);
-                        }
-                        SpiritFrameProducer::External | SpiritFrameProducer::Vfx => {
-                            retained_normal = Some(active.frame);
-                        }
+                    if matches!(active.frame.producer, SpiritFrameProducer::GpuLogger(_)) {
+                        retained_gpu_logger = Some(active.frame);
                     }
                     inflight = None;
                     continue;
@@ -1807,12 +1477,8 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
             Some((frame, true))
         } else if let Some(frame) = rearm_retry.take() {
             Some((frame, false))
-        } else if (stream_aborted || gpu_logger_snapshot.is_some())
-            && let Some(frame) = (if gpu_logger_snapshot.is_some() {
-                retained_gpu_logger
-            } else {
-                retained_normal
-            })
+        } else if gpu_logger_snapshot.is_some()
+            && let Some(frame) = retained_gpu_logger
             && matches!(intel_cursor::spirit_cursor_rearm_needed(fence_index), Ok(true))
             && begin_rearm(id)
         {
@@ -1894,122 +1560,49 @@ async fn spirit_cursor_worker_loop(id: SpiritFenceId) {
                 Timer::after(Duration::from_millis(SPIRIT_RETRY_MS)).await;
                 continue;
             }
-            if !stream_aborted {
-                if Instant::now() < stream_next_deadline {
-                    Timer::at(stream_next_deadline).await;
-                    continue;
-                }
-                let source_frame = package_active
-                    .as_ref()
-                    .map(|scheduled| {
-                        let elapsed_ms = Instant::now()
-                            .saturating_duration_since(package_started)
-                            .as_millis();
-                        scheduled.frame_at_elapsed(elapsed_ms)
-                    })
-                    .or_else(|| {
-                        // A clip boundary cannot interrupt the native tile.
-                        // Slide over the last Lily frame until her next is ready.
-                        (id == SpiritFenceId::FENCE_0 && codex_handoff::active())
-                            .then(codex_render::current_source)
-                            .flatten()
-                    });
-                let Some(source_frame) = source_frame else {
-                    Timer::after(Duration::from_millis(SPIRIT_IDLE_POLL_MS)).await;
-                    continue;
-                };
-                if stream_queued_frames == 0
-                    && crate::r::services::shell3_font_service::spirit_font_first_required()
-                {
-                    if let Err(reason) = crate::r::services::shell3_font_service::prepare().await {
-                        bringup_diag::failed(id, "native-font-before-first-producer-failed");
-                        crate::log_important!(target: "gfx";
-                            "trueos-spirit: context-bootstrap fence={} first_retired=0 atlas_ready=0 reason={} resumed=0 action=stop-before-first-compute\n",
-                            fence_index, reason);
-                        return;
-                    }
-                }
-                if id == SpiritFenceId::FENCE_0
-                    && codex_render::ready()
-                    && (codex_handoff::active() || codex_cleanup || codex_render::busy())
-                {
-                    match submit_codex_cached_frame(id, source_frame) {
-                        Ok((lease, requested)) => {
-                            codex_cleanup = false;
-                            advance_spirit_deadline(
-                                &mut stream_next_deadline,
-                                &mut stream_cadence_phase,
-                                codex_handoff::fast_updates(),
-                            );
-                            stream_queued_frames = stream_queued_frames.saturating_add(1);
-                            bringup_diag::submitted(id, lease.fence.sequence);
-                            bringup_diag::released(id);
-                            if codex_was_active
-                                && let Err(error) = codex_render::update(
-                                    requested,
-                                    spirit_vfx_control(),
-                                    presentation_rate.estimate_fps(),
-                                )
-                            {
-                                stream_aborted = true;
-                                crate::log_error!(target: "gfx";
-                                    "trueos-spirit: Codex character update failed error={:?} action=retain-last-surflive\n",
-                                    error);
-                            }
-                            continue;
-                        }
-                        Err(error) => {
-                            crate::log_warn!(target: "gfx";
-                                "trueos-spirit: Codex native sample deferred error={:?}\n", error);
-                            Timer::after(Duration::from_millis(SPIRIT_IDLE_POLL_MS)).await;
-                            continue;
-                        }
-                    }
-                }
-                match submit_spirit_vfx_frame(id, presentation_rate.estimate_fps(), source_frame) {
-                    Ok(producing) => {
-                        let fast_handoff = id == SpiritFenceId::FENCE_0 && codex_handoff::fast_updates();
-                        advance_spirit_deadline(
-                            &mut stream_next_deadline,
-                            &mut stream_cadence_phase,
-                            fast_handoff,
-                        );
-                        stream_queued_frames = stream_queued_frames.saturating_add(1);
-                        bringup_diag::submitted(id, producing.lease.fence.sequence);
-                        if spirit_should_trace_frame(stream_queued_frames) {
-                            crate::log_info!(
-                                target: "gfx";
-                                "trueos-spirit: vfx stream submitted frame={} shader_frame={} tag={} fence={} sequence={} target_hz={} present_fps={} sample_window_ms={} cadence=deadline-paced/no-catch-up issuer=one-shot completion=tag-poll/yield gate=guc-context producer-release=guc-post-sync display-release=surflive mode=continuous artifacts=optional-background+sprite default=clean-lilly\n",
-                                stream_queued_frames,
-                                producing.submission.frame(),
-                                producing.submission.tag(),
-                                fence_index,
-                                producing.lease.fence.sequence,
-                                SPIRIT_VFX_TARGET_HZ,
-                                presentation_rate.estimate_fps(),
-                                SPIRIT_PRESENT_FPS_WINDOW_MS,
-                            );
-                        }
-                        gpu_inflight = Some(producing);
-                        continue;
-                    }
-                    Err(SpiritSubmitError::Busy) if background_cache::baking() => {
-                        Timer::after(Duration::from_millis(SPIRIT_GPU_POLL_MS)).await;
-                        continue;
-                    }
-                    Err(error) => {
-                        crate::log_warn!(
-                            target: "gfx";
-                            "trueos-spirit: vfx stream admission deferred frame={} error={:?}\n",
-                            stream_queued_frames.saturating_add(1),
-                            error,
-                        );
-                    }
-                }
-                Timer::after(Duration::from_millis(SPIRIT_RETRY_MS)).await;
+            if Instant::now() < stream_next_deadline {
+                Timer::at(stream_next_deadline).await;
                 continue;
             }
-            Timer::after(Duration::from_millis(SPIRIT_IDLE_POLL_MS)).await;
+            let Some(scheduled) = package_active.as_ref() else {
+                Timer::after(Duration::from_millis(SPIRIT_IDLE_POLL_MS)).await;
+                continue;
+            };
+            let elapsed_ms = Instant::now()
+                .saturating_duration_since(package_started)
+                .as_millis();
+            let source_frame = scheduled.frame_at_elapsed(elapsed_ms);
+            match submit_lilly_frame(id, source_frame) {
+                Ok(lease) => {
+                    let fast_handoff = id == SpiritFenceId::FENCE_0 && codex_handoff::fast_updates();
+                    advance_spirit_deadline(
+                        &mut stream_next_deadline,
+                        &mut stream_cadence_phase,
+                        fast_handoff,
+                    );
+                    stream_queued_frames = stream_queued_frames.saturating_add(1);
+                    bringup_diag::submitted(id, lease.fence.sequence);
+                    bringup_diag::released(id);
+                    if spirit_should_trace_frame(stream_queued_frames) {
+                        crate::log_info!(target: "gfx";
+                            "trueos-spirit: Lilly cursor copy frame={} fence={} sequence={} bytes={} release=cpu-cache-flush next=cursor-arm\n",
+                            stream_queued_frames,
+                            fence_index,
+                            lease.fence.sequence,
+                            lease.layout().byte_len,
+                        );
+                    }
+                    continue;
+                }
+                Err(error) => {
+                    crate::log_warn!(target: "gfx";
+                        "trueos-spirit: Lilly cursor copy deferred frame={} error={:?}\n",
+                        stream_queued_frames.saturating_add(1),
+                        error,
+                    );
+                }
+            }
+            Timer::after(Duration::from_millis(SPIRIT_RETRY_MS)).await;
             continue;
         };
         match intel_cursor::spirit_cursor_arm(frame.lease.surface) {
@@ -2146,15 +1739,15 @@ fn finish_rearm(id: SpiritFenceId) {
     MAILBOXES[id.index()].lock().rearming = false;
 }
 
-fn spirit_vfx_frame_period(phase: &mut u64) -> Duration {
-    spirit_frame_period(phase, SPIRIT_VFX_TARGET_HZ)
+fn spirit_lilly_frame_period(phase: &mut u64) -> Duration {
+    spirit_frame_period(phase, SPIRIT_LILLY_TARGET_HZ)
 }
 
 fn advance_spirit_deadline(deadline: &mut Instant, phase: &mut u64, fast_handoff: bool) {
     let period = if fast_handoff {
         spirit_frame_period(phase, 60)
     } else {
-        spirit_vfx_frame_period(phase)
+        spirit_lilly_frame_period(phase)
     };
     let scheduled = *deadline + period;
     let now = Instant::now();
@@ -2181,8 +1774,8 @@ fn spirit_frame_period(phase: &mut u64, hz: u64) -> Duration {
 }
 
 fn spirit_should_trace_frame(frame: u64) -> bool {
-    frame <= SPIRIT_VFX_INITIAL_TRACE_FRAMES
-        || frame.is_multiple_of(SPIRIT_VFX_PERIODIC_TRACE_FRAMES)
+    frame <= SPIRIT_LILLY_INITIAL_TRACE_FRAMES
+        || frame.is_multiple_of(SPIRIT_LILLY_PERIODIC_TRACE_FRAMES)
 }
 
 fn map_cursor_error(error: intel_cursor::SpiritCursorError) -> SpiritSubmitError {

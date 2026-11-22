@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test the production Lilly pack decoder + cold loader with mocked DMA only."""
+"""Test the production Lilly pack decoder, cold loader, and cursor copy."""
 from pathlib import Path
 import json
 import os

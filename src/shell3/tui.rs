@@ -86,13 +86,10 @@ impl Route {
         self.owner.is_some() || self.native.as_ref().is_some_and(|n| n.active)
     }
 
-    fn observe_program_status(&mut self, bytes: &[u8]) -> bool {
-        let mut failed = false;
-        self.program_status.feed(bytes, |status| {
+    fn observe_program_status(&mut self, bytes: &[u8]) {
+        self.program_status.feed(bytes, |_| {
             self.codex_starting = false;
-            failed |= status == ProgramStatus::Error;
         });
-        failed
     }
 }
 struct Registry {
@@ -638,7 +635,7 @@ pub(crate) fn write(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize
 fn write_inner(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize> {
     let lease = crate::shell3::matrix_target_slot_lease(target);
     let run = crate::hv::vm_run_generation(vm)?;
-    let (responses, failed) = {
+    let responses = {
         let mut routes = ROUTES.lock();
         let route = routes
             .routes
@@ -660,11 +657,8 @@ fn write_inner(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize> {
                 .routes
                 .iter_mut()
                 .find(|route| route.lease == lease)?;
-            let failed = route.observe_program_status(&bytes[..written]);
+            route.observe_program_status(&bytes[..written]);
             drop(routes);
-            if failed {
-                crate::spirit::spirit_vfx::play_failed_vfx();
-            }
             super::service::notify_work();
             return Some(written);
         }
@@ -673,16 +667,13 @@ fn write_inner(target: &MatrixTarget, vm: u8, bytes: &[u8]) -> Option<usize> {
             .iter_mut()
             .find(|route| route.lease == lease)?;
         route.screen.feed(bytes);
-        let failed = route.observe_program_status(bytes);
+        route.observe_program_status(bytes);
         let responses = route.screen.take_responses();
         if route.screen.take_dirty() {
             routes.changed(frontend);
         }
-        (responses, failed)
+        responses
     };
-    if failed {
-        crate::spirit::spirit_vfx::play_failed_vfx();
-    }
     if !responses.is_empty() {
         crate::hv::blueprint_console_submit_stdin_for_target(vm, target, run, &responses);
     }
