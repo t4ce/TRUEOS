@@ -717,6 +717,12 @@ fn with_device_at<R>(index: usize, f: impl FnOnce(&mut dyn NetDevice) -> R) -> O
     Some(f(dev))
 }
 
+pub(crate) fn set_esp32_rtp_multicast_at(index: usize, enabled: bool) {
+    if let Some(ActiveDevice::R8125(dev)) = DEVICES.lock().get_mut(index) {
+        dev.adapter_mut().set_esp32_rtp_multicast(enabled);
+    }
+}
+
 pub(crate) fn register_usb_nic(nic: usb::UsbNic) -> Result<usize, &'static str> {
     let mut devices = DEVICES.lock();
     if devices.len() >= adapter::MAX_NET_DEVICES {

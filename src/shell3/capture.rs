@@ -1,6 +1,7 @@
 //! Persistent Shell3 capture helpers. Copy, navigation, scheduling and recording
 //! admission live here; Shell3 only launches the helper and selects its slot.
 use super::helper;
+mod audio;
 #[cfg(feature = "trueos_h264_encode_stream")]
 mod mux;
 
@@ -82,7 +83,7 @@ impl Kind {
         match self {
             Self::Pic => "PIC  screen pictures",
             Self::Vid => "VID  screen recording",
-            Self::Aud => "AUD  microphone recording",
+            Self::Aud => "AUD  ESP32 Wi-Fi microphone",
             Self::Vaud => "VAUD  screen + microphone",
         }
     }
@@ -431,7 +432,7 @@ impl Menu {
         }
     }
     fn record(&mut self, target: &MatrixTarget, seconds: u32) -> Result<(), &'static str> {
-        if matches!(self.kind, Kind::Aud | Kind::Vaud) {
+        if self.kind == Kind::Vaud {
             crate::log!("in maintainance to audio refactor\n");
             return Err("in maintainance to audio refactor");
         }
@@ -458,6 +459,11 @@ impl Menu {
             #[cfg(not(feature = "trueos_h264_encode_stream"))]
             return Err("Hardware encoder support is disabled in this build.");
         }
+        if expected == AUDIO {
+            let recording = Recording::new(disk, format!("recordings/{name}.wav"), clock, AUDIO);
+            audio::request(target.clone(), recording.clone())?;
+            self.audio = Some(recording);
+        }
         self.seconds = seconds;
         Ok(())
     }
@@ -466,7 +472,10 @@ impl Menu {
         let (first, visible, offset) = self.layout(rows);
         let mut lines = alloc::vec![String::new(); rows];
         lines[0] = self.kind.title().into();
-        if first == 4 {
+        if first == 4 && self.kind == Kind::Aud {
+            lines[2] = audio::source_status().into();
+            lines[3] = "Local mic / line-in unavailable.".into();
+        } else if first == 4 {
             lines[2] = "Choose an operation.".into();
         }
         for i in 0..visible {
@@ -486,8 +495,18 @@ impl Menu {
         } else if self.video.is_some() || self.audio.is_some() {
             let recording = self.video.as_ref().or(self.audio.as_ref()).unwrap();
             let epoch = recording.clock.epoch.load(Ordering::Acquire);
-            if epoch == 0 {
+            if epoch == 0 || now < epoch {
                 self.message.clone()
+            } else if self.kind == Kind::Aud && recording.stopped() {
+                "Saving WAV…".into()
+            } else if self.kind == Kind::Aud {
+                let started = recording.status.lock().started_ns;
+                if started == 0 {
+                    self.message.clone()
+                } else {
+                    let elapsed = now.saturating_sub(started) / 1_000_000_000;
+                    format!("{} / {} sec", elapsed.min(u64::from(self.seconds)), self.seconds)
+                }
             } else {
                 format!(
                     "{} / {} sec{}  {}",
@@ -501,6 +520,8 @@ impl Menu {
                     self.message
                 )
             }
+        } else if self.kind == Kind::Aud && first != 4 && self.message.is_empty() {
+            audio::source_status().into()
         } else {
             self.message.clone()
         };

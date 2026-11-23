@@ -536,6 +536,25 @@ impl R8125Adapter {
             | Self::multicast_hash(solicited_node)
     }
 
+    pub(crate) fn set_esp32_rtp_multicast(&mut self, enabled: bool) {
+        let mut hash = Self::bringup_multicast_hash(self.mac);
+        if enabled {
+            // IGMP general queries are sent to the IPv4 all-systems address.
+            let igmp_all_systems = [0x01, 0x00, 0x5e, 0x00, 0x00, 0x01];
+            hash |= Self::multicast_hash(igmp_all_systems)
+                | Self::multicast_hash(crate::allports::esp::RTP_MIC_MULTICAST_MAC);
+        }
+        unsafe {
+            self.mmio.write_u8(REG_CFG9346, CFG9346_UNLOCK);
+            self.mmio.write_u32(REG_MAR4, (hash >> 32) as u32);
+            self.mmio.write_u32(REG_MAR0, hash as u32);
+            self.mmio.write_u8(REG_CFG9346, CFG9346_LOCK);
+        }
+        // Keep datapath recovery pointed at the driver-owned filter.
+        self.snapshot.multicast_hash = hash;
+        publish_snapshot(self.snapshot);
+    }
+
     /// Publish an RX descriptor to the NIC with ownership last.
     ///
     /// The device must never observe `DESC_OWN` before the buffer address and

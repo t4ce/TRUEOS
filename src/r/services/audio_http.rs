@@ -1,5 +1,6 @@
 //! Listen-only HTTP playback of completed or progressive PCM.
 pub(crate) mod handoff;
+pub(crate) mod rtp_mic;
 mod sink;
 use sink::Sink;
 use spin::Mutex;
@@ -32,6 +33,7 @@ const FRAME_BYTES: usize = CHANNELS * 2;
 const BLOCK_BYTES: usize = SAMPLE_RATE * FRAME_BYTES * SEND_MS / 1000;
 const PCM_PREFIX_BYTES: usize = 4;
 const POLL_MS: u64 = 5;
+const RTP_MIC_RETRY_MS: u64 = 2_000;
 const REQUEST_IDLE_TIMEOUT_MS: u64 = 750;
 const FIXED_SEND_TIMEOUT_MS: u64 = 1_500;
 
@@ -74,8 +76,21 @@ struct AudioHttpSession {
 struct AudioHttpEndpoint {
     vnet: VNet,
     listener: Option<api::NetHandle>,
+    rtp_mic: Option<api::NetHandle>,
+    rtp_mic_retry: Instant,
     dev_idx: usize,
     sessions: Vec<AudioHttpSession>,
+}
+
+impl AudioHttpEndpoint {
+    fn retry_rtp_mic(&mut self, now: Instant) {
+        if self.rtp_mic.is_none() && now >= self.rtp_mic_retry {
+            self.rtp_mic_retry = now + Duration::from_millis(RTP_MIC_RETRY_MS);
+            if crate::net::link_state_at(self.dev_idx).is_some_and(|state| state.up) {
+                let _ = self.vnet.open_esp32_rtp_mic();
+            }
+        }
+    }
 }
 
 impl AudioHttpSession {
@@ -157,6 +172,8 @@ fn audio_http_open_endpoint(dev_idx: usize) -> Option<AudioHttpEndpoint> {
     Some(AudioHttpEndpoint {
         vnet,
         listener: None,
+        rtp_mic: None,
+        rtp_mic_retry: Instant::now(),
         dev_idx,
         sessions: Vec::new(),
     })
@@ -276,7 +293,7 @@ fn wav_stream_head() -> Vec<u8> {
     head
 }
 
-fn append_wav_header(head: &mut Vec<u8>, bytes: u32) {
+pub(crate) fn append_wav_header(head: &mut Vec<u8>, bytes: u32) {
     head.extend_from_slice(b"RIFF");
     head.extend_from_slice(&(bytes + 36).to_le_bytes());
     head.extend_from_slice(b"WAVEfmt ");
@@ -583,6 +600,8 @@ pub async fn audio_http_task() {
                                 PAGE_PATH,
                                 WAV_PATH
                             );
+                        } else if kind == api::SocketKind::Udp {
+                            endpoint.rtp_mic = Some(handle);
                         }
                     }
                     api::Event::TcpEstablished { handle, .. } => {
@@ -675,7 +694,9 @@ pub async fn audio_http_task() {
                         }
                     }
                     api::Event::Closed { handle } => {
-                        if let Some(idx) = endpoint
+                        if Some(handle) == endpoint.rtp_mic {
+                            endpoint.rtp_mic = None;
+                        } else if let Some(idx) = endpoint
                             .sessions
                             .iter()
                             .position(|session| session.handle == handle)
@@ -706,6 +727,11 @@ pub async fn audio_http_task() {
                             }
                         }
                     }
+                    api::Event::UdpPacket { handle, from, data }
+                        if Some(handle) == endpoint.rtp_mic =>
+                    {
+                        rtp_mic::receive(from, data.as_slice());
+                    }
                     api::Event::UdpPacket { .. }
                     | api::Event::UdpPacketV6 { .. }
                     | api::Event::IpPacket { .. }
@@ -715,6 +741,7 @@ pub async fn audio_http_task() {
                 }
             }
 
+            endpoint.retry_rtp_mic(now);
             let mut idx = 0usize;
             while idx < endpoint.sessions.len() {
                 let session = &mut endpoint.sessions[idx];

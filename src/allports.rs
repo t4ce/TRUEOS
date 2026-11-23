@@ -75,6 +75,12 @@ pub mod esp {
     pub const BLUEPRINT_RELAY_UDP_PORT: u16 = super::services::SWARM_BLUEPRINT_RELAY_UDP_PORT;
     pub const HTTP_UPLOAD_PORT: u16 = 8080;
     pub const TRUEOS_PEER_TCP_PORT: u16 = 32_344;
+    pub(crate) const RTP_MIC_UDP_PORT: u16 = 5004;
+    pub(crate) const RTP_MIC_MULTICAST_IPV4: [u8; 4] = [239, 255, 77, 77];
+    pub(crate) const RTP_MIC_MULTICAST_MAC: [u8; 6] = {
+        let [_, b, c, d] = RTP_MIC_MULTICAST_IPV4;
+        [0x01, 0x00, 0x5e, b & 0x7f, c, d]
+    };
 }
 
 pub mod probes {

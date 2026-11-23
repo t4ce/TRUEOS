@@ -5,6 +5,7 @@ use core::{
     sync::atomic::{AtomicU32, AtomicU64, Ordering},
 };
 
+use crate::allports::esp::{RTP_MIC_MULTICAST_IPV4, RTP_MIC_MULTICAST_MAC, RTP_MIC_UDP_PORT};
 use crate::r::net::wall::{Caller as WallCaller, Scope as WallScope, Transport as WallTransport};
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use smoltcp::iface::{
@@ -15,9 +16,11 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, PacketMeta, RxToken, TxTo
 use smoltcp::socket::{dhcpv4, icmp, raw, tcp, udp};
 use smoltcp::time::{Duration as SmolDuration, Instant};
 use smoltcp::wire::{
-    EthernetAddress, HardwareAddress, Icmpv4Packet, Icmpv4Repr, Icmpv6Packet, Icmpv6Repr,
+    EthernetAddress, EthernetFrame, EthernetProtocol, HardwareAddress, Icmpv4Packet, Icmpv4Repr,
+    Icmpv6Packet, Icmpv6Repr,
     IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, IpProtocol, IpVersion, Ipv4Address,
-    Ipv6Address, Ipv6Packet, Ipv6Repr, NdiscPrefixInfoFlags, NdiscRepr, RawHardwareAddress,
+    Ipv4Packet, Ipv4Repr, Ipv6Address, Ipv6Packet, Ipv6Repr, NdiscPrefixInfoFlags, NdiscRepr,
+    RawHardwareAddress, UdpPacket, UdpRepr,
 };
 use trueos_executor::task;
 use trueos_time::{Duration as EmbassyDuration, Timer};
@@ -672,6 +675,8 @@ pub enum NetCommand {
         port: u16,
         tx_buffer_bytes: usize,
     },
+    /// Kernel-only receiver for the fixed ESP32 group, independent of UDP binds.
+    OpenEsp32RtpMic,
     OpenTcpListen {
         port: u16,
     },
@@ -1041,6 +1046,40 @@ struct AdapterDeviceAt<'a> {
     index: usize,
     rx_buffer: &'a mut VecDeque<Vec<u8>>,
     tx_buffer: &'a mut VecDeque<Vec<u8>>,
+    esp32_rtp_mic: Option<Esp32RtpMic>,
+}
+
+#[derive(Clone, Copy)]
+struct Esp32RtpMic {
+    owner: &'static str,
+    handle: NetHandle,
+}
+
+fn esp32_rtp_datagram(frame: &[u8]) -> Option<(SocketAddr, &[u8])> {
+    if frame.get(..6)? != RTP_MIC_MULTICAST_MAC {
+        return None;
+    }
+    let ethernet = EthernetFrame::new_checked(frame).ok()?;
+    if ethernet.ethertype() != EthernetProtocol::Ipv4 {
+        return None;
+    }
+    let checksum = ChecksumCapabilities::default();
+    let ip_packet = Ipv4Packet::new_checked(ethernet.payload()).ok()?;
+    let ip = Ipv4Repr::parse(&ip_packet, &checksum).ok()?;
+    if ip.dst_addr.octets() != RTP_MIC_MULTICAST_IPV4
+        || ip.next_header != IpProtocol::Udp
+        || ip.src_addr.is_multicast()
+        || ip.src_addr.is_broadcast()
+        || ip.src_addr.is_unspecified()
+    {
+        return None;
+    }
+    let udp = UdpPacket::new_checked(ip_packet.payload()).ok()?;
+    if udp.dst_port() != RTP_MIC_UDP_PORT {
+        return None;
+    }
+    let repr = UdpRepr::parse(&udp, &ip.src_addr.into(), &ip.dst_addr.into(), &checksum).ok()?;
+    Some(((ip.src_addr, repr.src_port).into(), udp.payload()))
 }
 
 fn adapter_device_capabilities() -> DeviceCapabilities {
@@ -1076,6 +1115,13 @@ impl<'a> Device for AdapterDeviceAt<'a> {
         };
 
         Some(packet).map(|packet| {
+            // Packets have passed the packet Wall. Observe just the mic group
+            // and let smoltcp deliver the original frame to any Blueprint socket.
+            if let Some(receiver) = self.esp32_rtp_mic
+                && let Some((peer, data)) = esp32_rtp_datagram(&packet)
+            {
+                let _ = push_event(receiver.owner, udp_event(receiver.handle, peer, data));
+            }
             let new_total = NET_RX_FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
             let new_dev_total = NET_RX_FRAMES_AT
                 .get(self.index)
@@ -2019,6 +2065,7 @@ struct NetService {
     sockets: SocketSet<'static>,
     rx_buffer: VecDeque<Vec<u8>>,
     tx_buffer: VecDeque<Vec<u8>>,
+    esp32_rtp_mic: Option<Esp32RtpMic>,
     records: Vec<SocketRecord>,
     tun_records: Vec<TunRecord>,
     next_handle: AtomicU32,
@@ -2110,14 +2157,12 @@ impl NetService {
             index: device_index,
             rx_buffer: &mut rx_buffer,
             tx_buffer: &mut tx_buffer,
+            esp32_rtp_mic: None,
         };
         let mut iface = Interface::new(cfg, &mut device, now());
 
         // mDNS/DNS-SD uses IPv4 multicast.
         let _ = iface.join_multicast_group(IpAddress::Ipv4(Ipv4Address::new(224, 0, 0, 251)));
-        // Do not unconditionally join the ESP32 RTP microphone group here.
-        // Its continuous stream has no UDP consumer in this stack today; a
-        // future consumer should join it together with programming the NIC MAR.
         // Ensure the stack accepts multicast IPv6 control traffic.
         // Router Advertisements are commonly sent to ff02::1 (all-nodes).
         let _ = iface.join_multicast_group(IpAddress::Ipv6(Ipv6Address::new(
@@ -2231,6 +2276,7 @@ impl NetService {
             sockets,
             rx_buffer,
             tx_buffer,
+            esp32_rtp_mic: None,
             records: Vec::new(),
             tun_records: Vec::new(),
             next_handle: AtomicU32::new(1),
@@ -2793,6 +2839,40 @@ impl NetService {
         } else {
             Err("link down")
         }
+    }
+
+    fn open_esp32_rtp_mic(&mut self, owner: &'static str) -> Result<NetHandle, &'static str> {
+        if let Some(receiver) = self.esp32_rtp_mic {
+            return if receiver.owner == owner {
+                Ok(receiver.handle)
+            } else {
+                Err("esp32 rtp: receiver already open")
+            };
+        }
+        if !WallCaller::Kernel.permits_inbound(
+            WallTransport::Udp,
+            WallScope::Network,
+            RTP_MIC_UDP_PORT,
+        ) {
+            return Err("esp32 rtp: bind permission denied");
+        }
+        self.require_link_up().map_err(|_| "esp32 rtp: link down")?;
+        if self.iface.ipv4_addr().is_none() {
+            return Err("esp32 rtp: no IPv4 address");
+        }
+        self.iface
+            .join_multicast_group(Ipv4Addr::from(RTP_MIC_MULTICAST_IPV4))
+            .map_err(|_| "esp32 rtp: multicast join failed")?;
+        crate::net::set_esp32_rtp_multicast_at(self.device_index, true);
+        let handle = self.alloc_handle();
+        self.esp32_rtp_mic = Some(Esp32RtpMic { owner, handle });
+        Ok(handle)
+    }
+
+    fn close_esp32_rtp_mic(&mut self) {
+        self.esp32_rtp_mic = None;
+        let _ = self.iface.leave_multicast_group(Ipv4Addr::from(RTP_MIC_MULTICAST_IPV4));
+        crate::net::set_esp32_rtp_multicast_at(self.device_index, false);
     }
 
     fn open_tun(
@@ -4689,6 +4769,13 @@ impl NetService {
                 };
                 let _ = push_event(owner, event);
             }
+            NetCommand::OpenEsp32RtpMic => {
+                let event = match self.open_esp32_rtp_mic(owner) {
+                    Ok(handle) => NetEvent::Opened { handle, kind: SocketKind::Udp },
+                    Err(msg) => NetEvent::Error { msg },
+                };
+                let _ = push_event(owner, event);
+            }
             NetCommand::OpenTcpListen { port } => match self.open_tcp(owner, port) {
                 Ok(handle) => {
                     let _ = push_event(
@@ -4888,6 +4975,17 @@ impl NetService {
                 self.send_icmp_echo_v6(owner, target, seq, data);
             }
             NetCommand::Close { handle } => {
+                if let Some(receiver) = self.esp32_rtp_mic
+                    && receiver.handle == handle
+                {
+                    if receiver.owner == owner {
+                        self.close_esp32_rtp_mic();
+                        let _ = push_event(owner, NetEvent::Closed { handle });
+                    } else {
+                        let _ = push_event(owner, NetEvent::Error { msg: "bad handle" });
+                    }
+                    return;
+                }
                 if self.records.iter().any(|record| record.handle == handle && record.owner != owner)
                     || self.tun_records.iter().any(|record| record.handle == handle && record.owner != owner)
                 {
@@ -4902,6 +5000,9 @@ impl NetService {
                 }
             }
             NetCommand::ResetOwner { complete } => {
+                if self.esp32_rtp_mic.is_some_and(|receiver| receiver.owner == owner) {
+                    self.close_esp32_rtp_mic();
+                }
                 let handles: Vec<_> = self.records.iter()
                     .filter(|record| record.owner == owner)
                     .map(|record| record.handle).collect();
@@ -5217,6 +5318,7 @@ impl NetService {
                 index: device_index,
                 rx_buffer,
                 tx_buffer,
+                esp32_rtp_mic: self.esp32_rtp_mic,
             };
 
             // Always poll at least once
@@ -5519,6 +5621,10 @@ impl NetService {
         if link_up {
             self.maybe_send_icmp_ping(timestamp);
             self.maybe_send_icmp_ping_v6(timestamp);
+        } else if let Some(receiver) = self.esp32_rtp_mic
+            && push_event(receiver.owner, NetEvent::Closed { handle: receiver.handle })
+        {
+            self.close_esp32_rtp_mic();
         }
 
         work_done

@@ -39,6 +39,7 @@ use Scope::{Local, Network};
 const WEB: Rule = tcp(Network, &[], &[80, 443]);
 const HTTPS: Rule = tcp(Network, &[], &[443]);
 const IDEDIT_HTML: u16 = 42_128;
+const ESP32_RTP: Rule = udp(Network, &[5004], &[]);
 
 pub(crate) const KERNEL_SERVICES: &[AppProfile] = &[
     service("logtotcp", &[tcp(Network, &[1], &[])]),
@@ -47,7 +48,7 @@ pub(crate) const KERNEL_SERVICES: &[AppProfile] = &[
     service("http-trueosfs", &[tcp(Network, &[80], &[80])]),
     service(
         "audio-http",
-        &[tcp(Network, &[82], &[]), tcp(Local, &[82], &[])],
+        &[tcp(Network, &[82], &[]), tcp(Local, &[82], &[]), ESP32_RTP],
     ),
     service(
         "vm-store-replication",
@@ -140,7 +141,7 @@ pub(crate) const BLUEPRINT_PROFILES: &[AppProfile] = &[
         &[tcp(Network, &[18], &[]), udp(Network, &[30_018], &[])],
     ),
     service("emomodel", &[HTTPS]),
-    service("esp32_stt", &[udp(Network, &[5004], &[])]),
+    service("esp32_stt", &[ESP32_RTP]),
     service("hello_world_replicatable", &[tcp(Network, &[48_080], &[])]),
     service("idedit_htmlbuild_srv", &[tcp(Local, &[IDEDIT_HTML], &[])]),
     service("ipp-printer", &[tcp(Network, &[], &[631])]),

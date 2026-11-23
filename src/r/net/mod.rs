@@ -289,6 +289,13 @@ impl VNet {
         })
     }
 
+    pub(crate) fn open_esp32_rtp_mic(&self) -> Result<(), ()> {
+        if !matches!(wall::Caller::current(), Some(wall::Caller::Kernel)) {
+            return Err(());
+        }
+        self.submit_kernel(NetCommand::OpenEsp32RtpMic)
+    }
+
     pub(crate) fn submit_tcp_connect_from_for_actor(
         &self,
         local: core::net::SocketAddr,

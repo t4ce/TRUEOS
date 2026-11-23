@@ -209,6 +209,16 @@ mod tests {
     }
 
     #[test]
+    fn esp32_microphone_and_stt_can_receive_rtp() {
+        for principal in [Principal::Kernel, Principal::Blueprint("esp32_stt")] {
+            assert!(permits_inbound(principal, Udp, Network, 5004));
+            assert!(!permits_outbound(principal, Udp, Network, 5004));
+            assert!(!permits_inbound(principal, Tcp, Network, 5004));
+            assert!(!permits_inbound(principal, Udp, Network, 5005));
+        }
+    }
+
+    #[test]
     fn buildin_and_blueprint_identities_have_distinct_profiles() {
         if BUILDINS.contains(&"share") {
             assert!(permits_inbound(
