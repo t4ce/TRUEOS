@@ -75,7 +75,7 @@ fn validate_stream_request(action: u64, stream: u64, bytes: usize) -> Result<(),
     match action {
         0 if stream == 0 && bytes == 0 => Ok(()),
         1 if (1..=i64::MAX as u64).contains(&stream) => sink::validate_append_size(bytes),
-        2 | 3 if (1..=i64::MAX as u64).contains(&stream) && bytes == 0 => Ok(()),
+        2 | 3 | 4 if (1..=i64::MAX as u64).contains(&stream) && bytes == 0 => Ok(()),
         _ => Err(-22),
     }
 }
@@ -93,6 +93,9 @@ fn stream_for(owner: sink::Owner, action: u64, stream: u64, pcm: &[u8]) -> i64 {
             1 => sink.append(owner, stream, pcm, now_ms).map(|()| 0),
             2 => sink.finish(owner, stream).map(|()| 0),
             3 => sink.abort(owner, stream).map(|()| 0),
+            // Read-only metadata, also exposed by /audio/status. Finished
+            // streams remain active until their queued samples are consumed.
+            4 => Ok(i64::from(sink.active_ids().contains(&Some(stream)))),
             _ => unreachable!("validated audio stream action"),
         };
         result.unwrap_or_else(i64::from)
@@ -112,10 +115,12 @@ pub(crate) fn release_vm(id: u8, generation: u64) {
     });
 }
 
-/// Begin (0), append (1), finish (2), or abort (3) one stereo s16le/48 kHz
+/// Begin (0), append (1), finish (2), abort (3), or query playing (4) for one stereo s16le/48 kHz
 /// stream. Begin returns a positive token or -16 if both slots are occupied.
 /// Append accepts complete frames, at most 64 KiB per call. The other actions
 /// take an empty payload. Finished PCM remains available as a retained clip.
+/// Query returns 1 while that source is queued or playing, otherwise 0. It
+/// observes metadata only and never exposes another producer's sample memory.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_http_audio_stream_v1(
     action: u32,

@@ -106,6 +106,8 @@ fn progressive_handoff_uses_bounded_guest_payload_and_generation() {
     let id=unsafe { stream(0,0,null,0) };
     assert!(id>0);
     let id=id as u64;
+    assert_eq!(unsafe {stream(4,id,null,0)},1);
+    assert_eq!(unsafe {stream(4,id,pcm.as_ptr(),4)},-22);
     let other=unsafe {stream(0,0,null,0)};
     assert!(other>0);
     assert_eq!(unsafe {stream(0,0,null,0)},-16);
@@ -121,9 +123,12 @@ fn progressive_handoff_uses_bounded_guest_payload_and_generation() {
     assert_eq!(unsafe {stream(2,id,null,0)},-13);
     GENERATION.store(1,Ordering::SeqCst);
     assert_eq!(unsafe {stream(2,id,null,0)},0);
+    assert_eq!(unsafe {stream(4,id,null,0)},1);
     let mut output=[0;8];
     assert_eq!(SINK.lock().render(&mut output)[0].first,Some((id,0)));
     assert_eq!(output,[1,2,3,4,5,6,7,8]);
+    assert_eq!(unsafe {stream(4,id,null,0)},0);
+    assert_eq!(unsafe {stream(4,999,null,0)},0);
     assert_eq!(SINK.lock().snapshot().unwrap().id,id);
     let next=unsafe {stream(0,0,null,0)};
     assert!(next>id as i64);
