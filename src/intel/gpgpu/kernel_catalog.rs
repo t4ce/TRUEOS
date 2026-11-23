@@ -17,6 +17,7 @@ pub(crate) const CPP_DEMO_RGBA8_SOURCE_PATH: &str =
 pub(crate) const SHADERTOY_MANDELBROT_KERNEL_NAME: &str = "shadertoy_mandelbrot";
 pub(crate) const SHADERTOY_CUBE_FIELD_KERNEL_NAME: &str = "shadertoy_cube_field";
 pub(crate) const SHADERTOY_NGUYEN_KERNEL_NAME: &str = "shadertoy_nguyen";
+pub(crate) const SHADERTOY_SINE_VISUALIZER_KERNEL_NAME: &str = "shadertoy_sine_visualizer";
 pub(crate) const SHADERTOY_MANDELBOX_KERNEL_NAME: &str = "shadertoy_mandelbox";
 pub(crate) const SHADERTOY_LICO_KERNEL_NAME: &str = "shadertoy_lico";
 pub(crate) const SHADERTOY_PALETTE_GRID_KERNEL_NAME: &str = "shadertoy_palette_grid";
@@ -99,6 +100,9 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         SHADERTOY_MANDELBROT_KERNEL_NAME => Some(SHADERTOY_MANDELBROT_SOURCE_PATH),
         SHADERTOY_CUBE_FIELD_KERNEL_NAME => Some(SHADERTOY_CUBE_FIELD_SOURCE_PATH),
         SHADERTOY_NGUYEN_KERNEL_NAME => Some(SHADERTOY_NGUYEN_SOURCE_PATH),
+        SHADERTOY_SINE_VISUALIZER_KERNEL_NAME => {
+            Some("Blueprint:shadertoy/assets/sine_visualizer/kernel.clcpp")
+        }
         SHADERTOY_MANDELBOX_KERNEL_NAME => Some("Blueprint:Cubes/Cube/mandelbox/kernel.clcpp"),
         SHADERTOY_LICO_KERNEL_NAME => Some("Blueprint:lico/assets/visualizer/kernel.clcpp"),
         SHADERTOY_PALETTE_GRID_KERNEL_NAME => Some(SHADERTOY_PALETTE_GRID_SOURCE_PATH),
@@ -250,6 +254,9 @@ include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_nguyen.contract.rs"
 );
 include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_sine_visualizer.contract.rs"
+);
+include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_mandelbox.contract.rs"
 );
 include!("../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_lico.contract.rs");
@@ -264,6 +271,7 @@ const _: () = {
         (SHADERTOY_MANDELBROT_ADLS_CPP_ABI_CONTRACT, 5),
         (SHADERTOY_CUBE_FIELD_ADLS_CPP_ABI_CONTRACT, 5),
         (SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT, 5),
+        (SHADERTOY_SINE_VISUALIZER_ADLS_CPP_ABI_CONTRACT, 5),
         (SHADERTOY_MANDELBOX_ADLS_CPP_ABI_CONTRACT, 6),
         (SHADERTOY_LICO_ADLS_CPP_ABI_CONTRACT, 5),
         (SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT, 5),
@@ -289,6 +297,7 @@ const _: () = {
     assert!(SHADERTOY_MANDELBROT_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
     assert!(SHADERTOY_CUBE_FIELD_ADLS_CPP_ABI_CONTRACT.bindings.len() == 2);
     assert!(SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
+    assert!(SHADERTOY_SINE_VISUALIZER_ADLS_CPP_ABI_CONTRACT.bindings.len() == 2);
     assert!(SHADERTOY_MANDELBOX_ADLS_CPP_ABI_CONTRACT.bindings.len() == 3);
     assert!(SHADERTOY_LICO_ADLS_CPP_ABI_CONTRACT.bindings.len() == 2);
     assert!(SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);

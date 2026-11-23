@@ -21,7 +21,7 @@ output ABI, one resident upload, and seven scalar-selected workloads:
 
 Open the ShaderToy Blueprint: F8 selects the four-panel gallery; F9–F12
 select Aurora, Julia, SDF and Voronoi. Left/Right reaches Retro Sun and High
-Wisps (IDs 13 and 14), as well as live audio (F7) and ParticleCraft (ID 15).
+Wisps (IDs 13 and 14), as well as the sine wave visualizer (F7) and ParticleCraft (ID 15).
 The seven gallery views reuse this one artifact with its original mode values.
 
 Shell2 `cpp` has been removed. `win` now owns the separate 30-window retained

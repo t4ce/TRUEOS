@@ -28,7 +28,7 @@ pub(crate) const SKYBOX_SAMPLE_RGB565_PACKAGE: ShaderToyPackageContract =
 /// Several gallery selectors use one program with different mode uniforms.
 pub(crate) fn program_id(shader_id: u32) -> Option<u32> {
     match shader_id {
-        1..=6 | 15 | 16 => Some(shader_id),
+        1..=6 | super::SHADERTOY_SHADER_SINE_VISUALIZER | 15 | 16 => Some(shader_id),
         super::SHADERTOY_SHADER_LICO => Some(shader_id),
         8..=14 => Some(8),
         _ => None,
@@ -46,6 +46,7 @@ pub(crate) fn contract(shader_id: u32) -> Option<ShaderToyPackageContract> {
         4 => SHADERTOY_PALETTE_GRID_PACKAGE,
         5 => SHADERTOY_COSMIC_STRANDS_PACKAGE,
         6 => SHADERTOY_PROTEAN_CLOUDS_PACKAGE,
+        super::SHADERTOY_SHADER_SINE_VISUALIZER => SHADERTOY_SINE_VISUALIZER_PACKAGE,
         8 => SHADERTOY_CPP_GALLERY_PACKAGE,
         15 => SHADERTOY_PARTICLE_CRAFT_PACKAGE,
         _ => return None,

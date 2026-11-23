@@ -7,11 +7,10 @@ bundles those six files. The kernel retains the six `.contract.rs` files here
 and the small generated package hash/length catalog in
 `src/intel/gpgpu/artifacts/shadertoy_packages.rs`; these six payloads are Blueprint-owned.
 
-The catalog also admits three unchanged native programs: live audio (7), the
-C++ gallery (8, shared by selectors 8–14), and ParticleCraft (15). Their packages
-use `input.sources.json` instead of GLSL, preserving every baked C++ source/header.
-The kernel retains their existing internal diagnostic renderers and artifact
-copies. Each ShaderToy window must still register the matching program package.
+The catalog also admits the sine wave visualizer (7), the C++ gallery (8,
+shared by selectors 8–14), and ParticleCraft (15) as native programs. Their packages
+use `input.sources.json` to preserve their baked C++ sources and headers.
+Each ShaderToy window must register the matching program package.
 ParticleCraft admission checks all three entry-point contracts in its single ELF.
 Shell2 `cpp` is retired; `win` runs only the retained 30-window demo.
 
@@ -146,11 +145,11 @@ The current artifacts are:
 | 4 | `shadertoy_palette_grid` | `2174c3002ff5e0c489de3ea4aff8da5b922b995e6075967a326eeb656e280124` |
 | 5 | `shadertoy_cosmic_strands` | `bf7e5b8a590526a36fa9684a4055d9dd255e36cba8b5ab75813ca3b59b4569d4` |
 | 6 | `shadertoy_protean_clouds` | `aad75d1acb31ae065420ee907d5c2bcbe9bb73b71f29c27943a0ec1504956e56` |
+| 7 | `shadertoy_sine_visualizer` | `6ce209a9e365e2b550bf1fb658e468c202aeb04035afc929445b8d75482fe386` |
 
-All six contracts are SIMD16 with 96 bytes of cross-thread data, 96 bytes of
-per-thread local IDs, and no scratch or SLM. The cube-field and Protean Clouds artifacts expose
-its read-only uniform argument as both a stateless pointer and BTI 1; direct RCS
-dispatch binds the same kernel-owned block through both representations.
+These contracts are SIMD16 with 96 bytes of cross-thread data, 96 bytes of
+per-thread local IDs, and zero scratch or SLM. Cube-field, Protean Clouds and
+the sine wave visualizer also bind their read-only uniform block through BTI 1.
 
 
 Protean above 720p uses a radially warped sample image (up to 2× smaller on each
@@ -163,11 +162,11 @@ measurements and quality tradeoffs.
 
 ## Native catalog migration
 
-`operations/shadertoy_catalog.rs` routes selectors 7–15 to the existing gallery,
-audio and ParticleCraft dispatchers. UI4 takes window-owned runtime state for
-the duration of rendering, then restores it after retirement. Audio subscriptions,
-paint history and persistent particle storage do not cross window ownership.
-The original six Image passes continue through their existing row/focus path.
+`operations/shadertoy_catalog.rs` routes F7 through the standard Image pass.
+The shader generates the sine wave from frame time. Selectors 8–14 and 15
+use the gallery and ParticleCraft dispatchers respectively. UI4 takes the
+window's paint history and particle state for rendering and restores it after
+retirement.
 
 The three native programs are owned by the Blueprint asset directories, including
 editable C++ and headers. Their bakery scripts read those sources and stage

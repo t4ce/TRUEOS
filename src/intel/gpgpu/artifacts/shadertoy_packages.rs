@@ -18,6 +18,9 @@ pub(crate) const SHADERTOY_COSMIC_STRANDS_PACKAGE: ShaderToyPackageContract = Sh
 pub(crate) const SHADERTOY_PROTEAN_CLOUDS_PACKAGE: ShaderToyPackageContract = ShaderToyPackageContract {
     shader_id: 6, bin_bytes: 71840, spv_bytes: 46416,
 };
+pub(crate) const SHADERTOY_SINE_VISUALIZER_PACKAGE: ShaderToyPackageContract = ShaderToyPackageContract {
+    shader_id: 7, bin_bytes: 48008, spv_bytes: 34572,
+};
 pub(crate) const SHADERTOY_CPP_GALLERY_PACKAGE: ShaderToyPackageContract = ShaderToyPackageContract {
     shader_id: 8, bin_bytes: 222576, spv_bytes: 157140,
 };

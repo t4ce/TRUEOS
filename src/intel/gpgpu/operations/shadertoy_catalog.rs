@@ -57,7 +57,9 @@ impl ShaderToyRuntimeState {
             self.extent = (dst.width, dst.height);
         }
         match params.shader_id {
-            1..=6 => shadertoy_rgba8_surface_full(dst, params),
+            1..=6 | SHADERTOY_SHADER_SINE_VISUALIZER => {
+                shadertoy_rgba8_surface_full(dst, params)
+            }
             16 => self.environment.render(dst, params),
             8..=14 => {
                 if params.shader_id == 14 && params.flags & 2 != 0 {

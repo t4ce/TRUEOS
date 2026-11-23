@@ -149,6 +149,14 @@ pub(crate) const SHADERTOY_NGUYEN_ADLS_ARTIFACT: GpgpuKernelArtifact =
         &SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT,
     );
 
+pub(crate) const SHADERTOY_SINE_VISUALIZER_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    GpgpuKernelArtifact::contracted(
+        SHADERTOY_SINE_VISUALIZER_KERNEL_NAME,
+        &[],
+        &[],
+        &SHADERTOY_SINE_VISUALIZER_ADLS_CPP_ABI_CONTRACT,
+    );
+
 pub(crate) const SHADERTOY_LICO_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         SHADERTOY_LICO_KERNEL_NAME,

@@ -46,7 +46,7 @@ compiler and ABI boundary.
 - Font production: analytical vector-outline coverage to persistent R8 masks.
   The former diagnostic outline-mesh kernel and its render-import probe were
   removed.
-- Applications: C++ demo suite, live audio visualizer, ParticleCraft, and
+- Applications: C++ demo suite, sine wave visualizer, ParticleCraft, and
   Spirit background/sprite shaders.
 - Internal validation: the three-entry `lab256_multiphase` artifact.
 - Inference: the two LFM2.5 Q8 projection kernels.

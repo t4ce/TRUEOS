@@ -7,6 +7,7 @@ pub(crate) const SHADERTOY_SHADER_NGUYEN: u32 = 3;
 pub(crate) const SHADERTOY_SHADER_PALETTE_GRID: u32 = 4;
 pub(crate) const SHADERTOY_SHADER_COSMIC_STRANDS: u32 = 5;
 pub(crate) const SHADERTOY_SHADER_PROTEAN_CLOUDS: u32 = 6;
+pub(crate) const SHADERTOY_SHADER_SINE_VISUALIZER: u32 = 7;
 pub(crate) const SHADERTOY_PARAMS_VERSION: u32 = 1;
 pub(crate) const SHADERTOY_FLAG_NATIVE_RESOLUTION: u32 = 1;
 
@@ -77,15 +78,18 @@ fn shadertoy_dispatch_rows(
         return None;
     }
     let launched_width = u64::from(width).div_ceil(16) * 16;
-    // The cheap effects need fewer submission boundaries. Keep the two
+    // The cheap effects need fewer submission boundaries. Keep the more
     // expensive procedural kernels in small batches; neither policy scales
     // a single walker with the entire window's pixel count.
     let max_pixels = match (shader_id, phase) {
         (SHADERTOY_SHADER_MANDELBOX, 1) => 16 * 1024,
         (_, 2) => SHADERTOY_LIGHT_DISPATCH_MAX_PIXELS,
-        (SHADERTOY_SHADER_NGUYEN | SHADERTOY_SHADER_PROTEAN_CLOUDS, _) => {
-            SHADERTOY_DISPATCH_MAX_PIXELS
-        }
+        (
+            SHADERTOY_SHADER_NGUYEN
+            | SHADERTOY_SHADER_PROTEAN_CLOUDS
+            | SHADERTOY_SHADER_SINE_VISUALIZER,
+            _,
+        ) => SHADERTOY_DISPATCH_MAX_PIXELS,
         _ => SHADERTOY_LIGHT_DISPATCH_MAX_PIXELS,
     };
     let rows = max_pixels / launched_width;

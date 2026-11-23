@@ -8,6 +8,7 @@ static CPP_DEMO_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new
 static SHADERTOY_MANDELBROT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_CUBE_FIELD_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_NGUYEN_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static SHADERTOY_SINE_VISUALIZER_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_MANDELBOX_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_LICO_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_PALETTE_GRID_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
