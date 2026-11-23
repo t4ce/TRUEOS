@@ -762,13 +762,14 @@ pub(super) fn cancel_native_attach(target: &MatrixTarget) {
         routes.changed(route.frontend);
     }
 }
-/// Station recording helpers consume only human input, even when their Shell3
-/// frame was admitted to AI interaction. Opening a helper is not a capture grant.
+/// Recording and playback routing controls consume human input even when
+/// their Shell3 frame has been shared with AI.
 pub(super) fn native_requires_human_input(frontend: u64, name: Option<&str>) -> bool {
     ROUTES.lock().routes.iter().any(|route| {
         route.frontend == Some(frontend) && Some(route.lease.name()) == name
             && route.native.as_ref().is_some_and(|native| native.active)
-            && super::capture::recognizes(route.lease.name())
+            && (route.lease.name() == super::audio_link::SLOT
+                || super::capture::recognizes(route.lease.name()))
     })
 }
 
@@ -1149,6 +1150,9 @@ pub(super) fn park(frontend: u64) -> bool {
 fn authorize_route(frontend: Frontend, name: &str) -> Result<(), &'static str> {
     let (vm, actor) = {
         let routes = ROUTES.lock();
+        if name == super::audio_link::SLOT && routes.accounts.is_guest(frontend.id) {
+            return Err("tui: Audio Link requires a human frontend");
+        }
         let vm = routes.routes.iter().find(|route| route.lease.name() == name).and_then(|route| route.vm);
         (vm, routes.accounts.account(frontend.id))
     };

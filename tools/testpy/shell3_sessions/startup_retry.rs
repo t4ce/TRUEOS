@@ -127,6 +127,7 @@ mod shell3 {
         errors: Vec<&'static str>,
         terminal_selected: bool,
         link_launches: Vec<u64>,
+        audio_link_launches: Vec<u64>,
         link_error: bool,
         link_enters: Vec<&'static str>,
         configured: Vec<service::WindowGeometry>,
@@ -189,6 +190,18 @@ mod shell3 {
             })
         }
     }
+    mod audio_link {
+        pub const SLOT: &str = "audio-link";
+        pub fn start(frontend: u64) -> Result<(), &'static str> {
+            super::WORLD.with_borrow_mut(|world| {
+                assert!(world.bound, "native Audio Link must follow frontend/window binding");
+                assert_eq!(world.boundary_events.last(), Some(&"local-account"));
+                world.boundary_events.push(SLOT);
+                world.audio_link_launches.push(frontend);
+            });
+            Ok(())
+        }
+    }
     mod tui {
         pub fn bind_guest_frontend_account(_: u64, account: Option<crate::AccountId>) {
             super::WORLD.with_borrow_mut(|world| {
@@ -219,7 +232,7 @@ mod shell3 {
         fn rendered_lines(&self) -> Vec<Vec<u8>> { vec![vec![]] }
         fn reveals(&self) {}
         fn matrix_area(&self) {}
-        fn edit_life(&self) {}
+        fn terminal_effects(&self) {}
     }
     mod update {
         pub fn take_updates(_: &mut super::Snapshot, _: super::Snapshot, _: &[()]) {}
@@ -306,7 +319,7 @@ mod shell3 {
             let challenge_started = WORLD.with_borrow_mut(|world| {
                 assert!(world.bound);
                 assert!(matches!(world.boundary_events.last(),
-                    Some(&"bind") | Some(&"blueprint") | Some(&"link")),
+                    Some(&"bind") | Some(&"blueprint") | Some(&"link") | Some(&audio_link::SLOT)),
                     "local identity must follow binding or admitted startup");
                 world.boundary_events.push("local-account");
                 world.local_account_reconciliations += 1;
@@ -349,7 +362,12 @@ mod shell3 {
         fn enter_native_terminal(&mut self, slot: &'static str) {
             WORLD.with_borrow_mut(|world| {
                 assert!(world.bound);
-                assert_eq!(world.link_launches, vec![self.tui_frontend]);
+                let launches = if slot == audio_link::SLOT {
+                    &world.audio_link_launches
+                } else {
+                    &world.link_launches
+                };
+                assert_eq!(launches, &[self.tui_frontend]);
                 world.link_enters.push(slot);
                 world.terminal_selected = true;
             });
@@ -709,6 +727,31 @@ mod shell3 {
     }
 
     #[test]
+    fn audio_link_opens_its_own_native_slot_after_first_paint() {
+        let mut shell = Shell3::fixture();
+        let source = crate::ui4::Ui4CursorSource { controller_id: 2, slot_id: 3, ep_target: 4 };
+        let startup = startup::Startup::AudioLink { source, anchor: (1800, 1000) };
+        assert_eq!(startup.guest_account(), None);
+        startup.configure_window(&mut shell);
+        shell.pending_startup = Some(startup);
+        shell.show.outcomes.extend([Err("copy-unavailable"), Ok(())]);
+        assert!(run(shell.present()).is_err());
+        WORLD.with_borrow(|world| assert!(world.audio_link_launches.is_empty()));
+        run(shell.present()).unwrap();
+        run(shell.present()).unwrap();
+        assert_eq!(shell.active_matrix_slot.as_deref(), Some(audio_link::SLOT));
+        WORLD.with_borrow(|world| {
+            assert_eq!(world.audio_link_launches, vec![33]);
+            assert_eq!(world.link_enters, vec![audio_link::SLOT]);
+            assert!(world.link_launches.is_empty());
+            assert_eq!(world.configured.len(), 1);
+        });
+        crate::ui4::WORLD.with_borrow(|world| assert_eq!(world.selections, vec![(
+            source, crate::ui4::WindowOwner::SHELL3_SERVICE, crate::ui4::WindowId(7), 1800, 1000,
+        )]));
+    }
+
+    #[test]
     fn link_admission_failure_reports_once_and_still_selects_shell_to_show_the_error() {
         let mut shell = Shell3::fixture();
         shell.pending_startup = Some(link_startup());
@@ -750,22 +793,27 @@ mod shell3 {
         let latest = crate::ui4::Ui4CursorSource { controller_id: 2, slot_id: 2, ep_target: 2 };
         crate::ui4::link_service::request_open(first, (10, 20));
         crate::ui4::link_service::request_open(latest, (30, 40));
+        crate::ui4::link_service::request_audio_open(first, (70, 80));
         let mut task = std::pin::pin!(crate::ui4::link_service::ui4_link_service_task());
         poll_service(task.as_mut());
         WORLD.with_borrow(|world| {
-            assert_eq!(world.request_calls, 1);
-            assert!(matches!(&world.startup_requests[..], [startup::Startup::Link { source, anchor }]
-                if *source == latest && *anchor == (30, 40)));
+            assert_eq!(world.request_calls, 2);
+            assert!(matches!(&world.startup_requests[..], [
+                startup::Startup::Link { source, anchor },
+                startup::Startup::AudioLink { source: audio_source, anchor: audio_anchor },
+            ] if *source == latest && *anchor == (30, 40)
+                && *audio_source == first && *audio_anchor == (70, 80)));
             assert!(world.link_launches.is_empty(), "desktop adapter only queues a Shell3 startup");
+            assert!(world.audio_link_launches.is_empty());
         });
         crate::ui4::WORLD.with_borrow(|world| assert!(world.selections.is_empty()));
         crate::ui4::link_service::request_open(first, (50, 60));
         poll_service(task.as_mut());
         WORLD.with_borrow(|world| {
-            assert_eq!(world.request_calls, 2, "a later desktop action admits a fresh Shell3");
+            assert_eq!(world.request_calls, 3, "a later desktop action admits a fresh Shell3");
             assert!(matches!(world.startup_requests.last(), Some(startup::Startup::Link { source, anchor })
                 if *source == first && *anchor == (50, 60)));
         });
-        crate::ui4::WORLD.with_borrow(|world| assert_eq!(world.font_prepares, 2));
+        crate::ui4::WORLD.with_borrow(|world| assert_eq!(world.font_prepares, 3));
     }
 }

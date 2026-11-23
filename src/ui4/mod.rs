@@ -151,7 +151,7 @@ pub(crate) use input_broker::{
     select_window_for_cursor_at, software_cursor_visuals, take_owner_input_events,
     ui4_input_service_task, window_input_routes,
 };
-pub(crate) use link_service::{request_open as request_link_open, ui4_link_service_task};
+pub(crate) use link_service::ui4_link_service_task;
 pub(crate) use screenshot::{
     COMPACT_WINDOW_GRID_EXTENT, COMPACT_WINDOW_OBSERVATION_MAX_PNG_BYTES,
     capture_compact_window_observation, request_wd_postblend_capture, ui4_screenshot_service_task,

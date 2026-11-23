@@ -5,10 +5,48 @@ Only network transport, playback cancellation and timers are mocked. MP4 sample
 indexing, fragment parsing, read-ahead and Annex-B conversion are production code.
 """
 from pathlib import Path
+import json
 import subprocess
 import tempfile
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def run_harness(path: Path, rust: str, *, muxed_fixture: bool = False):
+    channel = tomllib.loads((ROOT / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
+    codec = json.dumps(str(ROOT / "vendor/symphonia-codec-aac-0.5.5-trueos"))
+    core = json.dumps(str(ROOT / "vendor/symphonia-core-0.5.5-trueos"))
+    (path / "Cargo.toml").write_text(f"""
+[package]
+name = "trueos-http-mp4-harness"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[lib]
+path = "test.rs"
+
+[dependencies]
+symphonia-codec-aac = {{ path = {codec}, default-features = false }}
+symphonia-core = {{ path = {core}, default-features = false }}
+""")
+    if muxed_fixture:
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=black:size=32x32:rate=25:duration=0.4",
+            "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=44100:duration=0.4",
+            "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-threads", "1",
+            "-c:a", "aac", "-movflags", "+faststart", "soundtrack.mp4",
+        ], cwd=path, check=True)
+    (path / "test.rs").write_text(rust)
+    subprocess.run([
+        "cargo", f"+{channel}", "test", "--offline", "--lib", "--",
+        "--test-threads=1", "--nocapture",
+    ], cwd=path, check=True)
+
+
 source = (ROOT / "src/intel/media/hw_vid.rs").read_text()
 start = source.rfind("#[derive(", 0, source.index("struct Mp4Box {"))
 end = source.index("fn h264_has_annexb_start_code(")
@@ -307,9 +345,57 @@ tail = r'''
 }
 '''
 
+soundtrack_tests = r'''
+#[cfg(test)]
+mod soundtrack_tests {
+    use super::*;
+    use super::http_mp4::audio::{Mp4Audio, PcmWriter};
+
+    fn soundtrack(bytes: &[u8]) -> Option<Mp4Audio> {
+        let moov = mp4_find_child(bytes, 0, bytes.len(), *b"moov").unwrap();
+        let video = mp4_collect_children(bytes, moov.payload_start, moov.end, *b"trak")
+            .into_iter()
+            .find_map(|trak| mp4_parse_avc_track(bytes, trak).unwrap())
+            .unwrap();
+        Mp4Audio::open(bytes, moov, bytes.len(), &video).unwrap()
+    }
+
+    #[test]
+    fn decodes_muxed_mono_aac_on_video_timeline_through_partial_writes() {
+        let bytes = include_bytes!("soundtrack.mp4");
+        let mut audio = soundtrack(bytes).expect("AAC track found");
+        let first = audio.next_sample().unwrap();
+        assert!(audio.decode_sample(bytes[first.offset..first.offset + first.size].to_vec()).unwrap().is_none(),
+            "the AAC priming packet must not reach the playback queue");
+        let mut writer = PcmWriter::default();
+        let mut output = Vec::new();
+        while let Some(sample) = audio.next_sample() {
+            let Some(decoded) = audio.decode_sample(bytes[sample.offset..sample.offset + sample.size].to_vec()).unwrap()
+            else { continue };
+            while !writer.write(&decoded, |pcm| {
+                let accepted = pcm.len().min(508);
+                output.extend_from_slice(&pcm[..accepted]);
+                Ok(accepted)
+            }).unwrap() {}
+        }
+        assert_eq!(output.len() / 4, 19_200, "0.4 seconds after edit trim at 48 kHz");
+        assert!(output.chunks_exact(4).all(|frame| frame[..2] == frame[2..]));
+        assert!(output[..480 * 4].iter().any(|&byte| byte != 0),
+            "track starts at the video origin without spurious silence");
+    }
+
+    #[test]
+    fn missing_soundtrack_keeps_the_avc_movie_supported() {
+        let (bytes, _) = super::tests::classic(false);
+        assert!(soundtrack(&bytes).is_none());
+    }
+}
+'''
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="http-mp4-streaming-") as directory:
         path = Path(directory)
-        (path / "test.rs").write_text(head + demux + access_units + memory_reader + assembler + http_nals + nal_bits + reader_dispatch + tail)
-        subprocess.run(["rustc", "--edition=2024", "--test", str(path / "test.rs"), "-o", str(path / "test")], check=True)
-        subprocess.run([str(path / "test"), "--test-threads=1", "--nocapture"], check=True)
+        tests = tail.replace(" fn classic(", " pub(super) fn classic(")
+        tests = tests[:tests.rindex("\n}")] + soundtrack_tests + "\n}"
+        run_harness(path, head + demux + access_units + memory_reader + assembler
+                     + http_nals + nal_bits + reader_dispatch + tests, muxed_fixture=True)

@@ -1,11 +1,6 @@
 //! Listen-only HTTP playback of completed or progressive PCM.
 pub(crate) mod handoff;
 pub(crate) mod rtp_mic;
-mod sink;
-use sink::Sink;
-use spin::Mutex;
-
-static SINK: Mutex<Sink> = Mutex::new(Sink::new());
 
 extern crate alloc;
 
@@ -14,6 +9,7 @@ use alloc::{format, vec::Vec};
 use trueos_time::{Duration, Instant, Timer};
 use v::vnet as api;
 
+use super::audio_playback;
 use crate::r::net::{VNet, ports};
 
 const PAGE_PATH: &str = "/";
@@ -33,20 +29,14 @@ const FRAME_BYTES: usize = CHANNELS * 2;
 const BLOCK_BYTES: usize = SAMPLE_RATE * FRAME_BYTES * SEND_MS / 1000;
 const PCM_PREFIX_BYTES: usize = 4;
 const POLL_MS: u64 = 5;
+const LISTENER_RETRY_MS: u64 = 250;
+const CLOSE_ACK_TIMEOUT_MS: u64 = 1_500;
 const RTP_MIC_RETRY_MS: u64 = 2_000;
 const REQUEST_IDLE_TIMEOUT_MS: u64 = 750;
 const FIXED_SEND_TIMEOUT_MS: u64 = 1_500;
 
 fn monotonic_millis() -> u64 {
     Instant::now().as_millis()
-}
-
-pub(crate) fn set_local_playback(enabled: bool) {
-    SINK.lock().set_local_playback(enabled);
-}
-
-pub(crate) fn render_local(out: &mut [[i16; 2]]) {
-    SINK.lock().render_local(out, monotonic_millis());
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,7 +49,7 @@ enum SessionMode {
 }
 
 struct ClipTransfer {
-    clip: sink::Clip,
+    clip: audio_playback::Clip,
     offset: usize,
 }
 
@@ -76,13 +66,77 @@ struct AudioHttpSession {
 struct AudioHttpEndpoint {
     vnet: VNet,
     listener: Option<api::NetHandle>,
+    listener_retry: Instant,
+    closing_tcp: Vec<ClosingTcp>,
     rtp_mic: Option<api::NetHandle>,
     rtp_mic_retry: Instant,
     dev_idx: usize,
     sessions: Vec<AudioHttpSession>,
 }
 
+struct ClosingTcp {
+    handle: api::NetHandle,
+    queued_at: Option<Instant>,
+}
+
 impl AudioHttpEndpoint {
+    fn stop_http(&mut self, now: Instant) {
+        if let Some(handle) = self.listener.take() {
+            self.close_tcp(handle);
+        }
+        for session in self.sessions.drain(..) {
+            self.closing_tcp.push(ClosingTcp {
+                handle: session.handle,
+                queued_at: None,
+            });
+        }
+        self.listener_retry = now;
+    }
+
+    fn is_closing(&self, handle: api::NetHandle) -> bool {
+        self.closing_tcp.iter().any(|entry| entry.handle == handle)
+    }
+
+    fn close_tcp(&mut self, handle: api::NetHandle) {
+        if !self.is_closing(handle) {
+            self.closing_tcp.push(ClosingTcp {
+                handle,
+                queued_at: None,
+            });
+        }
+    }
+
+    fn flush_tcp_closes(&mut self, now: Instant) {
+        self.closing_tcp.retain_mut(|entry| {
+            if let Some(queued_at) = entry.queued_at {
+                // The adapter emits Closed after removing the socket. Retain
+                // handles briefly to reject older queued TcpData on re-enable.
+                return now < queued_at + Duration::from_millis(CLOSE_ACK_TIMEOUT_MS);
+            }
+            if self.vnet.submit(api::Command::Close { handle: entry.handle }).is_ok() {
+                entry.queued_at = Some(now);
+            }
+            true
+        });
+    }
+
+    fn ensure_listener(&mut self, now: Instant) {
+        if self.listener.is_none()
+            && now >= self.listener_retry
+            && !self.closing_tcp.iter().any(|entry| entry.queued_at.is_none())
+        {
+            self.listener_retry = now + Duration::from_millis(LISTENER_RETRY_MS);
+            let _ = self.vnet.submit(api::Command::OpenTcpListen {
+                port: ports::AUDIO_HTTP_TCP_PORT,
+            });
+        }
+    }
+
+    fn release_listener(&mut self, now: Instant) {
+        self.listener = None;
+        self.listener_retry = now;
+    }
+
     fn retry_rtp_mic(&mut self, now: Instant) {
         if self.rtp_mic.is_none() && now >= self.rtp_mic_retry {
             self.rtp_mic_retry = now + Duration::from_millis(RTP_MIC_RETRY_MS);
@@ -132,65 +186,28 @@ fn audio_http_open_endpoint(dev_idx: usize) -> Option<AudioHttpEndpoint> {
     }
 
     let vnet = VNet::open_polled(dev_idx)?;
-    if vnet
-        .submit(api::Command::OpenTcpListen {
-            port: ports::AUDIO_HTTP_TCP_PORT,
-        })
-        .is_err()
-    {
-        crate::log!(
-            "audio-http: listen submit failed dev={} owner={}\n",
-            dev_idx,
-            vnet.owner()
-        );
-        return None;
-    }
-
-    let ip = crate::net::adapter::ipv4_at(dev_idx);
-    let name = crate::net::device_name_at(dev_idx).unwrap_or("?");
-    match ip {
-        Some([a, b, c, d]) => crate::log!(
-            "audio-http: listen submitted tcp {} owner={} dev={} {} ip={}.{}.{}.{}\n",
-            ports::AUDIO_HTTP_TCP_PORT,
-            vnet.owner(),
-            dev_idx,
-            name,
-            a,
-            b,
-            c,
-            d
-        ),
-        None => crate::log!(
-            "audio-http: listen submitted tcp {} owner={} dev={} {} ip=none\n",
-            ports::AUDIO_HTTP_TCP_PORT,
-            vnet.owner(),
-            dev_idx,
-            name
-        ),
-    }
-
+    let now = Instant::now();
     Some(AudioHttpEndpoint {
         vnet,
         listener: None,
+        listener_retry: now,
+        closing_tcp: Vec::new(),
         rtp_mic: None,
-        rtp_mic_retry: Instant::now(),
+        rtp_mic_retry: now,
         dev_idx,
         sessions: Vec::new(),
     })
 }
 
-fn audio_http_add_endpoints(endpoints: &mut Vec<AudioHttpEndpoint>) -> usize {
-    let mut added = 0usize;
+fn audio_http_add_endpoints(endpoints: &mut Vec<AudioHttpEndpoint>) {
     for dev_idx in 0..crate::net::device_count() {
         if endpoints.iter().any(|endpoint| endpoint.dev_idx == dev_idx) {
             continue;
         }
         if let Some(endpoint) = audio_http_open_endpoint(dev_idx) {
             endpoints.push(endpoint);
-            added += 1;
         }
     }
-    added
 }
 
 fn find_http_header_end(buf: &[u8]) -> Option<usize> {
@@ -322,7 +339,7 @@ fn clip_request_id(target: &str) -> Option<u64> {
 }
 
 fn start_clip_response(vnet: &VNet, session: &mut AudioHttpSession, id: Option<u64>) -> bool {
-    let clip = SINK.lock().snapshot();
+    let clip = audio_playback::http_snapshot();
     let Some(clip) = clip.filter(|clip| Some(clip.id) == id) else {
         let response = response_with_body("HTTP/1.1 409 Conflict\r\n", "text/plain; charset=utf-8", b"clip no longer available\n");
         return !send_fixed_response(vnet, session, &response);
@@ -346,6 +363,10 @@ fn send_clip_tick(vnet: &VNet, session: &mut AudioHttpSession) -> bool {
     const WINDOW: usize = SAMPLE_RATE * CHANNELS * 2 / 4;
     let transfer = session.clip.as_mut().expect("clip response owns its PCM");
     while transfer.offset < transfer.clip.pcm.len() {
+        if !transfer.clip.http_forward_allowed() {
+            close_session(vnet, session.handle);
+            return true;
+        }
         let room = WINDOW.saturating_sub(session.pending_bytes.saturating_sub(session.sent_bytes));
         let count = room.min(api::MAX_MSG).min(transfer.clip.pcm.len() - transfer.offset);
         if count == 0 { break; }
@@ -432,13 +453,14 @@ fn handle_request(vnet: &VNet, session: &mut AudioHttpSession, active_streams: u
 }
 
 fn status_response(listeners: usize) -> Vec<u8> {
-    let sink = SINK.lock();
-    let clip_id = sink.snapshot().map_or(0, |clip| clip.id);
-    let source_ids = sink.active_ids().into_iter().flatten()
+    let (clip_id, ids) = audio_playback::http_status();
+    let producers = ids.iter().flatten().count();
+    let source_ids = ids.into_iter().flatten()
         .map(|id| format!("\"{}\"", id)).collect::<Vec<_>>().join(",");
     let body = format!(
         "{{\"listeners\":{},\"capacity\":{},\"clip_id\":\"{}\",\"playing\":{},\"producers\":{},\"producer_capacity\":{},\"source_ids\":[{}]}}\n",
-        listeners, MAX_STREAM_CLIENTS, clip_id, sink.busy(), sink.active_count(), sink::MAX_PRODUCERS, source_ids
+        listeners, MAX_STREAM_CLIENTS, clip_id.unwrap_or(0), producers != 0,
+        producers, audio_playback::MAX_PRODUCERS, source_ids
     );
     response_with_body(
         "HTTP/1.1 200 OK\r\n",
@@ -448,20 +470,22 @@ fn status_response(listeners: usize) -> Vec<u8> {
 }
 
 fn render_audio_block(
-    sink: &mut Sink,
     mixed: &mut [u8],
     sources: &mut [u8],
-) -> [sink::RenderReport; sink::MAX_PRODUCERS] {
+    now_ms: u64,
+) -> (
+    [Option<u64>; audio_playback::MAX_PRODUCERS],
+    [audio_playback::RenderReport; audio_playback::MAX_PRODUCERS],
+) {
     // The live PCM endpoint sends two u16le frame counts, then one fixed
     // stereo PCM block per producer. Unused frames in each slot are zero.
     let (prefix, samples) = sources.split_at_mut(PCM_PREFIX_BYTES);
     let (a, b) = samples.split_at_mut(BLOCK_BYTES);
-    let reports = sink.render_sources(a, b);
+    let (expired, reports) = audio_playback::render_http(a, b, mixed, now_ms);
     for (count, report) in prefix.chunks_exact_mut(2).zip(&reports) {
         count.copy_from_slice(&((report.bytes / FRAME_BYTES) as u16).to_le_bytes());
     }
-    sink::mix_center(mixed, &a[..reports[0].bytes], &b[..reports[1].bytes]);
-    reports
+    (expired, reports)
 }
 
 fn stream_audio_tick(vnet: &VNet, session: &mut AudioHttpSession, bytes: &[u8]) -> bool {
@@ -483,13 +507,6 @@ fn active_stream_count(endpoint: &AudioHttpEndpoint) -> usize {
         .iter()
         .filter(|session| matches!(session.mode, SessionMode::Streaming | SessionMode::StreamingSources | SessionMode::SendingClip))
         .count()
-}
-
-fn reopen_listener(endpoint: &mut AudioHttpEndpoint) {
-    endpoint.listener = None;
-    let _ = endpoint.vnet.submit(api::Command::OpenTcpListen {
-        port: ports::AUDIO_HTTP_TCP_PORT,
-    });
 }
 
 fn close_oldest_reading_request(endpoint: &mut AudioHttpEndpoint) -> bool {
@@ -536,19 +553,11 @@ fn prune_idle_sessions(endpoint: &mut AudioHttpEndpoint) {
 #[trueos_executor::task]
 pub async fn audio_http_task() {
     let mut endpoints: Vec<AudioHttpEndpoint> = Vec::new();
-    loop {
-        audio_http_add_endpoints(&mut endpoints);
-        if !endpoints.is_empty() {
-            break;
-        }
-        crate::log!("audio-http: waiting for a usable NIC\n");
-        Timer::after(Duration::from_millis(250)).await;
-    }
-
     let mut endpoint_discovery_ticks = 0u32;
     let mut next_send = Instant::now();
     let mut pcm_bytes = alloc::vec![0; BLOCK_BYTES];
-    let mut source_bytes = alloc::vec![0; PCM_PREFIX_BYTES + sink::MAX_PRODUCERS * BLOCK_BYTES];
+    let mut source_bytes =
+        alloc::vec![0; PCM_PREFIX_BYTES + audio_playback::MAX_PRODUCERS * BLOCK_BYTES];
     loop {
         if endpoint_discovery_ticks == 0 {
             audio_http_add_endpoints(&mut endpoints);
@@ -556,19 +565,21 @@ pub async fn audio_http_task() {
         endpoint_discovery_ticks = (endpoint_discovery_ticks + 1) % 100;
 
         let now = Instant::now();
-        let due = now >= next_send;
+        let http_enabled = audio_playback::http_enabled();
+        let rendering = http_enabled && !endpoints.is_empty();
+        audio_playback::set_http_rendering(rendering);
+        if !rendering {
+            next_send = now;
+        }
+        let due = rendering && now >= next_send;
         if due {
             // Advance the timeline instead of accumulating polling latency.
             next_send = next_send + Duration::from_millis(SEND_MS as u64);
             if now >= next_send + Duration::from_millis(100) {
                 next_send = now + Duration::from_millis(SEND_MS as u64);
             }
-            let (expired, reports) = {
-                let mut sink = SINK.lock();
-                sink.set_http_rendering();
-                let expired = sink.expire(now.as_millis());
-                (expired, render_audio_block(&mut sink, &mut pcm_bytes, &mut source_bytes))
-            };
+            let (expired, reports) =
+                render_audio_block(&mut pcm_bytes, &mut source_bytes, now.as_millis());
             for id in expired.into_iter().flatten() {
                 crate::log!("audio-http: progressive clip={} expired\n", id);
             }
@@ -585,12 +596,23 @@ pub async fn audio_http_task() {
             }
         }
         for endpoint in endpoints.iter_mut() {
-            prune_idle_sessions(endpoint);
+            if http_enabled {
+                prune_idle_sessions(endpoint);
+            } else {
+                endpoint.stop_http(now);
+            }
 
             while let Some(ev) = endpoint.vnet.pop_event() {
                 match ev {
                     api::Event::Opened { handle, kind } => {
                         if kind == api::SocketKind::Tcp {
+                            if !http_enabled
+                                || endpoint.listener.is_some()
+                                || endpoint.is_closing(handle)
+                            {
+                                endpoint.close_tcp(handle);
+                                continue;
+                            }
                             endpoint.listener = Some(handle);
                             crate::log!(
                                 "audio-http: tcp listen opened dev={} handle={} port={} page={} stream={}\n",
@@ -604,9 +626,14 @@ pub async fn audio_http_task() {
                             endpoint.rtp_mic = Some(handle);
                         }
                     }
+                    api::Event::TcpEstablished { handle, .. } | api::Event::TcpData { handle, .. }
+                        if !http_enabled || endpoint.is_closing(handle) =>
+                    {
+                        endpoint.close_tcp(handle);
+                    }
                     api::Event::TcpEstablished { handle, .. } => {
                         if endpoint.listener == Some(handle) {
-                            reopen_listener(endpoint);
+                            endpoint.release_listener(now);
                         }
 
                         if endpoint
@@ -640,7 +667,7 @@ pub async fn audio_http_task() {
                     }
                     api::Event::TcpData { handle, data } => {
                         if endpoint.listener == Some(handle) {
-                            reopen_listener(endpoint);
+                            endpoint.release_listener(now);
                         }
 
                         let idx = match endpoint
@@ -694,6 +721,7 @@ pub async fn audio_http_task() {
                         }
                     }
                     api::Event::Closed { handle } => {
+                        endpoint.closing_tcp.retain(|entry| entry.handle != handle);
                         if Some(handle) == endpoint.rtp_mic {
                             endpoint.rtp_mic = None;
                         } else if let Some(idx) = endpoint
@@ -703,8 +731,7 @@ pub async fn audio_http_task() {
                         {
                             endpoint.sessions.remove(idx);
                         } else if Some(handle) == endpoint.listener {
-                            endpoint.sessions.clear();
-                            reopen_listener(endpoint);
+                            endpoint.release_listener(now);
                         }
                     }
                     api::Event::Error { msg } => {
@@ -742,6 +769,11 @@ pub async fn audio_http_task() {
             }
 
             endpoint.retry_rtp_mic(now);
+            endpoint.flush_tcp_closes(now);
+            if !http_enabled {
+                continue;
+            }
+            endpoint.ensure_listener(now);
             let mut idx = 0usize;
             while idx < endpoint.sessions.len() {
                 let session = &mut endpoint.sessions[idx];

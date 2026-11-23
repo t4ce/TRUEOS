@@ -4,7 +4,7 @@ mod playback;
 
 use trueos_time::{Duration, Instant, Timer};
 
-use crate::r::services::audio_http;
+use crate::r::services::audio_playback;
 
 const PCI_OWNER: &str = "intel-hda";
 const HDA_SUBCLASS: u8 = 0x03;
@@ -68,32 +68,37 @@ pub(crate) async fn service() {
     let Some(mut playback) = open_playback() else {
         return;
     };
-    audio_http::set_local_playback(true);
+    audio_playback::set_local_playback(true);
     let mut next_idle_pcm = Instant::now();
+    let mut connected = false;
     let error = loop {
-        match playback.poll_jacks() {
-            Ok(true) => {
-                if let Err(error) = playback.refill(audio_http::render_local) {
-                    break error;
-                }
-                next_idle_pcm = Instant::now() + IDLE_PCM_INTERVAL;
-            }
-            Ok(false) => {
-                let now = Instant::now();
-                if now >= next_idle_pcm {
-                    // With no jack, keep the sink's PCM clock running in software.
-                    audio_http::render_local(&mut [[0; 2]; IDLE_PCM_FRAMES]);
-                    next_idle_pcm += IDLE_PCM_INTERVAL;
-                    if now >= next_idle_pcm {
-                        next_idle_pcm = now + IDLE_PCM_INTERVAL;
-                    }
-                }
-            }
+        let has_output = match playback.poll_jacks() {
+            Ok(has_output) => has_output,
             Err(error) => break error,
+        };
+        if has_output != connected {
+            connected = has_output;
+            audio_playback::set_analog_connected(connected);
+        }
+        if has_output {
+            if let Err(error) = playback.refill(audio_playback::render_local) {
+                break error;
+            }
+            next_idle_pcm = Instant::now() + IDLE_PCM_INTERVAL;
+        } else {
+            let now = Instant::now();
+            if now >= next_idle_pcm {
+                // Keep the local playback position moving while the jack is disconnected.
+                audio_playback::render_local(&mut [[0; 2]; IDLE_PCM_FRAMES]);
+                next_idle_pcm += IDLE_PCM_INTERVAL;
+                if now >= next_idle_pcm {
+                    next_idle_pcm = now + IDLE_PCM_INTERVAL;
+                }
+            }
         }
         Timer::after_millis(2).await;
     };
     drop(playback);
-    audio_http::set_local_playback(false);
+    audio_playback::set_local_playback(false);
     crate::log_warn!(target: "global"; "hda: playback stopped: {}\n", error);
 }

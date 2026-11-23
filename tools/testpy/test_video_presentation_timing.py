@@ -17,6 +17,129 @@ VIDEO = 'src/ui4/video_frame.rs'
 TEXTURE = 'src/r/services/video_service.rs'
 
 
+def audio_lifecycle() -> str:
+    video = (ROOT / VIDEO).read_text()
+    methods = video.split('impl VideoPlaybackSession {', 1)[1].split('\n}', 1)[0]
+    state_init = video.split('impl VideoPlaybackState {', 1)[1].split('\n}', 1)[0]
+    state = '\n'.join(
+        item(VIDEO, name)
+        for name in ('VideoPlaybackSession', 'VideoPlaybackState', 'reserve_video_slot',
+                     'decoded_video_window_closed')
+    )
+    return r'''
+mod audio_lifecycle {
+use super::video_presentation_timing::PresentationClock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+struct Mutex<T>(std::sync::Mutex<T>);
+impl<T> Mutex<T> {
+    const fn new(value: T) -> Self { Self(std::sync::Mutex::new(value)) }
+    fn lock(&self) -> std::sync::MutexGuard<'_, T> { self.0.lock().unwrap() }
+}
+struct DecodedVideoConversionState { clock: PresentationClock }
+impl DecodedVideoConversionState {
+    const fn new() -> Self { Self { clock: PresentationClock::new() } }
+}
+type WindowOwner = u32;
+type WindowId = u32;
+const VIDEO_OWNER: WindowOwner = 1;
+struct VideoStream { window: WindowId }
+struct Wake;
+impl Wake { fn signal(&self, _: ()) {} }
+static VIDEO_PRESENTATION_WAKE: Wake = Wake;
+static VIDEO_SESSIONS: [VideoPlaybackState; 2] = [const { VideoPlaybackState::new() }; 2];
+struct Instant;
+impl Instant {
+    fn now() -> Self { Self }
+    fn as_ticks(self) -> u64 { 0 }
+}
+struct Duration;
+impl Duration { fn from_millis(_: u64) -> Self { Self } }
+struct Timer;
+impl Timer { async fn after(_: Duration) {} }
+fn poll_decoded_video_player_input() {}
+fn stop_decoded_nv12_stream(session: VideoPlaybackSession, _: &str) -> bool {
+    session.cancel_current().unwrap_or(false)
+}
+fn decoded_video_conversion_idle(_: VideoPlaybackSession) -> bool { true }
+
+mod audio_playback {
+    use super::Mutex;
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) struct VideoAudioOwner { pub slot: usize, pub generation: u64 }
+    #[derive(Debug)]
+    pub(crate) struct VideoPcm;
+    #[derive(Debug, Eq, PartialEq)]
+    pub(super) enum AudioEvent {
+        Begin(VideoAudioOwner),
+        Start(VideoAudioOwner),
+        Pause(VideoAudioOwner, bool),
+        Stop(VideoAudioOwner),
+    }
+    use AudioEvent::*;
+    pub(super) static EVENTS: Mutex<Vec<AudioEvent>> = Mutex::new(Vec::new());
+    pub(super) fn begin_video_pcm(owner: VideoAudioOwner) -> Result<VideoPcm, i32> {
+        EVENTS.lock().push(Begin(owner));
+        Ok(VideoPcm)
+    }
+    pub(super) fn start_video(owner: VideoAudioOwner) { EVENTS.lock().push(Start(owner)); }
+    pub(super) fn pause_video(owner: VideoAudioOwner, pause: bool) { EVENTS.lock().push(Pause(owner, pause)); }
+    pub(super) fn stop_video(owner: VideoAudioOwner) { EVENTS.lock().push(Stop(owner)); }
+}
+use audio_playback::{VideoAudioOwner, VideoPcm};
+@STATE@
+impl VideoPlaybackState {@INIT@
+}
+impl VideoPlaybackSession {@METHODS@
+}
+#[test]
+fn video_audio_waits_for_publication_and_cannot_outlive_its_window_or_generation() {
+    use audio_playback::{AudioEvent::*, EVENTS};
+    let old = reserve_video_slot(0).unwrap();
+    let owner = old.audio_owner();
+    old.state().stream.lock().replace(VideoStream { window: 3 });
+    old.begin_audio().unwrap();
+    assert!(!old.has_published());
+    assert_eq!(*EVENTS.lock(), [Begin(owner), Pause(owner, false)]);
+
+    old.did_publish();
+    old.did_publish();
+    assert!(old.has_published());
+    old.set_paused(true);
+    old.set_paused(false);
+    decoded_video_window_closed(VIDEO_OWNER, 4);
+    assert!(!old.is_cancelled());
+    decoded_video_window_closed(VIDEO_OWNER, 3);
+    assert!(old.is_cancelled());
+    assert_eq!(*EVENTS.lock(), [
+        Begin(owner), Pause(owner, false), Start(owner), Pause(owner, true), Pause(owner, false),
+        Stop(owner),
+    ]);
+    old.state().stream.lock().take();
+    old.finish("closed");
+
+    let replacement = reserve_video_slot(0).unwrap();
+    assert_eq!(old.slot, replacement.slot);
+    assert_ne!(old.audio_owner(), replacement.audio_owner());
+    assert!(!replacement.has_published());
+    EVENTS.lock().clear();
+    old.cancel();
+    old.set_paused(true);
+    old.did_publish();
+    assert_eq!(old.begin_audio().unwrap_err(), -125);
+    assert!(EVENTS.lock().is_empty());
+
+    replacement.set_paused(true);
+    replacement.did_publish();
+    EVENTS.lock().clear();
+    replacement.begin_audio().unwrap();
+    let owner = replacement.audio_owner();
+    assert_eq!(*EVENTS.lock(), [Begin(owner), Pause(owner, true), Start(owner)]);
+}
+}
+'''.replace('@STATE@', state).replace('@INIT@', state_init).replace('@METHODS@', methods)
+
+
 def source():
     harness = '#![allow(dead_code)]\n#[path="' + str(ROOT / 'src/ui4/video_presentation_timing.rs') + '"] mod video_presentation_timing;\n'
     harness += r'''
@@ -141,7 +264,7 @@ static STREAMS: Mutex<Vec<Stream>>=Mutex::new(Vec::new());
 }
 }
 '''
-    return harness
+    return harness + audio_lifecycle()
 
 
 def main():

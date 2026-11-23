@@ -18,14 +18,19 @@ impl<T> Mutex<T> {
     fn lock(&self)->std::sync::MutexGuard<'_,T> { self.0.lock().unwrap() }
 }
 #[path="@SINK@"] mod sink;
-static SINK:Mutex<sink::Sink>=Mutex::new(sink::Sink::new());
+pub(crate) static SINK:Mutex<sink::Sink>=Mutex::new(sink::Sink::new());
 #[path="@HANDOFF@"] mod handoff;
+mod audio_playback {
+    pub(crate) use crate::sink::{ProducerOwner, validate_append_size, validate_size};
+    pub(crate) use crate::{SINK, monotonic_millis};
+}
 static MODE:AtomicU8=AtomicU8::new(0);
 static START:AtomicUsize=AtomicUsize::new(0);
 static END:AtomicUsize=AtomicUsize::new(0);
 static GENERATION:AtomicUsize=AtomicUsize::new(1);
-fn monotonic_millis()->u64 { 0 }
+pub(crate) fn monotonic_millis()->u64 { 0 }
 mod hv {
+    pub const TRUEOS_VM_ID_LIMIT: usize = 64;
     pub fn current_hull_guest_context_vm_id()->Option<u8> {
         (super::MODE.load(super::Ordering::SeqCst)==1).then_some(7)
     }
@@ -76,6 +81,12 @@ fn pointer_boundaries_copy_lifetime_and_native_vm_paths() {
     for mode in [0,1,2] {
         MODE.store(mode,Ordering::SeqCst);
         assert_eq!(unsafe {handoff::trueos_cabi_http_audio_clip_submit_v1(bytes.as_ptr(),8)},0);
+        let expected_owner = if mode == 0 {
+            sink::ProducerOwner::Host
+        } else {
+            sink::ProducerOwner::Vm { id: 7, generation: GENERATION.load(Ordering::SeqCst) as u64 }
+        };
+        assert_eq!(SINK.lock().route_sources()[0].unwrap().owner, expected_owner);
         let mut out=[0;8]; SINK.lock().render(&mut out); assert_eq!(out,bytes.as_slice());
     }
     MODE.store(0,Ordering::SeqCst);
@@ -136,13 +147,14 @@ fn progressive_handoff_uses_bounded_guest_payload_and_generation() {
     assert_eq!(unsafe {stream(2,next as u64,null,0)},-2);
     MODE.store(0,Ordering::SeqCst);
 }
-'''.replace('@SINK@', str(ROOT / 'src/r/services/audio_http/sink.rs')).replace('@HANDOFF@',str(ROOT / 'src/r/services/audio_http/handoff.rs'))
+'''.replace('@SINK@', str(ROOT / 'src/r/services/audio_playback/sink.rs')).replace('@HANDOFF@',str(ROOT / 'src/r/services/audio_http/handoff.rs'))
     # Refer to the local VM stub from the otherwise unmodified production module.
     handoff = (ROOT / 'src/r/services/audio_http/handoff.rs').read_text()
     with tempfile.TemporaryDirectory(prefix='trueos-clip-handoff-') as work:
         directory=Path(work)
         fixture=directory/'handoff.rs'
-        fixture.write_text(handoff.replace('use super::{SINK, sink};','use super::{SINK, sink};\nuse crate::trueos_vm;'))
+        fixture.write_text(handoff.replace('use crate::r::services::audio_playback::{',
+                                           'use crate::trueos_vm;\nuse crate::audio_playback::{'))
         harness=harness.replace(str(ROOT / 'src/r/services/audio_http/handoff.rs'),str(fixture))
         source=directory/'tests.rs'; source.write_text(harness)
         binary=directory/'tests'

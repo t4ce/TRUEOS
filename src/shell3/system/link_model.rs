@@ -386,7 +386,7 @@ impl View {
             self.status = String::from("Device disconnected. Refreshing live HID devices.");
         }
         let mut canvas = Canvas::new(cols, rows);
-        canvas.text(0, 0, cols, "[Return]  LINK  HID combos");
+        canvas.text(0, 0, cols, "[Return]  HID Link");
         canvas.hit(
             Rect {
                 x: 0,

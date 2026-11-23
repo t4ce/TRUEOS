@@ -14,6 +14,8 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
 use trueos_time::{Duration, Instant, Timer};
 
+use crate::r::services::audio_playback::{self, VideoAudioOwner, VideoPcm};
+
 use super::{
     DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId,
     ScanoutFormat, Ui4InputEvent, WindowCreate, WindowId, WindowOwner, WindowPlacement,
@@ -862,6 +864,8 @@ struct VideoPlaybackState {
     generation: AtomicU64,
     cancelled: AtomicBool,
     paused: AtomicBool,
+    // Serialize audio lifecycle changes and slot reuse with first publication.
+    audio_published: Mutex<bool>,
     stream: Mutex<Option<VideoStream>>,
     texture_target: core::sync::atomic::AtomicU32,
     conversion: Mutex<DecodedVideoConversionState>,
@@ -873,6 +877,7 @@ impl VideoPlaybackState {
             generation: AtomicU64::new(0),
             cancelled: AtomicBool::new(false),
             paused: AtomicBool::new(false),
+            audio_published: Mutex::new(false),
             stream: Mutex::new(None),
             texture_target: core::sync::atomic::AtomicU32::new(0),
             conversion: Mutex::new(DecodedVideoConversionState::new()),
@@ -894,6 +899,45 @@ impl VideoPlaybackSession {
     fn state(self) -> &'static VideoPlaybackState {
         &VIDEO_SESSIONS[self.slot]
     }
+
+    fn audio_owner(self) -> VideoAudioOwner {
+        VideoAudioOwner {
+            slot: self.slot,
+            generation: self.generation,
+        }
+    }
+
+    pub(crate) fn begin_audio(self) -> Result<VideoPcm, i32> {
+        let state = self.state();
+        let published = state.audio_published.lock();
+        if self.is_cancelled() {
+            return Err(-125);
+        }
+        if state.texture_target.load(Ordering::Acquire) != 0 {
+            return Err(-95);
+        }
+        let owner = self.audio_owner();
+        let stream = audio_playback::begin_video_pcm(owner)?;
+        audio_playback::pause_video(owner, state.paused.load(Ordering::Acquire));
+        if *published {
+            audio_playback::start_video(owner);
+        }
+        Ok(stream)
+    }
+
+    pub(crate) fn has_published(self) -> bool {
+        let published = self.state().audio_published.lock();
+        !self.is_cancelled() && *published
+    }
+
+    fn did_publish(self) {
+        let mut published = self.state().audio_published.lock();
+        if !self.is_cancelled() && !*published {
+            *published = true;
+            audio_playback::start_video(self.audio_owner());
+        }
+    }
+
     pub(crate) fn is_cancelled(self) -> bool {
         let state = self.state();
         state.generation.load(Ordering::Acquire) != self.generation
@@ -901,12 +945,37 @@ impl VideoPlaybackSession {
             || !state.occupied.load(Ordering::Acquire)
     }
     pub(crate) fn set_paused(self, paused: bool) {
+        let state = self.state();
+        let _audio = state.audio_published.lock();
         if !self.is_cancelled() {
-            self.state().conversion.lock().clock.set_paused(paused, Instant::now().as_ticks());
-            self.state().paused.store(paused, Ordering::Release);
+            state.conversion.lock().clock.set_paused(paused, Instant::now().as_ticks());
+            state.paused.store(paused, Ordering::Release);
+            audio_playback::pause_video(self.audio_owner(), paused);
             VIDEO_PRESENTATION_WAKE.signal(());
         }
     }
+
+    /// Returns whether this is the first cancellation of the occupied slot.
+    fn cancel_current(self) -> Option<bool> {
+        let state = self.state();
+        let _audio = state.audio_published.lock();
+        if state.generation.load(Ordering::Acquire) != self.generation
+            || !state.occupied.load(Ordering::Acquire)
+        {
+            return None;
+        }
+        let first = !state.cancelled.swap(true, Ordering::AcqRel);
+        if first {
+            audio_playback::stop_video(self.audio_owner());
+            VIDEO_PRESENTATION_WAKE.signal(());
+        }
+        Some(first)
+    }
+
+    pub(crate) fn cancel(self) {
+        let _ = self.cancel_current();
+    }
+
     pub(crate) async fn wait_until_playing(self) -> bool {
         loop {
             poll_decoded_video_player_input();
@@ -926,8 +995,12 @@ impl VideoPlaybackSession {
         let stopped = stop_decoded_nv12_stream(self, reason);
         // Retain the slot on unexpected task abandonment with live GPU reads.
         if decoded_video_conversion_idle(self) {
-            self.state().texture_target.store(0, Ordering::Release);
-            self.state().occupied.store(false, Ordering::Release);
+            let state = self.state();
+            let _audio = state.audio_published.lock();
+            if state.generation.load(Ordering::Acquire) == self.generation {
+                state.texture_target.store(0, Ordering::Release);
+                state.occupied.store(false, Ordering::Release);
+            }
         }
         stopped
     }
@@ -937,14 +1010,18 @@ pub(super) fn decoded_video_window_closed(owner: WindowOwner, window: WindowId) 
     if owner != VIDEO_OWNER {
         return;
     }
-    for state in &VIDEO_SESSIONS {
+    for (slot, state) in VIDEO_SESSIONS.iter().enumerate() {
         let stream = state.stream.lock();
         if stream
             .as_ref()
             .is_some_and(|stream| stream.window == window)
         {
-            state.cancelled.store(true, Ordering::Release);
-            VIDEO_PRESENTATION_WAKE.signal(());
+            VideoPlaybackSession {
+                slot,
+                generation: state.generation.load(Ordering::Acquire),
+            }
+            .cancel();
+            return;
         }
     }
 }
@@ -1443,22 +1520,24 @@ pub(super) fn decoded_video_frame_latched(
 /// Frame/window is opened separately after the stream SPS supplies its visible
 /// dimensions.
 pub(crate) fn reserve_shell_decoded_video_player() -> Option<VideoPlaybackSession> {
-    let slot = VIDEO_SESSIONS.iter().position(|state| {
-        state
-            .occupied
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-    })?;
-    let state = &VIDEO_SESSIONS[slot];
-    state.texture_target.store(0, Ordering::Release);
-    let session = VideoPlaybackSession {
-        slot,
-        generation: state.generation.fetch_add(1, Ordering::AcqRel) + 1,
-    };
-    state.cancelled.store(false, Ordering::Release);
-    state.paused.store(false, Ordering::Release);
-    *state.stream.lock() = None;
-    Some(session)
+    reserve_video_slot(0)
+}
+
+fn reserve_video_slot(texture_target: u32) -> Option<VideoPlaybackSession> {
+    VIDEO_SESSIONS.iter().enumerate().find_map(|(slot, state)| {
+        let mut published = state.audio_published.lock();
+        if state.occupied.load(Ordering::Acquire) {
+            return None;
+        }
+        let generation = state.generation.load(Ordering::Relaxed).checked_add(1)?;
+        *published = false;
+        state.generation.store(generation, Ordering::Release);
+        state.cancelled.store(false, Ordering::Release);
+        state.paused.store(false, Ordering::Release);
+        state.texture_target.store(texture_target, Ordering::Release);
+        state.occupied.store(true, Ordering::Release);
+        Some(VideoPlaybackSession { slot, generation })
+    })
 }
 
 /// Open the reserved shell-video Frame/window at the media's visible extent.
@@ -1513,12 +1592,18 @@ fn poll_decoded_video_player_input() {
 
 fn toggle_video_playback_pause(window: WindowId) {
     for (slot, state) in VIDEO_SESSIONS.iter().enumerate() {
-        let stream = *state.stream.lock();
-        if !stream.is_some_and(|stream| stream.window == window) {
-            continue;
-        }
+        let session = {
+            let stream = state.stream.lock();
+            if !stream.as_ref().is_some_and(|stream| stream.window == window) {
+                continue;
+            }
+            VideoPlaybackSession {
+                slot,
+                generation: state.generation.load(Ordering::Acquire),
+            }
+        };
         let paused = !state.paused.load(Ordering::Acquire);
-        VideoPlaybackSession { slot, generation: state.generation.load(Ordering::Acquire) }.set_paused(paused);
+        session.set_paused(paused);
         crate::log_info!(target: "ui4";
             "ui4 video-player playback-toggle slot={} window={} state={} input=space selected-frame=1\n",
             slot + 1,
@@ -2027,7 +2112,10 @@ fn publish_prepared_video_window(
             publish_video_conversion(live, stream, &mut replacement, placement, resize_epoch)
         },
     ) {
-        Some(Ok(serial)) => serial,
+        Some(Ok(serial)) => {
+            session.did_publish();
+            serial
+        }
         None => return probe.finish(false),
         Some(Err(super::WindowBrokerError::StaleResize)) => {
             let mut outcome = probe.finish(false);
@@ -2153,9 +2241,17 @@ fn bind_decoded_source_stream(
 }
 
 pub(crate) fn stop_decoded_nv12_stream(session: VideoPlaybackSession, reason: &str) -> bool {
-    let reserved = !session.state().cancelled.swap(true, Ordering::AcqRel);
-    VIDEO_PRESENTATION_WAKE.signal(());
-    let stream = session.state().stream.lock().take();
+    let Some(reserved) = session.cancel_current() else {
+        return false;
+    };
+    let stream = {
+        let state = session.state();
+        let mut stream = state.stream.lock();
+        if state.generation.load(Ordering::Acquire) != session.generation {
+            return false;
+        }
+        stream.take()
+    };
     if let Some(stream) = stream {
         let close = finish_window_session_with_request(
             VIDEO_OWNER,
@@ -2359,27 +2455,5 @@ pub(crate) fn begin_texture_video_player(target: u32) -> Option<VideoPlaybackSes
     if target == 0 {
         return None;
     }
-    let slot = VIDEO_SESSIONS.iter().position(|state| {
-        state
-            .occupied
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-    })?;
-    let state = &VIDEO_SESSIONS[slot];
-    let session = VideoPlaybackSession {
-        slot,
-        generation: state.generation.fetch_add(1, Ordering::AcqRel) + 1,
-    };
-    state.cancelled.store(false, Ordering::Release);
-    state.paused.store(false, Ordering::Release);
-    state.texture_target.store(target, Ordering::Release);
-    Some(session)
-}
-impl VideoPlaybackSession {
-    pub(crate) fn cancel(self) {
-        if self.state().generation.load(Ordering::Acquire) == self.generation {
-            self.state().cancelled.store(true, Ordering::Release);
-            VIDEO_PRESENTATION_WAKE.signal(());
-        }
-    }
+    reserve_video_slot(target)
 }

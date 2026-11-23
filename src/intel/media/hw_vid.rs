@@ -1,4 +1,4 @@
-use alloc::{string::String, vec::Vec};
+use alloc::{string::String, sync::Arc, vec::Vec};
 use core::{
     fmt::Write,
     sync::atomic::{AtomicBool, Ordering},
@@ -14,6 +14,8 @@ const H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES: usize = 1024 * 1024 * 1024;
 const H264_TRUEOSFS_READ_CHUNK_BYTES: usize = 64 * 1024;
 const H264_FS_INDEX_READ_AHEAD_BYTES: usize = 64 * 1024;
 const H264_FS_SAMPLE_READ_AHEAD_BYTES: usize = 1024 * 1024;
+const MP4_AUDIO_READ_AHEAD_BYTES: usize = 64 * 1024;
+const MP4_AUDIO_PREROLL_FRAMES: usize = 5_760;
 const H264_FS_METADATA_CAP_BYTES: usize = 32 * 1024 * 1024;
 const H264_FS_PICTURE_CAP_BYTES: usize = 8 * 1024 * 1024;
 const H264_FS_READ_ERROR: i32 = -35;
@@ -478,13 +480,24 @@ pub(crate) async fn prepare_trueosfs_ui4_video(
 pub(crate) async fn run_prepared_trueosfs_ui4_video(
     session: crate::ui4::VideoPlaybackSession,
     path: &str,
-    prepared: PreparedTrueosFsVideo,
+    mut prepared: PreparedTrueosFsVideo,
 ) -> Result<H264PlaybackReport, &'static str> {
     let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
     let media_session = h264_reserve_decode_session(session).await?;
     let media_session_generation = media_session.generation();
     let decode_engine_name = media_session.engine_name();
     let _diagnostics = H264PlaybackGuard::begin();
+    let audio = if let H264NalReader::File(reader) = &mut prepared.reader {
+        reader
+            .soundtrack
+            .take()
+            .and_then(|track| LocalVideoAudio::start(session, reader.file, track))
+    } else {
+        None
+    };
+    if let Some(audio) = &audio {
+        audio.wait_for_preroll(session).await;
+    }
     let report = h264_i_p_playback_probe_with_reader(
         session,
         prepared.reader,
@@ -497,6 +510,12 @@ pub(crate) async fn run_prepared_trueosfs_ui4_video(
     )
     .await;
     drop(media_session);
+    if let Some(audio) = audio
+        && report.presented != 0
+        && report.first_failure_error == 0
+    {
+        audio.drain(session).await;
+    }
     crate::log_info!(target: "intel-media";
         "intel/hw_vid: media-session reserved=0 engine={} generation={} codec_mode=avc-decode submission_owner=guc direct_execlist_submit=0 scope=playback attempted={} retired={} presented={} release=stream-complete\n",
         decode_engine_name,
@@ -2624,11 +2643,21 @@ async fn h264_open_fs_reader(
                     colour: track.colour,
                 })
                 .collect();
-            return Ok((
-                H264NalReader::File(H264FileNalReader::new(session, file, Some(track))),
-                timing,
-                "trueosfs-stream-mp4-avc",
-            ));
+            let soundtrack = if fragmented {
+                None
+            } else {
+                match http_mp4::audio::Mp4Audio::open(&data, moov, len, &track) {
+                    Ok(soundtrack) => soundtrack,
+                    Err(reason) => {
+                        crate::log_warn!(target: "intel-media";
+                            "video/audio: local soundtrack unavailable reason={}\n", reason);
+                        None
+                    }
+                }
+            };
+            let mut reader = H264FileNalReader::new(session, file, Some(track));
+            reader.soundtrack = soundtrack;
+            return Ok((H264NalReader::File(reader), timing, "trueosfs-stream-mp4-avc"));
         }
     }
     if fragmented {
@@ -2653,10 +2682,121 @@ async fn h264_open_fs_reader(
     Err("mp4 has no supported AVC sample table")
 }
 
+struct LocalVideoAudio {
+    pcm: crate::r::services::audio_playback::VideoPcm,
+    progress: Arc<LocalVideoAudioProgress>,
+}
+
+#[derive(Default)]
+struct LocalVideoAudioProgress {
+    primed: AtomicBool,
+    done: AtomicBool,
+}
+
+impl LocalVideoAudio {
+    fn start(
+        session: crate::ui4::VideoPlaybackSession,
+        file: crate::r::fs::trueosfs::FileReadHandle,
+        soundtrack: http_mp4::audio::Mp4Audio,
+    ) -> Option<Self> {
+        let worker = crate::workers::pick_background_spawner()?;
+        let pcm = session
+            .begin_audio()
+            .inspect_err(|error| {
+                crate::log_warn!(target: "intel-media";
+                    "video/audio: local PCM admission failed code={}\n", error);
+            })
+            .ok()?;
+        let audio = Self {
+            pcm,
+            progress: Arc::new(LocalVideoAudioProgress::default()),
+        };
+        let task = match local_video_audio_task(session, file, soundtrack, pcm, audio.progress.clone()) {
+            Ok(task) => task,
+            Err(_) => {
+                crate::log_warn!(target: "intel-media";
+                    "video/audio: local audio worker unavailable\n");
+                return None;
+            }
+        };
+        worker.spawn(task);
+        Some(audio)
+    }
+
+    async fn wait_for_preroll(&self, session: crate::ui4::VideoPlaybackSession) {
+        while !self.progress.primed.load(Ordering::Acquire)
+            && !self.progress.done.load(Ordering::Acquire)
+            && !session.is_cancelled()
+        {
+            Timer::after_millis(4).await;
+        }
+    }
+
+    async fn drain(self, session: crate::ui4::VideoPlaybackSession) {
+        while !self.progress.done.load(Ordering::Acquire) || self.pcm.queued_frames() != 0 {
+            if !session.wait_until_playing().await {
+                break;
+            }
+            Timer::after_millis(4).await;
+        }
+    }
+}
+
+impl Drop for LocalVideoAudio {
+    fn drop(&mut self) {
+        self.pcm.abort();
+    }
+}
+
+#[trueos_executor::task(pool_size = 3)]
+async fn local_video_audio_task(
+    session: crate::ui4::VideoPlaybackSession,
+    file: crate::r::fs::trueosfs::FileReadHandle,
+    mut soundtrack: http_mp4::audio::Mp4Audio,
+    pcm: crate::r::services::audio_playback::VideoPcm,
+    progress: Arc<LocalVideoAudioProgress>,
+) {
+    let result = async {
+        let mut read_ahead = H264FsReadAhead::new(MP4_AUDIO_READ_AHEAD_BYTES);
+        let mut writer = http_mp4::audio::PcmWriter::default();
+        while let Some(sample) = soundtrack.next_sample() {
+            let mut compressed = alloc::vec![0; sample.size];
+            read_ahead.read(session, file, sample.offset as u64, &mut compressed).await?;
+            let Some(packet) = soundtrack.decode_sample(compressed)? else {
+                continue;
+            };
+            loop {
+                let consumed = writer
+                    .write(&packet, |chunk| pcm.write_pcm(chunk))
+                    .map_err(|_| "video PCM stream closed")?;
+                if pcm.queued_frames() >= MP4_AUDIO_PREROLL_FRAMES {
+                    progress.primed.store(true, Ordering::Release);
+                }
+                if consumed {
+                    break;
+                }
+                Timer::after_millis(4).await;
+            }
+        }
+        Ok::<(), &'static str>(())
+    }.await;
+    if let Err(reason) = result {
+        pcm.abort();
+        if !session.is_cancelled() {
+            crate::log_warn!(target: "intel-media";
+                "video/audio: local soundtrack stopped reason={}\n", reason);
+        }
+    } else {
+        pcm.finish();
+    }
+    progress.done.store(true, Ordering::Release);
+}
+
 struct H264FileNalReader {
     session: crate::ui4::VideoPlaybackSession,
     file: crate::r::fs::trueosfs::FileReadHandle,
     track: Option<Mp4AvcTrack>,
+    soundtrack: Option<http_mp4::audio::Mp4Audio>,
     mkv: Option<MkvAvcIndex>,
     sample: usize,
     offset: u64,
@@ -2680,6 +2820,7 @@ impl H264FileNalReader {
             session,
             file,
             track,
+            soundtrack: None,
             mkv: None,
             sample: 0,
             offset: 0,
@@ -3496,10 +3637,17 @@ async fn h264_i_p_playback_probe_with_reader(
             crate::intel::hw_pic::release_h264_output_surface(&pending.output);
         }
     }
+    let conversion_report = crate::ui4::wait_decoded_nv12_conversion_idle(session).await;
     if let H264NalReader::Http(http) = &mut reader {
+        if !session.is_cancelled()
+            && first_failure_error == 0
+            && conversion_report.first_failure_error == 0
+            && conversion_report.published != 0
+        {
+            http.http.finish_audio().await;
+        }
         http.http.close().await;
     }
-    let conversion_report = crate::ui4::wait_decoded_nv12_conversion_idle(session).await;
     // These are publication deadlines. Only the independent latched counter
     // below establishes that a picture crossed an actual display boundary.
     playback_timing.waited_frames = conversion_report.presentation_waited_frames;

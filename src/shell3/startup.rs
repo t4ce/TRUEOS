@@ -10,6 +10,10 @@ pub(crate) enum Startup {
         source: crate::ui4::Ui4CursorSource,
         anchor: (u32, u32),
     },
+    AudioLink {
+        source: crate::ui4::Ui4CursorSource,
+        anchor: (u32, u32),
+    },
     AppDb {
         source: crate::ui4::Ui4CursorSource,
         anchor: (u32, u32),
@@ -28,14 +32,16 @@ impl Startup {
             Self::GuestShell { access_account } | Self::Blueprint { access_account, .. } => {
                 Some(*access_account)
             }
-            Self::Link { .. } | Self::AppDb { .. } => None,
+            Self::Link { .. } | Self::AudioLink { .. } | Self::AppDb { .. } => None,
         }
     }
 
     /// Desktop entry points retain their placement across first-paint retries.
     pub(super) fn configure_window(&self, shell: &mut super::Shell3) {
         let anchor = match self {
-            Self::Link { anchor, .. } | Self::AppDb { anchor, .. } => anchor,
+            Self::Link { anchor, .. }
+            | Self::AudioLink { anchor, .. }
+            | Self::AppDb { anchor, .. } => anchor,
             _ => return,
         };
         let Some((cell_width, cell_height)) =
@@ -62,15 +68,23 @@ impl Startup {
 
     pub(super) fn launch(self, shell: &mut super::Shell3) {
         let desktop = match &self {
-            Self::Link { source, anchor } | Self::AppDb { source, anchor } => Some((*source, *anchor)),
+            Self::Link { source, anchor }
+            | Self::AudioLink { source, anchor }
+            | Self::AppDb { source, anchor } => Some((*source, *anchor)),
             _ => None,
         };
         match self {
             Self::GuestShell { .. } => {}
             Self::AppDb { .. } => shell.launch_named_app("AppDB", false),
-            Self::Link { .. } => {
-                match super::link::start(shell.tui_frontend()) {
-                    Ok(()) => shell.enter_native_terminal("link"),
+            Self::Link { .. } | Self::AudioLink { .. } => {
+                let frontend = shell.tui_frontend();
+                let (name, result) = if matches!(self, Self::AudioLink { .. }) {
+                    (super::audio_link::SLOT, super::audio_link::start(frontend))
+                } else {
+                    ("link", super::link::start(frontend))
+                };
+                match result {
+                    Ok(()) => shell.enter_native_terminal(name),
                     Err(error) => super::MatrixSlots::echo(
                         shell.active_matrix_slot.as_deref(),
                         shell.active_matrix_lifetime,

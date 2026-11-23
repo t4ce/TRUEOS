@@ -4,6 +4,9 @@ use super::*;
 use core::sync::atomic::Ordering;
 use crate::r::net::https::{MediaFetchCancellation, MediaRangeClient, MediaRangeIdentity};
 
+#[path = "mp4_audio.rs"]
+pub(super) mod audio;
+
 #[cfg(not(test))]
 #[path = "http_mp4_buffer.rs"]
 mod buffer;
@@ -13,6 +16,12 @@ pub(super) use buffer::BufferedHttpMp4Reader;
 const INDEX_WINDOW: usize = 64 * 1024;
 const SAMPLE_WINDOW: usize = 1024 * 1024;
 const BOX_LIMIT: usize = 65_536;
+
+enum ReadWindow {
+    Index,
+    Video,
+    Audio,
+}
 
 #[derive(Default)]
 struct Window {
@@ -37,6 +46,7 @@ struct HttpSource {
     len: usize,
     index: Window,
     samples: Window,
+    audio: Window,
     bytes_fetched: usize,
     transport: MediaRangeClient,
     // Set only after preparation, when the independent producer takes over.
@@ -106,7 +116,7 @@ impl HttpSource {
         &mut self,
         offset: usize,
         count: usize,
-        sample: bool,
+        read_window: ReadWindow,
     ) -> Result<Vec<u8>, &'static str> {
         let end = offset
             .checked_add(count)
@@ -121,10 +131,14 @@ impl HttpSource {
             .samples
             .get(offset, count)
             .or_else(|| self.index.get(offset, count))
+            .or_else(|| self.audio.get(offset, count))
         {
             return Ok(bytes);
         }
-        let budget = if sample { SAMPLE_WINDOW } else { INDEX_WINDOW };
+        let budget = match read_window {
+            ReadWindow::Video => SAMPLE_WINDOW,
+            ReadWindow::Index | ReadWindow::Audio => INDEX_WINDOW,
+        };
         let n = count.max(budget).min(self.len - offset);
         let bytes = self.fetch(offset, n).await?;
         if bytes.len() != n {
@@ -134,10 +148,10 @@ impl HttpSource {
         let result = window
             .get(offset, end - offset)
             .ok_or("video HTTP range was short")?;
-        if sample {
-            self.samples = window;
-        } else {
-            self.index = window;
+        match read_window {
+            ReadWindow::Index => self.index = window,
+            ReadWindow::Video => self.samples = window,
+            ReadWindow::Audio => self.audio = window,
         }
         Ok(result)
     }
@@ -150,7 +164,7 @@ impl HttpSource {
         if available < 8 {
             return Err("mp4 truncated box header");
         }
-        let header = self.read(offset, available, false).await?;
+        let header = self.read(offset, available, ReadWindow::Index).await?;
         let size32 = mp4_read_u32(&header, 0).ok_or("mp4 invalid box header")?;
         let (size, header_len) = if size32 == 1 {
             (
@@ -180,6 +194,7 @@ pub(super) struct HttpMp4Reader {
     source: HttpSource,
     pub(super) track: Mp4AvcTrack,
     pub(super) timing: Vec<H264SampleTiming>,
+    audio: Option<audio::Mp4Audio>,
     fragmented: bool,
     trex: Option<Mp4TrexDefaults>,
     cursor: usize,
@@ -210,6 +225,7 @@ impl HttpMp4Reader {
             len: 0,
             index: Window::default(),
             samples: Window::default(),
+            audio: Window::default(),
             bytes_fetched: 0,
             transport: MediaRangeClient::new(caller),
             stop: None,
@@ -238,7 +254,7 @@ impl HttpMp4Reader {
                     if b.end - b.start > H264_FS_METADATA_CAP_BYTES {
                         return Err("mp4 metadata exceeds streaming limit");
                     }
-                    moov_data = Some(source.read(b.start, b.end - b.start, false).await?);
+                    moov_data = Some(source.read(b.start, b.end - b.start, ReadWindow::Index).await?);
                     break;
                 }
                 cursor = b.end; // Skip mdat by its header, including a tail moov.
@@ -268,9 +284,21 @@ impl HttpMp4Reader {
             }
             let track = track.ok_or("mp4 has no supported AVC track")?;
             let trex = mp4_parse_trex_defaults(&data, moov, track.track_id);
-            Ok::<_, &'static str>((track, trex, fragmented))
+            let audio = if fragmented || indexed_length.is_some() {
+                None
+            } else {
+                match audio::Mp4Audio::open(&data, moov, source.len, &track) {
+                    Ok(audio) => audio,
+                    Err(reason) => {
+                        crate::log_warn!(target: "intel-media";
+                            "video/http: soundtrack unavailable reason={}\n", reason);
+                        None
+                    }
+                }
+            };
+            Ok::<_, &'static str>((track, trex, fragmented, audio))
         }.await;
-        let (track, trex, fragmented) = match metadata {
+        let (track, trex, fragmented, audio) = match metadata {
             Ok(metadata) => metadata,
             Err(error) => {
                 source.transport.close().await;
@@ -281,6 +309,7 @@ impl HttpMp4Reader {
             source,
             track,
             timing: Vec::new(),
+            audio,
             fragmented,
             trex,
             cursor: 0,
@@ -352,7 +381,7 @@ impl HttpMp4Reader {
             if b.end - b.start > H264_FS_METADATA_CAP_BYTES {
                 return Err("mp4 fragment metadata exceeds streaming limit");
             }
-            let data = self.source.read(b.start, b.end - b.start, false).await?;
+            let data = self.source.read(b.start, b.end - b.start, ReadWindow::Index).await?;
             let local = mp4_next_box(&data, 0, data.len()).ok_or("mp4 invalid moof")?;
             let mut mdat = None;
             while self.cursor < self.source.len {
@@ -455,7 +484,7 @@ impl HttpMp4Reader {
         if sample.size == 0 || sample.size > H264_FS_PICTURE_CAP_BYTES {
             return Err("mp4 sample exceeds decoder picture limit");
         }
-        let payload = self.source.read(sample.offset, sample.size, true).await?;
+        let payload = self.source.read(sample.offset, sample.size, ReadWindow::Video).await?;
         let mut bytes = Vec::new();
         mp4_emit_annexb_aud(&mut bytes);
         if self.sample == 0 || sample.keyframe {

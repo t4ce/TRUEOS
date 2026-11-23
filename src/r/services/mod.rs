@@ -30,3 +30,4 @@ pub(crate) mod video_open_service;
 pub mod video_service;
 pub(crate) mod live_video_service;
 pub(crate) mod audio_http;
+pub(crate) mod audio_playback;

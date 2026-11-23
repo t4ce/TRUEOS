@@ -45,7 +45,7 @@ pub(super) const CONTEXT_MENU_ROW_GAP_PX: u32 = 2;
 pub(super) const CONTEXT_MENU_ROW_HEIGHT_PX: u32 = (microfont::FHEIGHT as u32)
     .saturating_mul(2)
     .saturating_add(CONTEXT_MENU_ROW_GAP_PX);
-pub(super) const DESKTOP_CONTEXT_MENU_ENTRY_COUNT: u32 = 5;
+pub(super) const DESKTOP_CONTEXT_MENU_ENTRY_COUNT: u32 = DESKTOP_CONTEXT_MENU_ENTRIES.len() as u32;
 pub(super) const DESKTOP_CONTEXT_MENU_HORIZONTAL_INSET_PX: u32 = 12;
 pub(super) const DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX: u32 = 12;
 
@@ -82,13 +82,23 @@ static DESKTOP_SHELL_LAUNCH_INTENTS: Mutex<Vec<DesktopShellLaunchIntent, MAX_CUR
 static DESKTOP_SHELL_LAUNCH_SIGNAL: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum DesktopContextMenuAction {
+pub(super) enum DesktopContextMenuAction {
     ColorPicker,
     Chromatic,
     Shell,
-    Link,
+    HidLink,
+    AudioLink,
     AppDb,
 }
+
+pub(super) const DESKTOP_CONTEXT_MENU_ENTRIES: &[(DesktopContextMenuAction, &str)] = &[
+    (DesktopContextMenuAction::ColorPicker, "COLOR PICKER"),
+    (DesktopContextMenuAction::Chromatic, "CHROMATIC"),
+    (DesktopContextMenuAction::Shell, "SHELL"),
+    (DesktopContextMenuAction::HidLink, "HID LINK"),
+    (DesktopContextMenuAction::AudioLink, "AUDIO LINK"),
+    (DesktopContextMenuAction::AppDb, "APPDB"),
+];
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Ui4PointerEvent {
@@ -1109,7 +1119,12 @@ impl InputBroker {
                         DesktopContextMenuAction::Shell => {
                             request_desktop_shell_launch(source, x, y, false)
                         }
-                        DesktopContextMenuAction::Link => super::request_link_open(source, anchor),
+                        DesktopContextMenuAction::HidLink => {
+                            super::link_service::request_open(source, anchor);
+                        }
+                        DesktopContextMenuAction::AudioLink => {
+                            super::link_service::request_audio_open(source, anchor);
+                        }
                         DesktopContextMenuAction::AppDb => request_desktop_shell_launch(source, anchor.0, anchor.1, true),
                     }
                 }
@@ -3553,18 +3568,13 @@ fn desktop_context_menu_action_at(
     if !visual_rect_contains(menu, x, y) {
         return None;
     }
-    match y
+    let row = y
         .saturating_sub(menu.y)
         .saturating_sub(DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX)
-        / CONTEXT_MENU_ROW_HEIGHT_PX
-    {
-        0 => Some(DesktopContextMenuAction::ColorPicker),
-        1 => Some(DesktopContextMenuAction::Chromatic),
-        2 => Some(DesktopContextMenuAction::Shell),
-        3 => Some(DesktopContextMenuAction::Link),
-        4 => Some(DesktopContextMenuAction::AppDb),
-        _ => None,
-    }
+        / CONTEXT_MENU_ROW_HEIGHT_PX;
+    DESKTOP_CONTEXT_MENU_ENTRIES
+        .get(row as usize)
+        .map(|(action, _)| *action)
 }
 
 fn visual_rect_contains(rect: Ui4VisualRect, x: u32, y: u32) -> bool {
@@ -4258,7 +4268,15 @@ mod tests {
     }
 
     #[test]
-    fn desktop_context_menu_exposes_appdb_directly_below_link() {
+    fn desktop_context_menu_exposes_both_link_tools_above_appdb() {
+        assert_eq!(
+            &super::DESKTOP_CONTEXT_MENU_ENTRIES[3..],
+            &[
+                (DesktopContextMenuAction::HidLink, "HID LINK"),
+                (DesktopContextMenuAction::AudioLink, "AUDIO LINK"),
+                (DesktopContextMenuAction::AppDb, "APPDB"),
+            ],
+        );
         let menu = super::Ui4VisualRect {
             x: 0,
             y: 0,
@@ -4270,14 +4288,18 @@ mod tests {
             + 1;
         assert_eq!(
             desktop_context_menu_action_at(menu, 12, y),
-            Some(DesktopContextMenuAction::Link)
+            Some(DesktopContextMenuAction::HidLink)
         );
         assert_eq!(
             desktop_context_menu_action_at(menu, 12, y + super::CONTEXT_MENU_ROW_HEIGHT_PX),
-            Some(DesktopContextMenuAction::AppDb)
+            Some(DesktopContextMenuAction::AudioLink)
         );
         assert_eq!(
             desktop_context_menu_action_at(menu, 12, y + super::CONTEXT_MENU_ROW_HEIGHT_PX * 2),
+            Some(DesktopContextMenuAction::AppDb)
+        );
+        assert_eq!(
+            desktop_context_menu_action_at(menu, 12, y + super::CONTEXT_MENU_ROW_HEIGHT_PX * 3),
             None
         );
     }

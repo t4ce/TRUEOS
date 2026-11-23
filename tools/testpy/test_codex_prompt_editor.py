@@ -28,7 +28,8 @@ def menu_source():
     constants = (
         "CONTEXT_MENU_BORDER_PX", "CONTEXT_MENU_OFFSET_PX", "CONTEXT_MENU_WIDTH_PX",
         "CONTEXT_MENU_ROW_GAP_PX", "CONTEXT_MENU_ROW_HEIGHT_PX",
-        "DESKTOP_CONTEXT_MENU_ENTRY_COUNT", "DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX",
+        "DESKTOP_CONTEXT_MENU_ENTRY_COUNT", "DESKTOP_CONTEXT_MENU_ENTRIES",
+        "DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX",
     )
     result = "mod microfont {\n" + constant("vendor/microfont/src/lib.rs", "FHEIGHT") + "}\n"
     result += "mod color_picker {\n" + constant("src/ui4/color_picker.rs", "PICKER_WIDTH") + "}\n"
@@ -40,7 +41,7 @@ def menu_source():
     ))
     result += "mod tests { use super::*;\n#[test]\n"
     result += block((ROOT / broker).read_text(),
-                    "fn desktop_context_menu_exposes_appdb_directly_below_link()")
+                    "fn desktop_context_menu_exposes_both_link_tools_above_appdb()")
     result += """
     #[test]
     fn last_menu_row_fits_at_the_screen_corner() {

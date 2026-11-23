@@ -20,10 +20,11 @@ extern crate alloc;
 
 #[path = "@SINK@"]
 mod sink;
+mod hv { pub const TRUEOS_VM_ID_LIMIT: usize = 64; }
 
 #[cfg(test)]
 mod prefix_tests {
-    use super::sink::Sink;
+    use super::sink::{ProducerOwner, Sink};
     use alloc::{sync::Arc, vec, vec::Vec};
 
     fn pcm(frames: usize, seed: u8) -> Vec<u8> {
@@ -43,7 +44,7 @@ mod prefix_tests {
     fn joining_one_second_late_and_reconnecting_both_keep_the_complete_prefix() {
         let mut sink = Sink::new();
         let expected = pcm(48_000 * 3, 37);
-        sink.submit(&expected).unwrap();
+        sink.submit(ProducerOwner::Host, &expected).unwrap();
         let first_id = sink.snapshot().unwrap().id;
         // Reproduce the live clock consuming one second before a GET arrives.
         let mut live_tick = [0; 1_920];
@@ -73,29 +74,29 @@ mod prefix_tests {
         let mut sink = Sink::new();
         assert!(!sink.busy());
         assert!(sink.snapshot().is_none());
-        assert_eq!(sink.submit(&[]), Err(-22));
-        assert_eq!(sink.submit(&[1, 2]), Err(-22));
+        assert_eq!(sink.submit(ProducerOwner::Host, &[]), Err(-22));
+        assert_eq!(sink.submit(ProducerOwner::Host, &[1, 2]), Err(-22));
         assert!(sink.snapshot().is_none());
 
         let first = pcm(8, 11);
         let competing = pcm(5, 93);
-        sink.submit(&first).unwrap();
+        sink.submit(ProducerOwner::Host, &first).unwrap();
         let accepted = sink.snapshot().unwrap();
         assert_ne!(accepted.id, 0);
         assert!(sink.busy());
-        sink.submit(&competing).unwrap();
+        sink.submit(ProducerOwner::Host, &competing).unwrap();
         let second = sink.snapshot().unwrap();
         assert_eq!(second.id, accepted.id + 1);
         assert_eq!(second.pcm.as_ref(), competing.as_slice());
         assert_eq!(sink.active_count(), 2);
 
         // Successful discard still applies once both playback slots are used.
-        assert_eq!(sink.submit(&first), Ok(()));
+        assert_eq!(sink.submit(ProducerOwner::Host, &first), Ok(()));
         assert!(Arc::ptr_eq(&sink.snapshot().unwrap().pcm, &second.pcm));
         finish(&mut sink, first.len());
-        assert_eq!(sink.submit(&[7, 8]), Err(-22));
+        assert_eq!(sink.submit(ProducerOwner::Host, &[7, 8]), Err(-22));
         assert_eq!(sink.snapshot().unwrap().id, second.id);
-        sink.submit(&first).unwrap();
+        sink.submit(ProducerOwner::Host, &first).unwrap();
         assert_eq!(sink.snapshot().unwrap().id, second.id + 1);
     }
 
@@ -104,7 +105,7 @@ mod prefix_tests {
         let mut sink = Sink::new();
         let mut caller = pcm(1_300, 29);
         let expected = caller.clone();
-        sink.submit(&caller).unwrap();
+        sink.submit(ProducerOwner::Host, &caller).unwrap();
         let download = sink.snapshot().unwrap();
         caller.fill(0);
         drop(caller);
@@ -112,10 +113,10 @@ mod prefix_tests {
         // latest accepted clip changes. No old PCM is overwritten in place.
         finish(&mut sink, expected.len());
         let second = pcm(4, 133);
-        sink.submit(&second).unwrap();
+        sink.submit(ProducerOwner::Host, &second).unwrap();
         finish(&mut sink, second.len());
         let third = pcm(9, 215);
-        sink.submit(&third).unwrap();
+        sink.submit(ProducerOwner::Host, &third).unwrap();
         let latest = sink.snapshot().unwrap();
         assert_eq!(latest.id, download.id + 2);
         assert_eq!(latest.pcm.as_ref(), third.as_slice());
@@ -129,7 +130,7 @@ mod prefix_tests {
     fn sink_retains_only_the_last_clip_when_no_download_keeps_an_old_snapshot() {
         let mut sink = Sink::new();
         let first = pcm(32, 17);
-        sink.submit(&first).unwrap();
+        sink.submit(ProducerOwner::Host, &first).unwrap();
         let weak_first = {
             let snapshot = sink.snapshot().unwrap();
             Arc::downgrade(&snapshot.pcm)
@@ -137,7 +138,7 @@ mod prefix_tests {
         finish(&mut sink, first.len());
         assert!(weak_first.upgrade().is_some(), "completed clip remains replayable");
         let second = pcm(3, 51);
-        sink.submit(&second).unwrap();
+        sink.submit(ProducerOwner::Host, &second).unwrap();
         assert!(weak_first.upgrade().is_none(), "replacement releases old storage");
         let weak_last = {
             let snapshot = sink.snapshot().unwrap();
@@ -160,7 +161,7 @@ def main():
         work = Path(directory)
         source = work / "tests.rs"
         binary = work / "tests"
-        source.write_text(HARNESS.replace("@SINK@", str(ROOT / "src/r/services/audio_http/sink.rs")))
+        source.write_text(HARNESS.replace("@SINK@", str(ROOT / "src/r/services/audio_playback/sink.rs")))
         subprocess.run([
             "rustup", "run", "nightly-2026-07-10", "rustc", "--edition=2024", "--test",
             str(source), "-o", str(binary),

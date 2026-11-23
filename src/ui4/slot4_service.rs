@@ -639,7 +639,11 @@ fn software_cursor_scene() -> Slot4Scene {
                 Rgba8::new(180, 188, 204, 150),
             );
         }
-        for (row, label) in [(0u32, "COLOR PICKER"), (1u32, "CHROMATIC"), (2u32, "SHELL"), (3u32, "LINK"), (4u32, "APPDB")] {
+        for (index, &(action, label)) in super::input_broker::DESKTOP_CONTEXT_MENU_ENTRIES
+            .iter()
+            .enumerate()
+        {
+            let row = index as u32;
             let y = row_top
                 .saturating_add(row.saturating_mul(row_height))
                 .saturating_add(row_text_y);
@@ -647,7 +651,7 @@ fn software_cursor_scene() -> Slot4Scene {
                 .width
                 .saturating_sub(horizontal_inset.saturating_mul(2));
             let x = menu_rect.x.saturating_add(horizontal_inset);
-            if row == 0 {
+            if action == super::input_broker::DesktopContextMenuAction::ColorPicker {
                 push_microfont_rainbow_menu_text(&mut rects, x, y, width, label);
             } else {
                 push_microfont_menu_text(

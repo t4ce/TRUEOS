@@ -1,4 +1,6 @@
 mod admin;
+#[path = "system/audio_link.rs"]
+mod audio_link;
 #[path = "system/gpu.rs"]
 mod gpu;
 #[path = "system/font.rs"]

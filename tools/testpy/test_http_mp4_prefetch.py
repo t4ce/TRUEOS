@@ -6,7 +6,6 @@ keeps real queue backpressure, timing batches, cancellation and shutdown code.
 """
 from pathlib import Path
 import runpy
-import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +31,35 @@ mod workers {
 }
 pub struct Yield(bool);
 impl Future for Yield{type Output=();fn poll(mut self:core::pin::Pin<&mut Self>,_:&mut Context<'_>)->Poll<()>{if self.0{Poll::Ready(())}else{self.0=true;Poll::Pending}}}
+pub mod fake_audio {
+ #[derive(Default)]
+ pub struct Playback {
+  pub published: bool,
+  pub queued: usize,
+  pub total: usize,
+  pub max_queued: usize,
+  pub finished: bool,
+  pub signal: bool,
+ }
+ thread_local! {pub static PLAYBACK:crate::RefCell<Playback>=crate::RefCell::new(Playback::default());}
+ #[derive(Clone, Copy)]pub struct VideoPcm;
+ impl VideoPcm {
+  pub fn queued_frames(self)->usize {PLAYBACK.with(|state|state.borrow().queued)}
+  pub fn finish(self) {PLAYBACK.with(|state|state.borrow_mut().finished=true);}
+  pub fn abort(self) {PLAYBACK.with(|state|state.borrow_mut().queued=0);}
+  pub fn write_pcm(self,bytes:&[u8])->Result<usize,i32> {
+   PLAYBACK.with(|state|{
+    let mut state=state.borrow_mut();
+    let count=(bytes.len()/4).min(24_000-state.queued);
+    state.total+=count;
+    state.queued+=count;
+    state.max_queued=state.max_queued.max(state.queued);
+    state.signal|=bytes[..count*4].iter().any(|&byte|byte!=0);
+    Ok(count*4)
+   })
+  }
+ }
+}
 '''
 
 buffer_tests = r'''
@@ -85,6 +113,44 @@ buffer_tests = r'''
   let reads=crate::SERVER.with(|s|s.borrow().reads.len());crate::poll_producers();assert_eq!(crate::SERVER.with(|s|s.borrow().reads.len()),reads,"blocked producer fetched more candidates");
   assert!(next(&mut reader).unwrap().is_some());crate::poll_producers();assert_eq!(reader.shared.state.lock().queue.len(),2);assert!(reader.shared.state.lock().done);run(reader.close());
  }
+ #[test]fn muxed_soundtrack_prerolls_and_keeps_pumping_after_video_eof(){
+  use crate::fake_audio::PLAYBACK;
+  PLAYBACK.with(|playback|*playback.borrow_mut()=Default::default());
+  install(include_bytes!("soundtrack.mp4").to_vec());
+  let mut reader=run(open(None).unwrap().into_buffered()).unwrap();
+  crate::poll_producers();
+  {
+   let state=reader.shared.state.lock();
+   assert!(state.video_done,"video EOF must be available independently");
+   assert!(!state.done,"remaining soundtrack should keep prefetch alive");
+   assert!(state.audio.is_some());
+  }
+  PLAYBACK.with(|playback|{
+   let mut state=playback.borrow_mut();
+   assert!(state.queued>=SOUNDTRACK_PREROLL_FRAMES);
+   assert!(state.queued<SOUNDTRACK_PREROLL_FRAMES+1_200);
+   assert!(state.signal,"preroll must contain the AAC tone");
+   state.published=true;
+  });
+  let mut pictures=0;
+  while next(&mut reader).unwrap().is_some(){pictures+=1;}
+  assert_eq!(pictures,10);
+  for _ in 0..20 {
+   PLAYBACK.with(|playback|{
+    let mut state=playback.borrow_mut();
+    state.queued=state.queued.saturating_sub(1_920);
+   });
+   crate::poll_producers();
+  }
+  PLAYBACK.with(|playback|{
+   let state=playback.borrow();
+   assert!(state.finished);
+   assert_eq!(state.total,19_200);
+   assert!(state.max_queued<SOUNDTRACK_BUFFER_FRAMES+1_200);
+  });
+  run(reader.finish_audio());
+  run(reader.close());
+ }
 }
 '''
 
@@ -92,12 +158,20 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="http-mp4-prefetch-") as directory:
         path = Path(directory)
         http = (ROOT / "src/intel/media/http_mp4.rs").read_text().replace("#[cfg(not(test))]\n", "")
+        http = http.replace('"mp4_audio.rs"', f'"{ROOT / "src/intel/media/mp4_audio.rs"}"')
         (path / "http_mp4.rs").write_text(http)
         buffer = (ROOT / "src/intel/media/http_mp4_buffer.rs").read_text()
+        buffer = buffer.replace("use crate::r::services::audio_playback::VideoPcm;", "use crate::fake_audio::VideoPcm;")
         task_start = buffer.index("#[trueos_executor::task(pool_size = 3)]")
         buffer = buffer[:task_start] + "fn prefetch_task(shared:Arc<PrefetchShared>)->Result<impl core::future::Future<Output=()>,()>{if !crate::TASK_AVAILABLE.with(crate::Cell::get){return Err(());}Ok(async move {let reader=shared.reader.lock().take().unwrap();run_prefetch(reader,shared).await;})}\n"
         (path / "http_mp4_buffer.rs").write_text(buffer + buffer_tests)
         head = fixture["head"].replace(str(ROOT / "src/intel/media/http_mp4.rs"), str(path / "http_mp4.rs"))
+        head = head.replace("impl VideoPlaybackSession {", """
+ impl VideoPlaybackSession {
+  pub fn begin_audio(self)->Result<crate::fake_audio::VideoPcm,i32>{Ok(crate::fake_audio::VideoPcm)}
+  pub fn has_published(self)->bool {crate::fake_audio::PLAYBACK.with(|state|state.borrow().published)}
+  pub async fn wait_until_playing(self)->bool {!self.is_cancelled()}
+""")
         head = head.replace(" pub async fn after_millis(_:u64){std::future::pending::<()>().await}", " pub async fn after_millis(_:u64){crate::Yield(false).await}")
         head = head.replace("short_read:bool,", "short_read:bool,pending_at:Option<u64>,")
         head = head.replace("pub async fn close(&mut self) {}", "pub async fn close(&mut self) {crate::CLOSES.with(|n|n.set(n.get()+1));}")
@@ -116,6 +190,4 @@ if __name__ == "__main__":
             tail = tail.replace(f" fn {name}(", f" pub(crate) fn {name}(")
         tail = tail.replace("for _ in 0..32 {if", "for _ in 0..1000 {crate::poll_producers();if")
         body = head + "".join(fixture[name] for name in ["demux", "access_units", "memory_reader", "assembler", "http_nals", "nal_bits", "reader_dispatch"]) + tail
-        (path / "test.rs").write_text(body)
-        subprocess.run(["rustc", "--edition=2024", "--test", str(path / "test.rs"), "-o", str(path / "test")], check=True)
-        subprocess.run([str(path / "test"), "--test-threads=1"], check=True)
+        fixture["run_harness"](path, body, muxed_fixture=True)
