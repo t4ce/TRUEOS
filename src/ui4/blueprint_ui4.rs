@@ -52,16 +52,17 @@ use crate::intel::gpgpu::{
 
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec,
-    FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4CursorIcon, Ui4CursorSource,
+    FrameReadLease, FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4CursorIcon, Ui4CursorSource,
     Ui4CursorStep, Ui4InputEvent, Ui4KeyboardEvent, WindowBrokerError, WindowCreate, WindowId,
     WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId,
-    acquire_frame_buffer,
+    acquire_frame_buffer, acquire_published_frame,
     begin_additional_window_session, cancel_frame_buffer, commit_window_frame_refresh,
     commit_window_frame_replacement, create_frame, create_gpu_full_overwrite_frame,
     destroy_frame, finish_window_session, finish_window_session_with_request,
     focused_keyboard_state, gpgpu_rgba_surface, mark_frame_buffer_cpu_authored,
     mark_frame_buffer_fully_opaque, publish_frame_buffer, publish_gpgpu_scene_frame_buffer,
-    publish_resident_scene_frame_buffer, publish_window_frame, set_window_center_snapped_mouse,
+    publish_resident_scene_frame_buffer, publish_window_frame, published_rgba_view,
+    release_published_frame, set_window_center_snapped_mouse,
     set_window_cursor_icon, set_window_cursor_step, set_window_custom_cursor,
     set_window_hit_testable, set_window_opacity, set_window_position, take_owner_input_events,
     take_window_first_presentation, window_input_routes, window_resize_state, writable_rgba_view,
@@ -1606,6 +1607,51 @@ pub(crate) fn begin_vgpu_surface_import(
         height: destination.height,
         pitch: destination.pitch_bytes,
     })
+}
+
+pub(crate) struct VgpuPreviousFrame {
+    lease: FrameReadLease,
+    pub(crate) surface: GpgpuRgba8Surface,
+}
+
+impl Drop for VgpuPreviousFrame {
+    fn drop(&mut self) {
+        let _ = release_published_frame(self.lease);
+    }
+}
+
+/// Pin this producer's completed front buffer while its distinct back buffer
+/// is being rendered. The lease also keeps the old allocation alive on resize.
+pub(crate) fn pin_vgpu_previous_frame(
+    owner: WindowOwner,
+    window_id: u32,
+    surface_handle: u64,
+    destination: GpgpuRgba8Surface,
+) -> Option<VgpuPreviousFrame> {
+    let mut surfaces = SURFACES.lock();
+    let surface = surface_mut(&mut surfaces, owner, window_id)?;
+    if surface.vgpu_surface != Some(surface_handle) || !surface.gpu_submission_unretired {
+        return None;
+    }
+    let writer = surface.write_lease?;
+    let lease = acquire_published_frame(writer.frame).ok()?;
+    let previous = published_rgba_view(lease).ok().and_then(|view| {
+        if lease.buffer_index == writer.buffer_index
+            || destination.phys == view.phys
+            || (destination.width, destination.height) != (view.width, view.height)
+            || !view.gpu_release.is_some_and(|release| release.matches(view.phys, view.byte_len))
+        {
+            return None;
+        }
+        GpgpuRgba8Surface::new(view.phys, view.gpu, view.byte_len, view.width, view.height, view.pitch)
+    });
+    match previous {
+        Some(surface) => Some(VgpuPreviousFrame { lease, surface }),
+        None => {
+            let _ = release_published_frame(lease);
+            None
+        }
+    }
 }
 
 pub(crate) fn complete_vgpu_surface_submission(

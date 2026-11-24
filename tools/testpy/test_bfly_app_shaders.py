@@ -39,11 +39,15 @@ def main():
     package_path = native / "bfly-direct-wings.apshader"
     package = package_path.read_bytes()
     texture_bundle = (native / "app-shaders.bundle").read_bytes()
+    smoke = (native / "bfly-smoke-history.apshader").read_bytes()
+    cloud = (native / "bfly-cloud-history.apshader").read_bytes()
+    cloud_trail = (native / "bfly-cloud-trail.apshader").read_bytes()
 
     with tempfile.TemporaryDirectory(prefix="bfly-shader-intake-") as directory:
         path = Path(directory)
         (path / "src").mkdir()
         (path / "bfly.o").write_bytes(shader_elf(package))
+        (path / "history.o").write_bytes(shader_elf(smoke + cloud + cloud_trail))
         (path / "textures.o").write_bytes(shader_elf(texture_bundle))
         corrupt = bytearray(package)
         corrupt[-1] ^= 1
@@ -103,6 +107,21 @@ fn admits_direct_tessellation_stages_and_reuses_storage() {
 }
 
 #[test]
+fn admits_distinct_history_masks_and_a_shader_with_a_shared_mask() {
+    let elf = include_bytes!("../history.o");
+    app_shaders::register_blueprint_elf(elf).unwrap();
+    let smoke = app_shaders::bytes(25, 1).unwrap();
+    let cloud = app_shaders::bytes(27, 1).unwrap();
+    assert_eq!(smoke, include_bytes!(@SMOKE_MASK@));
+    assert_eq!(cloud, include_bytes!(@CLOUD_MASK@));
+    assert!(app_shaders::bytes(28, 0).is_some());
+    assert!(app_shaders::bytes(28, 1).is_none());
+    app_shaders::register_blueprint_elf(elf).unwrap();
+    assert!(core::ptr::eq(smoke, app_shaders::bytes(25, 1).unwrap()));
+    assert!(core::ptr::eq(cloud, app_shaders::bytes(27, 1).unwrap()));
+}
+
+#[test]
 fn rejects_corrupt_unknown_and_truncated_packages() {
     let corrupt = include_bytes!("../corrupt.o");
     assert_eq!(app_shaders::register_blueprint_elf(corrupt), Err("app-shader-sha256-mismatch"));
@@ -114,6 +133,8 @@ fn rejects_corrupt_unknown_and_truncated_packages() {
 }
 '''.replace("@LOADER@", json.dumps(str(ROOT / "src/gpu/app_shaders.rs"))).replace(
             "@PACKAGE@", json.dumps(str(package_path.resolve()))).replace(
+            "@SMOKE_MASK@", json.dumps(str((native / "bfly-smoke.r8").resolve()))).replace(
+            "@CLOUD_MASK@", json.dumps(str((native / "bfly-cloud.r8").resolve()))).replace(
             "@DIRECT_ID@", str(direct["id"])).replace(
             "@DIRECT_STAGE_SIZES@", json.dumps([stage["bytes"] for stage in direct["stages"]]))
         (path / "src/lib.rs").write_text(source)

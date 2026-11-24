@@ -2624,9 +2624,19 @@ fn encode_triangle_probe_batch(
     let cube_patch = crate::intel::shader::patch_cube::matches(pipeline);
     let bfly_program = bfly::for_pipeline(pipeline);
     let bfly_patches = bfly_program.is_some();
+    let instance_count = match (bfly_program, batch_mode) {
+        (Some(program), TriangleBatchMode::BflyPatchDraw { instances })
+            if program.accepts_instance_count(instances) =>
+        {
+            instances
+        }
+        (Some(_), _) | (None, TriangleBatchMode::BflyPatchDraw { .. }) => {
+            return Err("bfly-patches-instance-contract");
+        }
+        (None, _) => 1,
+    };
     let tessellated = cube_patch || bfly_patches;
     if cube_patch != matches!(batch_mode, TriangleBatchMode::CubePatchDraw)
-        || bfly_patches != matches!(batch_mode, TriangleBatchMode::BflyPatchDraw)
         || tessellated != shader_layout.tessellation.is_some()
         || (tessellated && (draw.native.is_none() || draw.vue_capture))
         || (cube_patch && !matches!(warm.device_id, 0xa780 | 0x4680))
@@ -3271,6 +3281,7 @@ fn encode_triangle_probe_batch(
     } else {
         (u32::from(sf_viewport_transform_enable) << 1) | (1 << 10)
     };
+    let line_width_raw = bfly_program.map_or(line_width_raw, bfly::Program::line_width_raw);
     let sf_dw1 = resident_line_width_sf_dw1(sf_base_dw1, batch_mode.line_raster(), line_width_raw);
     let sf_dw2 = if let Some(gs) = adjacency_gs {
         (gs.meta.sf_deref_block_size as u32) << 29
@@ -4659,8 +4670,9 @@ fn encode_triangle_probe_batch(
     }
     if let Some(program) = bfly_program {
         intel_render_focus_log!(
-            "bfly-tessellation enabled=1 topology=patchlist4 patches={} instances=16 domain=isolines hs_camera_bti=1\n",
+            "bfly-tessellation enabled=1 topology=patchlist4 patches={} instances={} domain=isolines hs_camera_bti=1\n",
             program.control_vertices() / 4,
+            instance_count,
         );
     } else if let Some([hs, ds]) = shader_layout.tessellation {
         intel_render_focus_log!(
@@ -5612,7 +5624,7 @@ fn encode_triangle_probe_batch(
         )?;
         push(batch_dwords, &mut cursor, draw.vertex_count)?;
         push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, if bfly_patches { bfly::PANEL_SIDE_INSTANCES } else { 1 })?;
+        push(batch_dwords, &mut cursor, instance_count)?;
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, 0)?;

@@ -1957,6 +1957,9 @@ fn create_resident_churn_forward_with_admission(
         let (pipeline, program) = retained_forward_pipeline()?;
         (pipeline, Some(program))
     };
+    // The colored butterfly domain shader exports one flat attribute after
+    // the VUE header and clip position. ANV reads it at offset 1, length 1.
+    let bfly_sbe_read = u8::from(program.is_none() && pipeline.ps.meta.num_varying_inputs != 0);
     let (vertex_bytes, index_bytes) = build_churn_forward_geometry(meshes)?;
     let expanded_index_blob = build_churn_expanded_indices(max_instances)?;
     let index_offset =
@@ -2166,6 +2169,7 @@ fn create_resident_churn_forward_with_admission(
     );
     Ok(ResidentChurnForward {
         draw_group_count: AtomicU32::new(CHURN_FORWARD_DRAW_COUNT as u32),
+        bfly_instances: AtomicU32::new(bfly::PANEL_SIDE_INSTANCES),
         point_width_raw: AtomicU32::new(0),
         vertex_gpu_addr: geometry.gpu_base(),
         vertex_stride: trueos_helio::churn_forward::VERTEX_STRIDE,
@@ -2191,8 +2195,8 @@ fn create_resident_churn_forward_with_admission(
             label: if program.is_some() { "helio-churn-forward-v1" } else { "bfly-patchlist4-isolines-v1" },
             vs_urb_output_length_override: Some(program.map_or(bfly::VS_URB_OUTPUT_LENGTH, |_| 1)),
             vs_urb_read_length: program.map_or(bfly::VS_URB_READ_LENGTH, |_| 1),
-            sbe_read_offset: program.map_or(0, |program| program.fixed_function().sbe_read_offset),
-            sbe_read_length: program.map_or(0, |program| program.fixed_function().sbe_read_length),
+            sbe_read_offset: program.map_or(bfly_sbe_read, |program| program.fixed_function().sbe_read_offset),
+            sbe_read_length: program.map_or(bfly_sbe_read, |program| program.fixed_function().sbe_read_length),
             force_sbe_read_offset: true,
             force_sbe_read_length: true,
             force_vs_with_vf_synthesized_vue: false,
@@ -2588,7 +2592,7 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
     }
 
     let camera_bytes = encode_camera(camera)?;
-    if resident.shader.bfly_geometry().is_some() {
+    if let Some(geometry) = resident.shader.bfly_geometry() {
         let identity = v::vgpu::RetainedTransformSeed {
             scale: [1.0; 3],
             rotation: [0.0, 0.0, 0.0, 1.0],
@@ -2597,11 +2601,14 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
         if seeds != [identity] || draw_ranges.is_some() {
             return Err("bfly-patches-fixed-instances");
         }
-        return resident
-            .camera
-            .write_and_flush(0, &camera_bytes)
-            .then_some(())
-            .ok_or("bfly-patches-camera-upload");
+        let instances = geometry
+            .instance_count(camera.previous_view_projection[11])
+            .ok_or("bfly-flock-butterfly-count")?;
+        if !resident.camera.write_and_flush(0, &camera_bytes) {
+            return Err("bfly-patches-camera-upload");
+        }
+        resident.bfly_instances.store(instances, Ordering::Release);
+        return Ok(());
     }
     let transform = resident.transform.as_ref().ok_or(
         resident

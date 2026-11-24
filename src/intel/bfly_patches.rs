@@ -6,8 +6,13 @@ use super::{
 };
 
 pub(crate) const PANEL_SIDE_INSTANCES: u32 = 16;
+const FLOCK_SIDES_PER_BUTTERFLY: u32 = 2;
+const FLOCK_BUTTERFLIES_MIN: u32 = 8;
+const FLOCK_BUTTERFLIES_MAX: u32 = 80;
 const VS_BYTES: usize = 168;
-const PS_BYTES: usize = 48;
+const WHITE_PS_BYTES: usize = 48;
+const RGB_PS_BYTES: usize = 72;
+const SMOKE_PS_BYTES: usize = 264;
 
 pub(crate) const SGVS: u32 = 0xe001_4001;
 pub(crate) const SGVS_2: [u32; 2] = [0xb001_0001, 2];
@@ -32,18 +37,39 @@ pub(crate) const WM: u32 = 0x80000040;
 pub(crate) enum Geometry {
     Closed,
     Open,
+    Flock,
+    GrowingFlock,
+    SwappingFlock,
+    SmokeFlock,
 }
 
 impl Geometry {
     const fn patch_tags(self) -> &'static [f32] {
         match self {
             Self::Closed => &[0.0, 0.0, 1.0, 0.0, 1.0],
-            Self::Open => &[0.0, 0.0, 0.0, 1.0],
+            Self::Open
+            | Self::Flock
+            | Self::GrowingFlock
+            | Self::SwappingFlock
+            | Self::SmokeFlock => &[0.0, 0.0, 0.0, 1.0],
         }
     }
 
     pub(crate) const fn control_vertices(self) -> usize {
         self.patch_tags().len() * 4
+    }
+
+    pub(crate) fn instance_count(self, butterfly_count: f32) -> Option<u32> {
+        if !matches!(
+            self,
+            Self::Flock | Self::GrowingFlock | Self::SwappingFlock | Self::SmokeFlock
+        ) {
+            return Some(PANEL_SIDE_INSTANCES);
+        }
+        let count = butterfly_count as u32;
+        ((FLOCK_BUTTERFLIES_MIN..=FLOCK_BUTTERFLIES_MAX).contains(&count)
+            && butterfly_count == count as f32)
+            .then(|| count * FLOCK_SIDES_PER_BUTTERFLY)
     }
 
     pub(crate) fn valid_vertices(self, vertices: &[u8], indices: &[u32]) -> bool {
@@ -79,6 +105,7 @@ struct Capture {
     hs_bytes: usize,
     ds_bytes: usize,
     ds_urb_read: u32,
+    line_width_px: u32,
 }
 
 pub(crate) struct Program {
@@ -88,8 +115,26 @@ pub(crate) struct Program {
 }
 
 impl Program {
+    pub(crate) fn line_width_raw(&self) -> u32 {
+        self.capture.line_width_px << 7
+    }
+
     pub(crate) fn control_vertices(&self) -> usize {
         self.capture.geometry.control_vertices()
+    }
+
+    pub(crate) fn accepts_instance_count(&self, instances: u32) -> bool {
+        match self.capture.geometry {
+            Geometry::Flock
+            | Geometry::GrowingFlock
+            | Geometry::SwappingFlock
+            | Geometry::SmokeFlock => {
+                instances % FLOCK_SIDES_PER_BUTTERFLY == 0
+                    && (FLOCK_BUTTERFLIES_MIN..=FLOCK_BUTTERFLIES_MAX)
+                        .contains(&(instances / FLOCK_SIDES_PER_BUTTERFLY))
+            }
+            _ => instances == PANEL_SIDE_INSTANCES,
+        }
     }
 
     pub(crate) fn stage_packets(&self, ksp: [u32; 2]) -> Result<[u32; 25], &'static str> {
@@ -120,7 +165,95 @@ pub(crate) fn supports_physical_device(vendor: u16, device: u16, revision: u8) -
 }
 
 // New meshes prefer the latest package for their layout. Resident meshes retain their capture.
-static PROGRAMS: [(Capture, spin::Once<Program>); 4] = [
+static PROGRAMS: [(Capture, spin::Once<Program>); 12] = [
+    (
+        Capture {
+            package_id: 26,
+            geometry: Geometry::SmokeFlock,
+            hs_bytes: 13592,
+            ds_bytes: 784,
+            ds_urb_read: 0x0050a800,
+            line_width_px: 2,
+        },
+        spin::Once::new(),
+    ),
+    (
+        Capture {
+            package_id: 23,
+            geometry: Geometry::SwappingFlock,
+            hs_bytes: 13144,
+            ds_bytes: 752,
+            ds_urb_read: 0x0050a800,
+            line_width_px: 2,
+        },
+        spin::Once::new(),
+    ),
+    (
+        Capture {
+            package_id: 22,
+            geometry: Geometry::SwappingFlock,
+            hs_bytes: 13408,
+            ds_bytes: 752,
+            ds_urb_read: 0x0050a800,
+            line_width_px: 2,
+        },
+        spin::Once::new(),
+    ),
+    (
+        Capture {
+            package_id: 21,
+            geometry: Geometry::SwappingFlock,
+            hs_bytes: 12992,
+            ds_bytes: 752,
+            ds_urb_read: 0x0050a800,
+            line_width_px: 2,
+        },
+        spin::Once::new(),
+    ),
+    (
+        Capture {
+            package_id: 20,
+            geometry: Geometry::SwappingFlock,
+            hs_bytes: 12328,
+            ds_bytes: 672,
+            ds_urb_read: 0x0050a800,
+            line_width_px: 1,
+        },
+        spin::Once::new(),
+    ),
+    (
+        Capture {
+            package_id: 19,
+            geometry: Geometry::SwappingFlock,
+            hs_bytes: 12328,
+            ds_bytes: 672,
+            ds_urb_read: 0x0050a800,
+            line_width_px: 1,
+        },
+        spin::Once::new(),
+    ),
+    (
+        Capture {
+            package_id: 18,
+            geometry: Geometry::GrowingFlock,
+            hs_bytes: 9864,
+            ds_bytes: 544,
+            ds_urb_read: 0x0050a800,
+            line_width_px: 1,
+        },
+        spin::Once::new(),
+    ),
+    (
+        Capture {
+            package_id: 17,
+            geometry: Geometry::Flock,
+            hs_bytes: 8984,
+            ds_bytes: 544,
+            ds_urb_read: 0x0050a800,
+            line_width_px: 1,
+        },
+        spin::Once::new(),
+    ),
     (
         Capture {
             package_id: 16,
@@ -128,6 +261,7 @@ static PROGRAMS: [(Capture, spin::Once<Program>); 4] = [
             hs_bytes: 6944,
             ds_bytes: 544,
             ds_urb_read: 0x0050a800,
+            line_width_px: 1,
         },
         spin::Once::new(),
     ),
@@ -138,6 +272,7 @@ static PROGRAMS: [(Capture, spin::Once<Program>); 4] = [
             hs_bytes: 6224,
             ds_bytes: 544,
             ds_urb_read: 0x0050a800,
+            line_width_px: 1,
         },
         spin::Once::new(),
     ),
@@ -148,6 +283,7 @@ static PROGRAMS: [(Capture, spin::Once<Program>); 4] = [
             hs_bytes: 4064,
             ds_bytes: 544,
             ds_urb_read: 0x0050a800,
+            line_width_px: 1,
         },
         spin::Once::new(),
     ),
@@ -158,6 +294,7 @@ static PROGRAMS: [(Capture, spin::Once<Program>); 4] = [
             hs_bytes: 4280,
             ds_bytes: 592,
             ds_urb_read: 0x0050b800,
+            line_width_px: 1,
         },
         spin::Once::new(),
     ),
@@ -169,8 +306,14 @@ fn load(capture: &'static Capture, slot: &'static spin::Once<Program>) -> Option
     }
     let code = |stage| crate::gpu::app_shaders::words(capture.package_id, stage);
     let [vs, hs, ds, ps] = [code(0)?, code(1)?, code(2)?, code(3)?];
+    let ps_bytes = match capture.geometry {
+        Geometry::SmokeFlock => SMOKE_PS_BYTES,
+        Geometry::SwappingFlock => RGB_PS_BYTES,
+        _ => WHITE_PS_BYTES,
+    };
+    let colored_segments = ps_bytes != WHITE_PS_BYTES;
     if [vs.len(), hs.len(), ds.len(), ps.len()].map(|words| words * 4)
-        != [VS_BYTES, capture.hs_bytes, capture.ds_bytes, PS_BYTES]
+        != [VS_BYTES, capture.hs_bytes, capture.ds_bytes, ps_bytes]
     {
         return None;
     }
@@ -202,7 +345,7 @@ fn load(capture: &'static Capture, slot: &'static spin::Once<Program>) -> Option
                 meta: TrianglePixelShaderMetadata {
                     kernel: ShaderKernelMetadata {
                         code_offset_bytes: VS_BYTES.next_multiple_of(64) as u32,
-                        code_size_bytes: PS_BYTES as u32,
+                        code_size_bytes: ps_bytes as u32,
                         code_alignment_bytes: 64,
                         ksp_offset_bytes: 0,
                         dispatch_mode: DispatchMode::Simd16,
@@ -212,12 +355,12 @@ fn load(capture: &'static Capture, slot: &'static spin::Once<Program>) -> Option
                         binding_table_entry_count: 1,
                         sampler_count: 0,
                     },
-                    num_varying_inputs: 0,
+                    num_varying_inputs: u8::from(colored_segments),
                     uses_vmask: true,
                     computed_stencil: false,
                     persample_dispatch: false,
                     computed_depth_mode: 0,
-                    flat_inputs: 0,
+                    flat_inputs: u32::from(colored_segments),
                 },
             },
         },

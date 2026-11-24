@@ -430,6 +430,24 @@ pub const RETAINED_VERTEX_LAYOUT_BFLY_PATCHES: u32 = 12;
 /// Three open cubic patches and one shared hinge connector, with four
 /// `[x, y, straight_edge]` control vertices in each patch.
 pub const RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES: u32 = 13;
+/// Uses the open patches with a shader-read frame payload carried in RetainedCamera.
+/// previous_view_projection[11] is the whole butterfly count in 8..=80.
+/// The renderer issues two patch instances per butterfly.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_FLOCK: u32 = 14;
+/// Open wing patches with independently growing butterflies. Uses the same
+/// instance count lane as layout 14, with separate shader motion records.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_GROWING_FLOCK: u32 = 15;
+/// Growing flock with colored segments and timed layout swaps. The swap
+/// clock in seconds is carried in previous_view_projection[12].
+pub const RETAINED_VERTEX_LAYOUT_BFLY_SWAPPING_FLOCK: u32 = 16;
+/// Swapping flock with a fading outline mask from the previous published frame.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_TRAIL_FLOCK: u32 = 17;
+/// Swapping flock with size-tiered R8 smoke revealed by downstroke trails.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK: u32 = 18;
+/// The downstroke trail uses the high-resolution R8 cloud mask.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_FLOCK: u32 = 19;
+/// A wider downstroke trail using the same resident R8 cloud mask.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK: u32 = 20;
 pub const RETAINED_TOPOLOGY_BFLY_PATCHLIST_4: u32 = 0x23;
 /// Experimental baked beveled cube: one Float3 origin, 44 zero indices.
 /// Only valid with RETAINED_TOPOLOGY_CUBE_PATCHLIST_1. HS expands each patch

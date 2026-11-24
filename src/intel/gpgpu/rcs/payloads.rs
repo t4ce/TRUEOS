@@ -204,13 +204,28 @@ fn direct_rcs_write_copy_rect_payload_at(
     payload_offset: usize,
     params: CopyRectRgba8Params,
 ) -> bool {
-    if payload_offset + COPY_RECT_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
+    direct_rcs_write_copy_rect_payload_with_texture_at(state, payload_offset, params, None)
+}
+
+fn direct_rcs_write_copy_rect_payload_with_texture_at(
+    state: DirectRcsState,
+    payload_offset: usize,
+    params: CopyRectRgba8Params,
+    texture_gpu: Option<u64>,
+) -> bool {
+    let cross_thread_bytes = if texture_gpu.is_some() {
+        BFLY_SMOKE_HISTORY_CROSS_THREAD_BYTES
+    } else {
+        COPY_RECT_CROSS_THREAD_BYTES
+    };
+    let indirect_bytes = cross_thread_bytes + COPY_RECT_PER_THREAD_BYTES;
+    if payload_offset + indirect_bytes > DIRECT_RCS_BATCH_BYTES {
         return false;
     }
 
     unsafe {
         let payload = state.batch_virt.add(payload_offset);
-        core::ptr::write_bytes(payload, 0, COPY_RECT_INDIRECT_BYTES);
+        core::ptr::write_bytes(payload, 0, indirect_bytes);
         let dwords = payload as *mut u32;
         core::ptr::write_volatile(dwords.add(3), 16);
         core::ptr::write_volatile(dwords.add(4), 1);
@@ -222,16 +237,25 @@ fn direct_rcs_write_copy_rect_payload_at(
         core::ptr::write_volatile(dwords.add(13), (params.src_gpu >> 32) as u32);
         core::ptr::write_volatile(dwords.add(14), params.dst_gpu as u32);
         core::ptr::write_volatile(dwords.add(15), (params.dst_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(16), params.src_pitch_bytes);
-        core::ptr::write_volatile(dwords.add(17), params.dst_pitch_bytes);
-        core::ptr::write_volatile(dwords.add(18), params.src_x);
-        core::ptr::write_volatile(dwords.add(19), params.src_y);
-        core::ptr::write_volatile(dwords.add(20), params.dst_x);
-        core::ptr::write_volatile(dwords.add(21), params.dst_y);
-        core::ptr::write_volatile(dwords.add(22), params.width);
-        core::ptr::write_volatile(dwords.add(23), params.height);
+        let values = if let Some(texture_gpu) = texture_gpu {
+            // IGC places all three pointers before the scalar arguments.
+            // The page-aligned R8 binding has buffer_offset=0 at byte 104.
+            core::ptr::write_volatile(dwords.add(16), texture_gpu as u32);
+            core::ptr::write_volatile(dwords.add(17), (texture_gpu >> 32) as u32);
+            dwords.add(18)
+        } else {
+            dwords.add(16)
+        };
+        core::ptr::write_volatile(values, params.src_pitch_bytes);
+        core::ptr::write_volatile(values.add(1), params.dst_pitch_bytes);
+        core::ptr::write_volatile(values.add(2), params.src_x);
+        core::ptr::write_volatile(values.add(3), params.src_y);
+        core::ptr::write_volatile(values.add(4), params.dst_x);
+        core::ptr::write_volatile(values.add(5), params.dst_y);
+        core::ptr::write_volatile(values.add(6), params.width);
+        core::ptr::write_volatile(values.add(7), params.height);
 
-        let local_ids = payload.add(COPY_RECT_CROSS_THREAD_BYTES) as *mut u16;
+        let local_ids = payload.add(cross_thread_bytes) as *mut u16;
         for lane in 0..16usize {
             core::ptr::write_volatile(local_ids.add(lane), lane as u16);
             core::ptr::write_volatile(local_ids.add(16 + lane), 0);

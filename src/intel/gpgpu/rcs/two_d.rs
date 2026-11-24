@@ -106,6 +106,7 @@ fn direct_rcs_encode_ui4_nv12_tile64_to_rgba8_frame_batch(
 fn direct_rcs_encode_copy_rect_2d_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
+    entry_offset: u64,
     params: CopyRectRgba8Params,
     src_bytes: usize,
     dst_bytes: usize,
@@ -127,7 +128,7 @@ fn direct_rcs_encode_copy_rect_2d_batch(
         state,
         COPY_RECT_BATCH_IDD_OFFSET_BYTES,
         COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
-        COPY_RECT_RGBA8_TEXT_OFFSET_BYTES,
+        entry_offset,
     ) || !direct_rcs_write_copy_rect_surface_states_at(
         state,
         COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
@@ -148,7 +149,7 @@ fn direct_rcs_encode_copy_rect_2d_batch(
     let Some(dispatch) = copy_rect_2d_dispatch(params.width, params.height) else {
         return false;
     };
-    direct_rcs_finish_two_buffer_dispatch_batch(
+    direct_rcs_finish_copy_rect_dispatch_batch(
         state,
         upload,
         COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES,
@@ -157,11 +158,83 @@ fn direct_rcs_encode_copy_rect_2d_batch(
     )
 }
 
+const BFLY_SMOKE_HISTORY_CROSS_THREAD_BYTES: usize = 128;
+const BFLY_SMOKE_HISTORY_INDIRECT_BYTES: usize =
+    BFLY_SMOKE_HISTORY_CROSS_THREAD_BYTES + COPY_RECT_PER_THREAD_BYTES;
+const BFLY_SMOKE_HISTORY_R8_SURFACE_OFFSET_BYTES: usize = 0x1100;
+const fn assert_bfly_textured_history_abi(abi: &GpgpuKernelAbiContract) {
+    assert!(abi.simd_width == 16);
+    assert!(abi.scratch_bytes == 0 && abi.slm_bytes == 0);
+    assert!(abi.cross_thread_data_bytes as usize == BFLY_SMOKE_HISTORY_CROSS_THREAD_BYTES);
+    assert!(abi.per_thread_data_bytes as usize == COPY_RECT_PER_THREAD_BYTES);
+    assert!(abi.bindings.len() == 3 && abi.bindings[2].arg_index == 10 && abi.bindings[2].bti == 2);
+    let args = abi.payload_args;
+    assert!(args.len() == 11 && args[0].offset_bytes == 48 && args[1].offset_bytes == 56);
+    assert!(args[10].arg_index == 10 && args[10].offset_bytes == 64 && args[10].size_bytes == 8);
+    let mut index = 2;
+    while index < 10 {
+        assert!(args[index].arg_index as usize == index);
+        assert!(args[index].offset_bytes as usize == 64 + 4 * index && args[index].size_bytes == 4);
+        index += 1;
+    }
+    assert!(abi.implicit_payload_args.len() == 4 && abi.implicit_payload_args[3].offset_bytes == 104);
+}
+const _: () = {
+    assert_bfly_textured_history_abi(&BFLY_SMOKE_HISTORY_RGBA8_ADLS_CPP_ABI_CONTRACT);
+    assert_bfly_textured_history_abi(&BFLY_CLOUD_HISTORY_RGBA8_ADLS_CPP_ABI_CONTRACT);
+    assert_bfly_textured_history_abi(&BFLY_CLOUD_TRAIL_RGBA8_ADLS_CPP_ABI_CONTRACT);
+};
 
+fn direct_rcs_encode_bfly_textured_history_batch(
+    state: DirectRcsState,
+    upload: UploadedKernelArtifact,
+    entry_offset: u64,
+    params: CopyRectRgba8Params,
+    src_bytes: usize,
+    dst_bytes: usize,
+    mask: &BflyHistoryR8,
+) -> bool {
+    let Some(dispatch) = copy_rect_2d_dispatch(params.width, params.height) else {
+        return false;
+    };
+    unsafe {
+        core::ptr::write_bytes(state.batch_virt, 0, DIRECT_RCS_BATCH_BYTES);
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_RCS_RESULT_BYTES);
+    }
+    direct_rcs_write_interface_descriptor_at(
+        state,
+        COPY_RECT_BATCH_IDD_OFFSET_BYTES,
+        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
+        entry_offset,
+        3,
+        (BFLY_SMOKE_HISTORY_CROSS_THREAD_BYTES / 32) as u32,
+    ) && direct_rcs_write_alpha_blend_worklist_surface_states_at(
+        state,
+        COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES,
+        COPY_RECT_BATCH_SRC_SURFACE_STATE_OFFSET_BYTES,
+        COPY_RECT_BATCH_DST_SURFACE_STATE_OFFSET_BYTES,
+        BFLY_SMOKE_HISTORY_R8_SURFACE_OFFSET_BYTES,
+        params.src_gpu,
+        src_bytes,
+        params.dst_gpu,
+        dst_bytes,
+        mask.gpu,
+        mask.bytes,
+    ) && direct_rcs_write_copy_rect_payload_with_texture_at(
+        state,
+        COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES,
+        params,
+        Some(mask.gpu),
+    ) && direct_rcs_finish_copy_rect_dispatch_batch(
+        state,
+        upload,
+        COPY_RECT_BATCH_PAYLOAD_BASE_OFFSET_BYTES,
+        BFLY_SMOKE_HISTORY_INDIRECT_BYTES,
+        dispatch,
+    )
+}
 
-
-
-fn direct_rcs_finish_two_buffer_dispatch_batch(
+fn direct_rcs_finish_copy_rect_dispatch_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
     payload_offset: usize,

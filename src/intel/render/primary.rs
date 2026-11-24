@@ -1625,7 +1625,6 @@ fn stage_resident_churn_forward_secondary(
     // The next-frame diagnostic removes the complete depth read/write path
     // only for PBR meshes; culling, geometry, and shader selection stay intact.
     let cube_patch = resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1;
-    let bfly_patches = resident.shader.bfly_geometry().is_some();
     let draw_depth = depth_config.filter(|_| draw.pbr_material.is_none() || picasso_depth_test_enabled());
     // Caller selects opaque depth-write or sorted palette depth-read-only pass.
     let blend_mode = if cube_patch && depth_config.is_some_and(|depth| !depth.write_enabled) {
@@ -1685,7 +1684,9 @@ fn stage_resident_churn_forward_secondary(
         resident_secondary_marker(RCS_EXEC_RESULT_DONE, secondary_index)?,
         match resident.topology() {
             ResidentScenePrimitiveTopology::CubePatchList1 => TriangleBatchMode::CubePatchDraw,
-            ResidentScenePrimitiveTopology::BflyPatchList4 => TriangleBatchMode::BflyPatchDraw,
+            ResidentScenePrimitiveTopology::BflyPatchList4 => TriangleBatchMode::BflyPatchDraw {
+                instances: resident.bfly_instances.load(Ordering::Acquire),
+            },
             ResidentScenePrimitiveTopology::PointList => TriangleBatchMode::PointDraw,
             ResidentScenePrimitiveTopology::LineList => TriangleBatchMode::LineDraw,
             ResidentScenePrimitiveTopology::LineListAdj => TriangleBatchMode::LineAdjDraw,
@@ -1706,7 +1707,7 @@ fn stage_resident_churn_forward_secondary(
         // Width is validated and latched with the camera under the retained
         // submission lease. Zero keeps every other resident's existing default.
         resident.point_width_raw.load(Ordering::Acquire),
-        if bfly_patches { 1 << 7 } else { 0 },
+        0,
         false,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         front_end_contract,

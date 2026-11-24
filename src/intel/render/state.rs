@@ -477,16 +477,42 @@ impl From<crate::intel::gpgpu::GpgpuHelioRetainedTransformOutput> for RetainedGr
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BflyHistory {
+    Monochrome,
+    Smoke,
+    Cloud,
+    CloudTrail,
+}
+
+impl BflyHistory {
+    pub(crate) const fn package_id(self) -> u32 {
+        match self {
+            Self::Monochrome => 24,
+            Self::Smoke => 25,
+            Self::Cloud => 27,
+            Self::CloudTrail => 28,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PicassoRetainedShader {
     Standard,
     MaxpixTornado,
     BflyPatches(crate::intel::shader::bfly_patches::Geometry),
+    BflyTrail(BflyHistory),
 }
 
 impl PicassoRetainedShader {
     pub(crate) fn bfly_geometry(self) -> Option<crate::intel::shader::bfly_patches::Geometry> {
+        use crate::intel::shader::bfly_patches::Geometry;
+
         match self {
             Self::BflyPatches(geometry) => Some(geometry),
+            Self::BflyTrail(BflyHistory::Monochrome) => Some(Geometry::SwappingFlock),
+            Self::BflyTrail(BflyHistory::Smoke | BflyHistory::Cloud | BflyHistory::CloudTrail) => {
+                Some(Geometry::SmokeFlock)
+            }
             _ => None,
         }
     }
@@ -508,6 +534,8 @@ pub(crate) struct ResidentChurnForward {
     /// already-proven indexed draw command path unchanged.
     expanded_indices: ResidentRenderBuffer,
     camera: ResidentRenderBuffer,
+    /// Indexed patch instances latched with the bfly camera upload.
+    bfly_instances: AtomicU32,
     /// Dedicated Maxpix SF PointWidth in native U8.3 units; other paths use zero.
     point_width_raw: AtomicU32,
     instances: ResidentRenderBuffer,
@@ -541,6 +569,13 @@ unsafe impl Send for ResidentChurnForward {}
 unsafe impl Sync for ResidentChurnForward {}
 
 impl ResidentChurnForward {
+    pub(crate) fn bfly_history(&self) -> Option<BflyHistory> {
+        match self.shader {
+            PicassoRetainedShader::BflyTrail(history) => Some(history),
+            _ => None,
+        }
+    }
+
     /// Picasso residents carry an immutable Render1 lease on every backing
     /// allocation.  Render0 residents return `None` and continue through the
     /// boot-lifetime kernel path.
@@ -840,7 +875,7 @@ impl TriangleBlendProbeMode {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum TriangleBatchMode {
     CubePatchDraw,
-    BflyPatchDraw,
+    BflyPatchDraw { instances: u32 },
     Draw,
     PointDraw,
     LineDraw,
@@ -2125,7 +2160,7 @@ impl TriangleBatchMode {
     fn topology(self) -> u32 {
         match self {
             Self::CubePatchDraw => 0x20, // 3DPRIM_PATCHLIST_1
-            Self::BflyPatchDraw => 0x23, // 3DPRIM_PATCHLIST_4
+            Self::BflyPatchDraw { .. } => 0x23, // 3DPRIM_PATCHLIST_4
             Self::Draw | Self::DrawScreenSpace | Self::VfDraw | Self::VfScreenSpaceDraw => {
                 intel_topology_from_helio(
                     trueos_helio::render_ir::PrimitiveTopology::TriangleList,
@@ -2190,7 +2225,7 @@ impl TriangleBatchMode {
     fn label(self) -> &'static str {
         match self {
             Self::CubePatchDraw => "cube-patchlist-1",
-            Self::BflyPatchDraw => "bfly-patchlist-4",
+            Self::BflyPatchDraw { .. } => "bfly-patchlist-4",
             Self::Draw => "draw",
             Self::PointDraw => "point-draw",
             Self::LineDraw => "line-draw",
@@ -2242,7 +2277,7 @@ impl TriangleBatchMode {
                 | Self::LineStripDraw
                 | Self::LineStripAdjDraw
                 | Self::VfLineDraw
-                | Self::BflyPatchDraw
+                | Self::BflyPatchDraw { .. }
         )
     }
 

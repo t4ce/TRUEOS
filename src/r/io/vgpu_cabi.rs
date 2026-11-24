@@ -958,6 +958,7 @@ fn broker_retained_frame_submit_inner(
     let owner = ui4_owner(principal)?;
     let completed = vgpu::submit_ui4_retained_frame(
         principal,
+        owner,
         DeviceHandle::from_raw(device),
         QueueHandle::from_raw(queue),
         submit,
@@ -967,12 +968,25 @@ fn broker_retained_frame_submit_inner(
         None,
     )
     .map_err(|error| error.errno())?;
-    crate::ui4::blueprint_ui4::complete_vgpu_resident_surface_submission(
-        owner,
-        completed.window_id,
-        completed.surface.handle.raw(),
-        completed.release,
-    )?;
+    complete_retained_frame(owner, completed)
+}
+
+fn complete_retained_frame(
+    owner: crate::ui4::WindowOwner,
+    completed: vgpu::Ui4SurfaceRetainedCompletion,
+) -> Result<v::vgpu::TimelinePoint, i32> {
+    use crate::ui4::{FrameGpuRelease, blueprint_ui4};
+
+    let window = completed.window_id;
+    let surface = completed.surface.handle.raw();
+    match completed.release {
+        FrameGpuRelease::ResidentScene(release) => {
+            blueprint_ui4::complete_vgpu_resident_surface_submission(owner, window, surface, release)?;
+        }
+        FrameGpuRelease::Compute(release) => {
+            blueprint_ui4::complete_vgpu_surface_submission(owner, window, surface, release)?;
+        }
+    }
     Ok(v::vgpu::TimelinePoint {
         value: completed.point.value,
         physical_serial: completed.point.physical_serial,
@@ -2038,6 +2052,7 @@ pub(crate) fn broker_retained_textured_frame_v1(
     let owner = ui4_owner(principal)?;
     let completed = vgpu::submit_ui4_retained_frame(
         principal,
+        owner,
         DeviceHandle::from_raw(device),
         QueueHandle::from_raw(queue),
         submit.frame,
@@ -2047,16 +2062,7 @@ pub(crate) fn broker_retained_textured_frame_v1(
         Some(submit),
     )
     .map_err(|e| e.errno())?;
-    crate::ui4::blueprint_ui4::complete_vgpu_resident_surface_submission(
-        owner,
-        completed.window_id,
-        completed.surface.handle.raw(),
-        completed.release,
-    )?;
-    Ok(v::vgpu::TimelinePoint {
-        value: completed.point.value,
-        physical_serial: completed.point.physical_serial,
-    })
+    complete_retained_frame(owner, completed)
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_vgpu_retained_textured_frame_v1(

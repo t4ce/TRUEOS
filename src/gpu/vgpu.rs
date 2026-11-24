@@ -2217,7 +2217,7 @@ pub(crate) fn create_retained_mesh(
     device_handle: DeviceHandle,
     descriptor: v::vgpu::RetainedMeshDescriptor,
 ) -> Result<RetainedMeshHandle, VgpuError> {
-    use crate::intel::render::{PicassoRetainedShader, ResidentScenePrimitiveTopology};
+    use crate::intel::render::{BflyHistory, PicassoRetainedShader, ResidentScenePrimitiveTopology};
     use crate::intel::shader::bfly_patches::Geometry;
 
     let double_sided = descriptor.topology & v::vgpu::RETAINED_MESH_FLAG_DOUBLE_SIDED != 0;
@@ -2234,6 +2234,13 @@ pub(crate) fn create_retained_mesh(
             | v::vgpu::RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO
             | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_PATCHES
             | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_GROWING_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SWAPPING_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TRAIL_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK
     ) || descriptor.vertex_count == 0
         || !topology.accepts_index_count(descriptor.index_count as usize)
     {
@@ -2247,14 +2254,25 @@ pub(crate) fn create_retained_mesh(
         }
         v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_PATCHES
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_GROWING_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SWAPPING_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TRAIL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK
             if topology == ResidentScenePrimitiveTopology::BflyPatchList4 && !double_sided =>
         {
-            let geometry = if descriptor.vertex_layout
-                == v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES
-            {
-                Geometry::Open
-            } else {
-                Geometry::Closed
+            let geometry = match descriptor.vertex_layout {
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK
+                | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_FLOCK
+                | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK => Geometry::SmokeFlock,
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SWAPPING_FLOCK
+                | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TRAIL_FLOCK => Geometry::SwappingFlock,
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_GROWING_FLOCK => Geometry::GrowingFlock,
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_FLOCK => Geometry::Flock,
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES => Geometry::Open,
+                _ => Geometry::Closed,
             };
             let count = geometry.control_vertices() as u32;
             if descriptor.vertex_count != count || descriptor.index_count != count {
@@ -2269,11 +2287,37 @@ pub(crate) fn create_retained_mesh(
             {
                 return Err(VgpuError::Unsupported);
             }
-            PicassoRetainedShader::BflyPatches(geometry)
+            let history = match descriptor.vertex_layout {
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TRAIL_FLOCK => Some(BflyHistory::Monochrome),
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK => Some(BflyHistory::Smoke),
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_FLOCK => Some(BflyHistory::Cloud),
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK => {
+                    Some(BflyHistory::CloudTrail)
+                }
+                _ => None,
+            };
+            if let Some(history) = history {
+                if !crate::gpu::app_shaders::present(history.package_id())
+                    || (history == BflyHistory::CloudTrail
+                        && !crate::gpu::app_shaders::present(BflyHistory::Cloud.package_id()))
+                {
+                    return Err(VgpuError::Unsupported);
+                }
+                PicassoRetainedShader::BflyTrail(history)
+            } else {
+                PicassoRetainedShader::BflyPatches(geometry)
+            }
         }
         v::vgpu::RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_PATCHES
-        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES => {
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_GROWING_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SWAPPING_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TRAIL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK => {
             return Err(VgpuError::Unsupported);
         }
         _ if topology == ResidentScenePrimitiveTopology::BflyPatchList4 => {
@@ -2291,7 +2335,14 @@ pub(crate) fn create_retained_mesh(
     let vertex_stride: usize = match descriptor.vertex_layout {
         v::vgpu::RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_PATCHES
-        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES => 12,
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_GROWING_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SWAPPING_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TRAIL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK => 12,
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT
         | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT_INSTANCE_PALETTE => 48,
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV => 32,
@@ -4988,6 +5039,7 @@ fn retained_textured_descriptor_valid(textured: &v::vgpu::RetainedTexturedFrameV
 /// records, topology, and resident mappings remain GPU/kernel owned.
 pub(crate) fn submit_ui4_retained_frame(
     principal: Principal,
+    owner: crate::ui4::WindowOwner,
     device_handle: DeviceHandle,
     queue_handle: QueueHandle,
     submit: v::vgpu::RetainedFrameSubmit,
@@ -4995,7 +5047,7 @@ pub(crate) fn submit_ui4_retained_frame(
     scene: Option<v::vgpu::RetainedFrameSubmitV3>,
     cubes: Option<v::vgpu::RetainedCubeDraw>,
     textured: Option<v::vgpu::RetainedTexturedFrameV1>,
-) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
+) -> Result<Ui4SurfaceRetainedCompletion, VgpuError> {
     let mut submit = submit;
     let mut group_textures = Vec::new();
     if let Some(textured) = textured {
@@ -5086,7 +5138,7 @@ pub(crate) fn submit_ui4_retained_frame(
         return Err(VgpuError::Unsupported);
     }
     let (
-        _window_id,
+        window_id,
         phys,
         producer_gpu,
         bytes,
@@ -5160,6 +5212,15 @@ pub(crate) fn submit_ui4_retained_frame(
             record.in_flight = 1;
             (Arc::clone(&record.resident), record.carrier, record.double_sided)
         };
+        if resident.bfly_history().is_some() && (submit.clear_rgba8_srgb != 0 || static_draw_count != 0) {
+            return Err(reject_retained_submission(
+                device,
+                mesh_handle,
+                surface_handle,
+                queue_handle,
+                VgpuError::Unsupported,
+            ));
+        }
         if submit.material.reserved != 0
             || submit
                 .material
@@ -5572,6 +5633,15 @@ pub(crate) fn submit_ui4_retained_frame(
             parameters: retained_material.parameters,
         }
     });
+    let previous = resident.bfly_history().and_then(|history| {
+        crate::ui4::blueprint_ui4::pin_vgpu_previous_frame(
+            owner,
+            window_id,
+            surface_handle.raw(),
+            destination,
+        )
+        .map(|previous| (history, previous))
+    });
     let rendered =
         crate::intel::render::render_resident_retained_with_static_draws_direct_to_surface(
             &resident,
@@ -5612,7 +5682,37 @@ pub(crate) fn submit_ui4_retained_frame(
                 .then_some(result.release_fence)
                 .flatten()
         })
-        .filter(|release| release.matches(phys, bytes));
+        .filter(|release| release.matches(phys, bytes))
+        .map(crate::ui4::FrameGpuRelease::ResidentScene);
+    let release = match (release, previous) {
+        (Some(raster_release), Some((style, previous))) => {
+            let history = crate::intel::gpgpu::bfly_history_rgba8_surface_full(
+                previous.surface,
+                destination,
+                style,
+            );
+            if let Some(release) = history.release.filter(|release| history.ok && release.matches(phys, bytes)) {
+                Some(crate::ui4::FrameGpuRelease::Compute(release))
+            } else if history.submitted {
+                // An unretired read can outlive the window. Keep its real
+                // front-buffer lease pinned while the writer is quarantined.
+                if !history.ok {
+                    core::mem::forget(previous);
+                }
+                None
+            } else {
+                crate::log_rate_limited!(
+                    target: "render";
+                    level: crate::log_os::LogLevel::Warn;
+                    first: 3;
+                    every: 120;
+                    "bfly trail pass rejected before submit; publishing raster output\n",
+                );
+                Some(raster_release)
+            }
+        }
+        (release, _) => release,
+    };
     let Some(release) = release else {
         let mut broker = BROKER.lock();
         if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) {
@@ -6251,14 +6351,21 @@ fn rollback_retained_submission_lease(
     }
 }
 
+pub(crate) struct Ui4SurfaceRetainedCompletion {
+    pub(crate) window_id: u32,
+    pub(crate) surface: SurfaceInfo,
+    pub(crate) release: crate::ui4::FrameGpuRelease,
+    pub(crate) point: TimelinePoint,
+}
+
 fn retire_retained_submission_lease(
     principal: Principal,
     device_handle: DeviceHandle,
     queue_handle: QueueHandle,
     surface_handle: SurfaceHandle,
     mesh_handle: RetainedMeshHandle,
-    release: crate::intel::render::ResidentSceneReleaseFence,
-) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
+    release: crate::ui4::FrameGpuRelease,
+) -> Result<Ui4SurfaceRetainedCompletion, VgpuError> {
     let physical = match require_physical() {
         Ok(physical) => physical,
         Err(error) => {
@@ -6319,7 +6426,7 @@ fn retire_retained_submission_lease(
         physical_publish_sequence: release.sequence(),
     };
     device.picasso_setup_in_flight = false;
-    Ok(Ui4SurfaceIndexedCompletion {
+    Ok(Ui4SurfaceRetainedCompletion {
         window_id,
         surface: SurfaceInfo {
             handle: surface_handle,

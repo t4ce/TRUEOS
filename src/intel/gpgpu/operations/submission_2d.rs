@@ -110,7 +110,9 @@ fn submit_copy_rect_2d(
             direct_scanout,
         );
     let batch_ok = dst_ppgtt_ok
-        && direct_rcs_encode_copy_rect_2d_batch(state, upload, params, src.bytes, dst.bytes);
+        && direct_rcs_encode_copy_rect_2d_batch(
+            state, upload, COPY_RECT_RGBA8_TEXT_OFFSET_BYTES, params, src.bytes, dst.bytes,
+        );
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
     let observed = if submitted {
         direct_rcs_poll_result_slot_timeout_ms(
