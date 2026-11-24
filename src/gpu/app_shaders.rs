@@ -20,7 +20,7 @@ enum Stage {
 struct Package {
     stages: Vec<Stage>,
 }
-static PACKAGES: [Once<Package>; 10] = [const { Once::new() }; 10];
+static PACKAGES: [Once<Package>; TRUST.len()] = [const { Once::new() }; TRUST.len()];
 
 fn u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?))

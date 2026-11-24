@@ -145,12 +145,33 @@ fn upload_triangle_shader_pipeline_at(
                 .ok_or("host-ps-pair-code-overflow")?,
         );
     }
-    let tessellation = if crate::intel::shader::patch_cube::matches(pipeline) {
+    let tessellation_code = if crate::intel::shader::patch_cube::matches(pipeline) {
         if !matches!(warm.device_id, 0xa780 | 0x4680) {
             return Err("cube-tessellation-device");
         }
-        let (offsets, tess_end) =
-            crate::intel::shader::patch_cube_upload_layout(used_end, warm.draw_state_len)?;
+        Some([
+            crate::intel::shader::patch_cube::tess_control(),
+            crate::intel::shader::patch_cube::tess_eval(),
+        ])
+    } else if let Some(program) = crate::intel::shader::bfly_patches::for_pipeline(pipeline) {
+        if !crate::intel::shader::bfly_patches_supports_physical_device(
+            0x8086,
+            warm.device_id,
+            warm.revision_id,
+        ) {
+            return Err("bfly-tessellation-device");
+        }
+        Some(program.tessellation_code)
+    } else {
+        None
+    };
+    let tessellation = if let Some([hs, ds]) = tessellation_code {
+        let (offsets, tess_end) = crate::intel::shader::tessellation_upload_layout(
+            used_end,
+            warm.draw_state_len,
+            hs.len() * 4,
+            ds.len() * 4,
+        )?;
         let mut stages = [TriangleShaderStageLayout {
             code_offset_bytes: 0,
             code_gpu_addr: 0,
@@ -158,13 +179,7 @@ fn upload_triangle_shader_pipeline_at(
             ksp_gpu_addr: 0,
             code_size_bytes: 0,
         }; 2];
-        for (index, code) in [
-            &crate::intel::shader::patch_cube::tess_control()[..],
-            &crate::intel::shader::patch_cube::tess_eval()[..],
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        for (index, code) in [hs, ds].into_iter().enumerate() {
             let offset = offsets[index];
             upload_stage_code(warm.draw_state_virt, offset, code)?;
             stages[index] = TriangleShaderStageLayout {
@@ -1875,17 +1890,11 @@ fn create_resident_churn_transform(
 
 
 
-fn create_resident_churn_forward_with_admission(
-    artifact_bytes: &'static [u8],
-    max_instances: usize,
-    meshes: &[trueos_helio::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
-    hardware_admission: ChurnHardwareAdmission,
-    carrier: Option<PicassoCarrierLease>,
-) -> Result<ResidentChurnForward, &'static str> {
-    if max_instances == 0 {
-        return Err("churn-native-instance-capacity");
-    }
-    let artifact = trueos_helio::Artifact::parse(artifact_bytes)
+fn retained_forward_pipeline() -> Result<
+    (crate::intel::shader::TrianglePipeline, trueos_helio::churn_forward::Program<'static>),
+    &'static str,
+> {
+    let artifact = trueos_helio::Artifact::parse(picasso_retained_forward_artifact()?)
         .map_err(|_| "churn-native-artifact")?;
     let program = artifact
         .churn_forward_program()
@@ -1916,6 +1925,19 @@ fn create_resident_churn_forward_with_admission(
     {
         return Err("churn-native-fixed-function-contract");
     }
+    Ok((churn_forward_pipeline(artifact, program)?, program))
+}
+
+fn create_resident_churn_forward_with_admission(
+    shader: PicassoRetainedShader,
+    max_instances: usize,
+    meshes: &[trueos_helio::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
+    hardware_admission: ChurnHardwareAdmission,
+    carrier: Option<PicassoCarrierLease>,
+) -> Result<ResidentChurnForward, &'static str> {
+    if max_instances == 0 {
+        return Err("churn-native-instance-capacity");
+    }
     let Some(dev) = crate::intel::claimed_device() else {
         return Err("no-device");
     };
@@ -1928,7 +1950,13 @@ fn create_resident_churn_forward_with_admission(
     // Validate and cache the immutable native code before acquiring any
     // mapped DMA resources. The aligned code copy is a bounded singleton;
     // service retries cannot leak another VS/PS pair.
-    let pipeline = churn_forward_pipeline(artifact, program)?;
+    use crate::intel::shader::bfly_patches as bfly;
+    let (pipeline, program) = if shader == PicassoRetainedShader::BflyPatches {
+        (*bfly::pipeline().ok_or("bfly-patches-shaders-missing")?, None)
+    } else {
+        let (pipeline, program) = retained_forward_pipeline()?;
+        (pipeline, Some(program))
+    };
     let (vertex_bytes, index_bytes) = build_churn_forward_geometry(meshes)?;
     let expanded_index_blob = build_churn_expanded_indices(max_instances)?;
     let index_offset =
@@ -2050,6 +2078,14 @@ fn create_resident_churn_forward_with_admission(
     }
     geometry.flush();
     expanded_indices.flush();
+    let sgvs = program.map_or(
+        [bfly::SGVS, bfly::SGVS_2[0], bfly::SGVS_2[1]],
+        |program| {
+            let sgvs = program.sgvs();
+            [sgvs.vf_sgvs_dw1, sgvs.vf_sgvs_2_dw1, sgvs.vf_sgvs_2_dw2]
+        },
+    );
+    let instancing = program.map(|program| program.vf_instancing());
     let native_vf = TriangleNativeDrawContract {
         hardware_admission,
         double_sided: false,
@@ -2068,13 +2104,16 @@ fn create_resident_churn_forward_with_admission(
                 byte_len: compacted_byte_len,
             },
         ],
-        vf_sgvs_dw1: sgvs.vf_sgvs_dw1,
-        vf_sgvs_2_dw1: sgvs.vf_sgvs_2_dw1,
-        vf_sgvs_2_dw2: sgvs.vf_sgvs_2_dw2,
-        vertex_element_count: 3,
-        vf_component_packing: [fetch.vf_component_packing_dw0, 0, 0, 0],
+        vf_sgvs_dw1: sgvs[0],
+        vf_sgvs_2_dw1: sgvs[1],
+        vf_sgvs_2_dw2: sgvs[2],
+        vertex_element_count: if program.is_some() { 3 } else { 2 },
+        vf_component_packing: [
+            program.map_or(bfly::VF_COMPONENT_PACKING, |program| program.vertex_fetch().vf_component_packing_dw0),
+            0, 0, 0,
+        ],
         vf_instancing: core::array::from_fn(|index| {
-            if let Some(state) = instancing.get(index) {
+            if let Some(state) = instancing.as_ref().and_then(|states| states.get(index)) {
                 TriangleVfInstancingState {
                     element_index: state.element_index as u8,
                     enabled: state.enabled,
@@ -2089,19 +2128,19 @@ fn create_resident_churn_forward_with_admission(
             }
         }),
     };
-    let (transform, transform_unavailable_reason) = match create_resident_churn_transform(
-        max_instances,
-        hardware_admission,
-        carrier,
-    ) {
-        Ok(transform) => (Some(transform), None),
-        Err(reason) => {
-            crate::log_warn!(
-                target: "render";
-                "helio-transform: optional acceleration unavailable reason={} action=native-cpu-expanded-fallback native_vs_ps=preserved window_admission=preserved\n",
-                reason,
-            );
-            (None, Some(reason))
+    let (transform, transform_unavailable_reason) = if shader == PicassoRetainedShader::BflyPatches {
+        (None, None)
+    } else {
+        match create_resident_churn_transform(max_instances, hardware_admission, carrier) {
+            Ok(transform) => (Some(transform), None),
+            Err(reason) => {
+                crate::log_warn!(
+                    target: "render";
+                    "helio-transform: optional acceleration unavailable reason={} action=native-cpu-expanded-fallback native_vs_ps=preserved window_admission=preserved\n",
+                    reason,
+                );
+                (None, Some(reason))
+            }
         }
     };
     crate::log_info!(
@@ -2145,14 +2184,15 @@ fn create_resident_churn_forward_with_admission(
             AtomicU32::new(u32::from_le_bytes([255, 255, 255, 255]))
         }),
         pipeline,
+        shader,
         sampled_material: false,
         native_vf,
         front_end_contract: TriangleFrontEndContract {
-            label: "helio-churn-forward-v1",
-            vs_urb_output_length_override: Some(1),
-            vs_urb_read_length: 1,
-            sbe_read_offset: fixed.sbe_read_offset,
-            sbe_read_length: fixed.sbe_read_length,
+            label: if program.is_some() { "helio-churn-forward-v1" } else { "bfly-patchlist4-isolines-v1" },
+            vs_urb_output_length_override: Some(program.map_or(bfly::VS_URB_OUTPUT_LENGTH, |_| 1)),
+            vs_urb_read_length: program.map_or(bfly::VS_URB_READ_LENGTH, |_| 1),
+            sbe_read_offset: program.map_or(0, |program| program.fixed_function().sbe_read_offset),
+            sbe_read_length: program.map_or(0, |program| program.fixed_function().sbe_read_length),
             force_sbe_read_offset: true,
             force_sbe_read_length: true,
             force_vs_with_vf_synthesized_vue: false,
@@ -2188,10 +2228,14 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     vertex_stride: u32,
     double_sided: bool,
     topology: ResidentScenePrimitiveTopology,
-    maxpix_tornado: bool,
+    shader: PicassoRetainedShader,
     instance_palette: bool,
 ) -> Result<ResidentChurnForward, &'static str> {
-    if instance_palette && (vertex_stride != 48 || max_instances > 255 || maxpix_tornado) {
+    use crate::intel::shader::bfly_patches as bfly;
+
+    let maxpix_tornado = shader == PicassoRetainedShader::MaxpixTornado;
+    let bfly_patches = shader == PicassoRetainedShader::BflyPatches;
+    if instance_palette && (vertex_stride != 48 || max_instances > 255 || shader != PicassoRetainedShader::Standard) {
         return Err("picasso-instance-palette-contract");
     }
     if maxpix_tornado
@@ -2200,6 +2244,12 @@ pub(crate) fn create_resident_picasso_retained_mesh(
             || topology != ResidentScenePrimitiveTopology::PointList)
     {
         return Err("maxpix-pointlist-contract");
+    }
+    if bfly_patches != (topology == ResidentScenePrimitiveTopology::BflyPatchList4)
+        || (bfly_patches
+            && (vertex_stride != 12 || max_instances != 1 || !bfly::valid_geometry(vertices, indices)))
+    {
+        return Err("bfly-patches-contract");
     }
     let cube_patch = topology == ResidentScenePrimitiveTopology::CubePatchList1;
     if cube_patch
@@ -2211,7 +2261,7 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     {
         return Err("cube-patch-seed-contract");
     }
-    if !matches!(vertex_stride, 24 | 32 | 48) && !(cube_patch && vertex_stride == 12) {
+    if !matches!(vertex_stride, 24 | 32 | 48) && !((cube_patch || bfly_patches) && vertex_stride == 12) {
         return Err("picasso-retained-vertex-layout");
     }
     let sampled_material = matches!(vertex_stride, 32 | 48);
@@ -2227,11 +2277,26 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         return Err("picasso-retained-geometry-shape");
     }
 
+    let index_bytes = indices
+        .len()
+        .checked_mul(size_of::<u32>())
+        .ok_or("picasso-retained-geometry-size")?;
+    let index_offset =
+        crate::intel::align_up(vertices.len(), 64).ok_or("picasso-retained-geometry-size")?;
+    let geometry_bytes = index_offset
+        .checked_add(index_bytes)
+        .ok_or("picasso-retained-geometry-size")?;
+    let vertex_count = u32::try_from(vertices.len() / vertex_stride)
+        .map_err(|_| "picasso-retained-geometry-size")?;
+    let index_count = u32::try_from(indices.len()).map_err(|_| "picasso-retained-geometry-size")?;
+    let vertex_bytes = u32::try_from(vertices.len()).map_err(|_| "picasso-retained-geometry-size")?;
+    let index_byte_len = u32::try_from(index_bytes).map_err(|_| "picasso-retained-geometry-size")?;
+
     // This performs the standard authenticated shader/compute admission and
     // allocates the persistent GPU seed, instance, compaction, and indirect
     // ranges. Only its synthetic cube geometry is replaced below.
     let mut resident = create_resident_churn_forward_with_admission(
-        picasso_retained_forward_artifact()?,
+        shader,
         max_instances,
         &bootstrap_churn_meshes(),
         ChurnHardwareAdmission::ValidatedProduction,
@@ -2333,10 +2398,14 @@ pub(crate) fn create_resident_picasso_retained_mesh(
             force_vs_with_vf_synthesized_vue: false,
         };
     }
+    if bfly_patches {
+        resident.vertex_stride = 12;
+        resident.vertex_format = TriangleVertexFormat::Float3;
+    }
     // Install a valid fallback for bootstrap. Every retained frame replaces
     // this with its live world-to-clip camera before the transform/draw pass;
     // the zeroed Churn allocation would produce clip_position.w == 0.
-    const CAMERA_BYTES: usize = 368;
+    const CAMERA_BYTES: usize = trueos_helio::churn::GpuCameraUniforms::BYTE_LEN;
     let mut camera_bytes = [0u8; CAMERA_BYTES];
     for matrix_offset in [0usize, 64, 128, 192, 304] {
         for diagonal in [0usize, 5, 10, 15] {
@@ -2348,19 +2417,13 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         let _ = release_resident_churn_forward(&resident);
         return Err("picasso-retained-camera-upload");
     }
-    let index_bytes = indices
-        .len()
-        .checked_mul(core::mem::size_of::<u32>())
-        .ok_or("picasso-retained-geometry-size")?;
-    let index_offset =
-        crate::intel::align_up(vertices.len(), 64).ok_or("picasso-retained-geometry-size")?;
-    let geometry_bytes = index_offset
-        .checked_add(index_bytes)
-        .ok_or("picasso-retained-geometry-size")?;
     let geometry = match allocate_resident_render_buffer_for_carrier(Some(carrier), geometry_bytes)
     {
         Ok(geometry) => geometry,
-        Err(error) => return Err(error),
+        Err(error) => {
+            let _ = release_resident_churn_forward(&resident);
+            return Err(error);
+        }
     };
     let mut index_blob = Vec::with_capacity(index_bytes);
     for index in indices {
@@ -2368,17 +2431,11 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     }
     if !geometry.write(0, vertices) || !geometry.write(index_offset, &index_blob) {
         let _ = release_resident_render_buffer(&geometry);
+        let _ = release_resident_churn_forward(&resident);
         return Err("picasso-retained-geometry-upload");
     }
     geometry.flush();
 
-    let vertex_count = u32::try_from(vertices.len() / vertex_stride)
-        .map_err(|_| "picasso-retained-geometry-size")?;
-    let index_count = u32::try_from(indices.len()).map_err(|_| "picasso-retained-geometry-size")?;
-    let vertex_bytes =
-        u32::try_from(vertices.len()).map_err(|_| "picasso-retained-geometry-size")?;
-    let index_byte_len =
-        u32::try_from(index_bytes).map_err(|_| "picasso-retained-geometry-size")?;
     let old_geometry = core::mem::replace(&mut resident.geometry, geometry);
     // V1/V2 start with one full-mesh indexed-indirect draw. V3 publishes its
     // submesh groups with the seeds; upper flag bits carry group-local slots.
@@ -2391,6 +2448,7 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     resident.index_bytes = index_byte_len;
     resident.topology = topology;
     if !release_resident_render_buffer(&old_geometry) {
+        let _ = release_resident_churn_forward(&resident);
         return Err("picasso-retained-bootstrap-release");
     }
     Ok(resident)
@@ -2529,12 +2587,27 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
         bytes
     }
 
+    let camera_bytes = encode_camera(camera)?;
+    if resident.shader == PicassoRetainedShader::BflyPatches {
+        let identity = v::vgpu::RetainedTransformSeed {
+            scale: [1.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            ..Default::default()
+        };
+        if seeds != [identity] || draw_ranges.is_some() {
+            return Err("bfly-patches-fixed-instances");
+        }
+        return resident
+            .camera
+            .write_and_flush(0, &camera_bytes)
+            .then_some(())
+            .ok_or("bfly-patches-camera-upload");
+    }
     let transform = resident.transform.as_ref().ok_or(
         resident
             .retained_transform_unavailable_reason()
             .unwrap_or("picasso-retained-transform-unavailable"),
     )?;
-    let camera_bytes = encode_camera(camera)?;
     let maxpix = core::ptr::eq(
         resident.pipeline.vs.code.as_ptr(),
         crate::intel::shader::maxpix_tornado::pipeline()
@@ -2649,7 +2722,7 @@ fn prepare_resident_churn_forward_draw(
             byte_len: resident.index_bytes,
             gpu_addr: resident.index_gpu_addr,
         }),
-        indirect_args_gpu_addr: Some(
+        indirect_args_gpu_addr: (resident.shader != PicassoRetainedShader::BflyPatches).then_some(
             resident.indirect_args.gpu_base()
                 + (group * trueos_helio::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
         ),

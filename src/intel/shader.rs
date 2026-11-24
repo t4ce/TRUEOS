@@ -89,14 +89,24 @@ pub(crate) fn patch_cube_upload_layout(
     after: usize,
     capacity: usize,
 ) -> Result<([usize; 2], usize), &'static str> {
+    tessellation_upload_layout(
+        after,
+        capacity,
+        patch_cube::tess_control().len() * 4,
+        patch_cube::tess_eval().len() * 4,
+    )
+}
+
+pub(crate) fn tessellation_upload_layout(
+    after: usize,
+    capacity: usize,
+    hs_bytes: usize,
+    ds_bytes: usize,
+) -> Result<([usize; 2], usize), &'static str> {
     let hs = after.checked_add(63).ok_or("tess-code-align")? & !63;
-    let hs_end = hs
-        .checked_add(patch_cube::tess_control().len() * 4)
-        .ok_or("tess-code-size")?;
+    let hs_end = hs.checked_add(hs_bytes).ok_or("tess-code-size")?;
     let ds = hs_end.checked_add(63).ok_or("tess-code-align")? & !63;
-    let end = ds
-        .checked_add(patch_cube::tess_eval().len() * 4)
-        .ok_or("tess-code-size")?;
+    let end = ds.checked_add(ds_bytes).ok_or("tess-code-size")?;
     // The state writer starts on a fresh page; reserve its descriptor page.
     let state = end.checked_add(4095).ok_or("tess-state-align")? & !4095;
     if state.checked_add(4096).is_none_or(|limit| limit > capacity) {
@@ -111,16 +121,32 @@ pub(crate) fn tessellation_stage_packets(ksp: Option<[u32; 2]>) -> Result<[u32; 
     words[0] = 0x781b0007;
     words[9] = 0x781c0003;
     words[14] = 0x781d0009;
-    if let Some([hs, ds]) = ksp {
-        if hs == 0 || ds == 0 || hs & 63 != 0 || ds & 63 != 0 {
-            return Err("tessellation-ksp-alignment");
-        }
-        words[..9].copy_from_slice(&patch_cube::HS_PACKET);
-        words[9..14].copy_from_slice(&patch_cube::TE_PACKET);
-        words[14..].copy_from_slice(&patch_cube::DS_PACKET);
-        words[3] = hs;
-        words[15] = ds;
+    if let Some(ksp) = ksp {
+        return relocate_tessellation_stage_packets(
+            patch_cube::HS_PACKET,
+            patch_cube::TE_PACKET,
+            patch_cube::DS_PACKET,
+            ksp,
+        );
     }
+    Ok(words)
+}
+
+fn relocate_tessellation_stage_packets(
+    hs: [u32; 9],
+    te: [u32; 5],
+    ds: [u32; 11],
+    [hs_ksp, ds_ksp]: [u32; 2],
+) -> Result<[u32; 25], &'static str> {
+    if hs_ksp == 0 || ds_ksp == 0 || (hs_ksp | ds_ksp) & 63 != 0 {
+        return Err("tessellation-ksp-alignment");
+    }
+    let mut words = [0; 25];
+    words[..9].copy_from_slice(&hs);
+    words[9..14].copy_from_slice(&te);
+    words[14..].copy_from_slice(&ds);
+    words[3] = hs_ksp;
+    words[15] = ds_ksp;
     Ok(words)
 }
 
@@ -145,6 +171,12 @@ pub(crate) mod maxpix_tornado;
 #[cfg(test)]
 #[path = "maxpix_tests.rs"]
 mod maxpix_tests;
+
+#[path = "bfly_patches.rs"]
+pub(crate) mod bfly_patches;
+pub(crate) use bfly_patches::{
+    pipeline as bfly_patches_pipeline, supports_physical_device as bfly_patches_supports_physical_device,
+};
 
 pub(crate) fn line_adjacency_geometry_shader() -> &'static AdjacencyGeometryShader {
     generated_adjacency_gs::line_adjacency_geometry_shader()

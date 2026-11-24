@@ -58,6 +58,8 @@ pub(crate) struct ResidentSceneDraw<'a> {
 pub(crate) enum ResidentScenePrimitiveTopology {
     /// Dedicated baked cube contract, not a generic tessellation shader API.
     CubePatchList1,
+    /// Four control points per Bézier or straight closure.
+    BflyPatchList4,
     PointList,
     LineList,
     /// Intel's native `3DPRIM_LINELIST_ADJ`; four VF vertices form one line
@@ -100,6 +102,7 @@ impl ResidentScenePrimitiveTopology {
     pub(crate) const fn accepts_index_count(self, count: usize) -> bool {
         match self {
             Self::CubePatchList1 => count == 44,
+            Self::BflyPatchList4 => count == crate::intel::shader::bfly_patches::CONTROL_VERTICES,
             Self::PointList => count >= 1,
             Self::LineList => count >= 2 && count.is_multiple_of(2),
             Self::LineListAdj => count >= 4 && count.is_multiple_of(4),
@@ -1361,7 +1364,7 @@ pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
         clear_rgba,
         diagnostic_logs,
         false,
-        true,
+        resident.shader != PicassoRetainedShader::BflyPatches,
         ResidentSceneRasterQuality::SingleSample,
         destination.width as usize,
         destination.height as usize,
@@ -1540,8 +1543,9 @@ fn stage_resident_scene_secondary(
         resident_secondary_marker(RCS_EXEC_RESULT_DRAW_POST3D, secondary_index)?,
         resident_secondary_marker(RCS_EXEC_RESULT_DONE, secondary_index)?,
         match topology {
-            ResidentScenePrimitiveTopology::CubePatchList1 => {
-                return Err("cube-patch-requires-retained-contract");
+            ResidentScenePrimitiveTopology::CubePatchList1
+            | ResidentScenePrimitiveTopology::BflyPatchList4 => {
+                return Err("patch-requires-retained-contract");
             }
             ResidentScenePrimitiveTopology::PointList => TriangleBatchMode::PointDraw,
             ResidentScenePrimitiveTopology::LineList => TriangleBatchMode::LineDraw,
@@ -1608,7 +1612,7 @@ fn stage_resident_churn_forward_secondary(
     state_warm: RenderWarmState,
     state_gpu: u64,
     mut draw: TriangleDrawPrep,
-    depth_config: TriangleDepthConfig,
+    depth_config: Option<TriangleDepthConfig>,
     resident: &ResidentChurnForward,
     uv_pipeline: bool,
     secondary_index: usize,
@@ -1618,10 +1622,10 @@ fn stage_resident_churn_forward_secondary(
     // The next-frame diagnostic removes the complete depth read/write path
     // only for PBR meshes; culling, geometry, and shader selection stay intact.
     let cube_patch = resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1;
-    let draw_depth =
-        (draw.pbr_material.is_none() || picasso_depth_test_enabled()).then_some(depth_config);
+    let bfly_patches = resident.shader == PicassoRetainedShader::BflyPatches;
+    let draw_depth = depth_config.filter(|_| draw.pbr_material.is_none() || picasso_depth_test_enabled());
     // Caller selects opaque depth-write or sorted palette depth-read-only pass.
-    let blend_mode = if cube_patch && !depth_config.write_enabled {
+    let blend_mode = if cube_patch && depth_config.is_some_and(|depth| !depth.write_enabled) {
         TriangleBlendProbeMode::StraightAlpha
     } else {
         TriangleBlendProbeMode::MesaZeroedState
@@ -1678,6 +1682,7 @@ fn stage_resident_churn_forward_secondary(
         resident_secondary_marker(RCS_EXEC_RESULT_DONE, secondary_index)?,
         match resident.topology() {
             ResidentScenePrimitiveTopology::CubePatchList1 => TriangleBatchMode::CubePatchDraw,
+            ResidentScenePrimitiveTopology::BflyPatchList4 => TriangleBatchMode::BflyPatchDraw,
             ResidentScenePrimitiveTopology::PointList => TriangleBatchMode::PointDraw,
             ResidentScenePrimitiveTopology::LineList => TriangleBatchMode::LineDraw,
             ResidentScenePrimitiveTopology::LineListAdj => TriangleBatchMode::LineAdjDraw,
@@ -1698,7 +1703,7 @@ fn stage_resident_churn_forward_secondary(
         // Width is validated and latched with the camera under the retained
         // submission lease. Zero keeps every other resident's existing default.
         resident.point_width_raw.load(Ordering::Acquire),
-        0,
+        if bfly_patches { 1 << 7 } else { 0 },
         false,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         front_end_contract,
@@ -3318,7 +3323,7 @@ fn submit_resident_churn_forward_geometry_batched(
     cube_companion: Option<&ResidentChurnForward>,
     static_draws: &[ResidentSceneDraw<'_>],
     clear: [u8; 4],
-    depth_config: TriangleDepthConfig,
+    depth_config: Option<TriangleDepthConfig>,
     render_target_gpu: u64,
     render_target_surface_format: u32,
     render_target_pitch: usize,
@@ -3328,6 +3333,10 @@ fn submit_resident_churn_forward_geometry_batched(
     capture_pipeline_stats: bool,
     capture_vue: bool,
 ) -> Result<ResidentSceneGeometryResult, &'static str> {
+    let bfly_patches = resident.shader == PicassoRetainedShader::BflyPatches;
+    if depth_config.is_none() != bfly_patches || (bfly_patches && cube_companion.is_some()) {
+        return Err("retained-scene-depth-contract");
+    }
     let render_lease = if carrier.is_none() {
         Some(reserve_warm_render_storage("helio-churn-forward").ok_or("render-storage-busy")?)
     } else {
@@ -3452,10 +3461,12 @@ fn submit_resident_churn_forward_geometry_batched(
     }
 
     let clear_secondary_index = transform_secondary_count;
-    let mut clear_depth = depth_config;
-    clear_depth.hiz_clear = clear_depth.hiz.is_some();
-    clear_depth.write_enabled = !clear_depth.hiz_clear;
-    clear_depth.compare_function = COMPARE_FUNCTION_ALWAYS;
+    let clear_depth = depth_config.map(|mut depth| {
+        depth.hiz_clear = depth.hiz.is_some();
+        depth.write_enabled = !depth.hiz_clear;
+        depth.compare_function = COMPARE_FUNCTION_ALWAYS;
+        depth
+    });
     let (clear_warm, clear_state_gpu) =
         resident_scene_state_warm(state, warm, clear_secondary_index)?;
     let clear_draw = prepare_triangle_draw_resources_for_scene_vertex_slice(
@@ -3475,7 +3486,7 @@ fn submit_resident_churn_forward_geometry_batched(
         clear_state_gpu,
         clear_draw,
         TriangleBlendProbeMode::MesaZeroedState,
-        Some(clear_depth),
+        clear_depth,
         clear,
         None,
         ResidentSceneFragmentContract::ConstantRgba,
@@ -3488,9 +3499,11 @@ fn submit_resident_churn_forward_geometry_batched(
         result_ggtt_gpu,
     )?;
 
-    let mut draw_depth = depth_config;
-    draw_depth.write_enabled = true;
-    draw_depth.compare_function = COMPARE_FUNCTION_LESS;
+    let draw_depth = depth_config.map(|mut depth| {
+        depth.write_enabled = true;
+        depth.compare_function = COMPARE_FUNCTION_LESS;
+        depth
+    });
     for group in 0..resident_draw_count {
         let secondary_index = group
             + 1
@@ -3500,10 +3513,10 @@ fn submit_resident_churn_forward_geometry_batched(
             } else {
                 0
             };
-        let mut group_depth = draw_depth;
-        if cube_two_pass && group == 1 {
-            group_depth.write_enabled = false;
-        }
+        let group_depth = draw_depth.map(|mut depth| {
+            depth.write_enabled = !cube_two_pass || group == 0;
+            depth
+        });
         let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
         match transform_handoff {
             Some(RetainedGraphicsHandoff::NativeMatrices) | None => {
@@ -3553,7 +3566,7 @@ fn submit_resident_churn_forward_geometry_batched(
                     state_gpu,
                     draw,
                     TriangleBlendProbeMode::MesaZeroedState,
-                    Some(draw_depth),
+                    draw_depth,
                     resident.material_rgba(group % trueos_helio::churn::MATERIAL_COUNT),
                     None,
                     ResidentSceneFragmentContract::ConstantRgba,
@@ -3588,7 +3601,7 @@ fn submit_resident_churn_forward_geometry_batched(
             state_gpu,
             draw,
             TriangleBlendProbeMode::StraightAlpha,
-            Some(draw_depth),
+            draw_depth,
             scene.rgba,
             scene.sampled_texture,
             scene.fragment_contract,
@@ -3620,8 +3633,10 @@ fn submit_resident_churn_forward_geometry_batched(
             )
             .ok_or("retained-companion-draw-resources")?
             .with_rt_surface_format(render_target_surface_format);
-            let mut depth = draw_depth;
-            depth.write_enabled = group == 0;
+            let depth = draw_depth.map(|mut depth| {
+                depth.write_enabled = group == 0;
+                depth
+            });
             stage_resident_churn_forward_secondary(
                 warm,
                 state_warm,
@@ -4164,7 +4179,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
                 cube_companion,
                 draws,
                 clear,
-                depth_config.ok_or("churn-native-depth")?,
+                depth_config,
                 render_target_gpu,
                 render_target_surface_format,
                 render_target_pitch,

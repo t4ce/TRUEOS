@@ -2260,6 +2260,37 @@ fn validate_triangle_native_draw_contract(
     Ok(())
 }
 
+fn validate_bfly_patch_draw_contract(
+    draw: TriangleDrawPrep,
+    native: TriangleNativeDrawContract,
+) -> Result<(), &'static str> {
+    use crate::intel::shader::bfly_patches as bfly;
+
+    let camera = native.vs_storage_bindings[0];
+    let count = bfly::CONTROL_VERTICES as u32;
+    if draw.vertex_format != TriangleVertexFormat::Float3
+        || draw.vertex_stride != 12
+        || draw.vertex_count != count
+        || draw.vertex_buffer_bytes != count * 12
+        || draw.index_buffer.is_none_or(|idx| idx.index_count != count || idx.byte_len != count * 4)
+        || draw.indirect_args_gpu_addr.is_some()
+        || draw.sampled_texture.is_some()
+        || draw.pbr_material.is_some()
+        || camera.gpu_addr == 0
+        || camera.byte_len != trueos_helio::churn::GpuCameraUniforms::BYTE_LEN as u32
+        || native.vertex_element_count != 2
+        || native.vf_sgvs_dw1 != bfly::SGVS
+        || [native.vf_sgvs_2_dw1, native.vf_sgvs_2_dw2] != bfly::SGVS_2
+        || native.vf_component_packing != [bfly::VF_COMPONENT_PACKING, 0, 0, 0]
+        || native.vf_instancing.iter().enumerate().any(|(index, element)| {
+            usize::from(element.element_index) != index || element.enabled || element.step_rate != 0
+        })
+    {
+        return Err("bfly-patches-native-contract");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod retained_native_matrix_draw_contract_tests {
     use super::{
@@ -2587,16 +2618,24 @@ fn encode_triangle_probe_batch(
     backend_probe_mode: BackendProbeMode,
     post_draw_sync_variant: PostDrawSyncVariant,
 ) -> Result<usize, &'static str> {
+    use crate::intel::shader::bfly_patches as bfly;
+
     let mut cursor = 0usize;
     let cube_patch = crate::intel::shader::patch_cube::matches(pipeline);
+    let bfly_program = bfly::for_pipeline(pipeline);
+    let bfly_patches = bfly_program.is_some();
+    let tessellated = cube_patch || bfly_patches;
     if cube_patch != matches!(batch_mode, TriangleBatchMode::CubePatchDraw)
-        || cube_patch != shader_layout.tessellation.is_some()
-        || (cube_patch
-            && (!matches!(warm.device_id, 0xa780 | 0x4680)
-                || draw.native.is_none()
-                || draw.vue_capture))
+        || bfly_patches != matches!(batch_mode, TriangleBatchMode::BflyPatchDraw)
+        || tessellated != shader_layout.tessellation.is_some()
+        || (tessellated && (draw.native.is_none() || draw.vue_capture))
+        || (cube_patch && !matches!(warm.device_id, 0xa780 | 0x4680))
+        || (bfly_patches
+            && (!bfly::supports_physical_device(0x8086, warm.device_id, warm.revision_id)
+                || depth_config.is_some()
+                || !matches!(backend_probe_mode, BackendProbeMode::MesaLike)))
     {
-        return Err("cube-patch-pipeline-contract");
+        return Err("tessellation-pipeline-contract");
     }
     if draw.vue_capture
         && (draw.native.is_none()
@@ -2608,7 +2647,11 @@ fn encode_triangle_probe_batch(
         return Err("picasso-vue-requires-native-trilist-d3d-clip");
     }
     if let Some(native) = draw.native {
-        validate_triangle_native_draw_contract(draw, native)?;
+        if bfly_patches {
+            validate_bfly_patch_draw_contract(draw, native)?;
+        } else {
+            validate_triangle_native_draw_contract(draw, native)?;
+        }
         if !device_admits_churn_forward_native(
             native.hardware_admission,
             warm.device_id,
@@ -2655,7 +2698,9 @@ fn encode_triangle_probe_batch(
     } else {
         backend_probe_mode.multisample_dw1()
     };
-    let sample_mask_dw = if resident_msaa4 {
+    let sample_mask_dw = if bfly_patches {
+        0xffff
+    } else if resident_msaa4 {
         0xF
     } else if mesa_host_fixed_function {
         mesa_sample_mask_dw(batch_mode.point_raster())
@@ -3211,6 +3256,11 @@ fn encode_triangle_probe_batch(
     } else {
         (1 << 5) | ((clip_max_point_width_raw & 0x7FF) << 6)
     };
+    let [clip_dw1, clip_dw2, clip_dw3] = if bfly_patches {
+        bfly::CLIP
+    } else {
+        [clip_dw1, clip_dw2, clip_dw3]
+    };
     // Mesa selects per-poly dereference only when VS has fewer than 192 URB
     // handles.  This ADL configuration has 3576, so the matching value is the
     // default 32-handle block mode (zero).
@@ -3252,7 +3302,9 @@ fn encode_triangle_probe_batch(
     // Mirror Mesa's simple-shader path here as literally as possible: cull
     // none, and otherwise leave raster defaults boring until we have visual
     // proof that a more opinionated packet is required.
-    let raster_dw1 = if draw.voxy_figure {
+    let raster_dw1 = if bfly_patches {
+        bfly::RASTER
+    } else if draw.voxy_figure {
         // The negative framebuffer Y scale maps authored CCW to screen CW.
         native_raster_dw1(false, true)
     } else if artifact_native_fixed_function {
@@ -3341,7 +3393,7 @@ fn encode_triangle_probe_batch(
             0
         }
         | wm_barycentric_mode;
-    let wm_dw1 = microfont_line_aa_wm(wm_dw1, native_line_aa);
+    let wm_dw1 = if bfly_patches { bfly::WM } else { microfont_line_aa_wm(wm_dw1, native_line_aa) };
     let wm_depth_stencil_dw1 = depth_config.map_or_else(
         || {
             if mesa_host_fixed_function {
@@ -3788,7 +3840,7 @@ fn encode_triangle_probe_batch(
     push(
         batch_dwords,
         &mut cursor,
-        if artifact_native_fixed_function || draw.voxy_headless || draw.voxy_figure {
+        if (artifact_native_fixed_function && !bfly_patches) || draw.voxy_headless || draw.voxy_figure {
             binding_table_pointer_offset
         } else {
             0
@@ -3796,7 +3848,11 @@ fn encode_triangle_probe_batch(
     )?;
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_HS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_HS)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        if bfly_patches { binding_table_pointer_offset } else { 0 },
+    )?;
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_DS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_DS)?;
     push(
@@ -3822,13 +3878,13 @@ fn encode_triangle_probe_batch(
         // these packets are the missing definition of that reserved region.
         log_batch_offset(cursor, "3DSTATE_PUSH_CONSTANT_ALLOC_VS");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PUSH_CONSTANT_ALLOC_VS)?;
-        push(batch_dwords, &mut cursor, if cube_patch { 8 } else { 16 })?;
+        push(batch_dwords, &mut cursor, if tessellated { 8 } else { 16 })?;
         log_batch_offset(cursor, "3DSTATE_PUSH_CONSTANT_ALLOC_HS");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PUSH_CONSTANT_ALLOC_HS)?;
-        push(batch_dwords, &mut cursor, if cube_patch { (8 << 16) | 8 } else { 0 })?;
+        push(batch_dwords, &mut cursor, if tessellated { (8 << 16) | 8 } else { 0 })?;
         log_batch_offset(cursor, "3DSTATE_PUSH_CONSTANT_ALLOC_DS");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PUSH_CONSTANT_ALLOC_DS)?;
-        push(batch_dwords, &mut cursor, if cube_patch { (16 << 16) | 8 } else { 0 })?;
+        push(batch_dwords, &mut cursor, if tessellated { (16 << 16) | 8 } else { 0 })?;
         log_batch_offset(cursor, "3DSTATE_PUSH_CONSTANT_ALLOC_GS");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PUSH_CONSTANT_ALLOC_GS)?;
         push(batch_dwords, &mut cursor, 0)?;
@@ -3837,7 +3893,7 @@ fn encode_triangle_probe_batch(
         push(
             batch_dwords,
             &mut cursor,
-            if cube_patch {
+            if tessellated {
                 (24 << 16) | 8
             } else {
                 (16 << 16) | 16
@@ -3845,11 +3901,11 @@ fn encode_triangle_probe_batch(
         )?;
         intel_render_focus_log!(
             "probe-push-constant-urb-partition total_kb=32 tessellation={} vs_kb={} hs_kb={} ds_kb={} gs_kb=0 ps_kb={} following_urb_start_8kb={} source=mesa-adl-gfx12\n",
-            cube_patch as u8,
-            if cube_patch { 8 } else { 16 },
-            if cube_patch { 8 } else { 0 },
-            if cube_patch { 8 } else { 0 },
-            if cube_patch { 8 } else { 16 },
+            tessellated as u8,
+            if tessellated { 8 } else { 16 },
+            if tessellated { 8 } else { 0 },
+            if tessellated { 8 } else { 0 },
+            if tessellated { 8 } else { 16 },
             TRIANGLE_VS_URB_START,
         );
 
@@ -4071,7 +4127,7 @@ fn encode_triangle_probe_batch(
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_1_FP,
                 )?;
-                if cube_patch {
+                if tessellated {
                     push_vertex_element_state(
                         batch_dwords,
                         &mut cursor,
@@ -4432,7 +4488,8 @@ fn encode_triangle_probe_batch(
         .or(TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE)
         .unwrap_or(baked_vs_urb_output_length);
 
-    if cube_patch {
+    if tessellated {
+        let urb = if bfly_patches { bfly::URB } else { crate::intel::shader::patch_cube::URB };
         for (command, (size, start, entries)) in [
             CMD_3DSTATE_URB_ALLOC_VS,
             CMD_3DSTATE_URB_ALLOC_HS,
@@ -4440,7 +4497,7 @@ fn encode_triangle_probe_batch(
             CMD_3DSTATE_URB_ALLOC_GS,
         ]
         .into_iter()
-        .zip(crate::intel::shader::patch_cube::URB)
+        .zip(urb)
         {
             push(batch_dwords, &mut cursor, command)?;
             push(batch_dwords, &mut cursor, (size - 1) | (start << 10) | (start << 21))?;
@@ -4592,10 +4649,19 @@ fn encode_triangle_probe_batch(
         .tessellation
         .map(|[hs, ds]| [hs.code_offset_bytes, ds.code_offset_bytes]);
     log_batch_offset(cursor, "3DSTATE_HS/TE/DS");
-    for word in crate::intel::shader::tessellation_stage_packets(tessellation_ksp)? {
+    let tessellation_packets = if let Some(program) = bfly_program {
+        program.stage_packets(tessellation_ksp.ok_or("bfly-tessellation-layout")?)?
+    } else {
+        crate::intel::shader::tessellation_stage_packets(tessellation_ksp)?
+    };
+    for word in tessellation_packets {
         push(batch_dwords, &mut cursor, word)?;
     }
-    if let Some([hs, ds]) = shader_layout.tessellation {
+    if bfly_patches {
+        intel_render_focus_log!(
+            "bfly-tessellation enabled=1 topology=patchlist4 patches=5 instances=16 domain=isolines hs_camera_bti=1\n",
+        );
+    } else if let Some([hs, ds]) = shader_layout.tessellation {
         intel_render_focus_log!(
             "cube-tessellation enabled=1 topology=patchlist1 patches=44 hs_control_points=3 domain=tri factors=1 ds_camera_bti=1 hs_ksp=0x{:X} ds_ksp=0x{:X} source={}\n",
             hs.code_offset_bytes,
@@ -5545,7 +5611,7 @@ fn encode_triangle_probe_batch(
         )?;
         push(batch_dwords, &mut cursor, draw.vertex_count)?;
         push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, 1)?;
+        push(batch_dwords, &mut cursor, if bfly_patches { bfly::PANEL_SIDE_INSTANCES } else { 1 })?;
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, 0)?;

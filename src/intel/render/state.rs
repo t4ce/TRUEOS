@@ -476,6 +476,13 @@ impl From<crate::intel::gpgpu::GpgpuHelioRetainedTransformOutput> for RetainedGr
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PicassoRetainedShader {
+    Standard,
+    MaxpixTornado,
+    BflyPatches,
+}
+
 pub(crate) struct ResidentChurnForward {
     /// Number of indexed-indirect graphics groups owned by this resident.
     /// Helio uses its full twelve-group scene; Picasso publishes only its
@@ -500,6 +507,7 @@ pub(crate) struct ResidentChurnForward {
     transform: Option<ResidentChurnTransform>,
     transform_unavailable_reason: Option<&'static str>,
     pipeline: crate::intel::shader::TrianglePipeline,
+    shader: PicassoRetainedShader,
     sampled_material: bool,
     native_vf: TriangleNativeDrawContract,
     front_end_contract: TriangleFrontEndContract,
@@ -823,6 +831,7 @@ impl TriangleBlendProbeMode {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum TriangleBatchMode {
     CubePatchDraw,
+    BflyPatchDraw,
     Draw,
     PointDraw,
     LineDraw,
@@ -2107,6 +2116,7 @@ impl TriangleBatchMode {
     fn topology(self) -> u32 {
         match self {
             Self::CubePatchDraw => 0x20, // 3DPRIM_PATCHLIST_1
+            Self::BflyPatchDraw => 0x23, // 3DPRIM_PATCHLIST_4
             Self::Draw | Self::DrawScreenSpace | Self::VfDraw | Self::VfScreenSpaceDraw => {
                 intel_topology_from_helio(
                     trueos_helio::render_ir::PrimitiveTopology::TriangleList,
@@ -2171,6 +2181,7 @@ impl TriangleBatchMode {
     fn label(self) -> &'static str {
         match self {
             Self::CubePatchDraw => "cube-patchlist-1",
+            Self::BflyPatchDraw => "bfly-patchlist-4",
             Self::Draw => "draw",
             Self::PointDraw => "point-draw",
             Self::LineDraw => "line-draw",
@@ -2222,6 +2233,7 @@ impl TriangleBatchMode {
                 | Self::LineStripDraw
                 | Self::LineStripAdjDraw
                 | Self::VfLineDraw
+                | Self::BflyPatchDraw
         )
     }
 

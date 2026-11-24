@@ -2110,6 +2110,9 @@ fn retained_mesh_topology(
         v::vgpu::RETAINED_TOPOLOGY_CUBE_PATCHLIST_1 => {
             Some(ResidentScenePrimitiveTopology::CubePatchList1)
         }
+        v::vgpu::RETAINED_TOPOLOGY_BFLY_PATCHLIST_4 => {
+            Some(ResidentScenePrimitiveTopology::BflyPatchList4)
+        }
         // Zero was the reserved field in the original descriptor ABI, whose
         // only legal retained topology was a triangle list.
         0 | v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST => {
@@ -2190,6 +2193,11 @@ mod retained_mesh_topology_tests {
             (vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN, ResidentScenePrimitiveTopology::TriangleFan, 3),
             (vgpu::PRIMITIVE_TOPOLOGY_QUAD_LIST, ResidentScenePrimitiveTopology::QuadList, 4),
             (vgpu::PRIMITIVE_TOPOLOGY_QUAD_STRIP, ResidentScenePrimitiveTopology::QuadStrip, 4),
+            (
+                vgpu::RETAINED_TOPOLOGY_BFLY_PATCHLIST_4,
+                ResidentScenePrimitiveTopology::BflyPatchList4,
+                20,
+            ),
         ];
         for (wire, expected, valid_count) in cases {
             assert_eq!(retained_mesh_topology(wire), Some(expected));
@@ -2204,6 +2212,8 @@ pub(crate) fn create_retained_mesh(
     device_handle: DeviceHandle,
     descriptor: v::vgpu::RetainedMeshDescriptor,
 ) -> Result<RetainedMeshHandle, VgpuError> {
+    use crate::intel::render::{PicassoRetainedShader, ResidentScenePrimitiveTopology};
+
     let double_sided = descriptor.topology & v::vgpu::RETAINED_MESH_FLAG_DOUBLE_SIDED != 0;
     let topology =
         retained_mesh_topology(descriptor.topology & !v::vgpu::RETAINED_MESH_FLAG_DOUBLE_SIDED)
@@ -2216,16 +2226,43 @@ pub(crate) fn create_retained_mesh(
             | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT_INSTANCE_PALETTE
             | v::vgpu::RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED
             | v::vgpu::RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_PATCHES
     ) || descriptor.vertex_count == 0
         || !topology.accepts_index_count(descriptor.index_count as usize)
     {
         return Err(VgpuError::Unsupported);
     }
-    let maxpix_tornado = descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO;
-    if maxpix_tornado && topology != crate::intel::render::ResidentScenePrimitiveTopology::PointList
-    {
-        return Err(VgpuError::Unsupported);
-    }
+    let shader = match descriptor.vertex_layout {
+        v::vgpu::RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO
+            if topology == ResidentScenePrimitiveTopology::PointList =>
+        {
+            PicassoRetainedShader::MaxpixTornado
+        }
+        v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_PATCHES
+            if topology == ResidentScenePrimitiveTopology::BflyPatchList4
+                && descriptor.vertex_count == 20
+                && descriptor.index_count == 20
+                && !double_sided =>
+        {
+            let adapter = require_physical()?.adapter_info();
+            if !crate::intel::shader::bfly_patches_supports_physical_device(
+                adapter.vendor_id,
+                adapter.device_id,
+                adapter.revision_id,
+            ) || crate::intel::shader::bfly_patches_pipeline().is_none()
+            {
+                return Err(VgpuError::Unsupported);
+            }
+            PicassoRetainedShader::BflyPatches
+        }
+        v::vgpu::RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_PATCHES => {
+            return Err(VgpuError::Unsupported);
+        }
+        _ if topology == ResidentScenePrimitiveTopology::BflyPatchList4 => {
+            return Err(VgpuError::Unsupported);
+        }
+        _ => PicassoRetainedShader::Standard,
+    };
     let vertex_buffer = BufferHandle::from_raw(descriptor.vertex_buffer);
     if (topology == crate::intel::render::ResidentScenePrimitiveTopology::CubePatchList1)
         != (descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED)
@@ -2234,7 +2271,8 @@ pub(crate) fn create_retained_mesh(
     }
     let index_buffer = BufferHandle::from_raw(descriptor.index_buffer);
     let vertex_stride: usize = match descriptor.vertex_layout {
-        v::vgpu::RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED => 12,
+        v::vgpu::RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_PATCHES => 12,
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT
         | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT_INSTANCE_PALETTE => 48,
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV => 32,
@@ -2371,7 +2409,7 @@ pub(crate) fn create_retained_mesh(
         &indices,
         if descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT_INSTANCE_PALETTE {
             255
-        } else if maxpix_tornado {
+        } else if shader != PicassoRetainedShader::Standard {
             1
         } else {
             v::vgpu::MAX_RETAINED_SCENE_INSTANCES
@@ -2379,7 +2417,7 @@ pub(crate) fn create_retained_mesh(
         vertex_stride as u32,
         double_sided,
         topology,
-        maxpix_tornado,
+        shader,
         descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT_INSTANCE_PALETTE,
     ) {
         Ok(resident) => resident,
