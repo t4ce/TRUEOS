@@ -1951,8 +1951,8 @@ fn create_resident_churn_forward_with_admission(
     // mapped DMA resources. The aligned code copy is a bounded singleton;
     // service retries cannot leak another VS/PS pair.
     use crate::intel::shader::bfly_patches as bfly;
-    let (pipeline, program) = if shader == PicassoRetainedShader::BflyPatches {
-        (*bfly::pipeline().ok_or("bfly-patches-shaders-missing")?, None)
+    let (pipeline, program) = if let Some(geometry) = shader.bfly_geometry() {
+        (*bfly::pipeline(geometry).ok_or("bfly-patches-shaders-missing")?, None)
     } else {
         let (pipeline, program) = retained_forward_pipeline()?;
         (pipeline, Some(program))
@@ -2128,7 +2128,7 @@ fn create_resident_churn_forward_with_admission(
             }
         }),
     };
-    let (transform, transform_unavailable_reason) = if shader == PicassoRetainedShader::BflyPatches {
+    let (transform, transform_unavailable_reason) = if shader.bfly_geometry().is_some() {
         (None, None)
     } else {
         match create_resident_churn_transform(max_instances, hardware_admission, carrier) {
@@ -2231,10 +2231,9 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     shader: PicassoRetainedShader,
     instance_palette: bool,
 ) -> Result<ResidentChurnForward, &'static str> {
-    use crate::intel::shader::bfly_patches as bfly;
-
     let maxpix_tornado = shader == PicassoRetainedShader::MaxpixTornado;
-    let bfly_patches = shader == PicassoRetainedShader::BflyPatches;
+    let bfly_geometry = shader.bfly_geometry();
+    let bfly_patches = bfly_geometry.is_some();
     if instance_palette && (vertex_stride != 48 || max_instances > 255 || shader != PicassoRetainedShader::Standard) {
         return Err("picasso-instance-palette-contract");
     }
@@ -2246,8 +2245,9 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         return Err("maxpix-pointlist-contract");
     }
     if bfly_patches != (topology == ResidentScenePrimitiveTopology::BflyPatchList4)
-        || (bfly_patches
-            && (vertex_stride != 12 || max_instances != 1 || !bfly::valid_geometry(vertices, indices)))
+        || bfly_geometry.is_some_and(|geometry| {
+            vertex_stride != 12 || max_instances != 1 || !geometry.valid_vertices(vertices, indices)
+        })
     {
         return Err("bfly-patches-contract");
     }
@@ -2588,7 +2588,7 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
     }
 
     let camera_bytes = encode_camera(camera)?;
-    if resident.shader == PicassoRetainedShader::BflyPatches {
+    if resident.shader.bfly_geometry().is_some() {
         let identity = v::vgpu::RetainedTransformSeed {
             scale: [1.0; 3],
             rotation: [0.0, 0.0, 0.0, 1.0],
@@ -2722,7 +2722,7 @@ fn prepare_resident_churn_forward_draw(
             byte_len: resident.index_bytes,
             gpu_addr: resident.index_gpu_addr,
         }),
-        indirect_args_gpu_addr: (resident.shader != PicassoRetainedShader::BflyPatches).then_some(
+        indirect_args_gpu_addr: resident.shader.bfly_geometry().is_none().then_some(
             resident.indirect_args.gpu_base()
                 + (group * trueos_helio::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
         ),

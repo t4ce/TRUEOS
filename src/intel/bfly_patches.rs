@@ -50,15 +50,26 @@ impl Geometry {
         let count = self.control_vertices();
         vertices.len() == count * 12
             && indices.len() == count
-            && indices.iter().copied().enumerate().all(|(i, idx)| i == idx as usize)
-            && vertices.chunks_exact(48).zip(self.patch_tags()).all(|(patch, &tag)| {
-                patch.chunks_exact(12).all(|point| {
-                    let x = f32::from_le_bytes(point[0..4].try_into().unwrap());
-                    let y = f32::from_le_bytes(point[4..8].try_into().unwrap());
-                    let edge = f32::from_le_bytes(point[8..12].try_into().unwrap());
-                    x.is_finite() && y.is_finite() && x.abs() <= 2.0 && y.abs() <= 2.0 && edge == tag
+            && indices
+                .iter()
+                .copied()
+                .enumerate()
+                .all(|(i, idx)| i == idx as usize)
+            && vertices
+                .chunks_exact(48)
+                .zip(self.patch_tags())
+                .all(|(patch, &tag)| {
+                    patch.chunks_exact(12).all(|point| {
+                        let x = f32::from_le_bytes(point[0..4].try_into().unwrap());
+                        let y = f32::from_le_bytes(point[4..8].try_into().unwrap());
+                        let edge = f32::from_le_bytes(point[8..12].try_into().unwrap());
+                        x.is_finite()
+                            && y.is_finite()
+                            && x.abs() <= 2.0
+                            && y.abs() <= 2.0
+                            && edge == tag
+                    })
                 })
-            })
     }
 }
 
@@ -109,7 +120,17 @@ pub(crate) fn supports_physical_device(vendor: u16, device: u16, revision: u8) -
 }
 
 // New meshes prefer the latest package for their layout. Resident meshes retain their capture.
-static PROGRAMS: [(Capture, spin::Once<Program>); 3] = [
+static PROGRAMS: [(Capture, spin::Once<Program>); 4] = [
+    (
+        Capture {
+            package_id: 16,
+            geometry: Geometry::Open,
+            hs_bytes: 6944,
+            ds_bytes: 544,
+            ds_urb_read: 0x0050a800,
+        },
+        spin::Once::new(),
+    ),
     (
         Capture {
             package_id: 15,

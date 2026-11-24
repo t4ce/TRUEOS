@@ -2263,11 +2263,11 @@ fn validate_triangle_native_draw_contract(
 fn validate_bfly_patch_draw_contract(
     draw: TriangleDrawPrep,
     native: TriangleNativeDrawContract,
+    count: u32,
 ) -> Result<(), &'static str> {
     use crate::intel::shader::bfly_patches as bfly;
 
     let camera = native.vs_storage_bindings[0];
-    let count = bfly::CONTROL_VERTICES as u32;
     if draw.vertex_format != TriangleVertexFormat::Float3
         || draw.vertex_stride != 12
         || draw.vertex_count != count
@@ -2647,8 +2647,8 @@ fn encode_triangle_probe_batch(
         return Err("picasso-vue-requires-native-trilist-d3d-clip");
     }
     if let Some(native) = draw.native {
-        if bfly_patches {
-            validate_bfly_patch_draw_contract(draw, native)?;
+        if let Some(program) = bfly_program {
+            validate_bfly_patch_draw_contract(draw, native, program.control_vertices() as u32)?;
         } else {
             validate_triangle_native_draw_contract(draw, native)?;
         }
@@ -4657,9 +4657,10 @@ fn encode_triangle_probe_batch(
     for word in tessellation_packets {
         push(batch_dwords, &mut cursor, word)?;
     }
-    if bfly_patches {
+    if let Some(program) = bfly_program {
         intel_render_focus_log!(
-            "bfly-tessellation enabled=1 topology=patchlist4 patches=5 instances=16 domain=isolines hs_camera_bti=1\n",
+            "bfly-tessellation enabled=1 topology=patchlist4 patches={} instances=16 domain=isolines hs_camera_bti=1\n",
+            program.control_vertices() / 4,
         );
     } else if let Some([hs, ds]) = shader_layout.tessellation {
         intel_render_focus_log!(

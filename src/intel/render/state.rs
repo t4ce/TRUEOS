@@ -480,7 +480,16 @@ impl From<crate::intel::gpgpu::GpgpuHelioRetainedTransformOutput> for RetainedGr
 pub(crate) enum PicassoRetainedShader {
     Standard,
     MaxpixTornado,
-    BflyPatches,
+    BflyPatches(crate::intel::shader::bfly_patches::Geometry),
+}
+
+impl PicassoRetainedShader {
+    pub(crate) fn bfly_geometry(self) -> Option<crate::intel::shader::bfly_patches::Geometry> {
+        match self {
+            Self::BflyPatches(geometry) => Some(geometry),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) struct ResidentChurnForward {

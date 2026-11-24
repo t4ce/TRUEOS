@@ -2198,6 +2198,11 @@ mod retained_mesh_topology_tests {
                 ResidentScenePrimitiveTopology::BflyPatchList4,
                 20,
             ),
+            (
+                vgpu::RETAINED_TOPOLOGY_BFLY_PATCHLIST_4,
+                ResidentScenePrimitiveTopology::BflyPatchList4,
+                16,
+            ),
         ];
         for (wire, expected, valid_count) in cases {
             assert_eq!(retained_mesh_topology(wire), Some(expected));
@@ -2213,6 +2218,7 @@ pub(crate) fn create_retained_mesh(
     descriptor: v::vgpu::RetainedMeshDescriptor,
 ) -> Result<RetainedMeshHandle, VgpuError> {
     use crate::intel::render::{PicassoRetainedShader, ResidentScenePrimitiveTopology};
+    use crate::intel::shader::bfly_patches::Geometry;
 
     let double_sided = descriptor.topology & v::vgpu::RETAINED_MESH_FLAG_DOUBLE_SIDED != 0;
     let topology =
@@ -2227,6 +2233,7 @@ pub(crate) fn create_retained_mesh(
             | v::vgpu::RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED
             | v::vgpu::RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO
             | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_PATCHES
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES
     ) || descriptor.vertex_count == 0
         || !topology.accepts_index_count(descriptor.index_count as usize)
     {
@@ -2239,23 +2246,34 @@ pub(crate) fn create_retained_mesh(
             PicassoRetainedShader::MaxpixTornado
         }
         v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_PATCHES
-            if topology == ResidentScenePrimitiveTopology::BflyPatchList4
-                && descriptor.vertex_count == 20
-                && descriptor.index_count == 20
-                && !double_sided =>
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES
+            if topology == ResidentScenePrimitiveTopology::BflyPatchList4 && !double_sided =>
         {
+            let geometry = if descriptor.vertex_layout
+                == v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES
+            {
+                Geometry::Open
+            } else {
+                Geometry::Closed
+            };
+            let count = geometry.control_vertices() as u32;
+            if descriptor.vertex_count != count || descriptor.index_count != count {
+                return Err(VgpuError::Unsupported);
+            }
             let adapter = require_physical()?.adapter_info();
             if !crate::intel::shader::bfly_patches_supports_physical_device(
                 adapter.vendor_id,
                 adapter.device_id,
                 adapter.revision_id,
-            ) || crate::intel::shader::bfly_patches_pipeline().is_none()
+            ) || crate::intel::shader::bfly_patches_pipeline(geometry).is_none()
             {
                 return Err(VgpuError::Unsupported);
             }
-            PicassoRetainedShader::BflyPatches
+            PicassoRetainedShader::BflyPatches(geometry)
         }
-        v::vgpu::RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_PATCHES => {
+        v::vgpu::RETAINED_VERTEX_LAYOUT_MAXPIX_TORNADO
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_PATCHES
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES => {
             return Err(VgpuError::Unsupported);
         }
         _ if topology == ResidentScenePrimitiveTopology::BflyPatchList4 => {
@@ -2272,7 +2290,8 @@ pub(crate) fn create_retained_mesh(
     let index_buffer = BufferHandle::from_raw(descriptor.index_buffer);
     let vertex_stride: usize = match descriptor.vertex_layout {
         v::vgpu::RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED
-        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_PATCHES => 12,
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_PATCHES
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES => 12,
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT
         | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT_INSTANCE_PALETTE => 48,
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV => 32,

@@ -102,7 +102,10 @@ impl ResidentScenePrimitiveTopology {
     pub(crate) const fn accepts_index_count(self, count: usize) -> bool {
         match self {
             Self::CubePatchList1 => count == 44,
-            Self::BflyPatchList4 => count == crate::intel::shader::bfly_patches::CONTROL_VERTICES,
+            Self::BflyPatchList4 => {
+                use crate::intel::shader::bfly_patches::Geometry;
+                count == Geometry::Closed.control_vertices() || count == Geometry::Open.control_vertices()
+            }
             Self::PointList => count >= 1,
             Self::LineList => count >= 2 && count.is_multiple_of(2),
             Self::LineListAdj => count >= 4 && count.is_multiple_of(4),
@@ -1364,7 +1367,7 @@ pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
         clear_rgba,
         diagnostic_logs,
         false,
-        resident.shader != PicassoRetainedShader::BflyPatches,
+        resident.shader.bfly_geometry().is_none(),
         ResidentSceneRasterQuality::SingleSample,
         destination.width as usize,
         destination.height as usize,
@@ -1622,7 +1625,7 @@ fn stage_resident_churn_forward_secondary(
     // The next-frame diagnostic removes the complete depth read/write path
     // only for PBR meshes; culling, geometry, and shader selection stay intact.
     let cube_patch = resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1;
-    let bfly_patches = resident.shader == PicassoRetainedShader::BflyPatches;
+    let bfly_patches = resident.shader.bfly_geometry().is_some();
     let draw_depth = depth_config.filter(|_| draw.pbr_material.is_none() || picasso_depth_test_enabled());
     // Caller selects opaque depth-write or sorted palette depth-read-only pass.
     let blend_mode = if cube_patch && depth_config.is_some_and(|depth| !depth.write_enabled) {
@@ -3333,7 +3336,7 @@ fn submit_resident_churn_forward_geometry_batched(
     capture_pipeline_stats: bool,
     capture_vue: bool,
 ) -> Result<ResidentSceneGeometryResult, &'static str> {
-    let bfly_patches = resident.shader == PicassoRetainedShader::BflyPatches;
+    let bfly_patches = resident.shader.bfly_geometry().is_some();
     if depth_config.is_none() != bfly_patches || (bfly_patches && cube_companion.is_some()) {
         return Err("retained-scene-depth-contract");
     }
