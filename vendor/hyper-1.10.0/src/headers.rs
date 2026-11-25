@@ -19,6 +19,15 @@ pub(super) fn connection_close(value: &HeaderValue) -> bool {
     connection_has(value, "close")
 }
 
+// Check all Connection header fields for a close token.
+#[cfg(feature = "http1")]
+pub(super) fn connection_any_close(headers: &http::HeaderMap) -> bool {
+    headers
+        .get_all(http::header::CONNECTION)
+        .iter()
+        .any(connection_close)
+}
+
 #[cfg(feature = "http1")]
 fn connection_has(value: &HeaderValue, needle: &str) -> bool {
     if let Ok(s) = value.to_str() {

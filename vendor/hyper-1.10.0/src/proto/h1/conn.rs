@@ -614,6 +614,10 @@ where
 
         if !T::should_read_first() {
             self.state.busy();
+            // Honor the client's close request even if the server permits keep-alive.
+            if headers::connection_any_close(&head.headers) {
+                self.state.disable_keep_alive();
+            }
         }
 
         self.enforce_version(&mut head);
