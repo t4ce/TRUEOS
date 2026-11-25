@@ -4,6 +4,7 @@ use trueos_time::Instant;
 
 use super::lilly::{self, LillyResidentFrame};
 use super::lilly_sequencer::{Contextual, IdleMode, Playback, Sequencer};
+pub(crate) use super::lilly_sequencer::{SpeechCue, SpeechTurn};
 
 static SEQUENCER: Mutex<Option<Sequencer>> = Mutex::new(None);
 
@@ -36,7 +37,8 @@ pub(crate) fn enqueue_contextual_word(word: &str) -> Result<(), LillyProtocolErr
     Ok(())
 }
 
-/// Host-side control for the future Typing, Sound, Reading and Talk checkboxes.
+/// Update the selected ambient checkbox or the Talk mood mask.
+/// Normal clears the ambient selection. An empty Talk mask clears Talk.
 pub(crate) fn set_idle_mode(mode: IdleMode) {
     SEQUENCER
         .lock()
@@ -44,11 +46,27 @@ pub(crate) fn set_idle_mode(mode: IdleMode) {
         .set_mode(mode);
 }
 
+/// Current playback mode. Talk takes priority over the selected ambient mode.
 pub(crate) fn idle_mode() -> IdleMode {
     SEQUENCER
         .lock()
         .as_ref()
         .map_or(IdleMode::Normal, Sequencer::mode)
+}
+
+/// Manually selected ambient checkbox, including while Talk is active.
+pub(crate) fn idle_ambient_mode() -> IdleMode {
+    SEQUENCER
+        .lock()
+        .as_ref()
+        .map_or(IdleMode::Normal, Sequencer::ambient_mode)
+}
+
+pub(crate) fn speech_event(turn: SpeechTurn, stream: u64, cue: SpeechCue) {
+    SEQUENCER
+        .lock()
+        .get_or_insert_with(|| Sequencer::new(crate::tyche::soft_rng()))
+        .speech_event(turn, stream, cue);
 }
 
 pub(super) fn set_window_sound(selected: bool) {
@@ -78,11 +96,17 @@ pub(super) fn shift_deadlines(duration_ms: u64) {
 pub(super) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolError> {
     let now_ms = Instant::now().as_millis();
     let collapse = super::codex_handoff::needs_crossed();
+    let speech_stream = SEQUENCER.lock().as_ref().and_then(Sequencer::speech_stream);
+    let speech_playing = speech_stream.map(|stream| {
+        (stream, crate::r::services::audio_playback::source_active(stream))
+    });
     let playback = {
         let mut state = SEQUENCER.lock();
-        state
-            .get_or_insert_with(|| Sequencer::new(crate::tyche::soft_rng()))
-            .next(now_ms, collapse)
+        let sequencer = state.get_or_insert_with(|| Sequencer::new(crate::tyche::soft_rng()));
+        if let Some((stream, active)) = speech_playing {
+            sequencer.observe_speech_stream(stream, active, now_ms);
+        }
+        sequencer.next(now_ms, collapse)
     };
     let first_path = playback.frames[0];
     let first =

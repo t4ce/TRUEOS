@@ -6,6 +6,8 @@ fn shadertoy_contract(shader_id: u32) -> Option<&'static GpgpuKernelAbiContract>
         SHADERTOY_SHADER_SINE_VISUALIZER => Some(&SHADERTOY_SINE_VISUALIZER_ADLS_CPP_ABI_CONTRACT),
         SHADERTOY_SHADER_MANDELBOX => Some(&SHADERTOY_MANDELBOX_ADLS_CPP_ABI_CONTRACT),
         SHADERTOY_SHADER_LICO => Some(&SHADERTOY_LICO_ADLS_CPP_ABI_CONTRACT),
+        SHADERTOY_SHADER_BFLY_UNDERLAY => Some(&SHADERTOY_BFLY_UNDERLAY_ADLS_CPP_ABI_CONTRACT),
+        SHADERTOY_SHADER_BFLY_CELESTIAL => Some(&SHADERTOY_BFLY_CELESTIAL_ADLS_CPP_ABI_CONTRACT),
         SHADERTOY_SHADER_PALETTE_GRID => Some(&SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT),
         SHADERTOY_SHADER_COSMIC_STRANDS => Some(&SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT),
         SHADERTOY_SHADER_PROTEAN_CLOUDS => Some(&SHADERTOY_PROTEAN_CLOUDS_ADLS_CPP_ABI_CONTRACT),
@@ -21,11 +23,20 @@ fn shadertoy_text_offset(shader_id: u32) -> Option<u64> {
         SHADERTOY_SHADER_SINE_VISUALIZER => Some(SHADERTOY_SINE_VISUALIZER_TEXT_OFFSET_BYTES),
         SHADERTOY_SHADER_MANDELBOX => Some(SHADERTOY_MANDELBOX_TEXT_OFFSET_BYTES),
         SHADERTOY_SHADER_LICO => Some(SHADERTOY_LICO_TEXT_OFFSET_BYTES),
+        SHADERTOY_SHADER_BFLY_UNDERLAY => Some(SHADERTOY_BFLY_UNDERLAY_TEXT_OFFSET_BYTES),
+        SHADERTOY_SHADER_BFLY_CELESTIAL => Some(SHADERTOY_BFLY_CELESTIAL_TEXT_OFFSET_BYTES),
         SHADERTOY_SHADER_PALETTE_GRID => Some(SHADERTOY_PALETTE_GRID_TEXT_OFFSET_BYTES),
         SHADERTOY_SHADER_COSMIC_STRANDS => Some(SHADERTOY_COSMIC_STRANDS_TEXT_OFFSET_BYTES),
         SHADERTOY_SHADER_PROTEAN_CLOUDS => Some(SHADERTOY_PROTEAN_CLOUDS_TEXT_OFFSET_BYTES),
         _ => None,
     }
+}
+
+fn shadertoy_uses_source(shader_id: u32) -> bool {
+    matches!(
+        shader_id,
+        SHADERTOY_SHADER_PROTEAN_CLOUDS | SHADERTOY_SHADER_MANDELBOX | SHADERTOY_SHADER_BFLY_CELESTIAL
+    )
 }
 
 fn shadertoy_uniform_range(shader_id: u32) -> (usize, usize) {
@@ -62,7 +73,7 @@ fn direct_rcs_write_shadertoy_payload(
         return false;
     }
 
-    let source_abi = matches!(params.shader_id, SHADERTOY_SHADER_PROTEAN_CLOUDS | SHADERTOY_SHADER_MANDELBOX);
+    let source_abi = shadertoy_uses_source(params.shader_id);
     if !shadertoy_payload_layout_matches(contract, source_abi) {
         return false;
     }
@@ -74,6 +85,7 @@ fn direct_rcs_write_shadertoy_payload(
         // The admitted global_id_offset payload is uint3 at byte zero.
         // Keep resolution, destination base, pitch and mouse in full-image
         // coordinates while the walker executes only this batch's row count.
+        core::ptr::write_volatile(dwords, pass.dispatch_region(dst).x as u32);
         core::ptr::write_volatile(dwords.add(1), first_row);
         core::ptr::write_volatile(dwords.add(3), 16);
         core::ptr::write_volatile(dwords.add(4), 1);
@@ -161,9 +173,7 @@ fn direct_rcs_encode_shadertoy_batch(
     first_row: u32,
     rows: u32,
 ) -> bool {
-    if shadertoy_dispatch_rows(params.shader_id, pass.phase, dst.width, dst.height, first_row)
-        != Some(rows)
-    {
+    if pass.dispatch_rows(dst, params.shader_id, first_row) != Some(rows) {
         return false;
     }
     let Some(contract) = shadertoy_contract(params.shader_id) else {
@@ -179,6 +189,8 @@ fn direct_rcs_encode_shadertoy_batch(
         SHADERTOY_SHADER_SINE_VISUALIZER => SHADERTOY_SINE_VISUALIZER_ADLS_ARTIFACT,
         SHADERTOY_SHADER_MANDELBOX => SHADERTOY_MANDELBOX_ADLS_ARTIFACT,
         SHADERTOY_SHADER_LICO => SHADERTOY_LICO_ADLS_ARTIFACT,
+        SHADERTOY_SHADER_BFLY_UNDERLAY => SHADERTOY_BFLY_UNDERLAY_ADLS_ARTIFACT,
+        SHADERTOY_SHADER_BFLY_CELESTIAL => SHADERTOY_BFLY_CELESTIAL_ADLS_ARTIFACT,
         SHADERTOY_SHADER_PALETTE_GRID => SHADERTOY_PALETTE_GRID_ADLS_ARTIFACT,
         SHADERTOY_SHADER_COSMIC_STRANDS => SHADERTOY_COSMIC_STRANDS_ADLS_ARTIFACT,
         SHADERTOY_SHADER_PROTEAN_CLOUDS => SHADERTOY_PROTEAN_CLOUDS_ADLS_ARTIFACT,
@@ -187,19 +199,12 @@ fn direct_rcs_encode_shadertoy_batch(
     let Some(package) = shadertoy_package::contract(params.shader_id) else {
         return false;
     };
+    let source_abi = shadertoy_uses_source(params.shader_id);
     if upload.bin_sha256 != expected_artifact.bin_sha256
         || upload.bytes != package.bin_bytes
         || contract.bindings.is_empty()
-        || !shadertoy_payload_layout_matches(
-            contract,
-            matches!(params.shader_id, SHADERTOY_SHADER_PROTEAN_CLOUDS | SHADERTOY_SHADER_MANDELBOX),
-        )
-        || contract.bindings.len()
-            > if matches!(params.shader_id, SHADERTOY_SHADER_PROTEAN_CLOUDS | SHADERTOY_SHADER_MANDELBOX) {
-                3
-            } else {
-                2
-            }
+        || !shadertoy_payload_layout_matches(contract, source_abi)
+        || contract.bindings.len() > if source_abi { 3 } else { 2 }
         || contract.bindings[0].arg_index != 0
         || contract.bindings[0].bti != 0
     {
@@ -319,7 +324,7 @@ fn direct_rcs_encode_shadertoy_batch(
     ok &= direct_rcs_push_shadertoy_walker(
         batch,
         &mut cursor,
-        dst.width,
+        pass.dispatch_region(dst).width,
         rows,
     );
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
@@ -368,11 +373,11 @@ fn direct_rcs_push_shadertoy_walker(
 
 // Host payload writers are deliberately narrower than the general artifact
 // loader. Reject a newly baked ABI drift instead of launching shifted pointers.
-fn shadertoy_payload_layout_matches(contract: &GpgpuKernelAbiContract, focused: bool) -> bool {
-    let dimensions = if focused { 72 } else { 64 };
+fn shadertoy_payload_layout_matches(contract: &GpgpuKernelAbiContract, source_abi: bool) -> bool {
+    let dimensions = if source_abi { 72 } else { 64 };
     let offsets = [48, 56, dimensions, dimensions + 4, dimensions + 8, 64];
-    let count = if focused { 6 } else { 5 };
-    if contract.payload_args.len() != count || (focused && contract.bindings.len() != 3) {
+    let count = if source_abi { 6 } else { 5 };
+    if contract.payload_args.len() != count || (source_abi && contract.bindings.len() != 3) {
         return false;
     }
     for (i, arg) in contract.payload_args.iter().enumerate() {

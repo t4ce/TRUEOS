@@ -18,6 +18,20 @@ include!("shadertoy_packages.rs");
 include!("shadertoy_mandelbox_package.rs");
 include!("shadertoy_lico_package.rs");
 
+pub(crate) const SHADERTOY_BFLY_UNDERLAY_PACKAGE: ShaderToyPackageContract =
+    ShaderToyPackageContract {
+        shader_id: super::SHADERTOY_SHADER_BFLY_UNDERLAY,
+        bin_bytes: 10_768,
+        spv_bytes: 5_244,
+    };
+
+pub(crate) const SHADERTOY_BFLY_CELESTIAL_PACKAGE: ShaderToyPackageContract =
+    ShaderToyPackageContract {
+        shader_id: super::SHADERTOY_SHADER_BFLY_CELESTIAL,
+        bin_bytes: 20_840,
+        spv_bytes: 12_636,
+    };
+
 pub(crate) const SKYBOX_SAMPLE_RGB565_PACKAGE: ShaderToyPackageContract =
     ShaderToyPackageContract {
         shader_id: 17,
@@ -29,7 +43,9 @@ pub(crate) const SKYBOX_SAMPLE_RGB565_PACKAGE: ShaderToyPackageContract =
 pub(crate) fn program_id(shader_id: u32) -> Option<u32> {
     match shader_id {
         1..=6 | super::SHADERTOY_SHADER_SINE_VISUALIZER | 15 | 16 => Some(shader_id),
-        super::SHADERTOY_SHADER_LICO => Some(shader_id),
+        super::SHADERTOY_SHADER_LICO
+        | super::SHADERTOY_SHADER_BFLY_UNDERLAY
+        | super::SHADERTOY_SHADER_BFLY_CELESTIAL => Some(shader_id),
         8..=14 => Some(8),
         _ => None,
     }
@@ -43,6 +59,8 @@ pub(crate) fn contract(shader_id: u32) -> Option<ShaderToyPackageContract> {
         3 => SHADERTOY_NGUYEN_PACKAGE,
         16 => SHADERTOY_MANDELBOX_PACKAGE,
         super::SHADERTOY_SHADER_LICO => SHADERTOY_LICO_PACKAGE,
+        super::SHADERTOY_SHADER_BFLY_UNDERLAY => SHADERTOY_BFLY_UNDERLAY_PACKAGE,
+        super::SHADERTOY_SHADER_BFLY_CELESTIAL => SHADERTOY_BFLY_CELESTIAL_PACKAGE,
         4 => SHADERTOY_PALETTE_GRID_PACKAGE,
         5 => SHADERTOY_COSMIC_STRANDS_PACKAGE,
         6 => SHADERTOY_PROTEAN_CLOUDS_PACKAGE,

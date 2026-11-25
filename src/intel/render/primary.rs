@@ -103,8 +103,12 @@ impl ResidentScenePrimitiveTopology {
         match self {
             Self::CubePatchList1 => count == 44,
             Self::BflyPatchList4 => {
-                use crate::intel::shader::bfly_patches::Geometry;
-                count == Geometry::Closed.control_vertices() || count == Geometry::Open.control_vertices()
+                use crate::intel::shader::bfly_patches::{Geometry, LAYERED_CONTROL_VERTICES};
+                count == Geometry::Closed.control_vertices()
+                    || count == Geometry::Open.control_vertices()
+                    || count == Geometry::MixedFlock.control_vertices()
+                    || count == Geometry::FilledFlock.control_vertices()
+                    || count == LAYERED_CONTROL_VERTICES
             }
             Self::PointList => count >= 1,
             Self::LineList => count >= 2 && count.is_multiple_of(2),
@@ -1618,6 +1622,7 @@ fn stage_resident_churn_forward_secondary(
     depth_config: Option<TriangleDepthConfig>,
     resident: &ResidentChurnForward,
     uv_pipeline: bool,
+    draw_group: usize,
     secondary_index: usize,
     result_ggtt_gpu: u64,
 ) -> Result<usize, &'static str> {
@@ -1626,13 +1631,26 @@ fn stage_resident_churn_forward_secondary(
     // only for PBR meshes; culling, geometry, and shader selection stay intact.
     let cube_patch = resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1;
     let draw_depth = depth_config.filter(|_| draw.pbr_material.is_none() || picasso_depth_test_enabled());
-    // Caller selects opaque depth-write or sorted palette depth-read-only pass.
+    // Cube depth-read-only passes blend in draw order. Butterfly fills replace
+    // prior fragments so their alpha stays constant where wings cross.
     let blend_mode = if cube_patch && depth_config.is_some_and(|depth| !depth.write_enabled) {
         TriangleBlendProbeMode::StraightAlpha
     } else {
         TriangleBlendProbeMode::MesaZeroedState
     };
-    let (pipeline, front_end_contract) = if draw.pbr_material.is_some() && uv_pipeline {
+    let (pipeline, front_end_contract) = if let Some(pass) =
+        resident.bfly_passes.get(draw_group).and_then(Option::as_ref)
+    {
+        let mut front_end = resident.front_end_contract;
+        if draw_group != 0 {
+            front_end.label = "bfly-patchlist4-isolines-v1";
+        }
+        // The RGB lines and colored fills use the first varying slot for flat color.
+        let read = u8::from(pass.pipeline.ps.meta.num_varying_inputs != 0);
+        front_end.sbe_read_offset = read;
+        front_end.sbe_read_length = read;
+        (*pass.pipeline, front_end)
+    } else if draw.pbr_material.is_some() && uv_pipeline {
         prepare_picasso_retained_uv_diagnostic(&mut draw)?
     } else {
         (resident.pipeline, resident.front_end_contract)
@@ -3545,6 +3563,7 @@ fn submit_resident_churn_forward_geometry_batched(
                     group_depth,
                     resident,
                     uv_pipeline,
+                    group,
                     secondary_index,
                     result_ggtt_gpu,
                 )?;
@@ -3649,6 +3668,7 @@ fn submit_resident_churn_forward_geometry_batched(
                 depth,
                 cube,
                 uv_pipeline,
+                group,
                 secondary_index,
                 result_ggtt_gpu,
             )?;

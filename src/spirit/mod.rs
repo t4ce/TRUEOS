@@ -36,7 +36,9 @@ pub(crate) mod spirit_thoughts;
 mod window_selection;
 
 #[allow(unused_imports)]
-pub(crate) use lilly_protocol::{enqueue_contextual_word, enqueue_presentation_word, idle_mode, set_idle_mode};
+pub(crate) use lilly_protocol::{
+    enqueue_contextual_word, enqueue_presentation_word, idle_ambient_mode, idle_mode, set_idle_mode,
+};
 #[allow(unused_imports)]
 pub(crate) use lilly_sequencer::{IdleMode, TalkMoods};
 

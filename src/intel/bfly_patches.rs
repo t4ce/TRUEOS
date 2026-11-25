@@ -13,6 +13,13 @@ const VS_BYTES: usize = 168;
 const WHITE_PS_BYTES: usize = 48;
 const RGB_PS_BYTES: usize = 72;
 const SMOKE_PS_BYTES: usize = 264;
+const FILLED_PS_BYTES: usize = 72;
+const BREED_FILL_PS_BYTES: usize = 112;
+const TRANSLUCENT_FILL_PS_BYTES: usize = 120;
+const PROJECTED_WIDTHS_PACKAGE_ID: u32 = 30;
+const INSET_OUTLINE_PACKAGE_ID: u32 = 33;
+const BREED_FILL_PACKAGE_ID: u32 = 34;
+const TRANSLUCENT_FILL_PACKAGE_ID: u32 = 36;
 
 pub(crate) const SGVS: u32 = 0xe001_4001;
 pub(crate) const SGVS_2: [u32; 2] = [0xb001_0001, 2];
@@ -25,12 +32,16 @@ pub(crate) const VS_URB_READ_LENGTH: u8 = 1;
 const HS: [u32; 9] = [
     0x781b0007, 0x00080000, 0xa0014f03, 0, 0, 0, 0, 0x01340000, 0,
 ];
+pub(crate) const HULL_STATE_DWORDS: usize = HS.len();
 const TE: [u32; 5] = [0x781c0003, 0x00800121, 0x427c0000, 0x42800000, 0];
+const FILLED_TE: [u32; 5] = [0x781c0003, 0x00800301, 0x427c0000, 0x42800000, 0];
 // Size in 64-byte units, start in 8 KiB units, entry count.
 pub(crate) const URB: [(u32, u32, u32); 4] =
     [(1, 4, 2304), (3, 22, 1024), (1, 46, 2304), (1, 4, 0)];
-pub(crate) const CLIP: [u32; 3] = [0x00040400, 0xc4000001, 0x0003ffe0];
-pub(crate) const RASTER: u32 = 0x04210003;
+const CLIP: [u32; 3] = [0x00040400, 0xc4000001, 0x0003ffe0];
+const FILLED_CLIP: [u32; 3] = [0x00040400, 0xd4000001, 0x0003ffe0];
+const RASTER: u32 = 0x04210003;
+const FILLED_RASTER: u32 = 0x04a11003;
 pub(crate) const WM: u32 = 0x80000040;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -41,6 +52,10 @@ pub(crate) enum Geometry {
     GrowingFlock,
     SwappingFlock,
     SmokeFlock,
+    MixedFlock,
+    FilledFlock,
+    InsetFillFlock,
+    InsetOutlineFlock,
 }
 
 impl Geometry {
@@ -52,6 +67,11 @@ impl Geometry {
             | Self::GrowingFlock
             | Self::SwappingFlock
             | Self::SmokeFlock => &[0.0, 0.0, 0.0, 1.0],
+            Self::MixedFlock => &[0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0, 2.0, 2.0, 3.0],
+            Self::FilledFlock => &[0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0, 4.0, 5.0, 6.0, 6.0, 7.0],
+            Self::InsetFillFlock | Self::InsetOutlineFlock => {
+                &[0.0, 0.0, 0.0, 1.0, 4.0, 4.0, 4.0, 4.0, 4.0, 5.0]
+            }
         }
     }
 
@@ -59,10 +79,21 @@ impl Geometry {
         self.patch_tags().len() * 4
     }
 
+    pub(crate) const fn is_filled(self) -> bool {
+        matches!(self, Self::FilledFlock | Self::InsetFillFlock)
+    }
+
     pub(crate) fn instance_count(self, butterfly_count: f32) -> Option<u32> {
         if !matches!(
             self,
-            Self::Flock | Self::GrowingFlock | Self::SwappingFlock | Self::SmokeFlock
+            Self::Flock
+                | Self::GrowingFlock
+                | Self::SwappingFlock
+                | Self::SmokeFlock
+                | Self::MixedFlock
+                | Self::FilledFlock
+                | Self::InsetFillFlock
+                | Self::InsetOutlineFlock
         ) {
             return Some(PANEL_SIDE_INSTANCES);
         }
@@ -99,6 +130,21 @@ impl Geometry {
     }
 }
 
+pub(crate) const LAYERED_CONTROL_VERTICES: usize =
+    Geometry::InsetFillFlock.control_vertices() + Geometry::MixedFlock.control_vertices();
+
+pub(crate) fn valid_layered_vertices(vertices: &[u8], indices: &[u32]) -> bool {
+    let inset_count = Geometry::InsetFillFlock.control_vertices();
+    let Some((inset, original)) = vertices.split_at_checked(inset_count * 12) else {
+        return false;
+    };
+    let Some((inset_indices, original_indices)) = indices.split_at_checked(inset_count) else {
+        return false;
+    };
+    Geometry::InsetFillFlock.valid_vertices(inset, inset_indices)
+        && Geometry::MixedFlock.valid_vertices(original, original_indices)
+}
+
 struct Capture {
     package_id: u32,
     geometry: Geometry,
@@ -119,6 +165,22 @@ impl Program {
         self.capture.line_width_px << 7
     }
 
+    pub(crate) fn uses_projected_widths(&self) -> bool {
+        matches!(self.capture.package_id, PROJECTED_WIDTHS_PACKAGE_ID | INSET_OUTLINE_PACKAGE_ID)
+    }
+
+    pub(crate) fn is_filled(&self) -> bool {
+        self.capture.geometry.is_filled()
+    }
+
+    pub(crate) fn clip_state(&self) -> [u32; 3] {
+        if self.is_filled() { FILLED_CLIP } else { CLIP }
+    }
+
+    pub(crate) fn raster_dw1(&self) -> u32 {
+        if self.is_filled() { FILLED_RASTER } else { RASTER }
+    }
+
     pub(crate) fn control_vertices(&self) -> usize {
         self.capture.geometry.control_vertices()
     }
@@ -128,7 +190,11 @@ impl Program {
             Geometry::Flock
             | Geometry::GrowingFlock
             | Geometry::SwappingFlock
-            | Geometry::SmokeFlock => {
+            | Geometry::SmokeFlock
+            | Geometry::MixedFlock
+            | Geometry::FilledFlock
+            | Geometry::InsetFillFlock
+            | Geometry::InsetOutlineFlock => {
                 instances % FLOCK_SIDES_PER_BUTTERFLY == 0
                     && (FLOCK_BUTTERFLIES_MIN..=FLOCK_BUTTERFLIES_MAX)
                         .contains(&(instances / FLOCK_SIDES_PER_BUTTERFLY))
@@ -153,7 +219,8 @@ impl Program {
             0,
             0,
         ];
-        super::relocate_tessellation_stage_packets(HS, TE, ds, ksp)
+        let te = if self.is_filled() { FILLED_TE } else { TE };
+        super::relocate_tessellation_stage_packets(HS, te, ds, ksp)
     }
 }
 
@@ -165,7 +232,84 @@ pub(crate) fn supports_physical_device(vendor: u16, device: u16, revision: u8) -
 }
 
 // New meshes prefer the latest package for their layout. Resident meshes retain their capture.
-static PROGRAMS: [(Capture, spin::Once<Program>); 12] = [
+static PROGRAMS: [(Capture, spin::Once<Program>); 19] = [
+    (
+        Capture {
+            package_id: INSET_OUTLINE_PACKAGE_ID,
+            geometry: Geometry::InsetOutlineFlock,
+            hs_bytes: 13944,
+            ds_bytes: 784,
+            ds_urb_read: 0x0050a800,
+            line_width_px: 2,
+        },
+        spin::Once::new(),
+    ),
+    (
+        Capture {
+            package_id: TRANSLUCENT_FILL_PACKAGE_ID,
+            geometry: Geometry::InsetFillFlock,
+            hs_bytes: 13088,
+            ds_bytes: 624,
+            ds_urb_read: 0x00509800,
+            line_width_px: 1,
+        },
+        spin::Once::new(),
+    ),
+    (
+        Capture {
+            package_id: BREED_FILL_PACKAGE_ID,
+            geometry: Geometry::InsetFillFlock,
+            hs_bytes: 13088,
+            ds_bytes: 624,
+            ds_urb_read: 0x00509800,
+            line_width_px: 1,
+        },
+        spin::Once::new(),
+    ),
+    (
+        Capture {
+            package_id: 32,
+            geometry: Geometry::InsetFillFlock,
+            hs_bytes: 12256,
+            ds_bytes: 600,
+            ds_urb_read: 0x00509800,
+            line_width_px: 1,
+        },
+        spin::Once::new(),
+    ),
+    (
+        Capture {
+            package_id: 31,
+            geometry: Geometry::FilledFlock,
+            hs_bytes: 12256,
+            ds_bytes: 856,
+            ds_urb_read: 0x00509800,
+            line_width_px: 1,
+        },
+        spin::Once::new(),
+    ),
+    (
+        Capture {
+            package_id: PROJECTED_WIDTHS_PACKAGE_ID,
+            geometry: Geometry::MixedFlock,
+            hs_bytes: 13944,
+            ds_bytes: 784,
+            ds_urb_read: 0x0050a800,
+            line_width_px: 2,
+        },
+        spin::Once::new(),
+    ),
+    (
+        Capture {
+            package_id: 29,
+            geometry: Geometry::MixedFlock,
+            hs_bytes: 13888,
+            ds_bytes: 784,
+            ds_urb_read: 0x0050a800,
+            line_width_px: 2,
+        },
+        spin::Once::new(),
+    ),
     (
         Capture {
             package_id: 26,
@@ -306,12 +450,18 @@ fn load(capture: &'static Capture, slot: &'static spin::Once<Program>) -> Option
     }
     let code = |stage| crate::gpu::app_shaders::words(capture.package_id, stage);
     let [vs, hs, ds, ps] = [code(0)?, code(1)?, code(2)?, code(3)?];
-    let ps_bytes = match capture.geometry {
-        Geometry::SmokeFlock => SMOKE_PS_BYTES,
-        Geometry::SwappingFlock => RGB_PS_BYTES,
+    let ps_bytes = match (capture.geometry, capture.package_id) {
+        (Geometry::InsetFillFlock, TRANSLUCENT_FILL_PACKAGE_ID) => TRANSLUCENT_FILL_PS_BYTES,
+        (Geometry::InsetFillFlock, BREED_FILL_PACKAGE_ID) => BREED_FILL_PS_BYTES,
+        (Geometry::SmokeFlock | Geometry::MixedFlock | Geometry::InsetOutlineFlock, _) => {
+            SMOKE_PS_BYTES
+        }
+        (Geometry::SwappingFlock, _) => RGB_PS_BYTES,
+        (Geometry::FilledFlock | Geometry::InsetFillFlock, _) => FILLED_PS_BYTES,
         _ => WHITE_PS_BYTES,
     };
-    let colored_segments = ps_bytes != WHITE_PS_BYTES;
+    let flat_color = matches!(capture.package_id, BREED_FILL_PACKAGE_ID | TRANSLUCENT_FILL_PACKAGE_ID)
+        || (!capture.geometry.is_filled() && ps_bytes != WHITE_PS_BYTES);
     if [vs.len(), hs.len(), ds.len(), ps.len()].map(|words| words * 4)
         != [VS_BYTES, capture.hs_bytes, capture.ds_bytes, ps_bytes]
     {
@@ -355,12 +505,12 @@ fn load(capture: &'static Capture, slot: &'static spin::Once<Program>) -> Option
                         binding_table_entry_count: 1,
                         sampler_count: 0,
                     },
-                    num_varying_inputs: u8::from(colored_segments),
+                    num_varying_inputs: u8::from(flat_color),
                     uses_vmask: true,
                     computed_stencil: false,
                     persample_dispatch: false,
                     computed_depth_mode: 0,
-                    flat_inputs: u32::from(colored_segments),
+                    flat_inputs: u32::from(flat_color),
                 },
             },
         },
@@ -380,4 +530,11 @@ pub(crate) fn pipeline(geometry: Geometry) -> Option<&'static TrianglePipeline> 
         .filter(|(capture, _)| capture.geometry == geometry)
         .find_map(|(capture, slot)| load(capture, slot))
         .map(|program| &program.pipeline)
+}
+
+pub(crate) fn projected_mixed_pipeline() -> Option<&'static TrianglePipeline> {
+    let (capture, slot) = PROGRAMS
+        .iter()
+        .find(|(capture, _)| capture.package_id == PROJECTED_WIDTHS_PACKAGE_ID)?;
+    load(capture, slot).map(|program| &program.pipeline)
 }

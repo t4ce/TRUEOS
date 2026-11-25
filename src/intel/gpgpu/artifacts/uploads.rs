@@ -128,6 +128,19 @@ pub(crate) fn upload_cpp_demo_rgba8_kernel() -> Option<UploadedKernelArtifact> {
     *CPP_DEMO_RGBA8_UPLOAD.lock()
 }
 
+fn shadertoy_bfly_artifact(
+    adls: GpgpuKernelArtifact,
+    rpls: GpgpuKernelArtifact,
+) -> GpgpuKernelArtifact {
+    if super::claimed_device()
+        .is_some_and(|dev| rpls.target_policy.supports(dev.device_id, dev.revision_id))
+    {
+        rpls
+    } else {
+        adls
+    }
+}
+
 fn shadertoy_artifact_slot(
     shader_id: u32,
 ) -> Option<(GpgpuKernelArtifact, u64, &'static Mutex<Option<UploadedKernelArtifact>>)> {
@@ -159,6 +172,22 @@ fn shadertoy_artifact_slot(
             SHADERTOY_LICO_ADLS_ARTIFACT,
             SHADERTOY_LICO_ADLS_GPU,
             &SHADERTOY_LICO_UPLOAD,
+        ),
+        SHADERTOY_SHADER_BFLY_UNDERLAY => (
+            shadertoy_bfly_artifact(
+                SHADERTOY_BFLY_UNDERLAY_ADLS_ARTIFACT,
+                SHADERTOY_BFLY_UNDERLAY_RPLS_ARTIFACT,
+            ),
+            SHADERTOY_BFLY_UNDERLAY_GPU,
+            &SHADERTOY_BFLY_UNDERLAY_UPLOAD,
+        ),
+        SHADERTOY_SHADER_BFLY_CELESTIAL => (
+            shadertoy_bfly_artifact(
+                SHADERTOY_BFLY_CELESTIAL_ADLS_ARTIFACT,
+                SHADERTOY_BFLY_CELESTIAL_RPLS_ARTIFACT,
+            ),
+            SHADERTOY_BFLY_CELESTIAL_GPU,
+            &SHADERTOY_BFLY_CELESTIAL_UPLOAD,
         ),
         SHADERTOY_SHADER_PALETTE_GRID => (
             SHADERTOY_PALETTE_GRID_ADLS_ARTIFACT,

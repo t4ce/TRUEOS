@@ -2,6 +2,10 @@
 use crate::r::services::audio_playback::{
     ProducerOwner, SINK, monotonic_millis, validate_append_size, validate_size,
 };
+use crate::spirit::lilly_protocol::{self, SpeechCue, SpeechTurn};
+
+const SPIRIT_SPEECH_EVENT: u64 = 6;
+const SPIRIT_SPEECH_EVENT_BYTES: usize = 9;
 
 fn submit(owner: ProducerOwner, bytes: &[u8]) -> i32 {
     // The clip must outlive the caller and its VM heap/teardown.
@@ -87,13 +91,57 @@ fn validate_stream_request(action: u64, stream: u64, bytes: usize) -> Result<(),
         0 | 5 if stream == 0 && bytes == 0 => Ok(()),
         1 if (1..=i64::MAX as u64).contains(&stream) => validate_append_size(bytes),
         2 | 3 | 4 if (1..=i64::MAX as u64).contains(&stream) && bytes == 0 => Ok(()),
+        SPIRIT_SPEECH_EVENT if stream <= i64::MAX as u64 && bytes == SPIRIT_SPEECH_EVENT_BYTES => Ok(()),
         _ => Err(-22),
     }
+}
+
+fn speech_event(owner: ProducerOwner, stream: u64, payload: &[u8]) -> i64 {
+    let (cue, turn) = match decode_speech_event(stream, payload) {
+        Ok(event) => event,
+        Err(error) => return i64::from(error),
+    };
+    let ProducerOwner::Vm { id: vm_id, generation } = owner else {
+        return -13;
+    };
+    let ptts = crate::hv::with_blueprint_network_identity(vm_id, generation, |archive, _| {
+        archive.rsplit('/').next().is_some_and(|name| {
+            name.eq_ignore_ascii_case("ptts.bp") || name.eq_ignore_ascii_case("ptts")
+        })
+    });
+    if ptts != Some(true) || (stream != 0 && !SINK.lock().owns_live_pcm(owner, stream)) {
+        return -13;
+    }
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        lilly_protocol::speech_event(SpeechTurn { vm_id, generation, turn }, stream, cue);
+    });
+    0
+}
+
+fn decode_speech_event(stream: u64, payload: &[u8]) -> Result<(SpeechCue, u64), i32> {
+    let [kind, turn @ ..] = payload else { return Err(-22) };
+    let turn = u64::from_le_bytes(turn.try_into().map_err(|_| -22)?);
+    let cue = match (*kind, stream) {
+        (0, 1..) => SpeechCue::Continue,
+        (1, 1..) => SpeechCue::Thought,
+        (2, 1..) => SpeechCue::Answer,
+        (3, 1..) => SpeechCue::Done,
+        (4, 0) => SpeechCue::End,
+        (5, 0) => SpeechCue::Abort,
+        _ => return Err(-22),
+    };
+    if turn == 0 {
+        return Err(-22);
+    }
+    Ok((cue, turn))
 }
 
 fn stream_for(owner: ProducerOwner, action: u64, stream: u64, pcm: &[u8]) -> i64 {
     if let Err(error) = validate_stream_request(action, stream, pcm.len()) {
         return i64::from(error);
+    }
+    if action == SPIRIT_SPEECH_EVENT {
+        return speech_event(owner, stream, pcm);
     }
     crate::allocators::with_host_alloc_domain_strong(|| {
         let mut sink = SINK.lock();
@@ -143,6 +191,10 @@ pub(crate) fn release_vm(id: u8, generation: u64) {
 /// take an empty payload. Finished PCM remains available as a retained clip.
 /// Query returns 1 while that source is queued or playing, otherwise 0. It
 /// observes metadata only and never exposes another producer's sample memory.
+/// PTTS can report a Spirit speech event (6) with one kind byte and a nonzero
+/// little-endian u64 turn ID. Kinds 0–3 identify continuation, thought, answer,
+/// and completion PCM on an owned stream. Kinds 4 and 5 end or abort a turn
+/// without a stream.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_http_audio_stream_v1(
     action: u32,

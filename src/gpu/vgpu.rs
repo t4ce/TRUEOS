@@ -2218,7 +2218,7 @@ pub(crate) fn create_retained_mesh(
     descriptor: v::vgpu::RetainedMeshDescriptor,
 ) -> Result<RetainedMeshHandle, VgpuError> {
     use crate::intel::render::{BflyHistory, PicassoRetainedShader, ResidentScenePrimitiveTopology};
-    use crate::intel::shader::bfly_patches::Geometry;
+    use crate::intel::shader::bfly_patches::{Geometry, LAYERED_CONTROL_VERTICES, projected_mixed_pipeline};
 
     let double_sided = descriptor.topology & v::vgpu::RETAINED_MESH_FLAG_DOUBLE_SIDED != 0;
     let topology =
@@ -2241,6 +2241,13 @@ pub(crate) fn create_retained_mesh(
             | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK
             | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_FLOCK
             | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_TRAIL_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_SMOKE_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_CLOUD_TRAIL_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_FILLED_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_INSET_FILL_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK
     ) || descriptor.vertex_count == 0
         || !topology.accepts_index_count(descriptor.index_count as usize)
     {
@@ -2261,9 +2268,25 @@ pub(crate) fn create_retained_mesh(
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_FLOCK
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_TRAIL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_SMOKE_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_CLOUD_TRAIL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_FILLED_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_INSET_FILL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK
             if topology == ResidentScenePrimitiveTopology::BflyPatchList4 && !double_sided =>
         {
             let geometry = match descriptor.vertex_layout {
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_FILLED_FLOCK => Geometry::FilledFlock,
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_INSET_FILL_FLOCK
+                | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK
+                | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK => Geometry::InsetFillFlock,
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_TRAIL_FLOCK
+                | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_SMOKE_FLOCK
+                | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_CLOUD_TRAIL_FLOCK => {
+                    Geometry::MixedFlock
+                }
                 v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK
                 | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_FLOCK
                 | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK => Geometry::SmokeFlock,
@@ -2274,7 +2297,8 @@ pub(crate) fn create_retained_mesh(
                 v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OPEN_PATCHES => Geometry::Open,
                 _ => Geometry::Closed,
             };
-            let count = geometry.control_vertices() as u32;
+            let layered = descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK;
+            let count = if layered { LAYERED_CONTROL_VERTICES } else { geometry.control_vertices() } as u32;
             if descriptor.vertex_count != count || descriptor.index_count != count {
                 return Err(VgpuError::Unsupported);
             }
@@ -2288,22 +2312,38 @@ pub(crate) fn create_retained_mesh(
                 return Err(VgpuError::Unsupported);
             }
             let history = match descriptor.vertex_layout {
-                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TRAIL_FLOCK => Some(BflyHistory::Monochrome),
-                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK => Some(BflyHistory::Smoke),
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TRAIL_FLOCK
+                | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_TRAIL_FLOCK => {
+                    Some(BflyHistory::Monochrome)
+                }
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK
+                | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_SMOKE_FLOCK => Some(BflyHistory::Smoke),
                 v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_FLOCK => Some(BflyHistory::Cloud),
-                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK => {
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK
+                | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_CLOUD_TRAIL_FLOCK => {
                     Some(BflyHistory::CloudTrail)
                 }
                 _ => None,
             };
-            if let Some(history) = history {
+            if layered || descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK {
+                if crate::intel::shader::bfly_patches_pipeline(Geometry::InsetOutlineFlock).is_none()
+                    || layered && projected_mixed_pipeline().is_none()
+                {
+                    return Err(VgpuError::Unsupported);
+                }
+                if layered {
+                    PicassoRetainedShader::BflyLayered
+                } else {
+                    PicassoRetainedShader::BflyOutlinedInset
+                }
+            } else if let Some(history) = history {
                 if !crate::gpu::app_shaders::present(history.package_id())
                     || (history == BflyHistory::CloudTrail
                         && !crate::gpu::app_shaders::present(BflyHistory::Cloud.package_id()))
                 {
                     return Err(VgpuError::Unsupported);
                 }
-                PicassoRetainedShader::BflyTrail(history)
+                PicassoRetainedShader::BflyTrail { geometry, history }
             } else {
                 PicassoRetainedShader::BflyPatches(geometry)
             }
@@ -2317,7 +2357,14 @@ pub(crate) fn create_retained_mesh(
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TRAIL_FLOCK
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_FLOCK
-        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK => {
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_TRAIL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_SMOKE_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_CLOUD_TRAIL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_FILLED_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_INSET_FILL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK => {
             return Err(VgpuError::Unsupported);
         }
         _ if topology == ResidentScenePrimitiveTopology::BflyPatchList4 => {
@@ -2342,7 +2389,14 @@ pub(crate) fn create_retained_mesh(
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TRAIL_FLOCK
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_FLOCK
-        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK => 12,
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_TRAIL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_SMOKE_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_MIXED_CLOUD_TRAIL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_FILLED_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_INSET_FILL_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK => 12,
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT
         | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT_INSTANCE_PALETTE => 48,
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV => 32,
@@ -5633,7 +5687,7 @@ pub(crate) fn submit_ui4_retained_frame(
             parameters: retained_material.parameters,
         }
     });
-    let previous = resident.bfly_history().and_then(|history| {
+    let previous = resident.bfly_frame_history(&submit.camera).and_then(|history| {
         crate::ui4::blueprint_ui4::pin_vgpu_previous_frame(
             owner,
             window_id,

@@ -1,3 +1,4 @@
+# Additive owned-frame UI4 bottom color readback; all existing signatures unchanged.
 # Additive Lily contextual playback v1; all existing signatures unchanged.
 # Additive progressive HTTP audio stream v1; all 373 existing signatures unchanged.
 # Additive complete-clip HTTP playback handoff v1; all 372 existing signatures unchanged.
@@ -58,4 +59,4 @@
 # Additive non-consuming final GET URL metadata; all 369 previous signatures verified unchanged.
 # Intentional retirement of the QJS-only mouse stream; every surviving signature verified unchanged.
 # Additive UI4 logical keyboard events with cursor identity v1. Existing signatures unchanged.
-783cc2a451dc2131b0342d25f4c809e96cfb8e81a9a5b694878246ec99c78a72
+460ac59523a55523674b375f6d1b5d2d37527c08a794bd9cd59c5a38c8bda208

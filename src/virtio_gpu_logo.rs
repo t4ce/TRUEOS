@@ -25,6 +25,12 @@ pub(crate) fn set_background_color(r: u8, g: u8, b: u8) -> bool {
     true
 }
 
+pub(crate) fn get_background_color() -> Option<[u8; 3]> {
+    output_dimensions()?;
+    let packed = EMULATOR_BACKGROUND.load(Ordering::Acquire);
+    (packed & (1u64 << 32) != 0).then_some([(packed >> 16) as u8, (packed >> 8) as u8, packed as u8])
+}
+
 pub(crate) fn output_dimensions() -> Option<(u32, u32)> {
     let packed = EMULATOR_OUTPUT.load(Ordering::Acquire);
     (packed != 0).then_some(((packed >> 32) as u32, packed as u32))

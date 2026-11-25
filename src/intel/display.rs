@@ -1403,6 +1403,20 @@ fn pipe_bottom_color_from_xrgb(color: u32) -> u32 {
     pipe_bottom_color_u0_10(red, green, blue)
 }
 
+fn pipe_bottom_color_to_rgb8(raw: u32) -> [u8; 3] {
+    let channel = |shift: u32| {
+        let value = (raw >> shift) & 0x3ff;
+        ((value * 255 + 511) / 1023) as u8
+    };
+    [channel(20), channel(10), channel(0)]
+}
+
+pub(crate) fn get_pipe_a_bottom_color_rgb8() -> Option<[u8; 3]> {
+    let dev = crate::intel::claimed_device()?;
+    let raw = crate::intel::mmio_read(dev, SKL_BOTTOM_COLOR_A);
+    Some(pipe_bottom_color_to_rgb8(raw))
+}
+
 /// Program the real Pipe A bottom color. This register has RGB channels but no
 /// alpha channel; it is visible only where enabled planes do not cover the
 /// pipe output.

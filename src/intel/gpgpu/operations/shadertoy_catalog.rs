@@ -8,6 +8,7 @@ pub(crate) struct ShaderToyRuntimeState {
     particles_need_reset: bool,
     brush: CppCloudBrush,
     environment: ShaderToyEnvironment,
+    celestial: BflyCelestialState,
 }
 
 impl ShaderToyRuntimeState {
@@ -22,6 +23,7 @@ impl ShaderToyRuntimeState {
             particles_need_reset: true,
             brush: CppCloudBrush::new(),
             environment: ShaderToyEnvironment::new(),
+            celestial: BflyCelestialState::new(),
         }
     }
 
@@ -29,6 +31,7 @@ impl ShaderToyRuntimeState {
         &mut self,
         dst: GpgpuRgba8Surface,
         params: ShaderToyFrameParams,
+        target: (crate::ui4::FrameHandle, u8),
     ) -> GpgpuRgba8KernelResult {
         if !dst.is_valid()
             || !params.is_valid()
@@ -50,6 +53,7 @@ impl ShaderToyRuntimeState {
             self.particles_need_reset = true;
             self.brush = CppCloudBrush::new();
             self.environment = ShaderToyEnvironment::new();
+            self.celestial = BflyCelestialState::new();
             self.selected = params.shader_id;
         }
         if self.extent != (dst.width, dst.height) {
@@ -57,9 +61,10 @@ impl ShaderToyRuntimeState {
             self.extent = (dst.width, dst.height);
         }
         match params.shader_id {
-            1..=6 | SHADERTOY_SHADER_SINE_VISUALIZER => {
+            1..=6 | SHADERTOY_SHADER_SINE_VISUALIZER | SHADERTOY_SHADER_BFLY_UNDERLAY => {
                 shadertoy_rgba8_surface_full(dst, params)
             }
+            SHADERTOY_SHADER_BFLY_CELESTIAL => self.celestial.render(dst, params, target),
             16 => self.environment.render(dst, params),
             8..=14 => {
                 if params.shader_id == 14 && params.flags & 2 != 0 {

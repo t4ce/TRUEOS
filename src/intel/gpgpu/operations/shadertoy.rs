@@ -1,5 +1,7 @@
 pub(crate) const SHADERTOY_SHADER_MANDELBOX: u32 = 16;
 pub(crate) const SHADERTOY_SHADER_LICO: u32 = 18;
+pub(crate) const SHADERTOY_SHADER_BFLY_UNDERLAY: u32 = 19;
+pub(crate) const SHADERTOY_SHADER_BFLY_CELESTIAL: u32 = 20;
 pub(crate) const LICO_ANALYSIS_WORDS: usize = 128;
 pub(crate) const SHADERTOY_SHADER_MANDELBROT: u32 = 1;
 pub(crate) const SHADERTOY_SHADER_CUBE_FIELD: u32 = 2;
@@ -37,7 +39,11 @@ pub(crate) struct ShaderToyFrameParams {
 impl ShaderToyFrameParams {
     pub(crate) fn is_valid(self) -> bool {
         self.version == SHADERTOY_PARAMS_VERSION
-            && ((1..=16).contains(&self.shader_id) || self.shader_id == SHADERTOY_SHADER_LICO)
+            && matches!(
+                self.shader_id,
+                1..=16 | SHADERTOY_SHADER_LICO | SHADERTOY_SHADER_BFLY_UNDERLAY
+                    | SHADERTOY_SHADER_BFLY_CELESTIAL
+            )
             && (self.flags == 0
                 || (self.shader_id == SHADERTOY_SHADER_PROTEAN_CLOUDS
                     && self.flags == SHADERTOY_FLAG_NATIVE_RESOLUTION)
@@ -58,6 +64,8 @@ impl ShaderToyFrameParams {
             && self.date_month.is_finite()
             && self.date_day.is_finite()
             && self.date_seconds.is_finite()
+            && (self.shader_id != SHADERTOY_SHADER_BFLY_CELESTIAL
+                || bfly_celestial_square(self).is_some())
     }
 }
 
@@ -146,6 +154,7 @@ fn shadertoy_render_focused(
         source: scratch,
         focus,
         lico_analysis: None,
+        region: None,
     };
     let mut result = shadertoy_render_pass(scratch, params, pass);
     if result.ok {
@@ -164,13 +173,14 @@ fn shadertoy_render_pass(
     pass: ShaderToyPass<'_>,
 ) -> GpgpuRgba8KernelResult {
     let start_tick = direct_rcs_now_tick();
-    let mut first_row = 0;
+    let region = pass.dispatch_region(dst);
+    let mut first_row = region.y as u32;
+    let end_row = first_row + region.height;
     let mut ppgtt_generation = None;
     let mut timing = (params.shader_id == SHADERTOY_SHADER_LICO && params.frame.is_multiple_of(120))
         .then(ShaderToyDispatchTiming::default);
-    while first_row < dst.height {
-        let Some(rows) =
-            shadertoy_dispatch_rows(params.shader_id, pass.phase, dst.width, dst.height, first_row)
+    while first_row < end_row {
+        let Some(rows) = pass.dispatch_rows(dst, params.shader_id, first_row)
         else {
             return GpgpuRgba8KernelResult::default();
         };
@@ -266,8 +276,7 @@ fn submit_shadertoy_rgba8_rows(
 ) -> DirectRcsDispatchOutcome {
     if !dst.is_valid()
         || !params.is_valid()
-        || shadertoy_dispatch_rows(params.shader_id, pass.phase, dst.width, dst.height, first_row)
-            != Some(rows)
+        || pass.dispatch_rows(dst, params.shader_id, first_row) != Some(rows)
     {
         return DirectRcsDispatchOutcome::default();
     }
@@ -302,15 +311,26 @@ fn submit_shadertoy_rgba8_rows(
     let dst_ppgtt_ok = kernel_ppgtt_ok
         && (reuse_ppgtt
             || direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, pass.phase != 1));
-    let source_ppgtt_ok = dst_ppgtt_ok
-        && (pass.phase != 2
-            || direct_rcs_map_ppgtt_kernel(
+    let source_ppgtt_ok = dst_ppgtt_ok && match (params.shader_id, pass.phase) {
+        (SHADERTOY_SHADER_BFLY_CELESTIAL, _) => reuse_ppgtt
+            || direct_rcs_map_ppgtt_region_and_publish(
                 state,
                 pass.source.gpu,
                 pass.source.phys,
                 pass.source.bytes,
-            ));
-    if source_ppgtt_ok && params.shader_id == SHADERTOY_SHADER_LICO {
+                super::GEN8_PAGE_PRESENT,
+            ),
+        (_, 2) => direct_rcs_map_ppgtt_kernel(
+                state,
+                pass.source.gpu,
+                pass.source.phys,
+                pass.source.bytes,
+            ),
+        _ => true,
+    };
+    if source_ppgtt_ok
+        && matches!(params.shader_id, SHADERTOY_SHADER_LICO | SHADERTOY_SHADER_BFLY_CELESTIAL)
+    {
         *ppgtt_generation = Some(DIRECT_RCS_PPGTT_GENERATION.load(Ordering::Relaxed));
     }
     let batch_ok = source_ppgtt_ok

@@ -20,6 +20,8 @@ pub(crate) const SHADERTOY_NGUYEN_KERNEL_NAME: &str = "shadertoy_nguyen";
 pub(crate) const SHADERTOY_SINE_VISUALIZER_KERNEL_NAME: &str = "shadertoy_sine_visualizer";
 pub(crate) const SHADERTOY_MANDELBOX_KERNEL_NAME: &str = "shadertoy_mandelbox";
 pub(crate) const SHADERTOY_LICO_KERNEL_NAME: &str = "shadertoy_lico";
+pub(crate) const SHADERTOY_BFLY_UNDERLAY_KERNEL_NAME: &str = "shadertoy_bfly_underlay";
+pub(crate) const SHADERTOY_BFLY_CELESTIAL_KERNEL_NAME: &str = "shadertoy_bfly_celestial";
 pub(crate) const SHADERTOY_PALETTE_GRID_KERNEL_NAME: &str = "shadertoy_palette_grid";
 pub(crate) const SHADERTOY_COSMIC_STRANDS_KERNEL_NAME: &str = "shadertoy_cosmic_strands";
 pub(crate) const SHADERTOY_MANDELBROT_SOURCE_PATH: &str =
@@ -105,6 +107,8 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         }
         SHADERTOY_MANDELBOX_KERNEL_NAME => Some("Blueprint:Cubes/Cube/mandelbox/kernel.clcpp"),
         SHADERTOY_LICO_KERNEL_NAME => Some("Blueprint:lico/assets/visualizer/kernel.clcpp"),
+        SHADERTOY_BFLY_UNDERLAY_KERNEL_NAME => Some("Blueprint:bfly/shaders/bfly-underlay.clcpp"),
+        SHADERTOY_BFLY_CELESTIAL_KERNEL_NAME => Some("Blueprint:bfly/shaders/bfly-celestial.clcpp"),
         SHADERTOY_PALETTE_GRID_KERNEL_NAME => Some(SHADERTOY_PALETTE_GRID_SOURCE_PATH),
         SHADERTOY_COSMIC_STRANDS_KERNEL_NAME => Some(SHADERTOY_COSMIC_STRANDS_SOURCE_PATH),
         PARTICLE_CRAFT_KERNEL_NAME
@@ -261,6 +265,29 @@ include!(
 );
 include!("../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_lico.contract.rs");
 include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_bfly_underlay.contract.rs"
+);
+include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_bfly_celestial.contract.rs"
+);
+// Both Bfly programs bake to identical Zebin across these exact targets.
+const SHADERTOY_BFLY_RPLS_TARGET: GpgpuKernelTarget = GpgpuKernelTarget {
+    label: "rpls",
+    pci_device_ids: &[0xA780],
+    revision_min: 0x04,
+    revision_max: 0x04,
+};
+const SHADERTOY_BFLY_UNDERLAY_RPLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract =
+    GpgpuKernelAbiContract {
+        target: SHADERTOY_BFLY_RPLS_TARGET,
+        ..SHADERTOY_BFLY_UNDERLAY_ADLS_CPP_ABI_CONTRACT
+    };
+const SHADERTOY_BFLY_CELESTIAL_RPLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract =
+    GpgpuKernelAbiContract {
+        target: SHADERTOY_BFLY_RPLS_TARGET,
+        ..SHADERTOY_BFLY_CELESTIAL_ADLS_CPP_ABI_CONTRACT
+    };
+include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_palette_grid.contract.rs"
 );
 include!(
@@ -274,6 +301,8 @@ const _: () = {
         (SHADERTOY_SINE_VISUALIZER_ADLS_CPP_ABI_CONTRACT, 5),
         (SHADERTOY_MANDELBOX_ADLS_CPP_ABI_CONTRACT, 6),
         (SHADERTOY_LICO_ADLS_CPP_ABI_CONTRACT, 5),
+        (SHADERTOY_BFLY_UNDERLAY_ADLS_CPP_ABI_CONTRACT, 5),
+        (SHADERTOY_BFLY_CELESTIAL_ADLS_CPP_ABI_CONTRACT, 6),
         (SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT, 5),
         (SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT, 5),
     ];
@@ -300,6 +329,10 @@ const _: () = {
     assert!(SHADERTOY_SINE_VISUALIZER_ADLS_CPP_ABI_CONTRACT.bindings.len() == 2);
     assert!(SHADERTOY_MANDELBOX_ADLS_CPP_ABI_CONTRACT.bindings.len() == 3);
     assert!(SHADERTOY_LICO_ADLS_CPP_ABI_CONTRACT.bindings.len() == 2);
+    assert!(SHADERTOY_BFLY_UNDERLAY_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
+    assert!(matches!(SHADERTOY_BFLY_UNDERLAY_RPLS_CPP_ABI_CONTRACT.validate(), Ok(())));
+    assert!(SHADERTOY_BFLY_CELESTIAL_ADLS_CPP_ABI_CONTRACT.bindings.len() == 3);
+    assert!(matches!(SHADERTOY_BFLY_CELESTIAL_RPLS_CPP_ABI_CONTRACT.validate(), Ok(())));
     assert!(SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
     assert!(
         SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT

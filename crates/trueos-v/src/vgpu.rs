@@ -448,6 +448,24 @@ pub const RETAINED_VERTEX_LAYOUT_BFLY_SMOKE_FLOCK: u32 = 18;
 pub const RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_FLOCK: u32 = 19;
 /// A wider downstroke trail using the same resident R8 cloud mask.
 pub const RETAINED_VERTEX_LAYOUT_BFLY_CLOUD_TRAIL_FLOCK: u32 = 20;
+/// Both wing outlines in one draw, with shape selection in the flock records.
+/// The 10 patches carry `[x, y, shape * 2 + straight_edge]` controls.
+/// Set `previous_view_projection[14]` to 1.0 to skip sourcing the prior frame.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_MIXED_TRAIL_FLOCK: u32 = 21;
+/// The same mixed flock with projected-tier R8 smoke downstroke trails.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_MIXED_SMOKE_FLOCK: u32 = 22;
+/// The same mixed flock with the wider R8 cloud downstroke trail.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_MIXED_CLOUD_TRAIL_FLOCK: u32 = 23;
+/// A filled flock using 12 four-point patches and the same camera records.
+/// Each `[x, y, patch_kind]` point carries a fill patch tag without a history pass.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_FILLED_FLOCK: u32 = 24;
+/// Filled closed wing contours using 10 four-point patches and no history pass.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_INSET_FILL_FLOCK: u32 = 25;
+/// Inset fill and projected-width outline share the same 10 contour patches.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK: u32 = 26;
+/// The outlined inset followed by the original RGB outlines in one frame.
+/// The two consecutive 40-control sections each use local indices 0 through 39.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK: u32 = 27;
 pub const RETAINED_TOPOLOGY_BFLY_PATCHLIST_4: u32 = 0x23;
 /// Experimental baked beveled cube: one Float3 origin, 44 zero indices.
 /// Only valid with RETAINED_TOPOLOGY_CUBE_PATCHLIST_1. HS expands each patch

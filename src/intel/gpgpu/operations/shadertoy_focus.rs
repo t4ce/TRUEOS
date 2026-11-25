@@ -115,6 +115,7 @@ struct ShaderToyPass<'a> {
     source: GpgpuRgba8Surface,
     focus: [f32; 4],
     lico_analysis: Option<&'a [f32; LICO_ANALYSIS_WORDS]>,
+    region: Option<GpgpuRect>,
 }
 
 impl ShaderToyPass<'_> {
@@ -126,6 +127,17 @@ impl ShaderToyPass<'_> {
             source: dst,
             focus: [0.0, 0.0, 1.0, 1.0],
             lico_analysis: None,
+            region: None,
         }
+    }
+
+    fn dispatch_region(self, dst: GpgpuRgba8Surface) -> GpgpuRect {
+        self.region.unwrap_or_else(|| dst.bounds())
+    }
+
+    fn dispatch_rows(self, dst: GpgpuRgba8Surface, shader_id: u32, first_row: u32) -> Option<u32> {
+        let region = self.dispatch_region(dst);
+        let local_row = first_row.checked_sub(region.y as u32)?;
+        shadertoy_dispatch_rows(shader_id, self.phase, region.width, region.height, local_row)
     }
 }

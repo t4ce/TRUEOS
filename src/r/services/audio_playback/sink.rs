@@ -670,6 +670,13 @@ impl Sink {
             .map(|slot| slot.as_ref().map(|source| source.id))
     }
 
+    pub(crate) fn owns_live_pcm(&self, owner: ProducerOwner, id: u64) -> bool {
+        self.slots.iter().flatten().any(|source| {
+            source.owner == owner && source.id == id
+                && matches!(&source.pcm, Pcm::Live { samples, .. } if !samples.is_empty())
+        })
+    }
+
     pub(crate) fn http_active_ids(&self) -> [Option<u64>; MAX_PRODUCERS] {
         self.slots.each_ref().map(|slot| {
             let source = slot.as_ref()?;

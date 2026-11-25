@@ -112,6 +112,8 @@ pub const OP_BP_THREAD_CONTROL_V1: u32 = 0x226;
 pub const OP_BP_STOP_CONTROL_V1: u32 = 0x21A; // arg0 register(0)/poll(1) -> rc/requested
 /// `arg0=owned frame`, `arg1=0xRRGGBB`; primary display's shared opaque backdrop.
 pub const OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR: u32 = 0x208;
+/// `arg0=owned frame`; returns the shared backdrop as `0xRRGGBB` or a negative status.
+pub const OP_BP_UI4_SCENE_GET_DISPLAY_BOTTOM_COLOR: u32 = 0x25F;
 /// `arg0=owned frame`, payload=`red[256] + green[256] + blue[256]` u16 LE.
 pub const OP_BP_UI4_SCENE_SET_DISPLAY_GAMMA_RAMP: u32 = 0x211;
 /// arg0=owned window, arg1=signed fade -65535 (black)..65535 (white); 0 restores.

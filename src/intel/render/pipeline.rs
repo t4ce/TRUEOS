@@ -2594,6 +2594,43 @@ mod retained_native_matrix_draw_contract_tests {
     }
 }
 
+fn push_gfx12_primitive(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    draw: &TriangleDrawPrep,
+    instance_count: u32,
+    first_instance: u32,
+) -> Result<(), &'static str> {
+    let command = CMD_3DPRIMITIVE_EXTENDED
+        | if draw.indirect_args_gpu_addr.is_some() {
+            PRIMITIVE_INDIRECT_PARAMETER_ENABLE
+        } else {
+            0
+        };
+    let access = if draw.index_buffer.is_some() {
+        PRIMITIVE_VERTEX_ACCESS_RANDOM
+    } else {
+        0
+    };
+    let end = cursor.checked_add(10).ok_or("probe-batch-exhausted")?;
+    let packet = batch.get_mut(*cursor..end).ok_or("probe-batch-exhausted")?;
+    // ANV mirrors StartInstanceLocation in ExtendedParameter1 for SGVS_2.
+    packet.copy_from_slice(&[
+        command,
+        access,
+        draw.vertex_count,
+        0,
+        instance_count,
+        first_instance,
+        0,
+        0,
+        first_instance,
+        0,
+    ]);
+    *cursor = end;
+    Ok(())
+}
+
 fn encode_triangle_probe_batch(
     submit_name: &'static str,
     batch_dwords: &mut [u32],
@@ -2624,6 +2661,7 @@ fn encode_triangle_probe_batch(
     let cube_patch = crate::intel::shader::patch_cube::matches(pipeline);
     let bfly_program = bfly::for_pipeline(pipeline);
     let bfly_patches = bfly_program.is_some();
+    let bfly_filled = bfly_program.is_some_and(bfly::Program::is_filled);
     let instance_count = match (bfly_program, batch_mode) {
         (Some(program), TriangleBatchMode::BflyPatchDraw { instances })
             if program.accepts_instance_count(instances) =>
@@ -2682,7 +2720,8 @@ fn encode_triangle_probe_batch(
     {
         return Err("clip-adjacency-topology");
     }
-    let native_line_aa = draw.microfont_aa && batch_mode.line_raster();
+    let line_raster = batch_mode.line_raster() && !bfly_filled;
+    let native_line_aa = draw.microfont_aa && line_raster;
     if native_line_aa && resident_msaa4 {
         return Err("microfont-aa-msaa");
     }
@@ -3266,8 +3305,8 @@ fn encode_triangle_probe_batch(
     } else {
         (1 << 5) | ((clip_max_point_width_raw & 0x7FF) << 6)
     };
-    let [clip_dw1, clip_dw2, clip_dw3] = if bfly_patches {
-        bfly::CLIP
+    let [clip_dw1, clip_dw2, clip_dw3] = if let Some(program) = bfly_program {
+        program.clip_state()
     } else {
         [clip_dw1, clip_dw2, clip_dw3]
     };
@@ -3282,7 +3321,7 @@ fn encode_triangle_probe_batch(
         (u32::from(sf_viewport_transform_enable) << 1) | (1 << 10)
     };
     let line_width_raw = bfly_program.map_or(line_width_raw, bfly::Program::line_width_raw);
-    let sf_dw1 = resident_line_width_sf_dw1(sf_base_dw1, batch_mode.line_raster(), line_width_raw);
+    let sf_dw1 = resident_line_width_sf_dw1(sf_base_dw1, line_raster, line_width_raw);
     let sf_dw2 = if let Some(gs) = adjacency_gs {
         (gs.meta.sf_deref_block_size as u32) << 29
     } else if backend_probe_mode.sf_deref_block_zero() || TRIANGLE_VS_URB_ENTRIES >= 192 {
@@ -3313,8 +3352,8 @@ fn encode_triangle_probe_batch(
     // Mirror Mesa's simple-shader path here as literally as possible: cull
     // none, and otherwise leave raster defaults boring until we have visual
     // proof that a more opinionated packet is required.
-    let raster_dw1 = if bfly_patches {
-        bfly::RASTER
+    let raster_dw1 = if let Some(program) = bfly_program {
+        program.raster_dw1()
     } else if draw.voxy_figure {
         // The negative framebuffer Y scale maps authored CCW to screen CW.
         native_raster_dw1(false, true)
@@ -4670,9 +4709,10 @@ fn encode_triangle_probe_batch(
     }
     if let Some(program) = bfly_program {
         intel_render_focus_log!(
-            "bfly-tessellation enabled=1 topology=patchlist4 patches={} instances={} domain=isolines hs_camera_bti=1\n",
+            "bfly-tessellation enabled=1 topology=patchlist4 patches={} instances={} domain={} hs_camera_bti=1\n",
             program.control_vertices() / 4,
             instance_count,
+            if bfly_filled { "quads" } else { "isolines" },
         );
     } else if let Some([hs, ds]) = shader_layout.tessellation {
         intel_render_focus_log!(
@@ -5598,38 +5638,43 @@ fn encode_triangle_probe_batch(
 
     log_batch_offset(cursor, "3DPRIMITIVE");
     if device_is_gfx12(warm.device_id) {
-        // Gfx11+ direct draws use the extended ten-DWORD form.  Topology is
-        // supplied by 3DSTATE_VF_TOPOLOGY, while the three extended values
-        // repeat firstVertex, firstInstance, and baseVertex.  The verified
-        // host packet is 0x7B000808 followed by nine zero/default fields apart
-        // from vertex and instance counts.
-        push(
-            batch_dwords,
-            &mut cursor,
-            CMD_3DPRIMITIVE_EXTENDED
-                | if draw.indirect_args_gpu_addr.is_some() {
-                    PRIMITIVE_INDIRECT_PARAMETER_ENABLE
-                } else {
-                    0
-                },
-        )?;
-        push(
-            batch_dwords,
-            &mut cursor,
-            if draw.index_buffer.is_some() {
-                PRIMITIVE_VERTEX_ACCESS_RANDOM
+        if bfly_filled || bfly_program.is_some_and(bfly::Program::uses_projected_widths) {
+            // The hull shader uses the high instance bits to select one
+            // projected width class and keeps the low bits for the 160 sides.
+            let passes: &[(u32, u32)] = if bfly_filled {
+                &[(1, 0)]
             } else {
-                0
-            },
-        )?;
-        push(batch_dwords, &mut cursor, draw.vertex_count)?;
-        push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, instance_count)?;
-        push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, 0)?;
+                &[(2, 0), (3, 256), (4, 512)]
+            };
+            for &(width_px, first_instance) in passes {
+                if first_instance != 0 {
+                    log_batch_offset(cursor, "3DSTATE_SF bfly projected width");
+                    push(batch_dwords, &mut cursor, CMD_3DSTATE_SF)?;
+                    push(
+                        batch_dwords,
+                        &mut cursor,
+                        resident_line_width_sf_dw1(sf_base_dw1, true, width_px << 7),
+                    )?;
+                    push(batch_dwords, &mut cursor, sf_dw2)?;
+                    push(batch_dwords, &mut cursor, sf_dw3)?;
+                }
+                // Wa_16011107343 re-arms the hull state before each tessellated draw.
+                log_batch_offset(cursor, "3DSTATE_HS bfly pre-draw");
+                for &word in &tessellation_packets[..bfly::HULL_STATE_DWORDS] {
+                    push(batch_dwords, &mut cursor, word)?;
+                }
+                log_batch_offset(cursor, "3DPRIMITIVE bfly");
+                push_gfx12_primitive(
+                    batch_dwords,
+                    &mut cursor,
+                    &draw,
+                    instance_count,
+                    first_instance,
+                )?;
+            }
+        } else {
+            push_gfx12_primitive(batch_dwords, &mut cursor, &draw, instance_count, 0)?;
+        }
     } else {
         push(
             batch_dwords,

@@ -165,6 +165,32 @@ pub(crate) const SHADERTOY_LICO_ADLS_ARTIFACT: GpgpuKernelArtifact =
         &SHADERTOY_LICO_ADLS_CPP_ABI_CONTRACT,
     );
 
+const SHADERTOY_BFLY_UNDERLAY_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::contracted(
+    SHADERTOY_BFLY_UNDERLAY_KERNEL_NAME,
+    &[],
+    &[],
+    &SHADERTOY_BFLY_UNDERLAY_ADLS_CPP_ABI_CONTRACT,
+);
+const SHADERTOY_BFLY_UNDERLAY_RPLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::contracted(
+    SHADERTOY_BFLY_UNDERLAY_KERNEL_NAME,
+    &[],
+    &[],
+    &SHADERTOY_BFLY_UNDERLAY_RPLS_CPP_ABI_CONTRACT,
+);
+
+const SHADERTOY_BFLY_CELESTIAL_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::contracted(
+    SHADERTOY_BFLY_CELESTIAL_KERNEL_NAME,
+    &[],
+    &[],
+    &SHADERTOY_BFLY_CELESTIAL_ADLS_CPP_ABI_CONTRACT,
+);
+const SHADERTOY_BFLY_CELESTIAL_RPLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::contracted(
+    SHADERTOY_BFLY_CELESTIAL_KERNEL_NAME,
+    &[],
+    &[],
+    &SHADERTOY_BFLY_CELESTIAL_RPLS_CPP_ABI_CONTRACT,
+);
+
 pub(crate) const SHADERTOY_MANDELBOX_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         SHADERTOY_MANDELBOX_KERNEL_NAME,

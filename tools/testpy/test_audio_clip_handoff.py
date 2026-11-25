@@ -28,6 +28,7 @@ static MODE:AtomicU8=AtomicU8::new(0);
 static START:AtomicUsize=AtomicUsize::new(0);
 static END:AtomicUsize=AtomicUsize::new(0);
 static GENERATION:AtomicUsize=AtomicUsize::new(1);
+static PTTS:AtomicU8=AtomicU8::new(0);
 pub(crate) fn monotonic_millis()->u64 { 0 }
 mod hv {
     pub const TRUEOS_VM_ID_LIMIT: usize = 64;
@@ -40,7 +41,22 @@ mod hv {
     pub fn vm_run_generation(vm:u8)->Option<u64> {
         (vm==7).then(|| super::GENERATION.load(super::Ordering::SeqCst) as u64)
     }
+    pub fn with_blueprint_network_identity<T>(vm:u8,generation:u64,f:impl FnOnce(&str,bool)->T)->Option<T> {
+        (vm_run_generation(vm)==Some(generation)).then(|| {
+            f(if super::PTTS.load(super::Ordering::SeqCst)==1 { "/blobs/ptts.bp" } else { "other.bp" }, false)
+        })
+    }
 }
+mod spirit { pub mod lilly_protocol {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum SpeechCue { Continue, Thought, Answer, Done, End, Abort }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct SpeechTurn { pub vm_id:u8, pub generation:u64, pub turn:u64 }
+    pub static EVENTS:super::super::Mutex<Vec<(SpeechTurn,u64,SpeechCue)>>=super::super::Mutex::new(Vec::new());
+    pub fn speech_event(turn:SpeechTurn,stream:u64,cue:SpeechCue) {
+        EVENTS.lock().push((turn,stream,cue));
+    }
+} }
 mod allocators {
     pub fn with_host_alloc_domain_strong<T>(f:impl FnOnce()->T)->T { f() }
     pub fn hv_guest_heap_bounds(vm:u8)->Option<(usize,usize)> {
@@ -181,6 +197,47 @@ fn analog_monitor_begin_uses_the_same_abi_across_execution_modes() {
     }
     *SINK.lock() = sink::Sink::new();
     MODE.store(0, Ordering::SeqCst);
+}
+
+#[test]
+fn ptts_speech_metadata_requires_owned_pcm_and_a_current_ptts_guest() {
+    use spirit::lilly_protocol::{EVENTS,SpeechCue,SpeechTurn};
+    *SINK.lock()=sink::Sink::new();
+    let frame=[1u8,2,3,4];
+    let mut event=[0u8;9];
+    event[0]=1;
+    event[1..].copy_from_slice(&50u64.to_le_bytes());
+    let id=handoff::stream_guest(7,0,0,&[]) as u64;
+    assert!(id>0);
+    PTTS.store(1,Ordering::SeqCst);
+    assert_eq!(handoff::stream_guest(7,6,id,&event),-13);
+    assert_eq!(handoff::stream_guest(7,1,id,&frame),0);
+    PTTS.store(0,Ordering::SeqCst);
+    assert_eq!(handoff::stream_guest(7,6,id,&event),-13);
+    PTTS.store(1,Ordering::SeqCst);
+    GENERATION.store(2,Ordering::SeqCst);
+    assert_eq!(handoff::stream_guest(7,6,id,&event),-13);
+    GENERATION.store(1,Ordering::SeqCst);
+    assert_eq!(handoff::stream_guest(7,6,0,&event),-22);
+    assert_eq!(handoff::stream_guest(7,6,id,&event[..8]),-22);
+
+    let ptr=event.as_ptr() as usize;
+    START.store(ptr,Ordering::SeqCst);
+    END.store(ptr+event.len(),Ordering::SeqCst);
+    MODE.store(1,Ordering::SeqCst);
+    let stream=handoff::trueos_cabi_http_audio_stream_v1;
+    assert_eq!(unsafe { stream(6,id,event.as_ptr(),event.len()) },0);
+    event[0]=4;
+    assert_eq!(unsafe { stream(6,id,event.as_ptr(),event.len()) },-22);
+    assert_eq!(unsafe { stream(6,0,event.as_ptr(),event.len()) },0);
+    event[0]=5;
+    assert_eq!(unsafe { stream(6,id,event.as_ptr(),event.len()) },-22);
+    assert_eq!(unsafe { stream(6,0,event.as_ptr(),event.len()) },0);
+    let turn=SpeechTurn { vm_id:7,generation:1,turn:50 };
+    assert_eq!(*EVENTS.lock(),[(turn,id,SpeechCue::Thought),(turn,0,SpeechCue::End),(turn,0,SpeechCue::Abort)]);
+    MODE.store(0,Ordering::SeqCst);
+    PTTS.store(0,Ordering::SeqCst);
+    *SINK.lock()=sink::Sink::new();
 }
 '''.replace('@SINK@', str(ROOT / 'src/r/services/audio_playback/sink.rs')).replace('@HANDOFF@',str(ROOT / 'src/r/services/audio_http/handoff.rs'))
     # Refer to the local VM stub from the otherwise unmodified production module.

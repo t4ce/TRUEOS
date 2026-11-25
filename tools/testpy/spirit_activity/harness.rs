@@ -4,6 +4,7 @@ extern crate self as trueos_time;
 use std::sync::atomic::{AtomicU64, Ordering};
 static NOW: AtomicU64 = AtomicU64::new(0);
 static WARNINGS: AtomicU64 = AtomicU64::new(0);
+static AUDIO_STREAM: AtomicU64 = AtomicU64::new(0);
 
 pub struct Instant(u64);
 impl Instant {
@@ -29,6 +30,16 @@ mod tyche {
         }
         pub fn usize_below(&mut self, max: usize) -> usize { self.next() as usize % max }
         pub fn bool(&mut self) -> bool { self.usize_below(2) != 0 }
+    }
+}
+
+mod r {
+    pub mod services {
+        pub mod audio_playback {
+            pub fn source_active(id: u64) -> bool {
+                crate::AUDIO_STREAM.load(crate::Ordering::Relaxed) == id
+            }
+        }
     }
 }
 
@@ -58,8 +69,8 @@ mod spirit {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use crate::{NOW, WARNINGS, Ordering, tyche};
-        use lilly_sequencer::{Contextual, IdleMode, Playback, Sequencer, TalkMoods};
+        use crate::{AUDIO_STREAM, NOW, WARNINGS, Ordering, tyche};
+        use lilly_sequencer::{Contextual, IdleMode, Playback, Sequencer, SpeechCue, SpeechTurn, TalkMoods};
 
         const CROSS: &str = "Static_up/static.png";
         const UNCROSS: &str = "Static_up/uncrossed.png";
@@ -84,6 +95,12 @@ mod spirit {
             assert!(protocol::enqueue_contextual_word("vibe:happy").is_err());
 
             protocol::set_idle_mode(IdleMode::Typing);
+            assert_eq!(protocol::idle_mode(), IdleMode::Typing);
+            let talk = IdleMode::Talk(TalkMoods::from_bits(TalkMoods::CALM));
+            protocol::set_idle_mode(talk);
+            assert_eq!(protocol::idle_mode(), talk);
+            assert_eq!(protocol::idle_ambient_mode(), IdleMode::Typing);
+            protocol::set_idle_mode(IdleMode::Talk(TalkMoods::default()));
             assert_eq!(protocol::idle_mode(), IdleMode::Typing);
             let mut time = 50;
             for path in ["Transitions_up/unfolding-arms/frame_02.png", "Freestyle_up/wireless-keyboard/frame_02.png"] {
@@ -118,6 +135,17 @@ mod spirit {
             state.set_window_sound(true);
             state.set_window_sound(false);
             assert_eq!(state.mode(), IdleMode::Normal);
+
+            let talk = IdleMode::Talk(TalkMoods::from_bits(TalkMoods::CALM));
+            state.set_mode(IdleMode::Reading);
+            state.set_mode(talk);
+            state.set_window_sound(true);
+            assert_eq!(state.mode(), talk);
+            assert_eq!(state.ambient_mode(), IdleMode::Reading);
+            state.set_mode(IdleMode::Talk(TalkMoods::default()));
+            assert_eq!(state.mode(), IdleMode::Reading);
+            state.set_window_sound(false);
+            assert_eq!(state.mode(), IdleMode::Reading);
 
             state.set_mode(IdleMode::Sound);
             state.set_window_sound(true);
@@ -219,21 +247,21 @@ mod spirit {
             let mut state = Sequencer::new(tyche::soft_rng());
             state.set_mode(IdleMode::Talk(TalkMoods::from_bits(TalkMoods::CALM)));
             let mut time = 0;
-            let mut starts = Vec::new();
-            let mut talk_count = 0;
-            loop {
-                let start = time;
-                let clip = tick(&mut state, &mut time);
-                if clip.frames.len() == 1 && talk_count == 2 { break; }
-                if clip.frames.len() > 1 {
-                    starts.push(start);
-                    if clip.frames[1].starts_with("Talk_up/calm") { talk_count += 1; }
+            for _ in 0..2 {
+                let settled_at = time;
+                for _ in 0..10 {
+                    assert_eq!(tick(&mut state, &mut time).frames, &[CROSS]);
                 }
-                assert!(time < 8000);
+                assert_eq!(time, settled_at + 500);
+                for first_frame in [0, 1] {
+                    let clip = tick(&mut state, &mut time);
+                    assert_eq!(clip.frames[1], "Talk_up/calm/frame_02.png");
+                    assert_eq!(clip.frame_index(0), first_frame);
+                }
             }
-            assert_eq!(talk_count, 2);
-            assert!((1500..=2550).contains(&starts[0]));
             state.set_mode(IdleMode::Sound);
+            assert_eq!(state.mode(), IdleMode::Talk(TalkMoods::from_bits(TalkMoods::CALM)));
+            state.set_mode(IdleMode::Talk(TalkMoods::default()));
             assert_eq!(state.mode(), IdleMode::Sound);
             let mut saw_cat = false;
             loop {
@@ -243,6 +271,174 @@ mod spirit {
                 if clip.frames[1].contains("put-on") { assert!(saw_cat); }
             }
             assert!(saw_cat);
+        }
+
+        #[test]
+        fn talk_suspends_the_selected_ambient_mode_until_the_last_mood_clears() {
+            let mut state = Sequencer::new(tyche::soft_rng());
+            let mut time = 0;
+            state.set_mode(IdleMode::Typing);
+            assert_eq!(tick(&mut state, &mut time).frames.last(), Some(&UNCROSS));
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Freestyle_up/wireless-keyboard/frame_02.png");
+
+            let calm = IdleMode::Talk(TalkMoods::from_bits(TalkMoods::CALM));
+            state.set_mode(IdleMode::Talk(TalkMoods::from_bits(TalkMoods::CALM | TalkMoods::SHY)));
+            assert_eq!(state.ambient_mode(), IdleMode::Typing);
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Freestyle_up/wireless-keyboard/frame_07.png");
+            assert_eq!(tick(&mut state, &mut time).frames.last(), Some(&CROSS));
+
+            state.set_mode(calm);
+            let settled_at = time;
+            for _ in 0..4 {
+                assert_eq!(tick(&mut state, &mut time).frames, &[CROSS]);
+            }
+            state.set_mode(IdleMode::Reading);
+            assert_eq!(state.ambient_mode(), IdleMode::Reading);
+            assert_eq!(state.mode(), calm);
+            for _ in 0..6 {
+                assert_eq!(tick(&mut state, &mut time).frames, &[CROSS]);
+            }
+            assert_eq!(time, settled_at + 500);
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Talk_up/calm/frame_02.png");
+
+            assert!(state.enqueue(Contextual::Happy));
+            assert_eq!(state.ambient_mode(), IdleMode::Reading);
+            state.set_mode(IdleMode::Talk(TalkMoods::default()));
+            assert_eq!(state.mode(), IdleMode::Reading);
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Happy2_up/frame_02.png");
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Reading_up/open-book/frame_02.png");
+        }
+
+        #[test]
+        fn multiple_talk_moods_extend_the_pool_for_uncrossed_arms() {
+            let mut state = Sequencer::new(tyche::soft_rng());
+            let mut time = 0;
+            assert!(state.enqueue(Contextual::Nod));
+            assert_eq!(tick(&mut state, &mut time).frames.last(), Some(&UNCROSS));
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Nod_up/frame_02.png");
+
+            let moods = TalkMoods::from_bits(TalkMoods::CALM | TalkMoods::SHY);
+            state.set_mode(IdleMode::Talk(moods));
+            let mut seen = std::collections::BTreeSet::new();
+            for _ in 0..12 {
+                for _ in 0..10 {
+                    assert_eq!(tick(&mut state, &mut time).frames, &[UNCROSS]);
+                }
+                for _ in 0..2 {
+                    let clip = tick(&mut state, &mut time);
+                    assert_eq!(clip.frames.first(), Some(&UNCROSS));
+                    assert_eq!(clip.frames.last(), Some(&UNCROSS));
+                    seen.insert(clip.frames[1]);
+                }
+            }
+            assert_eq!(seen.into_iter().collect::<Vec<_>>(), [
+                "Talk_up/calm-2/frame_02.png",
+                "Talk_up/shy-2/frame_02.png",
+            ]);
+        }
+
+        #[test]
+        fn ptts_uses_one_wave_and_one_idea_then_restores_the_current_ambient_choice() {
+            let mut state = Sequencer::new(tyche::soft_rng());
+            let mut time = 0;
+            state.set_mode(IdleMode::Reading);
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Reading_up/open-book/frame_02.png");
+
+            let turn = SpeechTurn { vm_id: 4, generation: 9, turn: 1 };
+            let speaking = IdleMode::Talk(TalkMoods::from_bits(TalkMoods::CALM | TalkMoods::EXCITED));
+            state.speech_event(turn, 1, SpeechCue::Thought);
+            assert_eq!(state.mode(), speaking);
+            assert_eq!(state.ambient_mode(), IdleMode::Reading);
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Reading_up/put-away/frame_02.png");
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Waving_up/crossed-to-uncrossed/frame_02.png");
+
+            state.observe_speech_stream(1, false, time);
+            state.speech_event(turn, 2, SpeechCue::Continue);
+            state.observe_speech_stream(1, false, time + 250);
+            assert_eq!(state.mode(), speaking);
+            for _ in 0..8 {
+                for _ in 0..10 {
+                    assert_eq!(tick(&mut state, &mut time).frames, &[UNCROSS]);
+                }
+                for _ in 0..2 {
+                    let path = tick(&mut state, &mut time).frames[1];
+                    assert!(matches!(path, "Talk_up/calm-2/frame_02.png" | "Talk_up/excited-2/frame_02.png"));
+                }
+            }
+
+            state.speech_event(turn, 3, SpeechCue::Answer);
+            state.speech_event(turn, 3, SpeechCue::Answer);
+            assert_eq!(tick(&mut state, &mut time).frames.last(), Some(&CROSS));
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Idea_up/frame_02.png");
+            assert_eq!(tick(&mut state, &mut time).frames, &[CROSS]);
+
+            state.set_mode(IdleMode::Typing);
+            state.speech_event(SpeechTurn { turn: 2, ..turn }, 0, SpeechCue::End);
+            assert_eq!(state.mode(), speaking);
+            state.speech_event(turn, 4, SpeechCue::Done);
+            assert_eq!(state.mode(), IdleMode::Typing);
+            state.speech_event(turn, 5, SpeechCue::Continue);
+            assert_eq!(state.mode(), IdleMode::Typing);
+        }
+
+        #[test]
+        fn ptts_drain_releases_talk_without_a_done_sound() {
+            use lilly_protocol as protocol;
+            let manual = IdleMode::Talk(TalkMoods::from_bits(TalkMoods::SHY));
+            protocol::set_idle_mode(manual);
+            let turn = SpeechTurn { vm_id: 4, generation: 9, turn: 1 };
+            AUDIO_STREAM.store(17, Ordering::Relaxed);
+            protocol::speech_event(turn, 17, SpeechCue::Continue);
+            let speaking = IdleMode::Talk(TalkMoods::from_bits(TalkMoods::CALM | TalkMoods::EXCITED));
+            assert_eq!(protocol::idle_mode(), speaking);
+            let wave = protocol::next_animation().unwrap();
+            assert_eq!(wave.frame_at_elapsed(450), lilly::resident_frame("Waving_up/crossed-to-uncrossed/frame_02.png").unwrap());
+            AUDIO_STREAM.store(0, Ordering::Relaxed);
+            NOW.store(wave.boundary_ms, Ordering::Relaxed);
+            protocol::next_animation().unwrap();
+            assert_eq!(protocol::idle_mode(), speaking);
+            NOW.store(wave.boundary_ms + 250, Ordering::Relaxed);
+            protocol::next_animation().unwrap();
+            assert_eq!(protocol::idle_mode(), manual);
+            AUDIO_STREAM.store(18, Ordering::Relaxed);
+            protocol::speech_event(turn, 18, SpeechCue::Continue);
+            assert_eq!(protocol::next_animation().unwrap().frame_at_elapsed(0), lilly::resident_frame(UNCROSS).unwrap());
+        }
+
+        #[test]
+        fn ptts_answer_only_preserves_idea_after_the_done_tone() {
+            let mut state = Sequencer::new(tyche::soft_rng());
+            let mut time = 0;
+            let turn = SpeechTurn { vm_id: 4, generation: 9, turn: 1 };
+            state.speech_event(turn, 1, SpeechCue::Answer);
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Waving_up/crossed-to-uncrossed/frame_02.png");
+
+            state.set_mode(IdleMode::Reading);
+            state.speech_event(turn, 2, SpeechCue::Done);
+            assert_eq!(state.mode(), IdleMode::Reading);
+            assert_eq!(tick(&mut state, &mut time).frames.last(), Some(&CROSS));
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Idea_up/frame_02.png");
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Reading_up/open-book/frame_02.png");
+            state.set_mode(IdleMode::Normal);
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Reading_up/put-away/frame_02.png");
+            assert_eq!(tick(&mut state, &mut time).frames, &[CROSS]);
+        }
+
+        #[test]
+        fn ptts_silent_success_keeps_the_wave_but_abort_discards_it() {
+            let mut state = Sequencer::new(tyche::soft_rng());
+            let mut time = 0;
+            let turn = SpeechTurn { vm_id: 4, generation: 9, turn: 1 };
+            state.speech_event(turn, 1, SpeechCue::Thought);
+            state.speech_event(turn, 0, SpeechCue::Abort);
+            assert_eq!(state.mode(), IdleMode::Normal);
+            assert_eq!(tick(&mut state, &mut time).frames, &[CROSS]);
+
+            let turn = SpeechTurn { turn: 2, ..turn };
+            state.speech_event(turn, 2, SpeechCue::Thought);
+            state.speech_event(turn, 0, SpeechCue::End);
+            assert_eq!(state.mode(), IdleMode::Normal);
+            assert_eq!(tick(&mut state, &mut time).frames[1], "Waving_up/crossed-to-uncrossed/frame_02.png");
         }
     }
 }

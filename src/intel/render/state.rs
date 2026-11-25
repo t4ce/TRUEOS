@@ -500,26 +500,35 @@ pub(crate) enum PicassoRetainedShader {
     Standard,
     MaxpixTornado,
     BflyPatches(crate::intel::shader::bfly_patches::Geometry),
-    BflyTrail(BflyHistory),
+    BflyOutlinedInset,
+    BflyLayered,
+    BflyTrail {
+        geometry: crate::intel::shader::bfly_patches::Geometry,
+        history: BflyHistory,
+    },
 }
 
 impl PicassoRetainedShader {
     pub(crate) fn bfly_geometry(self) -> Option<crate::intel::shader::bfly_patches::Geometry> {
-        use crate::intel::shader::bfly_patches::Geometry;
-
         match self {
-            Self::BflyPatches(geometry) => Some(geometry),
-            Self::BflyTrail(BflyHistory::Monochrome) => Some(Geometry::SwappingFlock),
-            Self::BflyTrail(BflyHistory::Smoke | BflyHistory::Cloud | BflyHistory::CloudTrail) => {
-                Some(Geometry::SmokeFlock)
+            Self::BflyPatches(geometry) | Self::BflyTrail { geometry, .. } => Some(geometry),
+            Self::BflyOutlinedInset | Self::BflyLayered => {
+                Some(crate::intel::shader::bfly_patches::Geometry::InsetFillFlock)
             }
             _ => None,
         }
     }
 }
 
+#[derive(Clone, Copy)]
+struct ResidentBflyPass {
+    pipeline: &'static crate::intel::shader::TrianglePipeline,
+    first_control: u32,
+    control_count: u32,
+}
+
 pub(crate) struct ResidentChurnForward {
-    /// Number of indexed-indirect graphics groups owned by this resident.
+    /// Number of indexed graphics groups owned by this resident.
     /// Helio uses its full twelve-group scene; Picasso publishes only its
     /// active submesh ranges while holding the retained submission lease.
     draw_group_count: AtomicU32,
@@ -544,6 +553,7 @@ pub(crate) struct ResidentChurnForward {
     transform: Option<ResidentChurnTransform>,
     transform_unavailable_reason: Option<&'static str>,
     pipeline: crate::intel::shader::TrianglePipeline,
+    bfly_passes: [Option<ResidentBflyPass>; 3],
     shader: PicassoRetainedShader,
     sampled_material: bool,
     native_vf: TriangleNativeDrawContract,
@@ -571,8 +581,20 @@ unsafe impl Sync for ResidentChurnForward {}
 impl ResidentChurnForward {
     pub(crate) fn bfly_history(&self) -> Option<BflyHistory> {
         match self.shader {
-            PicassoRetainedShader::BflyTrail(history) => Some(history),
+            PicassoRetainedShader::BflyTrail { history, .. } => Some(history),
             _ => None,
+        }
+    }
+
+    pub(crate) fn bfly_frame_history(&self, camera: &v::vgpu::RetainedCamera) -> Option<BflyHistory> {
+        use crate::intel::shader::bfly_patches::Geometry;
+
+        match self.shader {
+            PicassoRetainedShader::BflyTrail {
+                geometry: Geometry::MixedFlock,
+                ..
+            } if camera.previous_view_projection[14] == 1.0 => None,
+            _ => self.bfly_history(),
         }
     }
 

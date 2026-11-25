@@ -35,9 +35,23 @@ def main():
     parser.add_argument("--app", type=Path, default=APP)
     args = parser.parse_args()
     native = args.app / "shaders/trueos"
-    direct = json.loads((native / "direct-wings-manifest.json").read_text())
-    package_path = native / "bfly-direct-wings.apshader"
+    direct = json.loads((native / "tier-width-wings-manifest.json").read_text())
+    filled = json.loads((native / "inset-wings-manifest.json").read_text())
+    breed = json.loads((native / "breed-wings-manifest.json").read_text())
+    translucent = json.loads((native / "translucent-wings-manifest.json").read_text())
+    inset_outline = json.loads((native / "inset-outline-manifest.json").read_text())
+    package_path = native / "bfly-tier-width-wings.apshader"
     package = package_path.read_bytes()
+    fill_package = (native / "bfly-inset-wings.apshader").read_bytes()
+    breed_package = (native / "bfly-breed-wings.apshader").read_bytes()
+    translucent_package = (native / "bfly-translucent-wings.apshader").read_bytes()
+    inset_outline_package = (native / "bfly-inset-outline.apshader").read_bytes()
+    mask_manifest = json.loads((native / "celestial-masks-manifest.json").read_text())
+    mask_payload = bytearray(struct.pack("<I", len(mask_manifest["stages"])))
+    for stage in mask_manifest["stages"]:
+        asset = (native / stage["asset_file"]).read_bytes()
+        mask_payload += struct.pack("<II", stage["kind"], len(asset)) + asset
+    masks = b"APSHDR1\0" + struct.pack("<II", mask_manifest["id"], len(mask_payload)) + mask_payload
     texture_bundle = (native / "app-shaders.bundle").read_bytes()
     smoke = (native / "bfly-smoke-history.apshader").read_bytes()
     cloud = (native / "bfly-cloud-history.apshader").read_bytes()
@@ -46,7 +60,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="bfly-shader-intake-") as directory:
         path = Path(directory)
         (path / "src").mkdir()
-        (path / "bfly.o").write_bytes(shader_elf(package))
+        (path / "bfly.o").write_bytes(shader_elf(
+            package + fill_package + breed_package + translucent_package + inset_outline_package + masks))
         (path / "history.o").write_bytes(shader_elf(smoke + cloud + cloud_trail))
         (path / "textures.o").write_bytes(shader_elf(texture_bundle))
         corrupt = bytearray(package)
@@ -87,22 +102,22 @@ fn admits_archived_texture_packages_as_aligned_native_stages() {
 fn admits_direct_tessellation_stages_and_reuses_storage() {
     let elf = include_bytes!("../bfly.o");
     app_shaders::register_blueprint_elf(elf).unwrap();
-    let id = @DIRECT_ID@;
-    assert!(app_shaders::present(id));
-    let sizes = @DIRECT_STAGE_SIZES@;
-    let mut stage_pointers = [core::ptr::null(); 4];
-    for (stage, (pointer, size)) in stage_pointers.iter_mut().zip(sizes).enumerate() {
-        let words = app_shaders::words(id, stage).unwrap();
-        assert_eq!(words.len() * 4, size);
-        *pointer = words.as_ptr();
-        assert_eq!(words.as_ptr().align_offset(4), 0);
-        assert!(app_shaders::bytes(id, stage).is_none());
-    }
-    assert_eq!(sizes.len(), stage_pointers.len());
-    assert!(app_shaders::words(id, sizes.len()).is_none());
-    app_shaders::register_blueprint_elf(elf).unwrap();
-    for (stage, pointer) in stage_pointers.iter().enumerate() {
-        assert_eq!(app_shaders::words(id, stage).unwrap().as_ptr(), *pointer);
+    for (id, sizes) in @GRAPHICS_STAGES@ {
+        assert!(app_shaders::present(id));
+        let mut stage_pointers = [core::ptr::null(); 4];
+        for (stage, (pointer, size)) in stage_pointers.iter_mut().zip(sizes).enumerate() {
+            let words = app_shaders::words(id, stage).unwrap();
+            assert_eq!(words.len() * 4, size);
+            *pointer = words.as_ptr();
+            assert_eq!(words.as_ptr().align_offset(4), 0);
+            assert!(app_shaders::bytes(id, stage).is_none());
+        }
+        assert_eq!(sizes.len(), stage_pointers.len());
+        assert!(app_shaders::words(id, sizes.len()).is_none());
+        app_shaders::register_blueprint_elf(elf).unwrap();
+        for (stage, pointer) in stage_pointers.iter().enumerate() {
+            assert_eq!(app_shaders::words(id, stage).unwrap().as_ptr(), *pointer);
+        }
     }
 }
 
@@ -122,6 +137,15 @@ fn admits_distinct_history_masks_and_a_shader_with_a_shared_mask() {
 }
 
 #[test]
+fn admits_celestial_masks_in_sampling_order() {
+    app_shaders::register_blueprint_elf(include_bytes!("../bfly.o")).unwrap();
+    assert_eq!(app_shaders::bytes(35, 0).unwrap(), include_bytes!(@MOON_MASK@));
+    assert_eq!(app_shaders::bytes(35, 1).unwrap(), include_bytes!(@EARTH_MASK@));
+    assert!(app_shaders::words(35, 0).is_none());
+    assert!(app_shaders::bytes(35, 2).is_none());
+}
+
+#[test]
 fn rejects_corrupt_unknown_and_truncated_packages() {
     let corrupt = include_bytes!("../corrupt.o");
     assert_eq!(app_shaders::register_blueprint_elf(corrupt), Err("app-shader-sha256-mismatch"));
@@ -135,8 +159,10 @@ fn rejects_corrupt_unknown_and_truncated_packages() {
             "@PACKAGE@", json.dumps(str(package_path.resolve()))).replace(
             "@SMOKE_MASK@", json.dumps(str((native / "bfly-smoke.r8").resolve()))).replace(
             "@CLOUD_MASK@", json.dumps(str((native / "bfly-cloud.r8").resolve()))).replace(
-            "@DIRECT_ID@", str(direct["id"])).replace(
-            "@DIRECT_STAGE_SIZES@", json.dumps([stage["bytes"] for stage in direct["stages"]]))
+            "@MOON_MASK@", json.dumps(str((native / "bfly-moon.r8").resolve()))).replace(
+            "@EARTH_MASK@", json.dumps(str((native / "bfly-earth.r8").resolve()))).replace(
+            "@GRAPHICS_STAGES@", repr([(record["id"], [stage["bytes"] for stage in record["stages"]])
+                                      for record in (direct, filled, breed, translucent, inset_outline)]))
         (path / "src/lib.rs").write_text(source)
         subprocess.run(["cargo", "test", "--lib", "--offline", "--quiet"], cwd=path, check=True)
 

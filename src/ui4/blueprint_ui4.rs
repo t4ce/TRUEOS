@@ -3167,6 +3167,34 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i3
     0
 }
 
+fn require_display_bottom_color_frame(window_id: u32) -> Result<(), i32> {
+    let owner = blueprint_owner().ok_or(ERROR_CONTEXT)?;
+    surface_mut(&mut SURFACES.lock(), owner, window_id)
+        .map(|_| ())
+        .ok_or(ERROR_NOT_FOUND)
+}
+
+/// Read the shared primary display backdrop as 0xRRGGBB through an owned frame.
+pub extern "C" fn trueos_cabi_ui4_scene_get_display_bottom_color(window_id: u32) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_GET_DISPLAY_BOTTOM_COLOR,
+            window_id as u64,
+            0,
+            &[],
+        );
+    }
+    if let Err(error) = require_display_bottom_color_frame(window_id) {
+        return error;
+    }
+    let Some([red, green, blue]) = crate::intel::get_pipe_a_bottom_color_rgb8()
+        .or_else(crate::virtio_gpu_logo::get_background_color)
+    else {
+        return ERROR_UI4;
+    };
+    (i32::from(red) << 16) | (i32::from(green) << 8) | i32::from(blue)
+}
+
 /// One-shot primary display backdrop control, shared with UI4's color picker.
 /// Ownership is checked against a live frame. This changes Pipe A globally;
 /// closing the frame does not restore the previous color (last writer wins).
@@ -3182,14 +3210,8 @@ pub extern "C" fn trueos_cabi_ui4_scene_set_display_bottom_color(window_id: u32,
             &[],
         );
     }
-    let Some(owner) = blueprint_owner() else {
-        return ERROR_CONTEXT;
-    };
-    {
-        let mut surfaces = SURFACES.lock();
-        if surface_mut(&mut surfaces, owner, window_id).is_none() {
-            return ERROR_NOT_FOUND;
-        }
+    if let Err(error) = require_display_bottom_color_frame(window_id) {
+        return error;
     }
     if crate::intel::set_pipe_a_bottom_color_rgb8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
         || crate::virtio_gpu_logo::set_background_color(
@@ -4668,7 +4690,7 @@ pub(crate) fn render_shadertoy_wire(owner: WindowOwner, window_id: u32, payload:
     };
     let rendered = match audio {
         Some(analysis) => state.render_lico(destination, params, analysis),
-        None => state.render(destination, params),
+        None => state.render(destination, params, (lease.frame, lease.buffer_index)),
     };
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {

@@ -153,6 +153,10 @@ pub(crate) fn http_status() -> (Option<u64>, [Option<u64>; MAX_PRODUCERS]) {
     (clip.map(|clip| clip.id), sink.http_active_ids())
 }
 
+pub(crate) fn source_active(id: u64) -> bool {
+    SINK.lock().active_ids().contains(&Some(id))
+}
+
 #[trueos_executor::task]
 pub(crate) async fn audio_playback_clock_task() {
     let mut next_tick = Instant::now();

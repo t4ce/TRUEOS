@@ -1951,8 +1951,30 @@ fn create_resident_churn_forward_with_admission(
     // mapped DMA resources. The aligned code copy is a bounded singleton;
     // service retries cannot leak another VS/PS pair.
     use crate::intel::shader::bfly_patches as bfly;
+    let mut bfly_passes = [None; 3];
     let (pipeline, program) = if let Some(geometry) = shader.bfly_geometry() {
-        (*bfly::pipeline(geometry).ok_or("bfly-patches-shaders-missing")?, None)
+        let pipeline = bfly::pipeline(geometry).ok_or("bfly-patches-shaders-missing")?;
+        let primary = ResidentBflyPass {
+            pipeline,
+            first_control: 0,
+            control_count: geometry.control_vertices() as u32,
+        };
+        bfly_passes[0] = Some(primary);
+        if matches!(shader, PicassoRetainedShader::BflyOutlinedInset | PicassoRetainedShader::BflyLayered) {
+            bfly_passes[1] = Some(ResidentBflyPass {
+                pipeline: bfly::pipeline(bfly::Geometry::InsetOutlineFlock)
+                    .ok_or("bfly-outline-shaders-missing")?,
+                ..primary
+            });
+        }
+        if shader == PicassoRetainedShader::BflyLayered {
+            bfly_passes[2] = Some(ResidentBflyPass {
+                pipeline: bfly::projected_mixed_pipeline().ok_or("bfly-layer-shaders-missing")?,
+                first_control: primary.control_count,
+                control_count: bfly::Geometry::MixedFlock.control_vertices() as u32,
+            });
+        }
+        (*pipeline, None)
     } else {
         let (pipeline, program) = retained_forward_pipeline()?;
         (pipeline, Some(program))
@@ -2188,11 +2210,16 @@ fn create_resident_churn_forward_with_admission(
             AtomicU32::new(u32::from_le_bytes([255, 255, 255, 255]))
         }),
         pipeline,
+        bfly_passes,
         shader,
         sampled_material: false,
         native_vf,
         front_end_contract: TriangleFrontEndContract {
-            label: if program.is_some() { "helio-churn-forward-v1" } else { "bfly-patchlist4-isolines-v1" },
+            label: match shader.bfly_geometry() {
+                Some(geometry) if geometry.is_filled() => "bfly-patchlist4-quads-v1",
+                Some(_) => "bfly-patchlist4-isolines-v1",
+                None => "helio-churn-forward-v1",
+            },
             vs_urb_output_length_override: Some(program.map_or(bfly::VS_URB_OUTPUT_LENGTH, |_| 1)),
             vs_urb_read_length: program.map_or(bfly::VS_URB_READ_LENGTH, |_| 1),
             sbe_read_offset: program.map_or(bfly_sbe_read, |program| program.fixed_function().sbe_read_offset),
@@ -2250,7 +2277,13 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     }
     if bfly_patches != (topology == ResidentScenePrimitiveTopology::BflyPatchList4)
         || bfly_geometry.is_some_and(|geometry| {
-            vertex_stride != 12 || max_instances != 1 || !geometry.valid_vertices(vertices, indices)
+            vertex_stride != 12
+                || max_instances != 1
+                || !if shader == PicassoRetainedShader::BflyLayered {
+                    crate::intel::shader::bfly_patches::valid_layered_vertices(vertices, indices)
+                } else {
+                    geometry.valid_vertices(vertices, indices)
+                }
         })
     {
         return Err("bfly-patches-contract");
@@ -2441,9 +2474,10 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     geometry.flush();
 
     let old_geometry = core::mem::replace(&mut resident.geometry, geometry);
-    // V1/V2 start with one full-mesh indexed-indirect draw. V3 publishes its
-    // submesh groups with the seeds; upper flag bits carry group-local slots.
-    resident.draw_group_count.store(1, Ordering::Release);
+    // Butterfly passes use immutable ranges. Ordinary retained meshes start
+    // with one draw until seed updates publish submeshes.
+    let draw_groups = resident.bfly_passes.iter().flatten().count().max(1) as u32;
+    resident.draw_group_count.store(draw_groups, Ordering::Release);
     resident.vertex_gpu_addr = resident.geometry.gpu_base();
     resident.vertex_count = vertex_count;
     resident.vertex_bytes = vertex_bytes;
@@ -2713,23 +2747,45 @@ fn prepare_resident_churn_forward_draw(
         }
         material
     });
+    let bfly = resident.shader.bfly_geometry().is_some();
+    let (vertex_count, vertex_buffer_bytes, vertex_gpu_addr, index_buffer) = if bfly {
+        let pass = resident.bfly_passes.get(group)?.as_ref()?;
+        let index_stride = size_of::<u32>() as u32;
+        (
+            pass.control_count,
+            pass.control_count * resident.vertex_stride,
+            resident.vertex_gpu_addr + u64::from(pass.first_control * resident.vertex_stride),
+            TriangleIndexBufferPrep {
+                index_count: pass.control_count,
+                byte_len: pass.control_count * index_stride,
+                gpu_addr: resident.index_gpu_addr + u64::from(pass.first_control * index_stride),
+            },
+        )
+    } else {
+        (
+            resident.vertex_count,
+            resident.vertex_bytes,
+            resident.vertex_gpu_addr,
+            TriangleIndexBufferPrep {
+                index_count: resident.index_count,
+                byte_len: resident.index_bytes,
+                gpu_addr: resident.index_gpu_addr,
+            },
+        )
+    };
     Some(TriangleDrawPrep {
         vue_capture: false,
 
         voxy_headless: false,
         voxy_figure: false,
         microfont_aa: false,
-        vertex_count: resident.vertex_count,
+        vertex_count,
         vertex_stride: resident.vertex_stride,
-        vertex_buffer_bytes: resident.vertex_bytes,
+        vertex_buffer_bytes,
         vertex_format: resident.vertex_format,
-        vertex_gpu_addr: resident.vertex_gpu_addr,
-        index_buffer: Some(TriangleIndexBufferPrep {
-            index_count: resident.index_count,
-            byte_len: resident.index_bytes,
-            gpu_addr: resident.index_gpu_addr,
-        }),
-        indirect_args_gpu_addr: resident.shader.bfly_geometry().is_none().then_some(
+        vertex_gpu_addr,
+        index_buffer: Some(index_buffer),
+        indirect_args_gpu_addr: (!bfly).then_some(
             resident.indirect_args.gpu_base()
                 + (group * trueos_helio::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
         ),

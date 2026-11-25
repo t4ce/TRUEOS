@@ -859,6 +859,8 @@ unsafe extern "C" {
     pub safe fn trueos_cabi_ui4_scene_frame_set_arc(window_id: u32, arc: u32) -> i32;
     /// Set the shared primary display bottom color (packed 0xRRGGBB), using an owned frame.
     pub safe fn trueos_cabi_ui4_scene_set_display_bottom_color(window_id: u32, rgb: u32) -> i32;
+    /// Read the shared primary display bottom color, returning 0xRRGGBB or a negative status.
+    pub safe fn trueos_cabi_ui4_scene_get_display_bottom_color(window_id: u32) -> i32;
     /// Program the shared primary display gamma LUT from a 3×256 RGB u16 ramp.
     pub fn trueos_cabi_ui4_scene_set_display_gamma_ramp(window_id: u32, ramp: *const u16) -> i32;
     pub safe fn trueos_cabi_ui4_scene_display_fade_v1(window_id: u32, amount: i32) -> i32;
@@ -1477,7 +1479,9 @@ unsafe extern "C" {
     /// a token. Action 5 begins with a shorter analog prebuffer and the
     /// standard HTTP prebuffer. Actions 1 (append), 2 (finish), 3 (abort),
     /// and 4 (query playing) take that token.
-    /// Only append takes PCM. Negative results are errors.
+    /// Only append takes PCM. Action 6 is reserved for PTTS Spirit events and
+    /// takes a kind byte followed by an eight-byte little-endian turn ID.
+    /// Negative results are errors.
     pub fn trueos_cabi_http_audio_stream_v1(
         action: u32,
         stream: u64,
@@ -2252,6 +2256,7 @@ mod scalar_import_safety {
     const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_ui4_scene_frame_set_opacity;
     const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_ui4_scene_frame_set_arc;
     const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_ui4_scene_set_display_bottom_color;
+    const _: extern "C" fn(u32) -> i32 = super::trueos_cabi_ui4_scene_get_display_bottom_color;
     const _: extern "C" fn(u32, i32) -> i32 = super::trueos_cabi_ui4_scene_display_fade_v1;
     const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_ui4_scene_frame_set_hit_testable;
     const _: extern "C" fn(u32, u32) -> i32 = super::trueos_cabi_ui4_scene_frame_set_escape_key_action;

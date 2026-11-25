@@ -10,6 +10,9 @@ mod catalog;
 const QUEUE_CAPACITY: usize = 32;
 const REST_POLL_MS: u64 = 50;
 const SHARED_FRAME_MS: u16 = 100;
+const TALK_IDLE_MS: u64 = 500;
+const SPEECH_DRAIN_GRACE_MS: u64 = 250;
+const RECENT_SPEECH_TURNS: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Pose {
@@ -152,7 +155,7 @@ impl Contextual {
     }
 }
 
-/// Talk checkboxes are independent within the mutually exclusive idle modes.
+/// Multiple Talk moods can share a single burst.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TalkMoods(u8);
 
@@ -169,6 +172,37 @@ impl TalkMoods {
     pub(crate) const fn bits(self) -> u8 {
         self.0
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SpeechTurn {
+    pub(crate) vm_id: u8,
+    pub(crate) generation: u64,
+    pub(crate) turn: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpeechCue {
+    Continue,
+    Thought,
+    Answer,
+    Done,
+    End,
+    Abort,
+}
+
+struct RecentSpeechTurn {
+    key: SpeechTurn,
+    waved: bool,
+    idea: bool,
+    ended: bool,
+}
+
+struct SpeechPlayback {
+    turn: SpeechTurn,
+    stream: u64,
+    inactive_since_ms: Option<u64>,
+    saved_mode: IdleMode,
 }
 
 const TALK_GROUPS: [&[&str]; 4] = [
@@ -232,6 +266,7 @@ struct Request {
     clip: &'static Clip,
     slow: bool,
     talk: u8,
+    speech_turn: Option<SpeechTurn>,
 }
 
 impl Request {
@@ -240,6 +275,14 @@ impl Request {
             clip,
             slow: false,
             talk: 0,
+            speech_turn: None,
+        }
+    }
+
+    fn speech_cue(clip: &'static Clip, turn: SpeechTurn) -> Self {
+        Self {
+            speech_turn: Some(turn),
+            ..Self::new(clip)
         }
     }
 }
@@ -333,7 +376,10 @@ pub(super) struct Sequencer {
     queue: VecDeque<Request>,
     pose: Pose,
     mode: IdleMode,
+    ambient_mode: IdleMode,
     window_sound: bool,
+    speech: Option<SpeechPlayback>,
+    recent_speech: VecDeque<RecentSpeechTurn>,
     return_pose: Option<Pose>,
     sound_intro: bool,
     sound_entry_after_intro: bool,
@@ -352,7 +398,10 @@ impl Sequencer {
             queue: VecDeque::new(),
             pose: Pose::Crossed,
             mode: IdleMode::Normal,
+            ambient_mode: IdleMode::Normal,
             window_sound: false,
+            speech: None,
+            recent_speech: VecDeque::new(),
             return_pose: None,
             sound_intro: false,
             sound_entry_after_intro: false,
@@ -369,12 +418,44 @@ impl Sequencer {
         self.mode
     }
 
+    pub(super) fn ambient_mode(&self) -> IdleMode {
+        self.ambient_mode
+    }
+
     pub(super) fn set_mode(&mut self, mode: IdleMode) {
-        self.window_sound = false;
+        let control_mode = self.control_mode();
         let mode = match mode {
-            IdleMode::Talk(moods) if moods.bits() == 0 => IdleMode::Normal,
-            mode => mode,
+            IdleMode::Talk(moods) if moods.bits() != 0 => mode,
+            IdleMode::Talk(_) if control_mode.talk_moods() == 0 => return,
+            IdleMode::Talk(_) if self.ambient_mode == IdleMode::Normal && self.window_sound => {
+                IdleMode::Sound
+            }
+            IdleMode::Talk(_) => self.ambient_mode,
+            ambient => {
+                self.ambient_mode = ambient;
+                self.window_sound = false;
+                if control_mode.talk_moods() != 0 {
+                    return;
+                }
+                ambient
+            }
         };
+        self.apply_control_mode(mode);
+    }
+
+    fn control_mode(&self) -> IdleMode {
+        self.speech.as_ref().map_or(self.mode, |speech| speech.saved_mode)
+    }
+
+    fn apply_control_mode(&mut self, mode: IdleMode) {
+        if let Some(speech) = self.speech.as_mut() {
+            speech.saved_mode = mode;
+        } else {
+            self.apply_mode(mode);
+        }
+    }
+
+    fn apply_mode(&mut self, mode: IdleMode) {
         if self.mode == mode {
             return;
         }
@@ -401,13 +482,119 @@ impl Sequencer {
     }
 
     pub(super) fn set_window_sound(&mut self, selected: bool) {
+        let control_mode = self.control_mode();
         if selected {
-            if self.mode != IdleMode::Sound {
-                self.set_mode(IdleMode::Sound);
+            if control_mode != IdleMode::Sound && self.ambient_mode != IdleMode::Sound {
                 self.window_sound = true;
+                if control_mode.talk_moods() == 0 {
+                    self.apply_control_mode(IdleMode::Sound);
+                }
             }
         } else if self.window_sound {
-            self.set_mode(IdleMode::Normal);
+            self.window_sound = false;
+            if control_mode.talk_moods() == 0 {
+                self.apply_control_mode(self.ambient_mode);
+            }
+        }
+    }
+
+    pub(super) fn speech_event(&mut self, turn: SpeechTurn, stream: u64, cue: SpeechCue) {
+        let index = self.recent_speech.iter().position(|entry| entry.key == turn);
+        let entry = if let Some(index) = index {
+            &mut self.recent_speech[index]
+        } else {
+            if self.recent_speech.len() == RECENT_SPEECH_TURNS {
+                self.recent_speech.pop_front();
+            }
+            self.recent_speech.push_back(RecentSpeechTurn {
+                key: turn,
+                waved: false,
+                idea: false,
+                ended: false,
+            });
+            self.recent_speech.back_mut().unwrap()
+        };
+        if matches!(cue, SpeechCue::Done | SpeechCue::End | SpeechCue::Abort) {
+            entry.ended = true;
+            if self.speech.as_ref().is_some_and(|speech| speech.turn == turn) {
+                self.stop_speech(cue != SpeechCue::Abort);
+            }
+            return;
+        }
+        if entry.ended {
+            return;
+        }
+        let wave = !entry.waved;
+        let idea = cue == SpeechCue::Answer && !entry.idea;
+        entry.waved = true;
+        entry.idea |= idea;
+
+        if self.speech.as_ref().is_none_or(|speech| speech.turn != turn) {
+            let old_turn = self.speech.as_ref().map(|speech| speech.turn);
+            self.queue.retain(|request| {
+                request.talk == 0 && (old_turn.is_none() || request.speech_turn != old_turn)
+            });
+        }
+        let saved_mode = self.control_mode();
+        self.speech = Some(SpeechPlayback {
+            turn,
+            stream,
+            inactive_since_ms: None,
+            saved_mode,
+        });
+        self.apply_mode(IdleMode::Talk(TalkMoods::from_bits(
+            TalkMoods::CALM | TalkMoods::EXCITED,
+        )));
+        if wave || idea {
+            // A cue waits for the playing clip, then goes ahead of queued idle clips.
+            self.queue.retain(|request| request.talk == 0);
+            if wave {
+                let pose = self.pose.arms_only().then_some(self.pose).or(self.return_pose);
+                let id = if pose == Some(Pose::Crossed) {
+                    "Waving_up/crossed-to-uncrossed"
+                } else {
+                    "Waving_up/neutral"
+                };
+                self.enqueue_speech_cue(clip(id), turn);
+            }
+            if idea {
+                self.enqueue_speech_cue(clip("Idea_up"), turn);
+            }
+            self.idle_at_ms = None;
+        }
+    }
+
+    fn enqueue_speech_cue(&mut self, clip: &'static Clip, turn: SpeechTurn) {
+        if self.queue.len() < QUEUE_CAPACITY + 2 {
+            let index = self.queue.iter().take_while(|request| request.speech_turn.is_some()).count();
+            self.queue.insert(index, Request::speech_cue(clip, turn));
+        }
+    }
+
+    pub(super) fn speech_stream(&self) -> Option<u64> {
+        self.speech.as_ref().map(|speech| speech.stream)
+    }
+
+    pub(super) fn observe_speech_stream(&mut self, stream: u64, active: bool, now_ms: u64) {
+        let Some(speech) = self.speech.as_mut().filter(|speech| speech.stream == stream) else {
+            return;
+        };
+        if active {
+            speech.inactive_since_ms = None;
+        } else if now_ms.saturating_sub(*speech.inactive_since_ms.get_or_insert(now_ms))
+            >= SPEECH_DRAIN_GRACE_MS
+        {
+            self.stop_speech(false);
+        }
+    }
+
+    fn stop_speech(&mut self, keep_cues: bool) {
+        if let Some(speech) = self.speech.take() {
+            self.queue.retain(|request| {
+                request.talk == 0 && (keep_cues || request.speech_turn != Some(speech.turn))
+            });
+            self.idle_at_ms = None;
+            self.apply_mode(speech.saved_mode);
         }
     }
 
@@ -485,22 +672,42 @@ impl Sequencer {
         true
     }
 
-    fn talk_request(&mut self, moods: u8) -> Request {
-        let mut selected = self.rng.usize_below(moods.count_ones() as usize);
-        for (index, variants) in TALK_GROUPS.iter().enumerate() {
-            let bit = 1 << index;
-            if moods & bit == 0 {
-                continue;
-            }
-            if selected == 0 {
-                return Request {
-                    talk: bit,
-                    ..Request::new(clip(variants[self.rng.usize_below(variants.len())]))
-                };
-            }
-            selected -= 1;
+    fn talk_requests(&mut self, moods: u8) -> Option<[Request; 2]> {
+        let pose = self.pose;
+        let automatic_speech = self.speech.is_some();
+        let groups = TALK_GROUPS
+            .iter()
+            .enumerate()
+            .filter_map(|(index, variants)| {
+                let bit = 1 << index;
+                if moods & bit == 0 {
+                    return None;
+                }
+                let matching = variants
+                    .iter()
+                    .map(|id| clip(id))
+                    .filter(|clip| {
+                        clip.entry == pose && clip.exit == pose
+                            && !(automatic_speech && clip.id == "Talk_up/wave")
+                    });
+                let count = matching.clone().count();
+                (count != 0).then_some((bit, matching, count))
+            });
+        let group_count = groups.clone().count();
+        if group_count == 0 {
+            return None;
         }
-        unreachable!("a checked mood was drawn")
+
+        let mut draw = || {
+            let group_index = self.rng.usize_below(group_count);
+            let (talk, mut matching, count) = groups.clone().nth(group_index).unwrap();
+            let variant_index = self.rng.usize_below(count);
+            Request {
+                talk,
+                ..Request::new(matching.nth(variant_index).unwrap())
+            }
+        };
+        Some([draw(), draw()])
     }
 
     fn idle_target(&self, from: Pose) -> Option<Pose> {
@@ -590,6 +797,9 @@ impl Sequencer {
                 return self.transition(step, false);
             }
             self.queue.pop_front();
+            if request.speech_turn.is_some() && self.mode.talk_moods() != 0 {
+                self.return_pose = None;
+            }
             return self.play(request, false, false);
         }
 
@@ -611,12 +821,12 @@ impl Sequencer {
         self.previous = None;
         let talk = self.mode.talk_moods();
         let ambient = self.mode.ambient_clip();
-        if talk == 0 && ambient.is_none() && !self.pose.arms_only() {
+        if ambient.is_none() && !self.pose.arms_only() {
             return Playback::holding(self.pose, false);
         }
         let deadline = *self.idle_at_ms.get_or_insert_with(|| {
             if talk != 0 {
-                now_ms + 1500 + self.rng.usize_below(1001) as u64
+                now_ms + TALK_IDLE_MS
             } else {
                 now_ms + 3000 + self.rng.usize_below(2001) as u64
             }
@@ -628,9 +838,11 @@ impl Sequencer {
             return self.play(Request::new(clip), false, false);
         }
         if talk != 0 {
-            let first = self.talk_request(talk);
-            let second = self.talk_request(talk);
-            self.queue.extend([first, second]);
+            let Some(requests) = self.talk_requests(talk) else {
+                self.idle_at_ms = None;
+                return Playback::holding(self.pose, false);
+            };
+            self.queue.extend(requests);
         } else {
             let index = rotation(
                 &mut self.rng,

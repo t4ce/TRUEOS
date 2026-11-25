@@ -804,6 +804,10 @@ pub(crate) fn set_pipe_a_bottom_color_rgb8(red: u8, green: u8, blue: u8) -> bool
     self::display::set_pipe_a_bottom_color_rgb8(red, green, blue)
 }
 
+pub(crate) fn get_pipe_a_bottom_color_rgb8() -> Option<[u8; 3]> {
+    self::display::get_pipe_a_bottom_color_rgb8()
+}
+
 pub(crate) fn begin_ui4_plane_surface_flip_batch() -> bool {
     self::display::begin_ui4_plane_surface_flip_batch()
 }
