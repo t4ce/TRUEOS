@@ -147,6 +147,41 @@ fn progressive_handoff_uses_bounded_guest_payload_and_generation() {
     assert_eq!(unsafe {stream(2,next as u64,null,0)},-2);
     MODE.store(0,Ordering::SeqCst);
 }
+
+#[test]
+fn analog_monitor_begin_uses_the_same_abi_across_execution_modes() {
+    let frame = [5, 0, 9, 0];
+    let pcm = frame.repeat(48_000 * 32 / 1000);
+    let ptr = pcm.as_ptr() as usize;
+    START.store(ptr, Ordering::SeqCst);
+    END.store(ptr + pcm.len(), Ordering::SeqCst);
+    let stream = handoff::trueos_cabi_http_audio_stream_v1;
+    let null = core::ptr::null();
+    for mode in [0, 1, 2] {
+        let mut sink = SINK.lock();
+        *sink = sink::Sink::new();
+        sink.set_local_playback(true);
+        sink.set_http_rendering(true);
+        drop(sink);
+        MODE.store(mode, Ordering::SeqCst);
+
+        assert_eq!(unsafe { stream(5, 1, null, 0) }, -22);
+        assert_eq!(unsafe { stream(5, 0, pcm.as_ptr(), 4) }, -22);
+        let id = unsafe { stream(5, 0, null, 0) };
+        assert!(id > 0);
+        assert_eq!(unsafe { stream(1, id as u64, pcm.as_ptr(), pcm.len()) }, 0);
+
+        let mut jack = [[0; 2]; 1];
+        let mut first = [0; 4];
+        let mut second = [0; 4];
+        let mut sink = SINK.lock();
+        sink.render_local(&mut jack, 0);
+        assert_eq!(jack, [[5, 9]]);
+        assert_eq!(sink.render_sources(&mut first, &mut second)[0].bytes, 0);
+    }
+    *SINK.lock() = sink::Sink::new();
+    MODE.store(0, Ordering::SeqCst);
+}
 '''.replace('@SINK@', str(ROOT / 'src/r/services/audio_playback/sink.rs')).replace('@HANDOFF@',str(ROOT / 'src/r/services/audio_http/handoff.rs'))
     # Refer to the local VM stub from the otherwise unmodified production module.
     handoff = (ROOT / 'src/r/services/audio_http/handoff.rs').read_text()

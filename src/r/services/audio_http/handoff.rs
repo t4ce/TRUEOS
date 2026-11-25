@@ -84,7 +84,7 @@ pub unsafe extern "C" fn trueos_cabi_http_audio_clip_submit_v1(
 
 fn validate_stream_request(action: u64, stream: u64, bytes: usize) -> Result<(), i32> {
     match action {
-        0 if stream == 0 && bytes == 0 => Ok(()),
+        0 | 5 if stream == 0 && bytes == 0 => Ok(()),
         1 if (1..=i64::MAX as u64).contains(&stream) => validate_append_size(bytes),
         2 | 3 | 4 if (1..=i64::MAX as u64).contains(&stream) && bytes == 0 => Ok(()),
         _ => Err(-22),
@@ -107,6 +107,7 @@ fn stream_for(owner: ProducerOwner, action: u64, stream: u64, pcm: &[u8]) -> i64
             // Read-only metadata, also exposed by /audio/status. Finished
             // streams remain active until their queued samples are consumed.
             4 => Ok(i64::from(sink.active_ids().contains(&Some(stream)))),
+            5 => sink.begin_analog_monitor(owner, now_ms).map(|id| id as i64),
             _ => unreachable!("validated audio stream action"),
         };
         result.unwrap_or_else(i64::from)
@@ -134,8 +135,10 @@ pub(crate) fn release_vm(id: u8, generation: u64) {
     });
 }
 
-/// Begin (0), append (1), finish (2), abort (3), or query playing (4) for one stereo s16le/48 kHz
-/// stream. Begin returns a positive token or -16 if both slots are occupied.
+/// Begin (0), append (1), finish (2), abort (3), query playing (4), or begin
+/// with a shorter analog prebuffer (5) for one stereo s16le/48 kHz stream.
+/// Both begin actions return a positive token or -16 if both slots are occupied.
+/// The HTTP prebuffer is the same for either begin action.
 /// Append accepts complete frames, at most 64 KiB per call. The other actions
 /// take an empty payload. Finished PCM remains available as a retained clip.
 /// Query returns 1 while that source is queued or playing, otherwise 0. It

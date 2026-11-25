@@ -8,7 +8,8 @@ pub(crate) const MAX_APPEND_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_PRODUCERS: usize = 2;
 const PCM_FRAME_BYTES: usize = 4;
 const VIDEO_PCM_CAPACITY: usize = 48_000 * PCM_FRAME_BYTES / 2;
-const PREBUFFER_BYTES: usize = 48_000 * 4 * 120 / 1000;
+const PREBUFFER_BYTES: usize = 48_000 * PCM_FRAME_BYTES * 120 / 1000;
+const ANALOG_MONITOR_PREBUFFER_BYTES: usize = 48_000 * PCM_FRAME_BYTES * 32 / 1000;
 const PRODUCER_IDLE_MS: u64 = 5_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,6 +96,7 @@ enum Pcm {
     Live {
         samples: Vec<u8>,
         last_append_ms: u64,
+        analog_monitor: bool,
     },
     Video(VideoQueue),
     Complete(Clip),
@@ -203,8 +205,19 @@ impl Source {
     fn read(&mut self, output: OutputBucket, bytes: usize) -> (&[u8], RenderReport) {
         let mut report = RenderReport::default();
         let cursor = &mut self.cursors[output as usize];
-        let (pcm, live) = match &self.pcm {
-            Pcm::Live { samples, .. } => (samples.as_slice(), true),
+        let (pcm, prebuffer) = match &self.pcm {
+            Pcm::Live {
+                samples,
+                analog_monitor,
+                ..
+            } => {
+                let bytes = if *analog_monitor && output == OutputBucket::Analog {
+                    ANALOG_MONITOR_PREBUFFER_BYTES
+                } else {
+                    PREBUFFER_BYTES
+                };
+                (samples.as_slice(), Some(bytes))
+            }
             Pcm::Video(queue) => {
                 let pcm = queue.read(cursor, bytes);
                 return if self.routes[output as usize] {
@@ -214,10 +227,10 @@ impl Source {
                     (&[], report)
                 };
             }
-            Pcm::Complete(clip) => (clip.pcm.as_slice(), false),
+            Pcm::Complete(clip) => (clip.pcm.as_slice(), None),
         };
         let available = pcm.len() - cursor.offset;
-        if live && cursor.buffering && available < PREBUFFER_BYTES {
+        if cursor.buffering && prebuffer.is_some_and(|needed| available < needed) {
             return (&[], report);
         }
 
@@ -227,7 +240,7 @@ impl Source {
         if count != 0 {
             report.first = cursor.first_pending.take().map(|ms| (self.id, ms));
         }
-        if live {
+        if prebuffer.is_some() {
             cursor.buffering = count < bytes;
             if cursor.buffering {
                 cursor.underruns = cursor.underruns.saturating_add(1);
@@ -401,6 +414,18 @@ impl Sink {
     }
 
     pub(crate) fn begin(&mut self, owner: ProducerOwner, now_ms: u64) -> Result<u64, i32> {
+        self.begin_live(owner, now_ms, false)
+    }
+
+    pub(crate) fn begin_analog_monitor(
+        &mut self,
+        owner: ProducerOwner,
+        now_ms: u64,
+    ) -> Result<u64, i32> {
+        self.begin_live(owner, now_ms, true)
+    }
+
+    fn begin_live(&mut self, owner: ProducerOwner, now_ms: u64, analog_monitor: bool) -> Result<u64, i32> {
         let slot = self.free_slot().ok_or(-16)?;
         let id = self.allocate_id()?;
         self.slots[slot] = Some(Source {
@@ -410,6 +435,7 @@ impl Sink {
             pcm: Pcm::Live {
                 samples: Vec::new(),
                 last_append_ms: now_ms,
+                analog_monitor,
             },
             cursors: [Cursor::new(Some(now_ms)); 2],
         });
@@ -552,6 +578,7 @@ impl Sink {
             pcm: Pcm::Live {
                 samples,
                 last_append_ms,
+                ..
             },
             ..
         }) = &mut self.slots[slot]
@@ -699,7 +726,15 @@ impl Sink {
 
     fn follow_clock(&mut self, from: OutputBucket, to: OutputBucket) {
         for source in self.slots.iter_mut().flatten() {
-            source.cursors[to as usize] = source.cursors[from as usize];
+            let mut cursor = source.cursors[from as usize];
+            if to == OutputBucket::Http
+                && matches!(source.pcm, Pcm::Live { analog_monitor: true, .. })
+            {
+                // Rejoining HTTP keeps the playback position and starts
+                // collecting the larger network lead at that position.
+                cursor.buffering = true;
+            }
+            source.cursors[to as usize] = cursor;
         }
         self.release_drained();
     }
@@ -1091,6 +1126,89 @@ mod tests {
             &clip.pcm[initial.len()..],
             &[23, 23, 23, 23, 29, 29, 29, 29]
         );
+    }
+
+    #[test]
+    fn analog_monitor_only_shortens_jack_start_and_rebuffer() {
+        let mut sink = Sink::new();
+        sink.set_local_playback(true);
+        sink.set_http_rendering(true);
+        let owner = ProducerOwner::Host;
+        let monitor = sink.begin_analog_monitor(owner, 10).unwrap();
+        let standard = sink.begin(owner, 10).unwrap();
+        let frame = [5, 0, 9, 0];
+        let below_threshold = frame.repeat(ANALOG_MONITOR_PREBUFFER_BYTES / PCM_FRAME_BYTES - 1);
+        for id in [monitor, standard] {
+            sink.append(owner, id, &below_threshold, 20).unwrap();
+        }
+        let mut jack = [[0; 2]; 1];
+        let mut first = [0; PCM_FRAME_BYTES];
+        let mut second = [0; PCM_FRAME_BYTES];
+        sink.render_local(&mut jack, 20);
+        assert_eq!(jack, [[0; 2]]);
+
+        for id in [monitor, standard] {
+            sink.append(owner, id, &frame, 30).unwrap();
+        }
+        assert_eq!(
+            sink.render_sources(&mut first, &mut second).map(|r| r.bytes),
+            [0; 2]
+        );
+
+        // The monitor is audible on Jack, while a legacy stream with the
+        // same number of queued samples is still buffering.
+        let mut drain = alloc::vec![[0; 2]; ANALOG_MONITOR_PREBUFFER_BYTES / PCM_FRAME_BYTES + 1];
+        sink.render_local(&mut drain, 30);
+        assert_eq!(drain[0], [5, 9]);
+        assert_eq!(drain[drain.len() - 2], [5, 9]);
+        assert_eq!(drain[drain.len() - 1], [0, 0]);
+        sink.append(owner, monitor, &below_threshold, 40).unwrap();
+        sink.render_local(&mut jack, 40);
+        assert_eq!(jack, [[0; 2]]);
+        sink.append(owner, monitor, &frame, 50).unwrap();
+        sink.render_local(&mut jack, 50);
+        assert_eq!(jack, [[5, 9]]);
+
+        let to_http_threshold =
+            (PREBUFFER_BYTES - 2 * ANALOG_MONITOR_PREBUFFER_BYTES) / PCM_FRAME_BYTES;
+        sink.append(owner, monitor, &frame.repeat(to_http_threshold), 60)
+            .unwrap();
+        assert_eq!(
+            sink.render_sources(&mut first, &mut second).map(|r| r.bytes),
+            [PCM_FRAME_BYTES, 0]
+        );
+        assert_eq!(first, frame);
+    }
+
+    #[test]
+    fn http_keeps_standard_prebuffer_after_following_an_analog_monitor() {
+        let mut sink = Sink::new();
+        sink.set_local_playback(true);
+        let owner = ProducerOwner::Host;
+        let id = sink.begin_analog_monitor(owner, 0).unwrap();
+        let frame = [11, 0, 13, 0];
+        let monitor_frames = ANALOG_MONITOR_PREBUFFER_BYTES / PCM_FRAME_BYTES;
+        let http_frames = PREBUFFER_BYTES / PCM_FRAME_BYTES;
+        let mut initial = frame.repeat(monitor_frames);
+        initial[0] = 4;
+        sink.append(owner, id, &initial, 10).unwrap();
+        let mut jack = [[0; 2]; 1];
+        sink.render_local(&mut jack, 10);
+        assert_eq!(jack, [[4, 13]]);
+
+        sink.set_http_rendering(true);
+        let mut first = [0; PCM_FRAME_BYTES];
+        let mut second = [0; PCM_FRAME_BYTES];
+        assert_eq!(sink.render_sources(&mut first, &mut second)[0].bytes, 0);
+        sink.append(owner, id, &frame.repeat(http_frames - monitor_frames), 20)
+            .unwrap();
+        assert_eq!(sink.render_sources(&mut first, &mut second)[0].bytes, 0);
+        sink.append(owner, id, &frame, 30).unwrap();
+        assert_eq!(
+            sink.render_sources(&mut first, &mut second)[0].bytes,
+            PCM_FRAME_BYTES
+        );
+        assert_eq!(first, frame, "the HTTP clock kept the previous analog position");
     }
 
     #[test]

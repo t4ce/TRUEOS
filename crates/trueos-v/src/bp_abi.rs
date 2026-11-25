@@ -1474,7 +1474,9 @@ unsafe extern "C" {
     pub fn trueos_cabi_http_audio_clip_submit_v1(pcm_ptr: *const u8, pcm_bytes: usize) -> i32;
 
     /// Progressive stereo s16le/48 kHz playback. Action 0 begins and returns
-    /// a token. Actions 1 (append), 2 (finish), and 3 (abort) take that token.
+    /// a token. Action 5 begins with a shorter analog prebuffer and the
+    /// standard HTTP prebuffer. Actions 1 (append), 2 (finish), 3 (abort),
+    /// and 4 (query playing) take that token.
     /// Only append takes PCM. Negative results are errors.
     pub fn trueos_cabi_http_audio_stream_v1(
         action: u32,
