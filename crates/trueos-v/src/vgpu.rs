@@ -466,6 +466,8 @@ pub const RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK: u32 = 26;
 /// The outlined inset followed by the original RGB outlines in one frame.
 /// The two consecutive 40-control sections each use local indices 0 through 39.
 pub const RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK: u32 = 27;
+/// Mixed Bfly control points used for swept ribbons and the live RGB outlines.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_TWILIGHT_FLOCK: u32 = 28;
 pub const RETAINED_TOPOLOGY_BFLY_PATCHLIST_4: u32 = 0x23;
 /// Experimental baked beveled cube: one Float3 origin, 44 zero indices.
 /// Only valid with RETAINED_TOPOLOGY_CUBE_PATCHLIST_1. HS expands each patch
