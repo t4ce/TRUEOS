@@ -436,6 +436,9 @@ const NEAREST_REPEAT_SAMPLER_STATE: [u32; 4] = [0; 4];
 // Mesa gfx12 SAMPLER_STATE: TCM_CLAMP=2 at TCZ[2:0], TCY[5:3], TCX[8:6].
 // Remaining fields retain normalized nearest sampling with LOD zero.
 const NEAREST_CLAMP_SAMPLER_STATE: [u32; 4] = [0, 0, 0, 0x92];
+// ANV ribbon captures: normalized linear clamp with one mip at LOD zero.
+// Clamp-to-edge never fetches the border color, so its mapped pointer is zero.
+const BFLY_RIBBON_SAMPLER_STATE: [u32; 4] = [0x5012_4000, 1, 0, 0x0007_e092];
 
 fn write_nearest_repeat_sampler_cache_line(samplers: &mut [u32]) {
     // TGL PRM Vol 9 p558 requires every 16-byte sampler in a fetched
@@ -1271,6 +1274,7 @@ fn write_triangle_probe_state_with_flush(
     }
 
     let native_sampled = draw.native.is_some() && draw.sampled_texture.is_some();
+    let ribbon_sampled = draw.sampled_texture.is_some_and(|texture| texture.ribbon.is_some());
     let native_pbr = native_sampled && draw.pbr_material.is_some();
     let native_metallic_roughness = native_sampled && draw.metallic_roughness_texture.is_some();
     let binding_table_entries = if draw.voxy_figure {
@@ -1527,11 +1531,11 @@ fn write_triangle_probe_state_with_flush(
         }
         if let Some(texture) = draw.sampled_texture {
             let start = surface_state_offset / 4 + 4 * 16;
-            write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
+            write_triangle_sampled_linear_surface_state(&mut dwords[start..start + 16], texture)?;
         }
         if let Some(texture) = draw.metallic_roughness_texture {
             let start = surface_state_offset / 4 + 5 * 16;
-            write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
+            write_triangle_sampled_linear_surface_state(&mut dwords[start..start + 16], texture)?;
         }
         if let Some(material) = draw.pbr_material {
             let base = draw.sampled_texture.ok_or("probe-pbr-base-color")?;
@@ -1571,7 +1575,7 @@ fn write_triangle_probe_state_with_flush(
         }
     } else if let Some(texture) = draw.sampled_texture {
         let start = surface_state_offset / 4 + (if draw.voxy_figure { 3 } else { 2 }) * 16;
-        write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
+        write_triangle_sampled_linear_surface_state(&mut dwords[start..start + 16], texture)?;
     }
 
     let samplers =
@@ -1579,6 +1583,11 @@ fn write_triangle_probe_state_with_flush(
     write_nearest_repeat_sampler_cache_line(samplers);
     if draw.sampled_texture.is_some_and(|texture| texture.sampler_flags == 0) {
         write_nearest_clamp_sampler_cache_line(samplers);
+    }
+    if ribbon_sampled {
+        for sampler in samplers.chunks_exact_mut(4) {
+            sampler.copy_from_slice(&BFLY_RIBBON_SAMPLER_STATE);
+        }
     }
     if native_pbr {
         write_pbr_sampler_cache_line(
@@ -1603,7 +1612,10 @@ fn write_triangle_probe_state_with_flush(
         return Err("probe-metallic-roughness-sampler-mode");
     }
     let sampler_words = [samplers[0], samplers[1], samplers[2], samplers[3]];
-    if native_sampled && !PICASSO_NATIVE_TEXTURE_STATE_LOGGED.swap(true, Ordering::AcqRel) {
+    if native_sampled
+        && !ribbon_sampled
+        && !PICASSO_NATIVE_TEXTURE_STATE_LOGGED.swap(true, Ordering::AcqRel)
+    {
         let ps_binding_table = &dwords
             [ps_binding_table_offset / 4..ps_binding_table_offset / 4 + ps_binding_table_entries];
         let texture_surface =
@@ -1683,8 +1695,9 @@ fn write_triangle_probe_state_with_flush(
         &mut dwords[sf_clip_viewport_offset / 4..sf_clip_viewport_offset / 4 + 16];
     sf_clip_viewport.fill(0);
     sf_clip_viewport[0] = (draw.target_w as f32 * 0.5).to_bits();
-    sf_clip_viewport[1] =
-        retained_viewport_y_scale(draw.target_h, native_sampled || draw.voxy_headless).to_bits();
+    // The GLSL ribbon uses the same clip-space orientation as its outline.
+    let naga_y_flipped = (native_sampled && !ribbon_sampled) || draw.voxy_headless;
+    sf_clip_viewport[1] = retained_viewport_y_scale(draw.target_h, naga_y_flipped).to_bits();
     sf_clip_viewport[2] = 1.0f32.to_bits();
     sf_clip_viewport[3] = (draw.target_w as f32 * 0.5 + viewport_translation_px[0]).to_bits();
     sf_clip_viewport[4] = (draw.target_h as f32 * 0.5 + viewport_translation_px[1]).to_bits();
@@ -1847,7 +1860,7 @@ fn write_triangle_raw_buffer_surface_state(
     Ok(())
 }
 
-fn write_triangle_sampled_rgba8_surface_state(
+fn write_triangle_sampled_linear_surface_state(
     surface: &mut [u32],
     texture: TriangleSampledTextureBinding,
 ) -> Result<(), &'static str> {
@@ -1859,32 +1872,47 @@ fn write_triangle_sampled_surface_state(
     texture: TriangleSampledTextureBinding,
     srgb: bool,
 ) -> Result<(), &'static str> {
+    use crate::intel::shader::bfly_patches::RibbonTexture;
+
+    let ribbon = texture.ribbon.is_some();
+    let r8 = texture.ribbon == Some(RibbonTexture::TwilightR8);
     if surface.len() != 16
         || texture.width == 0
         || texture.height == 0
-        || texture.pitch < texture.width.saturating_mul(4)
+        || texture.pitch < texture.width.saturating_mul(if r8 { 1 } else { 4 })
+        || (ribbon && srgb)
     {
         return Err("probe-sampled-texture-surface");
     }
     surface.fill(0);
     surface[0] = (SURFTYPE_2D << 29)
-        | (if srgb {
+        | (if r8 {
+            SURFACE_FORMAT_R8_UNORM
+        } else if srgb {
             SURFACE_FORMAT_R8G8B8A8_UNORM_SRGB
         } else {
             SURFACE_FORMAT_R8G8B8A8_UNORM
         } << 18)
-        | (SURFACE_HALIGN_4 << 14)
+        | ((if ribbon { 3 } else { SURFACE_HALIGN_4 }) << 14)
         | (SURFACE_VALIGN_4 << 16);
     surface[1] = (RENDER_MOCS << 24)
-        // TGL/ADL requires this for UNORM surfaces, including sampler reads.
-        // Omitting it is not a legal way to describe a linear RGBA8 texture.
+        // TGL/ADL requires the UNORM path bit for linear sampler reads.
         | (1 << 31);
     surface[2] = texture.width.saturating_sub(1) | (texture.height.saturating_sub(1) << 16);
     surface[3] = texture.pitch.saturating_sub(1);
-    surface[7] = (SHADER_CHANNEL_ALPHA << 16)
-        | (SHADER_CHANNEL_BLUE << 19)
-        | (SHADER_CHANNEL_GREEN << 22)
-        | (SHADER_CHANNEL_RED << 25);
+    if ribbon {
+        // Match the single-mip linear descriptors in the ribbon captures.
+        surface[1] |= texture.height / 4;
+        surface[5] = 1 << 8;
+    }
+    surface[7] = (SHADER_CHANNEL_RED << 25)
+        | if r8 {
+            SHADER_CHANNEL_ONE << 16
+        } else {
+            (SHADER_CHANNEL_ALPHA << 16)
+                | (SHADER_CHANNEL_BLUE << 19)
+                | (SHADER_CHANNEL_GREEN << 22)
+        };
     surface[8] = texture.gpu_addr as u32;
     surface[9] = (texture.gpu_addr >> 32) as u32;
     Ok(())
@@ -1956,15 +1984,13 @@ mod churn_raw_surface_tests {
 }
 
 #[cfg(test)]
-mod sampled_rgba8_surface_tests {
-    use super::{
-        RENDER_MOCS, TriangleSampledTextureBinding, write_triangle_sampled_rgba8_surface_state,
-    };
+mod sampled_unorm_surface_tests {
+    use super::*;
 
     #[test]
     fn enables_the_adls_unorm_sampler_path() {
         let mut surface = [0u32; 16];
-        write_triangle_sampled_rgba8_surface_state(
+        write_triangle_sampled_linear_surface_state(
             &mut surface,
             TriangleSampledTextureBinding {
                 gpu_addr: 0x1234_5000,
@@ -1972,12 +1998,58 @@ mod sampled_rgba8_surface_tests {
                 height: 16,
                 pitch: 64,
                 sampler_flags: 0,
+                ribbon: None,
             },
         )
         .unwrap();
         assert_eq!(surface[1], (RENDER_MOCS << 24) | (1 << 31));
         assert_eq!(surface[8], 0x1234_5000);
         assert_eq!(surface[9], 0);
+    }
+
+    #[test]
+    fn admits_a_tightly_packed_twilight_r8_mask() {
+        let binding = TriangleSampledTextureBinding {
+            gpu_addr: 0x1234_5000,
+            width: 256,
+            height: 256,
+            pitch: 256,
+            sampler_flags: 0,
+            ribbon: Some(crate::intel::shader::bfly_patches::RibbonTexture::TwilightR8),
+        };
+        let mut surface = [0u32; 16];
+        write_triangle_sampled_linear_surface_state(&mut surface, binding).unwrap();
+        assert_eq!(surface[0], 0x2501_c000);
+        assert_eq!(surface[1], (RENDER_MOCS << 24) | (1 << 31) | 64);
+        assert_eq!(surface[2], 255 | (255 << 16));
+        assert_eq!(surface[3], 255);
+        assert_eq!(surface[5], 1 << 8);
+        assert_eq!(surface[7], (SHADER_CHANNEL_RED << 25) | (SHADER_CHANNEL_ONE << 16));
+        assert_eq!(surface[8], 0x1234_5000);
+        assert!(write_triangle_sampled_surface_state(&mut surface, binding, true).is_err());
+    }
+
+    #[test]
+    fn encodes_the_three_tile_wake_atlas_with_alpha_swizzle() {
+        let kind = crate::intel::shader::bfly_patches::RibbonTexture::SunriseRgba8;
+        let binding = TriangleSampledTextureBinding {
+            gpu_addr: 0x1234_5000,
+            width: kind.width(),
+            height: kind.height(),
+            pitch: kind.pitch(),
+            sampler_flags: 0,
+            ribbon: Some(kind),
+        };
+        let mut surface = [0u32; 16];
+        write_triangle_sampled_linear_surface_state(&mut surface, binding).unwrap();
+        assert_eq!(surface[0], 0x231d_c000);
+        assert_eq!(surface[1], (RENDER_MOCS << 24) | (1 << 31) | 192);
+        assert_eq!(surface[2], 255 | (767 << 16));
+        assert_eq!(surface[3], 1023);
+        assert_eq!(surface[5], 1 << 8);
+        assert_eq!(surface[7], 0x0977_0000);
+        assert_eq!(surface[8], 0x1234_5000);
+        assert!(write_triangle_sampled_surface_state(&mut surface, binding, true).is_err());
     }
 }
 
@@ -1999,6 +2071,7 @@ mod picasso_pbr_state_tests {
             height: 1024,
             pitch: 8192,
             sampler_flags: 3,
+            ribbon: None,
         };
         let mut data_view = [0; 16];
         let mut color_view = [0; 16];
@@ -2263,18 +2336,31 @@ fn validate_triangle_native_draw_contract(
 fn validate_bfly_patch_draw_contract(
     draw: TriangleDrawPrep,
     native: TriangleNativeDrawContract,
-    count: u32,
+    program: &crate::intel::shader::bfly_patches::Program,
 ) -> Result<(), &'static str> {
     use crate::intel::shader::bfly_patches as bfly;
 
     let camera = native.vs_storage_bindings[0];
+    let count = program.control_vertices() as u32;
+    let texture_matches = match (program.ribbon_texture(), draw.sampled_texture) {
+        (Some(kind), Some(texture)) => {
+            texture.ribbon == Some(kind)
+                && texture.gpu_addr != 0
+                && texture.width == kind.width()
+                && texture.height == kind.height()
+                && texture.pitch == kind.pitch()
+                && texture.sampler_flags == 0
+        }
+        (None, None) => true,
+        _ => false,
+    };
     if draw.vertex_format != TriangleVertexFormat::Float3
         || draw.vertex_stride != 12
         || draw.vertex_count != count
         || draw.vertex_buffer_bytes != count * 12
         || draw.index_buffer.is_none_or(|idx| idx.index_count != count || idx.byte_len != count * 4)
         || draw.indirect_args_gpu_addr.is_some()
-        || draw.sampled_texture.is_some()
+        || !texture_matches
         || draw.pbr_material.is_some()
         || camera.gpu_addr == 0
         || camera.byte_len != trueos_helio::churn::GpuCameraUniforms::BYTE_LEN as u32
@@ -2430,6 +2516,7 @@ mod retained_native_matrix_draw_contract_tests {
             height: 1024,
             pitch: 4096,
             sampler_flags: 0,
+            ribbon: None,
         });
         assert_eq!(validate_triangle_native_draw_contract(draw, native), Ok(()));
 
@@ -2458,6 +2545,7 @@ mod retained_native_matrix_draw_contract_tests {
             height: 1024,
             pitch: 4096,
             sampler_flags: 0,
+            ribbon: None,
         });
         assert_eq!(validate_triangle_native_draw_contract(draw, native), Ok(()));
 
@@ -2484,7 +2572,7 @@ mod retained_native_matrix_draw_contract_tests {
         draw.vertex_stride = 48;
         draw.vertex_buffer_bytes = draw.vertex_count * 48;
         draw.sampled_texture = Some(TriangleSampledTextureBinding {
-            gpu_addr: 0x28000000, width: 256, height: 2, pitch: 1024, sampler_flags: 3,
+            gpu_addr: 0x28000000, width: 256, height: 2, pitch: 1024, sampler_flags: 3, ribbon: None,
         });
         draw.pbr_material = Some(super::TrianglePbrMaterial { textures: [None; 4], parameters: [0; 16] });
         assert_eq!(validate_triangle_native_draw_contract(draw, native), Ok(()));
@@ -2529,6 +2617,7 @@ mod retained_native_matrix_draw_contract_tests {
             height: 16,
             pitch: 64,
             sampler_flags: 3,
+            ribbon: None,
         });
         draw.pbr_material = Some(super::TrianglePbrMaterial {
             textures: [None; 4],
@@ -2696,7 +2785,7 @@ fn encode_triangle_probe_batch(
     }
     if let Some(native) = draw.native {
         if let Some(program) = bfly_program {
-            validate_bfly_patch_draw_contract(draw, native, program.control_vertices() as u32)?;
+            validate_bfly_patch_draw_contract(draw, native, program)?;
         } else {
             validate_triangle_native_draw_contract(draw, native)?;
         }
@@ -3443,7 +3532,10 @@ fn encode_triangle_probe_batch(
             0
         }
         | wm_barycentric_mode;
-    let wm_dw1 = if bfly_patches { bfly::WM } else { microfont_line_aa_wm(wm_dw1, native_line_aa) };
+    let wm_dw1 = bfly_program.map_or_else(
+        || microfont_line_aa_wm(wm_dw1, native_line_aa),
+        bfly::Program::wm_dw1,
+    );
     let wm_depth_stencil_dw1 = depth_config.map_or_else(
         || {
             if mesa_host_fixed_function {
@@ -4539,7 +4631,7 @@ fn encode_triangle_probe_batch(
         .unwrap_or(baked_vs_urb_output_length);
 
     if tessellated {
-        let urb = if bfly_patches { bfly::URB } else { crate::intel::shader::patch_cube::URB };
+        let urb = bfly_program.map_or(crate::intel::shader::patch_cube::URB, bfly::Program::urb);
         for (command, (size, start, entries)) in [
             CMD_3DSTATE_URB_ALLOC_VS,
             CMD_3DSTATE_URB_ALLOC_HS,

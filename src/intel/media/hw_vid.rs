@@ -10,7 +10,7 @@ mod http_mp4;
 
 const H264_DECODE_TIMEOUT_MS: u64 = 5_000;
 const H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
-const H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES: usize = 1024 * 1024 * 1024;
+const H264_BUFFERED_VIDEO_CAP_BYTES: usize = 1024 * 1024 * 1024;
 const H264_TRUEOSFS_READ_CHUNK_BYTES: usize = 64 * 1024;
 const H264_FS_INDEX_READ_AHEAD_BYTES: usize = 64 * 1024;
 const H264_FS_SAMPLE_READ_AHEAD_BYTES: usize = 1024 * 1024;
@@ -440,10 +440,7 @@ pub(crate) async fn prepare_trueosfs_ui4_video(
     if session.is_cancelled() {
         return Err("playback cancelled");
     }
-    let file_bytes = usize::try_from(file.data_len()).map_err(|_| "TRUEOSFS video too large")?;
-    if file_bytes == 0 || file_bytes > H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES {
-        return Err("TRUEOSFS video size outside playback limit");
-    }
+    let file_bytes = file.data_len();
     let (mut reader, sample_timing, decode_source) = h264_open_fs_reader(session, file).await?;
     // Inspect only the initial parameter sets, then replay those NALs to the
     // picture assembler. Payload reads continue on demand during playback.
@@ -468,7 +465,7 @@ pub(crate) async fn prepare_trueosfs_ui4_video(
     );
     Ok(PreparedTrueosFsVideo {
         reader,
-        stream_bytes: file.data_len(),
+        stream_bytes: file_bytes,
         sample_timing,
         decode_source,
         extent,
@@ -1865,7 +1862,7 @@ fn h264_prepare_trueosfs_asset(
     // byte sequences even though its AVC samples are length-prefixed.
     if h264_is_mp4_container(asset.as_slice()) {
         let demuxed = mp4_avc1_to_annexb(asset.as_slice())?;
-        if demuxed.annexb.is_empty() || demuxed.annexb.len() > H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES {
+        if demuxed.annexb.is_empty() || demuxed.annexb.len() > H264_BUFFERED_VIDEO_CAP_BYTES {
             return Err("demuxed TRUEOSFS H.264 size outside playback limit");
         }
         return Ok((demuxed.annexb, demuxed.timing, "trueosfs-mp4-avc", "mp4"));
@@ -2561,7 +2558,10 @@ async fn h264_open_fs_reader(
     session: crate::ui4::VideoPlaybackSession,
     file: crate::r::fs::trueosfs::FileReadHandle,
 ) -> Result<(H264NalReader, Vec<H264SampleTiming>, &'static str), &'static str> {
-    let len = file.data_len() as usize;
+    let len = usize::try_from(file.data_len()).map_err(|_| "TRUEOSFS video too large")?;
+    if len == 0 {
+        return Err("TRUEOSFS video is empty");
+    }
     let mut header = [0u8; 16];
     h264_fs_read_exact(session, file, 0, &mut header[..len.min(16)]).await?;
     if h264_has_annexb_start_code(&header[..len.min(16)]) {
@@ -2663,6 +2663,9 @@ async fn h264_open_fs_reader(
     if fragmented {
         // Preserve existing fragmented MP4 support until its fragment metadata
         // can be loaded independently. Ordinary MP4 and Annex-B stream above.
+        if len > H264_BUFFERED_VIDEO_CAP_BYTES {
+            return Err("fragmented MP4 exceeds the 1 GiB buffered playback limit");
+        }
         let mut asset = Vec::new();
         asset
             .try_reserve_exact(len)

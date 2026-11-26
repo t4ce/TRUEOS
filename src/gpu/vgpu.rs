@@ -2218,7 +2218,9 @@ pub(crate) fn create_retained_mesh(
     descriptor: v::vgpu::RetainedMeshDescriptor,
 ) -> Result<RetainedMeshHandle, VgpuError> {
     use crate::intel::render::{BflyHistory, PicassoRetainedShader, ResidentScenePrimitiveTopology};
-    use crate::intel::shader::bfly_patches::{Geometry, LAYERED_CONTROL_VERTICES, projected_mixed_pipeline};
+    use crate::intel::shader::bfly_patches::{
+        Geometry, LAYERED_CONTROL_VERTICES, LAYERED_WAKE_CONTROL_VERTICES, projected_mixed_pipeline,
+    };
 
     let double_sided = descriptor.topology & v::vgpu::RETAINED_MESH_FLAG_DOUBLE_SIDED != 0;
     let topology =
@@ -2249,6 +2251,8 @@ pub(crate) fn create_retained_mesh(
             | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK
             | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK
             | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TWILIGHT_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SUNRISE_FLOCK
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_WAKE_FLOCK
     ) || descriptor.vertex_count == 0
         || !topology.accepts_index_count(descriptor.index_count as usize)
     {
@@ -2277,11 +2281,15 @@ pub(crate) fn create_retained_mesh(
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TWILIGHT_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SUNRISE_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_WAKE_FLOCK
             if topology == ResidentScenePrimitiveTopology::BflyPatchList4 && !double_sided =>
         {
             let geometry = match descriptor.vertex_layout {
                 v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_FILLED_FLOCK => Geometry::FilledFlock,
                 v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TWILIGHT_FLOCK => Geometry::TwilightRibbon,
+                v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SUNRISE_FLOCK
+                | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_WAKE_FLOCK => Geometry::SunriseRibbon,
                 v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_INSET_FILL_FLOCK
                 | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK
                 | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK => Geometry::InsetFillFlock,
@@ -2301,7 +2309,15 @@ pub(crate) fn create_retained_mesh(
                 _ => Geometry::Closed,
             };
             let layered = descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK;
-            let count = if layered { LAYERED_CONTROL_VERTICES } else { geometry.control_vertices() } as u32;
+            let layered_wake =
+                descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_WAKE_FLOCK;
+            let count = if layered_wake {
+                LAYERED_WAKE_CONTROL_VERTICES
+            } else if layered {
+                LAYERED_CONTROL_VERTICES
+            } else {
+                geometry.control_vertices()
+            } as u32;
             if descriptor.vertex_count != count || descriptor.index_count != count {
                 return Err(VgpuError::Unsupported);
             }
@@ -2333,13 +2349,25 @@ pub(crate) fn create_retained_mesh(
                     return Err(VgpuError::Unsupported);
                 }
                 PicassoRetainedShader::BflyTwilight
-            } else if layered || descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK {
+            } else if geometry == Geometry::SunriseRibbon && !layered_wake {
+                if crate::intel::shader::bfly_patches_pipeline(Geometry::SunriseOutline).is_none() {
+                    return Err(VgpuError::Unsupported);
+                }
+                PicassoRetainedShader::BflySunrise
+            } else if layered_wake
+                || layered
+                || descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK
+            {
                 if crate::intel::shader::bfly_patches_pipeline(Geometry::InsetOutlineFlock).is_none()
-                    || layered && projected_mixed_pipeline().is_none()
+                    || (layered || layered_wake) && projected_mixed_pipeline().is_none()
+                    || layered_wake
+                        && crate::intel::shader::bfly_patches_pipeline(Geometry::InsetFillFlock).is_none()
                 {
                     return Err(VgpuError::Unsupported);
                 }
-                if layered {
+                if layered_wake {
+                    PicassoRetainedShader::BflyLayeredWake
+                } else if layered {
                     PicassoRetainedShader::BflyLayered
                 } else {
                     PicassoRetainedShader::BflyOutlinedInset
@@ -2373,7 +2401,9 @@ pub(crate) fn create_retained_mesh(
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_INSET_FILL_FLOCK
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK
-        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TWILIGHT_FLOCK => {
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TWILIGHT_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SUNRISE_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_WAKE_FLOCK => {
             return Err(VgpuError::Unsupported);
         }
         _ if topology == ResidentScenePrimitiveTopology::BflyPatchList4 => {
@@ -2406,7 +2436,9 @@ pub(crate) fn create_retained_mesh(
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_INSET_FILL_FLOCK
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK
         | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK
-        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TWILIGHT_FLOCK => 12,
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_TWILIGHT_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_SUNRISE_FLOCK
+        | v::vgpu::RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_WAKE_FLOCK => 12,
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT
         | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT_INSTANCE_PALETTE => 48,
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV => 32,

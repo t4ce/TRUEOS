@@ -65,7 +65,7 @@ impl ShaderToyFrameParams {
             && self.date_day.is_finite()
             && self.date_seconds.is_finite()
             && (self.shader_id != SHADERTOY_SHADER_BFLY_CELESTIAL
-                || bfly_celestial_square(self).is_some())
+                || bfly_celestial_rect(self).is_some())
     }
 }
 

@@ -117,6 +117,7 @@ struct TriangleSampledTextureBinding {
     height: u32,
     pitch: u32,
     sampler_flags: u32,
+    ribbon: Option<crate::intel::shader::bfly_patches::RibbonTexture>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -502,6 +503,9 @@ pub(crate) enum PicassoRetainedShader {
     BflyPatches(crate::intel::shader::bfly_patches::Geometry),
     BflyOutlinedInset,
     BflyLayered,
+    BflyLayeredWake,
+    BflyTwilight,
+    BflySunrise,
     BflyTrail {
         geometry: crate::intel::shader::bfly_patches::Geometry,
         history: BflyHistory,
@@ -514,6 +518,10 @@ impl PicassoRetainedShader {
             Self::BflyPatches(geometry) | Self::BflyTrail { geometry, .. } => Some(geometry),
             Self::BflyOutlinedInset | Self::BflyLayered => {
                 Some(crate::intel::shader::bfly_patches::Geometry::InsetFillFlock)
+            }
+            Self::BflyTwilight => Some(crate::intel::shader::bfly_patches::Geometry::TwilightRibbon),
+            Self::BflySunrise | Self::BflyLayeredWake => {
+                Some(crate::intel::shader::bfly_patches::Geometry::SunriseRibbon)
             }
             _ => None,
         }
@@ -553,7 +561,8 @@ pub(crate) struct ResidentChurnForward {
     transform: Option<ResidentChurnTransform>,
     transform_unavailable_reason: Option<&'static str>,
     pipeline: crate::intel::shader::TrianglePipeline,
-    bfly_passes: [Option<ResidentBflyPass>; 3],
+    bfly_passes: [Option<ResidentBflyPass>; 4],
+    ribbon_texture: Option<(crate::intel::shader::bfly_patches::RibbonTexture, ResidentRenderBuffer)>,
     shader: PicassoRetainedShader,
     sampled_material: bool,
     native_vf: TriangleNativeDrawContract,

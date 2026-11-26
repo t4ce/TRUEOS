@@ -39,12 +39,22 @@ def main():
     filled = json.loads((native / "inset-wings-manifest.json").read_text())
     breed = json.loads((native / "breed-wings-manifest.json").read_text())
     translucent = json.loads((native / "translucent-wings-manifest.json").read_text())
+    twilight = json.loads((native / "twilight-ribbon-manifest.json").read_text())
+    sunrise = json.loads((native / "sunrise-ribbon-manifest.json").read_text())
+    sunrise_outline = json.loads((native / "sunrise-outline-manifest.json").read_text())
     inset_outline = json.loads((native / "inset-outline-manifest.json").read_text())
+    neutral_outlines = [json.loads((native / f"neutral-{kind}-outline-manifest.json").read_text())
+                        for kind in ("mixed", "inset", "wake")]
+    neutral_packages = b"".join((native / (outline["name"] + ".apshader")).read_bytes()
+                                for outline in neutral_outlines)
     package_path = native / "bfly-tier-width-wings.apshader"
     package = package_path.read_bytes()
     fill_package = (native / "bfly-inset-wings.apshader").read_bytes()
     breed_package = (native / "bfly-breed-wings.apshader").read_bytes()
     translucent_package = (native / "bfly-translucent-wings.apshader").read_bytes()
+    twilight_package = (native / "bfly-twilight-ribbon.apshader").read_bytes()
+    sunrise_package = (native / "bfly-sunrise-ribbon.apshader").read_bytes()
+    sunrise_outline_package = (native / "bfly-sunrise-outline.apshader").read_bytes()
     inset_outline_package = (native / "bfly-inset-outline.apshader").read_bytes()
     mask_manifest = json.loads((native / "celestial-masks-manifest.json").read_text())
     mask_payload = bytearray(struct.pack("<I", len(mask_manifest["stages"])))
@@ -61,7 +71,8 @@ def main():
         path = Path(directory)
         (path / "src").mkdir()
         (path / "bfly.o").write_bytes(shader_elf(
-            package + fill_package + breed_package + translucent_package + inset_outline_package + masks))
+            package + fill_package + breed_package + translucent_package + inset_outline_package
+            + twilight_package + sunrise_package + sunrise_outline_package + neutral_packages + masks))
         (path / "history.o").write_bytes(shader_elf(smoke + cloud + cloud_trail))
         (path / "textures.o").write_bytes(shader_elf(texture_bundle))
         corrupt = bytearray(package)
@@ -139,10 +150,33 @@ fn admits_distinct_history_masks_and_a_shader_with_a_shared_mask() {
 #[test]
 fn admits_celestial_masks_in_sampling_order() {
     app_shaders::register_blueprint_elf(include_bytes!("../bfly.o")).unwrap();
-    assert_eq!(app_shaders::bytes(35, 0).unwrap(), include_bytes!(@MOON_MASK@));
-    assert_eq!(app_shaders::bytes(35, 1).unwrap(), include_bytes!(@EARTH_MASK@));
-    assert!(app_shaders::words(35, 0).is_none());
-    assert!(app_shaders::bytes(35, 2).is_none());
+    assert_eq!(app_shaders::bytes(40, 0).unwrap(), include_bytes!(@MOON_MASK@));
+    assert_eq!(app_shaders::bytes(40, 1).unwrap(), include_bytes!(@EARTH_MASK@));
+    assert_eq!(app_shaders::bytes(40, 2).unwrap(), include_bytes!(@SUN_MASK@));
+    for stage in 0..3 {
+        assert!(app_shaders::words(40, stage).is_none());
+    }
+    assert!(app_shaders::bytes(40, 3).is_none());
+}
+
+#[test]
+fn admits_twilight_graphics_and_retained_density() {
+    app_shaders::register_blueprint_elf(include_bytes!("../bfly.o")).unwrap();
+    for (index, size) in @TWILIGHT_STAGES@.into_iter().enumerate() {
+        assert_eq!(app_shaders::words(37, index).unwrap().len() * 4, size);
+    }
+    assert_eq!(app_shaders::bytes(37, 4).unwrap(), include_bytes!(@TWILIGHT_MASK@));
+    assert!(app_shaders::words(37, 4).is_none());
+}
+
+#[test]
+fn admits_sunrise_graphics_and_retained_rgba8() {
+    app_shaders::register_blueprint_elf(include_bytes!("../bfly.o")).unwrap();
+    for (index, size) in @SUNRISE_STAGES@.into_iter().enumerate() {
+        assert_eq!(app_shaders::words(38, index).unwrap().len() * 4, size);
+    }
+    assert_eq!(app_shaders::bytes(38, 4).unwrap(), include_bytes!(@SUNRISE_TEXTURE@));
+    assert!(app_shaders::words(38, 4).is_none());
 }
 
 #[test]
@@ -161,8 +195,14 @@ fn rejects_corrupt_unknown_and_truncated_packages() {
             "@CLOUD_MASK@", json.dumps(str((native / "bfly-cloud.r8").resolve()))).replace(
             "@MOON_MASK@", json.dumps(str((native / "bfly-moon.r8").resolve()))).replace(
             "@EARTH_MASK@", json.dumps(str((native / "bfly-earth.r8").resolve()))).replace(
+            "@SUN_MASK@", json.dumps(str((native / "bfly-sun.r8").resolve()))).replace(
+            "@TWILIGHT_MASK@", json.dumps(str((native / "bfly-twilight.r8").resolve()))).replace(
+            "@TWILIGHT_STAGES@", repr([stage["bytes"] for stage in twilight["stages"][:4]])).replace(
+            "@SUNRISE_TEXTURE@", json.dumps(str((native / "bfly-sunrise.rgba8").resolve()))).replace(
+            "@SUNRISE_STAGES@", repr([stage["bytes"] for stage in sunrise["stages"][:4]])).replace(
             "@GRAPHICS_STAGES@", repr([(record["id"], [stage["bytes"] for stage in record["stages"]])
-                                      for record in (direct, filled, breed, translucent, inset_outline)]))
+                                      for record in (direct, filled, breed, translucent,
+                                                     inset_outline, sunrise_outline, *neutral_outlines)]))
         (path / "src/lib.rs").write_text(source)
         subprocess.run(["cargo", "test", "--lib", "--offline", "--quiet"], cwd=path, check=True)
 

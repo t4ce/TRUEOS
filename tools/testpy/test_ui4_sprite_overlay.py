@@ -1,21 +1,68 @@
 #!/usr/bin/env python3
-"""Exercise native overlay admission and explicit and implicit opaque copies."""
+"""Exercise UI4 sprite admission, viewport copies, and exact BCS0 replacement."""
 from pathlib import Path
 import re
 import subprocess
 import tempfile
+from test_bcs_plan import harness_source as bcs_planner_harness
+from test_clip_position3_uv_texture import constant, item
 from test_vgpu_batch_overlay import block
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def main():
-    source = (ROOT / 'src/ui4/blueprint_ui4.rs').read_text()
-    constants = '\n'.join(re.findall(
-        r'^(?:pub\(crate\) )?const (?:MAX_SPRITE_QUADS|UI4_SPRITE_BATCH_TIMEOUT_NS|SPRITE_QUAD_FLAG_(?:BCS0_COPY|SRC_OVER)|'
-        r'ERROR_INVALID|ERROR_NOT_FOUND|ERROR_STATE|ERROR_UI4|ERROR_BUSY):[^;]+;',
-        source, re.M))
-    harness = '''#![allow(dead_code)]
+    ui4 = 'src/ui4/blueprint_ui4.rs'
+    surfaces = 'src/intel/gpgpu/types/surfaces.rs'
+    source = (ROOT / ui4).read_text()
+    surface_types = (ROOT / surfaces).read_text()
+    constants = '\n'.join(constant(ui4, name) for name in (
+        'MAX_SPRITE_QUADS', 'MAX_BCS0_COMMANDS_PER_BATCH', 'UI4_SPRITE_BATCH_TIMEOUT_NS',
+        'SPRITE_QUAD_FLAG_BCS0_COPY', 'SPRITE_QUAD_FLAG_BCS0_OVERWRITE', 'SPRITE_QUAD_BCS0_REPLACE',
+        'SPRITE_QUAD_FLAG_SRC_OVER', 'SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR', 'SPRITE_QUAD_VALID_FLAGS',
+        'ERROR_INVALID', 'ERROR_NOT_FOUND', 'ERROR_STATE', 'ERROR_UI4', 'ERROR_BUSY',
+    ))
+    planner = bcs_planner_harness().replace('] mod bcs_plan;', '] pub(crate) mod bcs_plan;')
+    harness = planner.removesuffix('}\n') + '''
+    pub(crate) use blt::{GucBcs0RgbaSurface, GucBcs0RgbaCopy, GucBcs0CopySubmitError};
+    use std::cell::Cell;
+
+    thread_local! {
+        pub static QUEUE_RESULT: Cell<Option<Result<(), GucBcs0CopySubmitError>>> =
+            const { Cell::new(None) };
+    }
+
+    pub fn queue_guc_bcs0_rgba_copies(
+        destination: GucBcs0RgbaSurface, copies: &[GucBcs0RgbaCopy],
+    ) -> Result<(), GucBcs0CopySubmitError> {
+        let [copy] = copies else { panic!("opaque viewport needs exactly one copy") };
+        assert_eq!((copy.destination_x, copy.destination_y), (0, 0));
+        assert_eq!((copy.width, copy.height), (destination.width, destination.height));
+        QUEUE_RESULT.with(|result| result.take().unwrap())
+    }
+
+    pub fn queue_guc_bcs0_plan_batch(
+        batch: &bcs_plan::BcsBatch,
+    ) -> Result<(), GucBcs0CopySubmitError> {
+        assert_eq!(batch.copy_count(), 2);
+        assert_eq!(batch.fill_count(), 0);
+        assert_eq!(batch.explicit_flushes(), 1);
+        QUEUE_RESULT.with(|result| result.take().unwrap())
+    }
+
+    pub mod gpgpu {
+        use crate::viewport::GpgpuRgba8Surface;
+
+        pub enum Ui4SpriteSceneCompletion { Complete { release: u64 }, Pending, Failed }
+
+        pub fn poll_ui4_bcs0_sprite_copy(
+            _: (), _: GpgpuRgba8Surface,
+        ) -> Ui4SpriteSceneCompletion {
+            Ui4SpriteSceneCompletion::Complete { release: 42 }
+        }
+    }
+}
+
 use std::sync::Mutex;
 type WindowOwner = u32;
 struct SpriteSceneUpload { expected: usize, quads: Vec<()> }
@@ -55,7 +102,8 @@ fn fresh_gpu_and_retired_native_frames_admit_sprites_but_cpu_frames_do_not() {
 }
 '''
     finish_scene = block(source, 'pub(crate) fn finish_sprite_scene(')
-    opaque_copy = block(finish_scene, 'if !render_overlay\n        && let [quad]')
+    retirement = block(finish_scene, 'if let Some((explicit_bcs_copy, source_pitch, submission))')
+    viewport_copy = finish_scene[finish_scene.index('let overwrite ='):finish_scene.index(retirement)]
     worklists = (ROOT / 'src/intel/gpgpu/types/worklists.rs').read_text()
     copy_flags = '\n'.join(re.findall(
         r'^pub\(crate\) const ALPHA_BLEND_WORKLIST_FLAG_(?:COPY|SRC_OVER|TINT_ALPHA|TINT_RGB):[^;]+;',
@@ -70,64 +118,33 @@ mod chronos {
     pub fn monotonic_nanos() -> u64 { 0 }
 }
 
-mod intel {
-    use std::cell::Cell;
-
-    #[derive(Clone, Copy)]
-    pub struct GucBcs0RgbaSurface {
-        pub phys: u64, pub gpu: u64, pub bytes: usize, pub width: u32, pub height: u32,
-        pub pitch_bytes: u32,
-    }
-
-    pub struct GucBcs0RgbaCopy {
-        pub source: GucBcs0RgbaSurface, pub source_x: u32, pub source_y: u32,
-        pub destination_x: u32, pub destination_y: u32, pub width: u32, pub height: u32,
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    pub enum GucBcs0CopySubmitError { Unavailable, Busy, InvalidRequest, SubmitFailed }
-
-    thread_local! {
-        pub static QUEUE_RESULT: Cell<Option<Result<(), GucBcs0CopySubmitError>>> =
-            const { Cell::new(None) };
-    }
-
-    pub fn queue_guc_bcs0_rgba_copies(
-        destination: GucBcs0RgbaSurface, copies: &[GucBcs0RgbaCopy],
-    ) -> Result<(), GucBcs0CopySubmitError> {
-        let [copy] = copies else { panic!("opaque viewport needs exactly one copy") };
-        assert_eq!((copy.destination_x, copy.destination_y), (0, 0));
-        assert_eq!((copy.width, copy.height), (destination.width, destination.height));
-        QUEUE_RESULT.with(|result| result.take().unwrap())
-    }
-
-    pub mod gpgpu {
-        pub enum Ui4SpriteSceneCompletion { Complete { release: u64 }, Pending, Failed }
-
-        pub fn poll_ui4_bcs0_sprite_copy(
-            _: (), _: super::GucBcs0RgbaSurface,
-        ) -> Ui4SpriteSceneCompletion {
-            Ui4SpriteSceneCompletion::Complete { release: 42 }
-        }
-    }
-}
-
-mod opaque_viewport {
+mod viewport {
     use super::{
-        ERROR_BUSY, ERROR_UI4, SPRITE_QUAD_FLAG_BCS0_COPY, SPRITE_QUAD_FLAG_SRC_OVER,
+        ERROR_BUSY, ERROR_INVALID, ERROR_UI4, MAX_BCS0_COMMANDS_PER_BATCH,
+        SPRITE_QUAD_BCS0_REPLACE, SPRITE_QUAD_FLAG_BCS0_COPY, SPRITE_QUAD_FLAG_BCS0_OVERWRITE,
+        SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR, SPRITE_QUAD_FLAG_SRC_OVER, SPRITE_QUAD_VALID_FLAGS,
         UI4_SPRITE_BATCH_TIMEOUT_NS,
     };
-    use crate::intel::{GucBcs0CopySubmitError, GucBcs0RgbaSurface as GpgpuRgba8Surface, QUEUE_RESULT};
+    use crate::intel::{GucBcs0CopySubmitError, QUEUE_RESULT};
     use crate::intel::gpgpu::Ui4SpriteSceneCompletion;
     use std::sync::atomic::Ordering;
 '''
     harness += '\n'.join([
         copy_flags,
-        '#[derive(Clone, Copy)]\n' + block(source, 'pub struct TrueosUi4SpriteQuad {'),
+        item(ui4, 'TrueosUi4SpriteQuad'),
+        item(surfaces, 'GpgpuRgba8StorageOrder'),
+        item(surfaces, 'GpgpuRgba8Surface'),
+        item(surfaces, 'GpgpuRect'),
+        block(surface_types, 'impl GpgpuRect {'),
+        block(surface_types, 'impl GpgpuRgba8Surface {'),
         block(worklists, 'pub(crate) struct GpgpuAlphaBlendWorklistDesc {'),
         block(source, 'enum AlphaRectConversion {'),
         block(source, 'fn rounded_sprite_coordinate('),
         block(source, 'fn alpha_rect_descriptor('),
+        block(source, 'fn valid_sprite_quad('),
+        block(source, 'fn bcs0_rgba_surface('),
+        block(source, 'fn bcs0_overwrite_viewport('),
+        '#[test]\n' + block(source, 'fn bcs_premultiplied_replacement_plans_full_copy_then_ordered_patch('),
     ])
     harness += '''
     mod libm {
@@ -136,6 +153,7 @@ mod opaque_viewport {
 
     struct RetainedSprite {
         opaque: bool,
+        premultiplied: bool,
         surface: GpgpuRgba8Surface,
     }
 
@@ -149,7 +167,7 @@ mod opaque_viewport {
 
     struct Frame {
         destination: GpgpuRgba8Surface,
-        sprites: [(u32, BlueprintSpriteSource); 1],
+        sprites: Vec<(u32, BlueprintSpriteSource)>,
         write_lease: Option<()>,
         pending_gpu_release: Option<u64>,
         sprite_clear_rgba: Option<u32>,
@@ -164,15 +182,15 @@ mod opaque_viewport {
         fn leased_at(width: u32, height: u32) -> Self {
             let destination = GpgpuRgba8Surface {
                 phys: 0x10000000, gpu: 0x12000000, bytes: (width * height * 4) as usize,
-                width, height, pitch_bytes: width * 4,
+                width, height, pitch_bytes: width * 4, storage_order: GpgpuRgba8StorageOrder::Rgba,
             };
             let source = GpgpuRgba8Surface {
                 phys: 0x20000000, gpu: 0x38001000, ..destination
             };
             Self {
                 destination,
-                sprites: [(1, BlueprintSpriteSource::Uploaded(RetainedSprite {
-                    opaque: true, surface: source,
+                sprites: vec![(1, BlueprintSpriteSource::Uploaded(RetainedSprite {
+                    opaque: true, premultiplied: true, surface: source,
                 }))],
                 write_lease: Some(()),
                 pending_gpu_release: None,
@@ -215,19 +233,25 @@ mod opaque_viewport {
         draw_quad(surface, surface.viewport_quad(explicit), result)
     }
 
-    #[allow(unused_variables)] // The trace macros ignore hardware addresses and errors.
     fn draw_quad(
         surface: &mut Frame, quad: TrueosUi4SpriteQuad, result: Result<(), GucBcs0CopySubmitError>,
+    ) -> i32 {
+        draw_quads(surface, vec![quad], result)
+    }
+
+    #[allow(unused_variables, irrefutable_let_patterns)]
+    fn draw_quads(
+        surface: &mut Frame, quads: Vec<TrueosUi4SpriteQuad>, result: Result<(), GucBcs0CopySubmitError>,
     ) -> i32 {
         let owner = 0;
         let window_id = 0;
         let lease = surface.write_lease.unwrap();
         let destination = surface.destination;
-        let upload = Upload { quads: vec![quad] };
+        let upload = Upload { quads };
         let render_overlay = false;
         QUEUE_RESULT.with(|slot| slot.set(Some(result)));
 '''
-    harness += opaque_copy + '''
+    harness += viewport_copy + retirement + '''
         GENERAL_SPRITE_PATH
     }
 
@@ -292,6 +316,42 @@ mod opaque_viewport {
         assert_eq!(frame.pending_gpu_release, None);
         quad.flags = 0;
         assert_eq!(draw_quad(&mut frame, quad, Ok(())), 0);
+    }
+
+    #[test]
+    fn premultiplied_replacement_retries_busy_and_never_falls_back() {
+        for (result, expected, retains_lease, quarantined) in [
+            (Err(GucBcs0CopySubmitError::Busy), ERROR_BUSY, false, false),
+            (Err(GucBcs0CopySubmitError::Unavailable), ERROR_UI4, false, false),
+            (Err(GucBcs0CopySubmitError::SubmitFailed), ERROR_UI4, true, true),
+            (Ok(()), 0, true, false),
+        ] {
+            let mut frame = Frame::leased_at(16, 16);
+            let BlueprintSpriteSource::Uploaded(base_sprite) = &mut frame.sprites[0].1;
+            base_sprite.opaque = false;
+            let patch_sprite = GpgpuRgba8Surface::new(0x30000000, 0x38100000, 256, 4, 4, 64).unwrap();
+            frame.sprites.push((2, BlueprintSpriteSource::Uploaded(RetainedSprite {
+                opaque: false, premultiplied: true, surface: patch_sprite,
+            })));
+
+            let mut base = frame.viewport_quad(false);
+            base.flags = SPRITE_QUAD_BCS0_REPLACE;
+            let patch = TrueosUi4SpriteQuad {
+                sprite_id: 2,
+                c0_x: 4.0, c0_y: 4.0, c1_x: 8.0, c1_y: 4.0,
+                c2_x: 8.0, c2_y: 8.0, c3_x: 4.0, c3_y: 8.0,
+                ..base
+            };
+            assert!(valid_sprite_quad(base));
+            assert!(!valid_sprite_quad(TrueosUi4SpriteQuad {
+                flags: SPRITE_QUAD_BCS0_REPLACE | SPRITE_QUAD_FLAG_SRC_OVER,
+                ..base
+            }));
+            assert_eq!(draw_quads(&mut frame, vec![base, patch], result), expected);
+            assert_eq!(frame.write_lease.is_some(), retains_lease);
+            assert_eq!(frame.quarantine_reason.is_some(), quarantined);
+            assert_eq!(frame.pending_gpu_release, (expected == 0).then_some(42));
+        }
     }
 }
 '''

@@ -122,13 +122,16 @@ const MAX_BCS0_CACHED_ALPHA_RUNS: usize = 65_536;
 const MAX_BCS0_COMMANDS_PER_BATCH: usize = 160;
 const UI4_SPRITE_BATCH_TIMEOUT_NS: u64 = 1_000_000_000;
 const SPRITE_QUAD_FLAG_SRC_OVER: u32 = 1 << 0;
+/// Copy every premultiplied pixel, including alpha zero, in a BCS0-only frame.
+const SPRITE_QUAD_FLAG_BCS0_OVERWRITE: u32 = 1 << 29;
 /// Explicitly request source-over with an already-premultiplied source.
 const SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR: u32 = 1 << 30;
 /// Explicitly request direct BCS0 copies of unscaled premultiplied RGBA pixels.
 const SPRITE_QUAD_FLAG_BCS0_COPY: u32 = 1 << 31;
+const SPRITE_QUAD_BCS0_REPLACE: u32 = SPRITE_QUAD_FLAG_BCS0_COPY | SPRITE_QUAD_FLAG_BCS0_OVERWRITE;
 
 const SPRITE_QUAD_VALID_FLAGS: u32 =
-    SPRITE_QUAD_FLAG_SRC_OVER | SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR | SPRITE_QUAD_FLAG_BCS0_COPY;
+    SPRITE_QUAD_FLAG_SRC_OVER | SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR | SPRITE_QUAD_BCS0_REPLACE;
 const _: () = {
     assert!(UI4_SCENE_SOURCE_GPU.is_multiple_of(4096));
     assert!(UI4_SCENE_SPRITE_GPU.is_multiple_of(4096));
@@ -5592,6 +5595,8 @@ fn valid_sprite_quad(quad: TrueosUi4SpriteQuad) -> bool {
         && quad.flags & !SPRITE_QUAD_VALID_FLAGS == 0
         && !(quad.flags & SPRITE_QUAD_FLAG_BCS0_COPY != 0
             && quad.flags & SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR != 0)
+        && (quad.flags & SPRITE_QUAD_FLAG_BCS0_OVERWRITE == 0
+            || quad.flags == SPRITE_QUAD_BCS0_REPLACE)
 }
 
 fn sprite_scene_uses_bcs0_clear(quads: &[TrueosUi4SpriteQuad]) -> bool {
@@ -5955,12 +5960,66 @@ const fn sprite_scene_needs_clear(render_overlay: bool, full_frame_copy: bool) -
     !render_overlay && !full_frame_copy
 }
 
+fn bcs0_overwrite_viewport(
+    quads: &[TrueosUi4SpriteQuad],
+    destination: GpgpuRgba8Surface,
+    mut source_for: impl FnMut(u32) -> Option<GpgpuRgba8Surface>,
+) -> Option<crate::intel::bcs_plan::BcsPlan> {
+    use crate::intel::bcs_plan::{BcsOp, BcsPlan, CopyBackend, SourceCache};
+
+    if quads.is_empty() || quads.len() > MAX_BCS0_COMMANDS_PER_BATCH {
+        return None;
+    }
+    let mut operations = Vec::with_capacity(quads.len());
+    for (index, quad) in quads.iter().copied().enumerate() {
+        if quad.flags != SPRITE_QUAD_BCS0_REPLACE
+            || quad.sprite_id == 0
+            || quad.c0_x < 0.0
+            || quad.c0_y < 0.0
+            || quad.c2_x > destination.width as f32
+            || quad.c2_y > destination.height as f32
+        {
+            return None;
+        }
+        let source = source_for(quad.sprite_id)?;
+        let AlphaRectConversion::Exact(rect) = alpha_rect_descriptor(quad, source, destination)
+        else {
+            return None;
+        };
+        if rect.flags != ALPHA_BLEND_WORKLIST_FLAG_COPY
+            || (index == 0
+                && (rect.dst_xy != 0
+                    || rect.size != (destination.width | (destination.height << 16))))
+        {
+            return None;
+        }
+        operations.push(BcsOp::Copy {
+            copy: crate::intel::GucBcs0RgbaCopy {
+                source: bcs0_rgba_surface(source),
+                source_x: rect.src_xy & 0xffff,
+                source_y: rect.src_xy >> 16,
+                destination_x: rect.dst_xy & 0xffff,
+                destination_y: rect.dst_xy >> 16,
+                width: rect.size & 0xffff,
+                height: rect.size >> 16,
+            },
+            backend: CopyBackend::PreferFast,
+            source_cache: SourceCache::WriteBack,
+        });
+    }
+    // The planner inserts the required flush between different fast-copy
+    // sources and admits legacy SRCCOPY when a rectangle cannot use fast copy.
+    let plan = BcsPlan::new(bcs0_rgba_surface(destination), &operations).ok()?;
+    (plan.batches().len() == 1).then_some(plan)
+}
+
 #[cfg(test)]
 mod sprite_overlay_tests {
     use super::{
-        NonzeroAlphaRun, SPRITE_QUAD_FLAG_BCS0_COPY, SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR,
-        TrueosUi4SpriteQuad, bcs0_solid_rect, bcs0_sprite_copies, cache_premultiplied_alpha_runs,
-        rgba8_is_premultiplied, sprite_scene_needs_clear,
+        NonzeroAlphaRun, SPRITE_QUAD_BCS0_REPLACE, SPRITE_QUAD_FLAG_BCS0_COPY,
+        SPRITE_QUAD_FLAG_BCS0_OVERWRITE, SPRITE_QUAD_FLAG_PREMUL_COMPOSITOR,
+        SPRITE_QUAD_FLAG_SRC_OVER, TrueosUi4SpriteQuad, bcs0_overwrite_viewport, bcs0_solid_rect,
+        bcs0_sprite_copies, cache_premultiplied_alpha_runs, rgba8_is_premultiplied, sprite_scene_needs_clear,
         sprite_scene_uses_bcs0_clear, valid_sprite_quad,
     };
     use crate::intel::gpgpu::GpgpuRgba8Surface;
@@ -6082,6 +6141,67 @@ mod sprite_overlay_tests {
             ..bcs_quad
         };
         assert!(valid_sprite_quad(premul));
+        assert!(valid_sprite_quad(TrueosUi4SpriteQuad {
+            flags: SPRITE_QUAD_BCS0_REPLACE,
+            ..bcs_quad
+        }));
+        assert!(!valid_sprite_quad(TrueosUi4SpriteQuad {
+            flags: SPRITE_QUAD_FLAG_BCS0_OVERWRITE,
+            ..bcs_quad
+        }));
+        assert!(!valid_sprite_quad(TrueosUi4SpriteQuad {
+            flags: SPRITE_QUAD_BCS0_REPLACE | SPRITE_QUAD_FLAG_SRC_OVER,
+            ..bcs_quad
+        }));
+    }
+
+    #[test]
+    fn bcs_premultiplied_replacement_plans_full_copy_then_ordered_patch() {
+        let destination = GpgpuRgba8Surface::new(0x400000, 0x400000, 64 * 8, 8, 8, 64).unwrap();
+        let background = GpgpuRgba8Surface::new(0x500000, 0x500000, 64 * 8, 8, 8, 64).unwrap();
+        let patch = GpgpuRgba8Surface::new(0x600000, 0x600000, 64 * 4, 4, 4, 64).unwrap();
+        let copy = |sprite_id, x, y, right, bottom| TrueosUi4SpriteQuad {
+            sprite_id,
+            c0_x: x,
+            c0_y: y,
+            c0_u: 0.0,
+            c0_v: 0.0,
+            c1_x: right,
+            c1_y: y,
+            c1_u: 1.0,
+            c1_v: 0.0,
+            c2_x: right,
+            c2_y: bottom,
+            c2_u: 1.0,
+            c2_v: 1.0,
+            c3_x: x,
+            c3_y: bottom,
+            c3_u: 0.0,
+            c3_v: 1.0,
+            color_rgba: u32::MAX,
+            flags: SPRITE_QUAD_BCS0_REPLACE,
+        };
+        let base_quad = copy(1, 0.0, 0.0, 8.0, 8.0);
+        let patch_quad = copy(2, 4.0, 2.0, 8.0, 6.0);
+        let source_for = |sprite_id| match sprite_id {
+            1 => Some(background),
+            2 => Some(patch),
+            _ => None,
+        };
+        let plan = bcs0_overwrite_viewport(&[base_quad, patch_quad], destination, source_for).unwrap();
+        let [batch] = plan.batches() else {
+            panic!("full replacement and patch must share one retirement");
+        };
+        assert_eq!(batch.copy_count(), 2);
+        assert_eq!(batch.fill_count(), 0);
+        assert_eq!(batch.copied_bytes(), (8 * 8 + 4 * 4) * 4);
+        assert_eq!(batch.explicit_flushes(), 1);
+
+        assert!(bcs0_overwrite_viewport(&[patch_quad], destination, source_for).is_none());
+        let alpha_holes = TrueosUi4SpriteQuad { flags: SPRITE_QUAD_FLAG_BCS0_COPY, ..patch_quad };
+        assert!(bcs0_overwrite_viewport(&[base_quad, alpha_holes], destination, source_for).is_none());
+        let scaled = copy(2, 4.0, 2.0, 7.0, 6.0);
+        assert!(bcs0_overwrite_viewport(&[base_quad, scaled], destination, source_for).is_none());
     }
 
     #[test]
@@ -6189,7 +6309,8 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     // service-owned sources are transparent placeholders; preserve the frame
     // lease and all later text/geometry instead of aborting the whole page.
     upload.quads.retain(|quad| {
-        quad.sprite_id < hull_image_api::SERVICE_SPRITE_BASE
+        quad.flags & SPRITE_QUAD_FLAG_BCS0_OVERWRITE != 0
+            || quad.sprite_id < hull_image_api::SERVICE_SPRITE_BASE
             || surface.sprites.iter().any(|(id, _)| *id == quad.sprite_id)
     });
     let Some(lease) = surface.write_lease else {
@@ -6243,11 +6364,37 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         }
     }
 
-    // A single opaque crop which overwrites the whole lease is a blit, with
-    // no clear, sampling, alpha arithmetic or EU dispatch required.
-    // Explicit copies must already be within the destination. The implicit
-    // optimization can also use a crop clipped by the sprite geometry code.
-    if !render_overlay
+    // An explicit replacement fills the lease with the first retained image;
+    // following rectangles can overwrite even transparent pixels. Keep this
+    // route all-BCS0, with validation before its first hardware submission.
+    let overwrite = upload
+        .quads
+        .iter()
+        .any(|quad| quad.flags & SPRITE_QUAD_FLAG_BCS0_OVERWRITE != 0);
+    let viewport_blit = if overwrite {
+        let plan = (!render_overlay)
+            .then(|| {
+                bcs0_overwrite_viewport(&upload.quads, destination, |sprite_id| {
+                    let (_, BlueprintSpriteSource::Uploaded(source)) =
+                        surface.sprites.iter().find(|(id, _)| *id == sprite_id)?
+                    else {
+                        return None;
+                    };
+                    source.premultiplied.then_some(source.surface)
+                })
+            })
+            .flatten();
+        let Some(plan) = plan else {
+            cancel_blueprint_sprite_frame_without_live_gpu(surface);
+            return ERROR_INVALID;
+        };
+        let batch = &plan.batches()[0];
+        Some((
+            true,
+            batch.source_mappings()[0].0.pitch_bytes,
+            crate::intel::queue_guc_bcs0_plan_batch(batch),
+        ))
+    } else if !render_overlay
         && let [quad] = upload.quads.as_slice()
         && (quad.flags & SPRITE_QUAD_FLAG_BCS0_COPY == 0
             || (quad.c0_x == 0.0
@@ -6263,6 +6410,8 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         && rect.dst_xy == 0
         && rect.size == (destination.width | (destination.height << 16))
     {
+        // An opaque crop can also skip the clear. The implicit optimization
+        // accepts a crop clipped by the sprite geometry code.
         let explicit_bcs_copy = quad.flags & SPRITE_QUAD_FLAG_BCS0_COPY != 0;
         let src = source.surface;
         let bcs_surface = |s: GpgpuRgba8Surface| crate::intel::GucBcs0RgbaSurface {
@@ -6282,7 +6431,16 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
             width: destination.width,
             height: destination.height,
         };
-        match crate::intel::queue_guc_bcs0_rgba_copies(bcs_surface(destination), &[copy]) {
+        Some((
+            explicit_bcs_copy,
+            src.pitch_bytes,
+            crate::intel::queue_guc_bcs0_rgba_copies(bcs_surface(destination), &[copy]),
+        ))
+    } else {
+        None
+    };
+    if let Some((explicit_bcs_copy, source_pitch, submission)) = viewport_blit {
+        match submission {
             Ok(submission) => {
                 let started = crate::chronos::monotonic_nanos();
                 loop {
@@ -6290,11 +6448,21 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                         Ui4SpriteSceneCompletion::Complete { release, .. } => {
                             surface.pending_gpu_release = Some(release);
                             surface.sprite_clear_rgba = None;
-                            static BCS_VIEWPORT_LOGGED: core::sync::atomic::AtomicBool =
-                                core::sync::atomic::AtomicBool::new(false);
-                            if !BCS_VIEWPORT_LOGGED.swap(true, Ordering::Relaxed) {
-                                crate::log_important!(target: "ui4";
-                                    "ui4/blueprint: opaque viewport retired backend=bcs0 command=xy-fast-copy-blt source=retained crop=1:1 clear=0 cpu-pixels=0\n");
+                            if overwrite {
+                                static BCS_OVERWRITE_LOGGED: core::sync::atomic::AtomicBool =
+                                    core::sync::atomic::AtomicBool::new(false);
+                                if !BCS_OVERWRITE_LOGGED.swap(true, Ordering::Relaxed) {
+                                    crate::log_important!(target: "ui4";
+                                        "ui4/blueprint: premultiplied viewport replacement retired backend=bcs0 copies={} crop=1:1 clear=0 shaders=0\n",
+                                        upload.quads.len());
+                                }
+                            } else {
+                                static BCS_VIEWPORT_LOGGED: core::sync::atomic::AtomicBool =
+                                    core::sync::atomic::AtomicBool::new(false);
+                                if !BCS_VIEWPORT_LOGGED.swap(true, Ordering::Relaxed) {
+                                    crate::log_important!(target: "ui4";
+                                        "ui4/blueprint: opaque viewport retired backend=bcs0 command=xy-fast-copy-blt source=retained crop=1:1 clear=0 cpu-pixels=0\n");
+                                }
                             }
                             return 0;
                         }
@@ -6323,7 +6491,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                 // The copy engine accepted no work. Keep the current front
                 // and let the caller acquire a fresh lease for the next view.
                 crate::log_trace!(target: "ui4/blueprint-frame";
-                    "opaque viewport deferred owner={:?} window={} frame={} extent={}x{} backend=bcs0 explicit={} reason=admission-busy action=retry-frame\n",
+                    "copy viewport deferred owner={:?} window={} frame={} extent={}x{} backend=bcs0 explicit={} reason=admission-busy action=retry-frame\n",
                     owner, window_id, lease.frame.raw(), destination.width, destination.height,
                     explicit_bcs_copy,
                 );
@@ -6347,9 +6515,9 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                 | crate::intel::GucBcs0CopySubmitError::InvalidRequest),
             ) => {
                 crate::log_trace!(target: "ui4/blueprint-frame";
-                    "opaque viewport admission failed owner={:?} window={} frame={} extent={}x{} source_pitch={} destination_pitch={} reason={:?} action={}\n",
+                    "copy viewport admission failed owner={:?} window={} frame={} extent={}x{} source_pitch={} destination_pitch={} reason={:?} action={}\n",
                     owner, window_id, lease.frame.raw(), destination.width, destination.height,
-                    src.pitch_bytes, destination.pitch_bytes, error,
+                    source_pitch, destination.pitch_bytes, error,
                     if explicit_bcs_copy { "reject-explicit-copy" } else { "fallback-shader" },
                 );
                 if explicit_bcs_copy {

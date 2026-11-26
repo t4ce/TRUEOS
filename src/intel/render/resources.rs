@@ -1951,37 +1951,89 @@ fn create_resident_churn_forward_with_admission(
     // mapped DMA resources. The aligned code copy is a bounded singleton;
     // service retries cannot leak another VS/PS pair.
     use crate::intel::shader::bfly_patches as bfly;
-    let mut bfly_passes = [None; 3];
-    let (pipeline, program) = if let Some(geometry) = shader.bfly_geometry() {
-        let pipeline = bfly::pipeline(geometry).ok_or("bfly-patches-shaders-missing")?;
+    let geometry = shader.bfly_geometry();
+    let ribbon_pixels = geometry
+        .and_then(bfly::Geometry::ribbon_texture)
+        .map(|kind| {
+            crate::gpu::app_shaders::bytes(kind.package_id(), 4)
+                .filter(|pixels| pixels.len() == kind.byte_len())
+                .map(|pixels| (kind, pixels))
+                .ok_or("bfly-ribbon-texture")
+        })
+        .transpose()?;
+    let mut bfly_passes = [None; 4];
+    let (pipeline, program) = if let Some(geometry) = geometry {
+        let pipeline = match shader {
+            PicassoRetainedShader::BflyTrail { history, .. }
+                if geometry == bfly::Geometry::MixedFlock && history != BflyHistory::Monochrome =>
+            {
+                bfly::tagged_mixed_pipeline()
+            }
+            _ => bfly::pipeline(geometry),
+        }
+        .ok_or("bfly-patches-shaders-missing")?;
+        let layered_wake = shader == PicassoRetainedShader::BflyLayeredWake;
         let primary = ResidentBflyPass {
             pipeline,
-            first_control: 0,
+            first_control: if layered_wake {
+                bfly::LAYERED_CONTROL_VERTICES as u32
+            } else {
+                0
+            },
             control_count: geometry.control_vertices() as u32,
         };
         bfly_passes[0] = Some(primary);
-        if matches!(shader, PicassoRetainedShader::BflyOutlinedInset | PicassoRetainedShader::BflyLayered) {
+        if shader == PicassoRetainedShader::BflyTwilight {
             bfly_passes[1] = Some(ResidentBflyPass {
-                pipeline: bfly::pipeline(bfly::Geometry::InsetOutlineFlock)
-                    .ok_or("bfly-outline-shaders-missing")?,
+                pipeline: bfly::projected_mixed_pipeline()
+                    .ok_or("bfly-twilight-outline-shaders-missing")?,
+                ..primary
+            });
+        } else if shader == PicassoRetainedShader::BflySunrise {
+            bfly_passes[1] = Some(ResidentBflyPass {
+                pipeline: bfly::pipeline(bfly::Geometry::SunriseOutline)
+                    .ok_or("bfly-sunrise-outline-shaders-missing")?,
                 ..primary
             });
         }
-        if shader == PicassoRetainedShader::BflyLayered {
-            bfly_passes[2] = Some(ResidentBflyPass {
-                pipeline: bfly::projected_mixed_pipeline().ok_or("bfly-layer-shaders-missing")?,
-                first_control: primary.control_count,
-                control_count: bfly::Geometry::MixedFlock.control_vertices() as u32,
+        if matches!(
+            shader,
+            PicassoRetainedShader::BflyOutlinedInset
+                | PicassoRetainedShader::BflyLayered
+                | PicassoRetainedShader::BflyLayeredWake
+        ) {
+            let fill_group = usize::from(layered_wake);
+            let fill = if layered_wake {
+                ResidentBflyPass {
+                    pipeline: bfly::pipeline(bfly::Geometry::InsetFillFlock)
+                        .ok_or("bfly-wake-fill-shaders-missing")?,
+                    first_control: 0,
+                    control_count: bfly::Geometry::InsetFillFlock.control_vertices() as u32,
+                }
+            } else {
+                primary
+            };
+            bfly_passes[fill_group] = Some(fill);
+            bfly_passes[fill_group + 1] = Some(ResidentBflyPass {
+                pipeline: bfly::pipeline(bfly::Geometry::InsetOutlineFlock)
+                    .ok_or("bfly-outline-shaders-missing")?,
+                ..fill
             });
+            if layered_wake || shader == PicassoRetainedShader::BflyLayered {
+                bfly_passes[fill_group + 2] = Some(ResidentBflyPass {
+                    pipeline: bfly::projected_mixed_pipeline().ok_or("bfly-layer-shaders-missing")?,
+                    first_control: fill.control_count,
+                    control_count: bfly::Geometry::MixedFlock.control_vertices() as u32,
+                });
+            }
         }
         (*pipeline, None)
     } else {
         let (pipeline, program) = retained_forward_pipeline()?;
         (pipeline, Some(program))
     };
-    // The colored butterfly domain shader exports one flat attribute after
-    // the VUE header and clip position. ANV reads it at offset 1, length 1.
-    let bfly_sbe_read = u8::from(program.is_none() && pipeline.ps.meta.num_varying_inputs != 0);
+    // Bfly exports user varyings after the VUE header and clip position.
+    let bfly_varyings = pipeline.ps.meta.num_varying_inputs;
     let (vertex_bytes, index_bytes) = build_churn_forward_geometry(meshes)?;
     let expanded_index_blob = build_churn_expanded_indices(max_instances)?;
     let index_offset =
@@ -2189,7 +2241,7 @@ fn create_resident_churn_forward_with_admission(
         max_instances,
         transform.is_some() as u8,
     );
-    Ok(ResidentChurnForward {
+    let mut resident = ResidentChurnForward {
         draw_group_count: AtomicU32::new(CHURN_FORWARD_DRAW_COUNT as u32),
         bfly_instances: AtomicU32::new(bfly::PANEL_SIDE_INSTANCES),
         point_width_raw: AtomicU32::new(0),
@@ -2211,6 +2263,7 @@ fn create_resident_churn_forward_with_admission(
         }),
         pipeline,
         bfly_passes,
+        ribbon_texture: None,
         shader,
         sampled_material: false,
         native_vf,
@@ -2222,8 +2275,8 @@ fn create_resident_churn_forward_with_admission(
             },
             vs_urb_output_length_override: Some(program.map_or(bfly::VS_URB_OUTPUT_LENGTH, |_| 1)),
             vs_urb_read_length: program.map_or(bfly::VS_URB_READ_LENGTH, |_| 1),
-            sbe_read_offset: program.map_or(bfly_sbe_read, |program| program.fixed_function().sbe_read_offset),
-            sbe_read_length: program.map_or(bfly_sbe_read, |program| program.fixed_function().sbe_read_length),
+            sbe_read_offset: program.map_or(u8::from(bfly_varyings != 0), |program| program.fixed_function().sbe_read_offset),
+            sbe_read_length: program.map_or(bfly_varyings.div_ceil(2), |program| program.fixed_function().sbe_read_length),
             force_sbe_read_offset: true,
             force_sbe_read_length: true,
             force_vs_with_vf_synthesized_vue: false,
@@ -2238,7 +2291,27 @@ fn create_resident_churn_forward_with_admission(
         transform,
         transform_unavailable_reason,
         max_instances,
-    })
+    };
+    if let Some((kind, pixels)) = ribbon_pixels {
+        let texture = match allocate_resident_render_buffer_for_carrier(carrier, pixels.len()) {
+            Ok(texture) => texture,
+            Err(error) => {
+                let _ = release_resident_churn_forward(&resident);
+                return Err(error);
+            }
+        };
+        if !texture.write_and_flush(0, pixels) {
+            let _ = release_resident_render_buffer(&texture);
+            let _ = release_resident_churn_forward(&resident);
+            return Err("bfly-ribbon-texture-upload");
+        }
+        crate::log_info!(target: "render";
+            "bfly {} resident upload bytes={} gpu=0x{:X}\n",
+            kind.label(), pixels.len(), texture.gpu_base(),
+        );
+        resident.ribbon_texture = Some((kind, texture));
+    }
+    Ok(resident)
 }
 
 
@@ -2279,10 +2352,14 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         || bfly_geometry.is_some_and(|geometry| {
             vertex_stride != 12
                 || max_instances != 1
-                || !if shader == PicassoRetainedShader::BflyLayered {
-                    crate::intel::shader::bfly_patches::valid_layered_vertices(vertices, indices)
-                } else {
-                    geometry.valid_vertices(vertices, indices)
+                || !match shader {
+                    PicassoRetainedShader::BflyLayered => {
+                        crate::intel::shader::bfly_patches::valid_layered_vertices(vertices, indices)
+                    }
+                    PicassoRetainedShader::BflyLayeredWake => {
+                        crate::intel::shader::bfly_patches::valid_layered_wake_vertices(vertices, indices)
+                    }
+                    _ => geometry.valid_vertices(vertices, indices),
                 }
         })
     {
@@ -2773,6 +2850,26 @@ fn prepare_resident_churn_forward_draw(
             },
         )
     };
+    let ribbon_texture = resident.ribbon_texture.as_ref().filter(|_| group == 0);
+    let sampled_texture = if let Some((kind, texture)) = ribbon_texture {
+        Some(TriangleSampledTextureBinding {
+            gpu_addr: texture.gpu_base(),
+            width: kind.width(),
+            height: kind.height(),
+            pitch: kind.pitch(),
+            sampler_flags: 0,
+            ribbon: Some(*kind),
+        })
+    } else {
+        sampled_material.map(|material| TriangleSampledTextureBinding {
+            gpu_addr: material.base_color.storage.gpu_base(),
+            width: material.base_color.width,
+            height: material.base_color.height,
+            pitch: material.base_color.pitch,
+            sampler_flags: material.base_color.sampler_flags,
+            ribbon: None,
+        })
+    };
     Some(TriangleDrawPrep {
         vue_capture: false,
 
@@ -2790,13 +2887,7 @@ fn prepare_resident_churn_forward_draw(
                 + (group * trueos_helio::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
         ),
         native: Some(resident.native_vf),
-        sampled_texture: sampled_material.map(|material| TriangleSampledTextureBinding {
-            gpu_addr: material.base_color.storage.gpu_base(),
-            width: material.base_color.width,
-            height: material.base_color.height,
-            pitch: material.base_color.pitch,
-            sampler_flags: material.base_color.sampler_flags,
-        }),
+        sampled_texture,
         metallic_roughness_texture: sampled_material.and_then(|material| {
             material
                 .metallic_roughness
@@ -2806,6 +2897,7 @@ fn prepare_resident_churn_forward_draw(
                     height: texture.height,
                     pitch: texture.pitch,
                     sampler_flags: texture.sampler_flags,
+                    ribbon: None,
                 })
         }),
         pbr_material: sampled_material
@@ -2824,6 +2916,7 @@ fn prepare_resident_churn_forward_draw(
                         height: texture.height,
                         pitch: texture.pitch,
                         sampler_flags: texture.sampler_flags,
+                        ribbon: None,
                     })
                 }),
                 parameters: material.parameters,
@@ -2895,6 +2988,9 @@ fn prepare_resident_churn_expanded_draw(
 
 pub(crate) fn release_resident_churn_forward(resident: &ResidentChurnForward) -> bool {
     let mut released = true;
+    if let Some((_, texture)) = &resident.ribbon_texture {
+        released &= release_resident_render_buffer(texture);
+    }
     released &= release_resident_render_buffer(&resident.indirect_args);
     released &= release_resident_render_buffer(&resident.compacted_indices);
     released &= release_resident_render_buffer(&resident.instances);

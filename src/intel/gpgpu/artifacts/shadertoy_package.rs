@@ -28,8 +28,8 @@ pub(crate) const SHADERTOY_BFLY_UNDERLAY_PACKAGE: ShaderToyPackageContract =
 pub(crate) const SHADERTOY_BFLY_CELESTIAL_PACKAGE: ShaderToyPackageContract =
     ShaderToyPackageContract {
         shader_id: super::SHADERTOY_SHADER_BFLY_CELESTIAL,
-        bin_bytes: 20_840,
-        spv_bytes: 12_636,
+        bin_bytes: 25_784,
+        spv_bytes: 16_108,
     };
 
 pub(crate) const SKYBOX_SAMPLE_RGB565_PACKAGE: ShaderToyPackageContract =

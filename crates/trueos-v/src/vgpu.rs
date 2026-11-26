@@ -468,6 +468,14 @@ pub const RETAINED_VERTEX_LAYOUT_BFLY_OUTLINED_INSET_FLOCK: u32 = 26;
 pub const RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_FLOCK: u32 = 27;
 /// Mixed Bfly control points used for swept ribbons and the live RGB outlines.
 pub const RETAINED_VERTEX_LAYOUT_BFLY_TWILIGHT_FLOCK: u32 = 28;
+/// Closed Bfly contours, textured wake ribbons, and matching live outlines.
+/// Patch tags use bit 0 for the closure, bit 2 for artwork, and bits 3+ for cubic order.
+/// `previous_view_projection[13..16]` contains Sunrise, Twilight, and Universe weights.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_SUNRISE_FLOCK: u32 = 29;
+/// Textured wake behind the layered inset and original outlines.
+/// Three 40-control sections contain the closed inset, original outline, and tagged wake.
+/// Each section uses local indices 0 through 39. Wake weights match the Sunrise layout.
+pub const RETAINED_VERTEX_LAYOUT_BFLY_LAYERED_WAKE_FLOCK: u32 = 30;
 pub const RETAINED_TOPOLOGY_BFLY_PATCHLIST_4: u32 = 0x23;
 /// Experimental baked beveled cube: one Float3 origin, 44 zero indices.
 /// Only valid with RETAINED_TOPOLOGY_CUBE_PATCHLIST_1. HS expands each patch
