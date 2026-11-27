@@ -1,0 +1,51 @@
+// Intel TGL PRM, Vol. 5, "Uncompressed Multisampled Surfaces".
+// Gen12 Y0 color MSS stores each sample in a separate tiled 2D slice.
+// qpitch is tile-row aligned, so a full slice is a contiguous byte interval.
+static inline uint y0_pixel_offset(uint x, uint y, uint pitch_bytes)
+{
+    const uint byte_x = x * 4u;
+    const uint tile_row = (y >> 5u) * pitch_bytes * 32u;
+    const uint tile_column = (byte_x >> 7u) * 4096u;
+    const uint oword_column = (byte_x & 0x70u) << 5u;
+    const uint tile_y = (y & 31u) << 4u;
+    return tile_row + tile_column + oword_column + tile_y + (byte_x & 15u);
+}
+
+__attribute__((intel_reqd_sub_group_size(16)))
+__kernel void resolve_gen12_y0_msaa4_rgba8(
+    __global const uint *src,
+    __global uint *dst,
+    uint src_pitch_bytes,
+    uint dst_pitch_bytes,
+    uint slice_bytes,
+    uint swap_red_blue,
+    uint width,
+    uint height)
+{
+    const uint x = get_global_id(0);
+    const uint y = get_global_id(1);
+    if (x >= width || y >= height) {
+        return;
+    }
+
+    const uint offset = y0_pixel_offset(x, y, src_pitch_bytes) >> 2u;
+    const uint slice = slice_bytes >> 2u;
+    const uint c0 = src[offset];
+    const uint c1 = src[offset + slice];
+    const uint c2 = src[offset + 2u * slice];
+    const uint c3 = src[offset + 3u * slice];
+
+    // Sum two separate 16-bit lanes per register. Four 8-bit components
+    // never cross into the adjacent lane, even when rounding.
+    const uint lane_mask = 0x00ff00ffu;
+    const uint even = (((c0 & lane_mask) + (c1 & lane_mask)
+                      + (c2 & lane_mask) + (c3 & lane_mask) + 0x00020002u)
+                     >> 2u) & lane_mask;
+    const uint odd = ((((c0 >> 8u) & lane_mask) + ((c1 >> 8u) & lane_mask)
+                     + ((c2 >> 8u) & lane_mask) + ((c3 >> 8u) & lane_mask) + 0x00020002u)
+                    >> 2u) & lane_mask;
+    const uint red_blue = swap_red_blue != 0u
+        ? ((even & 0xffu) << 16u) | (even >> 16u)
+        : even;
+    dst[y * (dst_pitch_bytes >> 2u) + x] = red_blue | (odd << 8u);
+}

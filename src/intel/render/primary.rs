@@ -789,16 +789,18 @@ static RESIDENT_SCENE_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex
 static RESIDENT_SCENE_LARGE_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_MSAA_COLOR: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
 static RESIDENT_SCENE_MSAA_DEPTH: Mutex<Option<ResidentSceneDepthAllocation>> = Mutex::new(None);
+static RESIDENT_SCENE_MSAA_MAP_QUARANTINED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_SCENE_DIRECT_UI4_TARGETS: Mutex<
     [Option<ResidentSceneDirectUi4Mapping>; RESIDENT_UI4_DIRECT_MAPPING_COUNT],
 > = Mutex::new([None; RESIDENT_UI4_DIRECT_MAPPING_COUNT]);
 static RESIDENT_SCENE_DEPTH_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
-static RESIDENT_SCENE_MSAA_FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_SCENE_MSAA_CONTRACT_LOGGED: AtomicBool = AtomicBool::new(false);
+static RESIDENT_SCENE_MSAA_RESOLVE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone)]
 struct ResidentSceneMsaaColorTarget {
     surface: crate::intel::gpgpu::GpgpuRgba8Surface,
+    qpitch_rows: u32,
 }
 
 fn prepare_resident_scene_direct_ui4_target(
@@ -974,6 +976,9 @@ fn prepare_resident_scene_msaa_allocation(
     if required_bytes == 0 || required_bytes > 64 * 1024 * 1024 {
         return Err("resident-scene-msaa-shape");
     }
+    if RESIDENT_SCENE_MSAA_MAP_QUARANTINED.load(Ordering::Acquire) {
+        return Err("indexed-msaa4-scratch-unavailable");
+    }
     let mut resident = slot.lock();
     if let Some(allocation) = *resident
         && allocation.storage_bytes >= required_bytes
@@ -984,24 +989,23 @@ fn prepare_resident_scene_msaa_allocation(
     let Some((storage_phys, storage_virt)) =
         crate::dma::alloc_ppgtt(required_bytes, crate::intel::WARM_ALIGN)
     else {
-        return Err("resident-scene-msaa-alloc");
+        return Err("indexed-msaa4-scratch-unavailable");
     };
-    let previous = *resident;
-    if let Some(previous) = previous
+    if let Some(previous) = *resident
         && !unmap_render_ppgtt_range(gpu_addr, previous.storage_bytes)
     {
         crate::dma::dealloc(storage_virt, required_bytes);
-        return Err("resident-scene-msaa-unmap");
+        // Keep the old allocation pinned if its translations could only be
+        // partly removed. The ordinary 1x path has separate storage.
+        RESIDENT_SCENE_MSAA_MAP_QUARANTINED.store(true, Ordering::Release);
+        return Err("indexed-msaa4-scratch-unavailable");
+    }
+    if let Some(previous) = resident.take() {
+        crate::dma::dealloc(previous.storage_virt, previous.storage_bytes);
     }
     if !map_render_ppgtt_range(gpu_addr, storage_phys, required_bytes) {
-        if let Some(previous) = previous {
-            let _ = map_render_ppgtt_range(gpu_addr, previous.storage_phys, previous.storage_bytes);
-        }
         crate::dma::dealloc(storage_virt, required_bytes);
-        return Err("resident-scene-msaa-map");
-    }
-    if let Some(previous) = previous {
-        crate::dma::dealloc(previous.storage_virt, previous.storage_bytes);
+        return Err("indexed-msaa4-scratch-unavailable");
     }
     let allocation = ResidentSceneDepthAllocation {
         storage_phys,
@@ -1011,7 +1015,7 @@ fn prepare_resident_scene_msaa_allocation(
     *resident = Some(allocation);
     crate::log_info!(
         target: "render";
-        "resident-scene-msaa: allocated kind={} phys=0x{:X} gpu=0x{:X} bytes=0x{:X} samples=4 tiling=tile64\n",
+        "resident-scene-msaa: allocated kind={} phys=0x{:X} gpu=0x{:X} bytes=0x{:X} samples=4\n",
         label,
         storage_phys,
         gpu_addr,
@@ -1025,12 +1029,13 @@ fn prepare_resident_scene_msaa_color(
     target_width: usize,
     target_height: usize,
 ) -> Result<ResidentSceneMsaaColorTarget, &'static str> {
-    if !device_is_gfx125(device_id) {
-        return Err("resident-scene-msaa-device");
-    }
-    let (pitch_bytes, _aligned_height, storage_bytes) =
+    let (pitch_bytes, qpitch_rows, storage_bytes) = if device_is_gfx125(device_id) {
         resident_scene_msaa_color_layout(target_width, target_height)
-            .ok_or("resident-scene-msaa-shape")?;
+    } else {
+        gen12_msaa4_layout(target_width, target_height)
+            .map(|layout| (layout.color_pitch_bytes, layout.color_rows, layout.color_bytes))
+    }
+    .ok_or("resident-scene-msaa-shape")?;
     let allocation = prepare_resident_scene_msaa_allocation(
         &RESIDENT_SCENE_MSAA_COLOR,
         GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE,
@@ -1046,7 +1051,10 @@ fn prepare_resident_scene_msaa_color(
         u32::try_from(pitch_bytes).map_err(|_| "resident-scene-msaa-shape")?,
     )
     .ok_or("resident-scene-msaa-surface")?;
-    Ok(ResidentSceneMsaaColorTarget { surface })
+    Ok(ResidentSceneMsaaColorTarget {
+        surface,
+        qpitch_rows: u32::try_from(qpitch_rows).map_err(|_| "resident-scene-msaa-shape")?,
+    })
 }
 
 fn resident_scene_msaa_color_layout(
@@ -1082,12 +1090,13 @@ fn prepare_resident_scene_msaa_depth(
     target_width: usize,
     target_height: usize,
 ) -> Result<TriangleDepthConfig, &'static str> {
-    if !device_is_gfx125(device_id) {
-        return Err("resident-scene-msaa-depth-device");
-    }
-    let (pitch_bytes, aligned_sample_height, storage_bytes) =
+    let (pitch_bytes, aligned_sample_height, storage_bytes) = if device_is_gfx125(device_id) {
         resident_scene_msaa_depth_layout(target_width, target_height)
-            .ok_or("resident-scene-msaa-depth-shape")?;
+    } else {
+        gen12_msaa4_layout(target_width, target_height)
+            .map(|layout| (layout.depth_pitch_bytes, layout.depth_rows, layout.depth_bytes))
+    }
+    .ok_or("resident-scene-msaa-depth-shape")?;
     let _allocation = prepare_resident_scene_msaa_allocation(
         &RESIDENT_SCENE_MSAA_DEPTH,
         GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE,
@@ -1286,19 +1295,6 @@ fn copy_resident_scene_output(
     }
 }
 
-/// Render a retained 4x scene directly into a leased UI4 RGBA surface.
-///
-/// The MSAA resolve and analytical coverage passes write the producer's back
-/// buffer themselves. No full-frame CPU readback or staging allocation is
-/// performed. On hardware without the 4x path, the ordinary linear scratch
-/// target is copied by BCS, with compute fallback on admission rejection.
-/// An incomplete frame provides no release fence: the caller must retain its
-/// destination lease rather than publish, recycle, or free that allocation.
-
-/// GridPaper's complete direct-render operation. Geometry targets the leased
-/// UI4 allocation directly; analytical coverage and cursor rectangles append
-/// their writes before one final scanout release is minted.
-
 /// Render an ordered immediate indexed scene directly into one UI4 surface.
 /// The public immediate pipeline has no depth-state descriptor, so draw order
 /// is authoritative and this path must not allocate or silently enable depth.
@@ -1344,6 +1340,75 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_dep
         false,
         true,
         ResidentSceneRasterQuality::SingleSample,
+        destination.width as usize,
+        destination.height as usize,
+        ResidentSceneFrameOutput::DirectGpuSurface(destination),
+    )
+}
+
+/// Admission is deliberately limited to the physical revision used for this
+/// bring-up. The compatibility override can alias a different GPU to ADL-S.
+pub(crate) fn indexed_msaa4_target_supported(
+    device_id: u16,
+    revision: u8,
+    width: u32,
+    height: u32,
+) -> bool {
+    static RAW_ADL_S: spin::Once<bool> = spin::Once::new();
+    if !gen12_msaa4_device(device_id, revision)
+        || !v::vgpu::indexed_msaa4_extent_supported(width, height)
+        || crate::pci::experimental_tgl_9a49_active()
+    {
+        return false;
+    }
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    dev.device_id == device_id
+        && dev.revision_id == revision
+        && *RAW_ADL_S.call_once(|| {
+            crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0) == 0x4680_8086
+                && crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 8) as u8 == 0x0c
+        })
+}
+
+/// Rasterize into private four-sample color/depth storage and resolve into
+/// the leased UI4 back buffer. Only a retired resolve releases the lease.
+pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_msaa4_direct_to_surface(
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    if !destination.is_valid()
+        || !resident_scene_target_extent_supported(
+            destination.width as usize,
+            destination.height as usize,
+            true,
+        )
+        || clear_rgba.is_none()
+        || !matches!(draws, [draw] if draw.depth_flags.is_none()
+            && draw.topology == ResidentScenePrimitiveTopology::TriangleList
+            && draw.fragment_contract == ResidentSceneFragmentContract::ClipPosition3UvTexture
+            && draw.sampled_texture.is_some())
+        || !crate::intel::claimed_device().is_some_and(|dev| {
+            indexed_msaa4_target_supported(
+                dev.device_id,
+                dev.revision_id,
+                destination.width,
+                destination.height,
+            )
+        })
+    {
+        return Err("indexed-msaa4-shape");
+    }
+    submit_resident_triangle_scene_capture(
+        draws,
+        clear_rgba,
+        diagnostic_logs,
+        false,
+        true,
+        ResidentSceneRasterQuality::Multisample4x,
         destination.width as usize,
         destination.height as usize,
         ResidentSceneFrameOutput::DirectGpuSurface(destination),
@@ -4017,34 +4082,23 @@ fn submit_resident_scene_capture_inner_for_carrier(
         if carrier.is_none() && !ensure_smoke_buffers_mapped(dev, warm) {
             return Err("render-map");
         }
-        let raster_quality = if !resident_scene_legacy_extent(target_width, target_height) {
-            // The fixed 64 MiB MSAA windows retain their proven legacy bound.
-            // Native direct frames use their larger single-sample aliases.
-            ResidentSceneRasterQuality::SingleSample
-        } else if carrier.is_some()
-            && raster_quality == ResidentSceneRasterQuality::Multisample4x
-        {
-            // Phase 1 owns a separate depth/state/target cache; its MSAA
-            // color/depth cache is not admitted until it too is carrier-local.
-            ResidentSceneRasterQuality::SingleSample
-        } else if raster_quality == ResidentSceneRasterQuality::Multisample4x
-            && !device_is_gfx125(warm.device_id)
-        {
-            if !RESIDENT_SCENE_MSAA_FALLBACK_LOGGED.swap(true, Ordering::AcqRel) {
-                crate::log_warn!(
-                    target: "render";
-                    "resident-scene-msaa: requested=4 effective=1 reason=tile64-msaa-requires-gfx125 device=0x{:04X}\n",
+        let msaa4 = raster_quality == ResidentSceneRasterQuality::Multisample4x;
+        if msaa4
+            && (carrier.is_some()
+                || drawable_depth.is_some()
+                || load_color
+                || !matches!(frame_output, ResidentSceneFrameOutput::DirectGpuSurface(_))
+                || !indexed_msaa4_target_supported(
                     warm.device_id,
-                );
-            }
-            ResidentSceneRasterQuality::SingleSample
-        } else {
-            raster_quality
-        };
-        diagnostic_stage = "msaa-color";
-        let msaa_color = if carrier.is_none()
-            && raster_quality == ResidentSceneRasterQuality::Multisample4x
+                    warm.revision_id,
+                    target_width as u32,
+                    target_height as u32,
+                ))
         {
+            return Err("indexed-msaa4-shape");
+        }
+        diagnostic_stage = "msaa-color";
+        let msaa_color = if msaa4 {
             Some(prepare_resident_scene_msaa_color(warm.device_id, target_width, target_height)?)
         } else {
             None
@@ -4090,9 +4144,9 @@ fn submit_resident_scene_capture_inner_for_carrier(
         {
             crate::log_info!(
                 target: "render";
-                "resident-scene-msaa: contract enabled samples=4 color=rgba8-unorm/tile64 color_pitch={} depth={} raster=on-pattern sample_mask=0xF resolve=gpgpu-single-dispatch/linear-rgba8 target={}x{} mesh_storage=unchanged\n",
+                "resident-scene-msaa: samples=4 color=rgba8-unorm/y0-mss color_pitch={} color_qpitch={} depth=d32/y0-ims target={}x{}\n",
                 target.surface.pitch_bytes,
-                if opaque_depth_enabled { "d32-float/tile64-ims" } else { "none" },
+                target.qpitch_rows,
                 target_width,
                 target_height,
             );
@@ -4112,7 +4166,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
         let depth_config = if let Some(depth) = drawable_depth {
             depth.config
         } else if opaque_depth_enabled {
-            Some(if raster_quality == ResidentSceneRasterQuality::Multisample4x {
+            Some(if msaa4 {
                 prepare_resident_scene_msaa_depth(warm.device_id, target_width, target_height)?
             } else {
                 match carrier {
@@ -4272,9 +4326,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
         } else {
             None
         };
-        // On the native 4x path, resolve directly into the UI4 producer back
-        // buffer. The scratch surface remains the compatibility target for
-        // single-sample hardware and for CPU readback consumers.
+        // The multisample path resolves into the exact leased UI4 back buffer.
         let output = match (frame_output, msaa_color) {
             (ResidentSceneFrameOutput::GpuSurface(destination), Some(_)) => destination,
             (ResidentSceneFrameOutput::GpuSurfaceDeferredRelease(destination), Some(_)) => {
@@ -4286,8 +4338,46 @@ fn submit_resident_scene_capture_inner_for_carrier(
             }
             _ => scratch_output.ok_or("resident-scene-resolve-surface")?,
         };
-        let resolved = geometry_complete && msaa_color.is_none();
+        let msaa_release = if let Some(target) = msaa_color {
+            diagnostic_stage = "msaa-resolve";
+            if geometry_complete {
+                let resolve = crate::intel::gpgpu::resolve_gen12_y0_msaa4_rgba8(
+                    target.surface,
+                    target.qpitch_rows,
+                    output,
+                );
+                if !resolve.submitted && !resolve.ok {
+                    // Geometry retired into private scratch. Nothing has
+                    // written the leased destination, and a retry can use 1x.
+                    return Err("indexed-msaa4-resolve-unavailable");
+                }
+                let release = resolve
+                    .release
+                    .filter(|release| resolve.ok && release.matches(output.phys, output.bytes));
+                if release.is_none() {
+                    retain_scratch = true;
+                    RESIDENT_SCENE_COPY_QUARANTINED.store(true, Ordering::Release);
+                    crate::log_error!(target: "render";
+                        "resident-scene-msaa: resolve retirement uncertain, retaining scratch and destination\n");
+                }
+                release
+            } else {
+                retain_scratch = true;
+                RESIDENT_SCENE_COPY_QUARANTINED.store(true, Ordering::Release);
+                None
+            }
+        } else {
+            None
+        };
+        let resolved = geometry_complete && (msaa_color.is_none() || msaa_release.is_some());
         let resolve_finished_ns = crate::chronos::monotonic_nanos();
+        if msaa_release.is_some() && !RESIDENT_SCENE_MSAA_RESOLVE_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::log_important!(target: "render";
+                "resident-scene-msaa: samples=4 resolve=retired target={}x{} resolve_us={}\n",
+                target_width, target_height,
+                resolve_finished_ns.saturating_sub(geometry_finished_ns) / 1_000,
+            );
+        }
         let coverage_submits = 0usize;
         let coverage_walkers = 0usize;
         let coverage_finished_ns = resolve_finished_ns;
@@ -4335,7 +4425,6 @@ fn submit_resident_scene_capture_inner_for_carrier(
             Some(ResidentSceneIncompleteStage::Geometry)
         } else if !resolved {
             Some(ResidentSceneIncompleteStage::Resolve)
-
         } else if present_copy_performed && !frame_complete {
             Some(ResidentSceneIncompleteStage::PresentCopy)
         } else if !frame_complete {
@@ -4364,14 +4453,12 @@ fn submit_resident_scene_capture_inner_for_carrier(
             // pixels written rather than pretending that no frame changed.
             changed_pixels = target_width.saturating_mul(target_height);
         }
-        // The direct single-sample path already ends in the renderer's RCS
-        // release packet. Multi-pass output receives a dedicated finalizer
-        // after resolve/coverage/copy so an older completion marker can never
-        // be promoted into a display-ownership proof.
+        // Direct output needs the last writer's release: the geometry fence
+        // at 1x, or the exact destination's resolve fence at 4x.
         let release_fence = match frame_output {
             ResidentSceneFrameOutput::DirectGpuSurface(destination)
                 if frame_complete
-                    && msaa_color.is_none()
+                    && (msaa_color.is_none() || msaa_release.is_some())
                     && !present_copy_performed =>
             {
                 Some(resident_scene_release(destination))

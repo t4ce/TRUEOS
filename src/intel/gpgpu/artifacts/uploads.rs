@@ -427,6 +427,7 @@ pub(crate) fn reload_known_kernel_artifact(
 fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
     match name {
         COPY_RECT_RGBA8_KERNEL_NAME
+        | RESOLVE_GEN12_Y0_MSAA4_RGBA8_KERNEL_NAME
         | ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME
         | UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME
         | SKYBOX_SAMPLE_RGB565_KERNEL_NAME

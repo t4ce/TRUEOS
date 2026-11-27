@@ -1460,14 +1460,6 @@ fn write_triangle_probe_state_with_flush(
     let surface = &mut dwords[surface_state_offset / 4..surface_state_offset / 4 + 16];
     surface.fill(0);
     let resident_msaa4 = draw.uses_resident_scene_msaa4();
-    if resident_msaa4 && !device_is_gfx125(warm.device_id) {
-        return Err("probe-msaa4-device");
-    }
-    let surface_halign = if resident_msaa4 {
-        3
-    } else {
-        backend_probe_mode.surface_halign_raw(warm.device_id)
-    };
     surface.copy_from_slice(&triangle_render_target_surface_state(
         TriangleRenderTargetSurface {
             format: draw.rt_surface_format,
@@ -1478,7 +1470,8 @@ fn write_triangle_probe_state_with_flush(
             msaa4: resident_msaa4,
         },
         warm.device_id,
-        surface_halign,
+        warm.revision_id,
+        backend_probe_mode.surface_halign_raw(warm.device_id),
     )?);
     intel_render_verbose_log!(
         "probe-surface-rt backend={} surf0=0x{:08X} format={} halign_raw={} valign_raw={} size={}x{} pitch=0x{:X} rt_gpu=0x{:X} samples={} tiling={} note=render-target-descriptor\n",
@@ -1492,7 +1485,13 @@ fn write_triangle_probe_state_with_flush(
         draw.rt_pitch,
         draw.rt_gpu_addr,
         if resident_msaa4 { 4 } else { 1 },
-        if resident_msaa4 { "tile64" } else { "linear" },
+        if !resident_msaa4 {
+            "linear"
+        } else if device_is_gfx125(warm.device_id) {
+            "tile64"
+        } else {
+            "y0"
+        },
     );
 
     if let Some(native) = draw.native {
@@ -1768,6 +1767,146 @@ fn write_triangle_probe_state_with_flush(
 // Captured EU messages: sampler loads use BTI2; state block reads use BTI3.
 // Surface records are RT0, raw GL state, sampled RGBA texture.
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Gen12Msaa4Layout {
+    color_pitch_bytes: usize,
+    color_rows: usize,
+    color_bytes: usize,
+    depth_pitch_bytes: usize,
+    depth_rows: usize,
+    depth_bytes: usize,
+}
+
+const fn gen12_msaa4_device(device_id: u16, revision_id: u8) -> bool {
+    device_id == 0x4680 && revision_id == 0x0c
+}
+
+fn gen12_msaa4_layout(width: usize, height: usize) -> Option<Gen12Msaa4Layout> {
+    if width == 0
+        || height == 0
+        || width > RESIDENT_SCENE_TARGET_WIDTH
+        || height > RESIDENT_SCENE_TARGET_HEIGHT
+    {
+        return None;
+    }
+
+    const Y0_TILE_WIDTH_BYTES: usize = 128;
+    const Y0_TILE_HEIGHT_ROWS: usize = 32;
+    // Gen12 uncompressed MSS color stores one Y0 slice per sample. QPitch
+    // describes the distance between slices in units of four rows.
+    let color_pitch_bytes = crate::intel::align_up(width * 4, Y0_TILE_WIDTH_BYTES)?;
+    let color_rows = crate::intel::align_up(height, Y0_TILE_HEIGHT_ROWS)?;
+    // Gen12 D32 IMS interleaves a 2x2 sample grid into the logical extent.
+    // Tile alignment also covers the required even-pixel alignment.
+    let depth_pitch_bytes = crate::intel::align_up(width * 2 * 4, Y0_TILE_WIDTH_BYTES)?;
+    let depth_rows = crate::intel::align_up(height * 2, Y0_TILE_HEIGHT_ROWS)?;
+    Some(Gen12Msaa4Layout {
+        color_pitch_bytes,
+        color_rows,
+        color_bytes: color_pitch_bytes * color_rows * 4,
+        depth_pitch_bytes,
+        depth_rows,
+        depth_bytes: depth_pitch_bytes * depth_rows,
+    })
+}
+
+fn gen12_msaa4_depth_matches_target(
+    width: u32,
+    height: u32,
+    depth: Option<TriangleDepthConfig>,
+) -> bool {
+    let Some(layout) = gen12_msaa4_layout(width as usize, height as usize) else {
+        return false;
+    };
+    depth.is_some_and(|depth| {
+        depth.gpu_addr == GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE
+            && depth.width == width
+            && depth.height == height
+            && depth.pitch_bytes as usize == layout.depth_pitch_bytes
+            && depth.qpitch_rows_div4 as usize == layout.depth_rows / 4
+            && depth.hiz.is_none()
+            && !depth.hiz_clear
+    })
+}
+
+fn gen12_msaa4_raster_dw1(raster_dw1: u32) -> u32 {
+    const FORCE_MULTISAMPLING: u32 = 1 << 14;
+    const FORCED_SAMPLE_COUNT: u32 = 0b111 << 18;
+    const DX_MULTISAMPLE_ENABLE: u32 = 1 << 12;
+    const DX_MULTISAMPLE_ON_PATTERN: u32 = 0b11 << 10;
+    (raster_dw1 & !(FORCE_MULTISAMPLING | FORCED_SAMPLE_COUNT))
+        | DX_MULTISAMPLE_ENABLE
+        | DX_MULTISAMPLE_ON_PATTERN
+}
+
+fn triangle_sample_state(
+    backend_probe_mode: BackendProbeMode,
+    resident_msaa4: bool,
+    bfly_patches: bool,
+    point_raster: bool,
+) -> (u32, u32) {
+    let multisample_dw1 = if resident_msaa4 {
+        2 << 1
+    } else {
+        backend_probe_mode.multisample_dw1()
+    };
+    let sample_mask_dw = if bfly_patches {
+        0xffff
+    } else if resident_msaa4 {
+        0xF
+    } else if matches!(backend_probe_mode, BackendProbeMode::MesaLike) {
+        mesa_sample_mask_dw(point_raster)
+    } else {
+        backend_probe_mode.sample_mask_dw()
+    };
+    (multisample_dw1, sample_mask_dw)
+}
+
+fn triangle_sample_pattern(resident_msaa4: bool) -> [u32; 8] {
+    if resident_msaa4 {
+        [
+            0x8888_8888,
+            0x8888_8888,
+            0x8888_8888,
+            0x8888_8888,
+            0x8888_8888,
+            0x8888_8888,
+            0xAE2A_E662,
+            0x0088_44CC,
+        ]
+    } else {
+        [0x8888_8888; 8]
+    }
+}
+
+fn triangle_ps_blend_dw1(
+    backend_probe_mode: BackendProbeMode,
+    blend_mode: TriangleBlendProbeMode,
+) -> u32 {
+    const BLEND_FACTOR_ONE: u32 = 0x01;
+    const BLEND_FACTOR_SRC_ALPHA: u32 = 0x03;
+    const BLEND_FACTOR_INV_SRC_ALPHA: u32 = 0x13;
+    const WRITABLE_RT: u32 = 1 << 30;
+    if backend_probe_mode.disable_ps_contract()
+        || backend_probe_mode.disable_ps_blend_writeable_rt()
+    {
+        return 0;
+    }
+    let source = match blend_mode {
+        TriangleBlendProbeMode::StraightAlpha => BLEND_FACTOR_SRC_ALPHA,
+        TriangleBlendProbeMode::PremultipliedAlpha => BLEND_FACTOR_ONE,
+        _ => return WRITABLE_RT,
+    };
+    // Color blending and independent alpha operate on covered samples.
+    WRITABLE_RT
+        | (1 << 29)
+        | (BLEND_FACTOR_ONE << 24)
+        | (BLEND_FACTOR_INV_SRC_ALPHA << 19)
+        | (source << 14)
+        | (BLEND_FACTOR_INV_SRC_ALPHA << 9)
+        | (1 << 7)
+}
+
 #[derive(Copy, Clone)]
 struct TriangleRenderTargetSurface {
     format: u32,
@@ -1778,26 +1917,50 @@ struct TriangleRenderTargetSurface {
     msaa4: bool,
 }
 
-/// Encode the native color-target descriptor identically for R8 and RGBA;
-/// pitch is already expressed in bytes by the target's owner.
+/// Encode a linear R8/RGBA target or an admitted four-sample RGBA target.
+/// The target owner supplies its pitch in bytes.
 fn triangle_render_target_surface_state(
     target: TriangleRenderTargetSurface,
     device_id: u16,
+    revision_id: u8,
     surface_halign: u32,
 ) -> Result<[u32; 16], &'static str> {
-    if target.msaa4 && !device_is_gfx125(device_id) {
+    const TILE_MODE_TILE64: u32 = 1 << 12;
+    const TILE_MODE_Y0: u32 = 3 << 12;
+    const SURFACE_ARRAY: u32 = 1 << 28;
+    let (surface_halign, tiling, qpitch) = if !target.msaa4 {
+        (surface_halign, 0, 0)
+    } else if device_is_gfx125(device_id) {
+        let aligned_height =
+            crate::intel::align_up(target.height as usize, 64).ok_or("probe-msaa4-shape")?;
+        (
+            SURFACE_HALIGN_128_GFX125,
+            SURFACE_ARRAY | TILE_MODE_TILE64,
+            u32::try_from(aligned_height / 4).map_err(|_| "probe-msaa4-shape")?,
+        )
+    } else if gen12_msaa4_device(device_id, revision_id) {
+        let layout = gen12_msaa4_layout(target.width as usize, target.height as usize)
+            .ok_or("probe-msaa4-shape")?;
+        if target.format != SURFACE_FORMAT_R8G8B8A8_UNORM
+            || target.pitch as usize != layout.color_pitch_bytes
+            || !target.gpu.is_multiple_of(4096)
+        {
+            return Err("probe-msaa4-color-contract");
+        }
+        (
+            SURFACE_HALIGN_4,
+            SURFACE_ARRAY | TILE_MODE_Y0,
+            (layout.color_rows / 4) as u32,
+        )
+    } else {
         return Err("probe-msaa4-device");
-    }
+    };
     let mut surface = [0; 16];
     surface[0] = (SURFTYPE_2D << 29)
         | (target.format << 18)
         | (surface_halign << 14)
         | (SURFACE_VALIGN_4 << 16)
-        | if target.msaa4 {
-            (1 << 12) | (1 << 28)
-        } else {
-            0
-        };
+        | tiling;
     // Gen11..12.0 require EnableUnormPathInColorPipe for normalized targets.
     surface[1] = (RENDER_MOCS << 24)
         | if device_is_gfx12(device_id) && !device_is_gfx125(device_id) {
@@ -1805,13 +1968,7 @@ fn triangle_render_target_surface_state(
         } else {
             0
         }
-        | if target.msaa4 {
-            let aligned_height =
-                crate::intel::align_up(target.height as usize, 64).ok_or("probe-msaa4-shape")?;
-            u32::try_from(aligned_height / 4).map_err(|_| "probe-msaa4-shape")?
-        } else {
-            0
-        };
+        | qpitch;
     surface[2] = target.width.saturating_sub(1) | (target.height.saturating_sub(1) << 16);
     surface[3] = target.pitch.saturating_sub(1);
     surface[4] = if target.msaa4 { 2 << 3 } else { 0 };
@@ -1822,6 +1979,180 @@ fn triangle_render_target_surface_state(
     surface[8] = target.gpu as u32;
     surface[9] = (target.gpu >> 32) as u32;
     Ok(surface)
+}
+
+#[cfg(test)]
+mod gen12_msaa4_tests {
+    use super::*;
+
+    const WIDTH: u32 = 810;
+    const HEIGHT: u32 = 1153;
+    const COLOR: TriangleRenderTargetSurface = TriangleRenderTargetSurface {
+        format: SURFACE_FORMAT_R8G8B8A8_UNORM,
+        pitch: 3328,
+        width: WIDTH,
+        height: HEIGHT,
+        gpu: GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE,
+        msaa4: true,
+    };
+
+    #[test]
+    fn y0_color_array_and_depth_sample_grid_fit_reserved_mappings() {
+        assert_eq!(
+            gen12_msaa4_layout(WIDTH as usize, HEIGHT as usize),
+            Some(Gen12Msaa4Layout {
+                color_pitch_bytes: 3328,
+                color_rows: 1184,
+                color_bytes: 15_761_408,
+                depth_pitch_bytes: 6528,
+                depth_rows: 2336,
+                depth_bytes: 15_249_408,
+            }),
+        );
+        let max =
+            gen12_msaa4_layout(RESIDENT_SCENE_TARGET_WIDTH, RESIDENT_SCENE_TARGET_HEIGHT).unwrap();
+        assert_eq!(max.color_bytes, 58_982_400);
+        assert_eq!(max.depth_bytes, 58_982_400);
+        assert!(max.color_bytes < 64 * 1024 * 1024);
+        assert!(max.depth_bytes < 64 * 1024 * 1024);
+        assert_eq!(gen12_msaa4_layout(0, 1), None);
+        assert_eq!(gen12_msaa4_layout(1, 0), None);
+        assert_eq!(gen12_msaa4_layout(RESIDENT_SCENE_TARGET_WIDTH + 1, 1), None);
+        assert_eq!(
+            gen12_msaa4_layout(1, RESIDENT_SCENE_TARGET_HEIGHT + 1),
+            None
+        );
+    }
+
+    #[test]
+    fn adls_color_packet_encodes_uncompressed_y0_and_per_sample_qpitch() {
+        let state = triangle_render_target_surface_state(COLOR, 0x4680, 0x0c, 3).unwrap();
+        assert_eq!((state[0] >> 28) & 1, 1);
+        assert_eq!((state[0] >> 12) & 0b11, 3);
+        assert_eq!((state[0] >> 14) & 0b11, SURFACE_HALIGN_4);
+        assert_eq!((state[0] >> 16) & 0b11, SURFACE_VALIGN_4);
+        assert_eq!((state[0] >> 18) & 0x1ff, SURFACE_FORMAT_R8G8B8A8_UNORM);
+        assert_eq!(state[1] & 0x7fff, 296);
+        assert_eq!(state[1] >> 31, 1);
+        assert_eq!(state[2], (WIDTH - 1) | ((HEIGHT - 1) << 16));
+        assert_eq!(state[3], COLOR.pitch - 1);
+        // MSS (bit 6 clear) with a 4× sample count (bits 5:3) and one array layer.
+        assert_eq!(state[4], 2 << 3);
+        assert_eq!(state[6], 0);
+        assert_eq!(state[8], COLOR.gpu as u32);
+
+        assert_eq!(
+            triangle_render_target_surface_state(COLOR, 0x4680, 0x0b, SURFACE_HALIGN_4),
+            Err("probe-msaa4-device"),
+        );
+        let incorrect_pitch = TriangleRenderTargetSurface {
+            pitch: 3200,
+            ..COLOR
+        };
+        assert_eq!(
+            triangle_render_target_surface_state(incorrect_pitch, 0x4680, 0x0c, SURFACE_HALIGN_4),
+            Err("probe-msaa4-color-contract"),
+        );
+        let incorrect_format = TriangleRenderTargetSurface {
+            format: SURFACE_FORMAT_B8G8R8A8_UNORM,
+            ..COLOR
+        };
+        assert_eq!(
+            triangle_render_target_surface_state(incorrect_format, 0x4680, 0x0c, SURFACE_HALIGN_4),
+            Err("probe-msaa4-color-contract"),
+        );
+    }
+
+    #[test]
+    fn linear_adls_and_tile64_arc_color_keep_their_descriptors() {
+        let linear = TriangleRenderTargetSurface {
+            msaa4: false,
+            ..COLOR
+        };
+        let state = triangle_render_target_surface_state(linear, 0x4680, 0x0c, 1).unwrap();
+        assert_eq!(state[0] & ((1 << 28) | (0b11 << 12)), 0);
+        assert_eq!(state[1] & 0x7fff, 0);
+        assert_eq!(state[4], 0);
+
+        let state = triangle_render_target_surface_state(COLOR, 0x56a0, 0, 1).unwrap();
+        assert_eq!(state[0] & ((1 << 28) | (0b11 << 12)), (1 << 28) | (1 << 12));
+        assert_eq!((state[0] >> 14) & 0b11, SURFACE_HALIGN_128_GFX125);
+        assert_eq!(state[1] & 0x7fff, 304);
+        assert_eq!(state[4], 2 << 3);
+    }
+
+    #[test]
+    fn every_adls_msaa_draw_requires_the_matching_d32_sample_grid() {
+        let depth = TriangleDepthConfig {
+            hiz: None,
+            hiz_clear: false,
+            gpu_addr: GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE,
+            pitch_bytes: 6528,
+            width: WIDTH,
+            height: HEIGHT,
+            qpitch_rows_div4: 584,
+            write_enabled: true,
+            compare_function: COMPARE_FUNCTION_LEQUAL,
+        };
+        assert!(gen12_msaa4_depth_matches_target(WIDTH, HEIGHT, Some(depth)));
+        assert!(!gen12_msaa4_depth_matches_target(WIDTH, HEIGHT, None));
+        assert!(!gen12_msaa4_depth_matches_target(
+            WIDTH,
+            HEIGHT - 1,
+            Some(depth)
+        ));
+        let wrong_qpitch = TriangleDepthConfig {
+            qpitch_rows_div4: 296,
+            ..depth
+        };
+        let wrong_pitch = TriangleDepthConfig {
+            pitch_bytes: 3328,
+            ..depth
+        };
+        let hiz_clear = TriangleDepthConfig {
+            hiz_clear: true,
+            ..depth
+        };
+        for invalid in [wrong_qpitch, wrong_pitch, hiz_clear] {
+            assert!(!gen12_msaa4_depth_matches_target(
+                WIDTH,
+                HEIGHT,
+                Some(invalid)
+            ));
+        }
+    }
+
+    #[test]
+    fn clip_clear_and_blended_draws_share_all_four_sample_locations() {
+        let backend = BackendProbeMode::MesaLike;
+        assert_eq!(triangle_sample_state(backend, true, false, false), (4, 0xF));
+        assert_eq!(triangle_sample_state(backend, false, false, false), (0, 1));
+        let pattern = triangle_sample_pattern(true);
+        assert_eq!(pattern[6].to_le_bytes(), [0x62, 0xe6, 0x2a, 0xae]);
+        assert_eq!((pattern[7] >> 16) & 0xff, 0x88);
+
+        let baseline_raster = native_raster_dw1(false, true);
+        assert_eq!(
+            gen12_msaa4_raster_dw1(baseline_raster),
+            baseline_raster | (3 << 10)
+        );
+        assert_eq!(
+            gen12_msaa4_raster_dw1(baseline_raster | (1 << 14) | (3 << 18)),
+            baseline_raster | (3 << 10),
+        );
+        assert_eq!(
+            triangle_ps_blend_dw1(backend, TriangleBlendProbeMode::MesaZeroedState),
+            1 << 30
+        );
+        for mode in [
+            TriangleBlendProbeMode::StraightAlpha,
+            TriangleBlendProbeMode::PremultipliedAlpha,
+        ] {
+            let blend = triangle_ps_blend_dw1(backend, mode);
+            // Keep alpha-to-coverage off for both shader blends.
+            assert_eq!(blend >> 29, 0b011);
+        }
+    }
 }
 
 /// Encode the Gen12 RAW buffer surface used by Churn's read-only storage
@@ -2798,8 +3129,12 @@ fn encode_triangle_probe_batch(
         }
     }
     let resident_msaa4 = draw.uses_resident_scene_msaa4();
-    if resident_msaa4 && !device_is_gfx125(warm.device_id) {
+    let gen12_msaa4 = resident_msaa4 && gen12_msaa4_device(warm.device_id, warm.revision_id);
+    if resident_msaa4 && !gen12_msaa4 && !device_is_gfx125(warm.device_id) {
         return Err("probe-msaa4-device");
+    }
+    if gen12_msaa4 && !gen12_msaa4_depth_matches_target(draw.target_w, draw.target_h, depth_config) {
+        return Err("probe-msaa4-depth-contract");
     }
     if clip_adjacency
         && !matches!(
@@ -2831,20 +3166,12 @@ fn encode_triangle_probe_batch(
         return Err("adjacency-gs-device-mismatch");
     }
     let mesa_host_fixed_function = matches!(backend_probe_mode, BackendProbeMode::MesaLike);
-    let multisample_dw1 = if resident_msaa4 {
-        2 << 1
-    } else {
-        backend_probe_mode.multisample_dw1()
-    };
-    let sample_mask_dw = if bfly_patches {
-        0xffff
-    } else if resident_msaa4 {
-        0xF
-    } else if mesa_host_fixed_function {
-        mesa_sample_mask_dw(batch_mode.point_raster())
-    } else {
-        backend_probe_mode.sample_mask_dw()
-    };
+    let (multisample_dw1, sample_mask_dw) = triangle_sample_state(
+        backend_probe_mode,
+        resident_msaa4,
+        bfly_patches,
+        batch_mode.point_raster(),
+    );
     if let Some(depth) = depth_config
         && (depth.gpu_addr & 0xFFF != 0
             || depth.pitch_bytes == 0
@@ -3488,6 +3815,11 @@ fn encode_triangle_probe_batch(
                 0
             }
     };
+    let raster_dw1 = if gen12_msaa4 {
+        gen12_msaa4_raster_dw1(raster_dw1)
+    } else {
+        raster_dw1
+    };
     let raster_dw1 = microfont_line_aa_raster(raster_dw1, native_line_aa);
     let raster_dw2 = 0;
     let raster_dw3 = 0;
@@ -3551,26 +3883,7 @@ fn encode_triangle_probe_batch(
     let wm_depth_stencil_dw2 = 0;
     let wm_depth_stencil_dw3 = 0;
     let wm_chroma_key_dw1 = 0;
-    const BLEND_FACTOR_ONE: u32 = 0x01;
-    const BLEND_FACTOR_SRC_ALPHA: u32 = 0x03;
-    const BLEND_FACTOR_INV_SRC_ALPHA: u32 = 0x13;
-    let ps_blend_dw1 = if backend_probe_mode.disable_ps_contract()
-        || backend_probe_mode.disable_ps_blend_writeable_rt()
-    {
-        0
-    } else if matches!(blend_mode, TriangleBlendProbeMode::StraightAlpha | TriangleBlendProbeMode::PremultipliedAlpha) {
-        // 3DSTATE_PS_BLEND: writable RT + color blending enabled, with
-        // straight-alpha RGB and independent alpha factors.
-        (1 << 30)
-            | (1 << 29)
-            | (BLEND_FACTOR_ONE << 24)
-            | (BLEND_FACTOR_INV_SRC_ALPHA << 19)
-            | ((if matches!(blend_mode, TriangleBlendProbeMode::PremultipliedAlpha) { BLEND_FACTOR_ONE } else { BLEND_FACTOR_SRC_ALPHA }) << 14)
-            | (BLEND_FACTOR_INV_SRC_ALPHA << 9)
-            | (1 << 7)
-    } else {
-        1 << 30
-    };
+    let ps_blend_dw1 = triangle_ps_blend_dw1(backend_probe_mode, blend_mode);
     static MICROFONT_AA_LINE_LOGGED: AtomicBool = AtomicBool::new(false);
     static MICROFONT_AA_PATCH_LOGGED: AtomicBool = AtomicBool::new(false);
     let aa_logged = if native_line_aa {
@@ -3605,20 +3918,6 @@ fn encode_triangle_probe_batch(
         backend_probe_mode.wm_hz_op_sample_mask() & 0xFFFF
     } else {
         0
-    };
-    let gfx125_sample_pattern_dwords = if resident_msaa4 {
-        [
-            0x8888_8888,
-            0x8888_8888,
-            0x8888_8888,
-            0x8888_8888,
-            0x8888_8888,
-            0x8888_8888,
-            0xAE2A_E662,
-            0x0088_44CC,
-        ]
-    } else {
-        [0x8888_8888; 8]
     };
     let gfx125_slice_hash =
         device_is_gfx125(warm.device_id).then(|| gfx125_slice_hash_config(warm));
@@ -3919,7 +4218,7 @@ fn encode_triangle_probe_batch(
     if device_is_gfx12(warm.device_id) {
         log_batch_offset(cursor, "3DSTATE_SAMPLE_PATTERN");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SAMPLE_PATTERN)?;
-        for pattern_dw in gfx125_sample_pattern_dwords {
+        for pattern_dw in triangle_sample_pattern(resident_msaa4) {
             push(batch_dwords, &mut cursor, pattern_dw)?;
         }
     }
@@ -6138,7 +6437,7 @@ fn encode_triangle_probe_batch(
     let primitive_replication_mask = (primitive_replication_dw1 >> 16) & 0xFFFF;
     let vp_extents_ok = vp_xmin <= vp_xmax && vp_ymin <= vp_ymax && vp_xmax > 0.0 && vp_ymax > 0.0;
     let draw_rect_ok = draw.target_w != 0 && draw.target_h != 0;
-    let sample_mask_ok = backend_probe_mode.sample_mask_dw() != 0;
+    let sample_mask_ok = sample_mask_dw != 0;
     let cull_none = ((raster_dw1 >> 16) & 0x3) == 1;
     let checkbook_clip_enable = (clip_dw2 >> 31) & 0x1;
     let prim_repl_ok = primitive_replication_count == 0 || primitive_replication_mask != 0;
@@ -6198,7 +6497,7 @@ fn encode_triangle_probe_batch(
         scissor_xmax,
         scissor_ymax,
         sample_mask_ok as u8,
-        backend_probe_mode.sample_mask_dw(),
+        sample_mask_dw,
         cull_none as u8,
         prim_repl_ok as u8,
         primitive_replication_count,
@@ -6299,7 +6598,7 @@ fn encode_triangle_probe_batch(
         (sf_dw3 >> 25) & 0x3,
     );
     intel_render_verbose_log!(
-        "probe-raster-decoded sf_viewport=0x{:X} cc_viewport=0x{:X} scissor_ptr=0x{:X} cull={} fill_front={} fill_back={} front={} scissor_enable={} aa_enable={} smooth_point={} msaa_rast_enable={} msaa_rast_mode={} force_msaa={} forced_samples={} sample_mask=0x1\n",
+        "probe-raster-decoded sf_viewport=0x{:X} cc_viewport=0x{:X} scissor_ptr=0x{:X} cull={} fill_front={} fill_back={} front={} scissor_enable={} aa_enable={} smooth_point={} msaa_rast_enable={} msaa_rast_mode={} force_msaa={} forced_samples={} sample_mask=0x{:X}\n",
         probe_state.sf_clip_viewport_offset_bytes,
         probe_state.cc_viewport_offset_bytes,
         probe_state.scissor_rect_offset_bytes,
@@ -6314,6 +6613,7 @@ fn encode_triangle_probe_batch(
         (raster_dw1 >> 10) & 0x3,
         (raster_dw1 >> 14) & 0x1,
         (raster_dw1 >> 18) & 0x7,
+        sample_mask_dw,
     );
     if backend_probe_mode.raster_hammer() {
         intel_render_verbose_log!(

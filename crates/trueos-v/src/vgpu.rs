@@ -150,6 +150,8 @@ impl DeviceInfo {
     /// The resident renderer can execute the GS-backed `_ADJ` primitive
     /// topologies on the current physical adapter.
     pub const FLAG_ADJACENCY_TOPOLOGY_RENDERING: u32 = 1 << 1;
+    /// The physical adapter supports the opt-in indexed 4× MSAA path.
+    pub const FLAG_INDEXED_MSAA4: u32 = 1 << 2;
 
     pub const fn is_lost(self) -> bool {
         self.flags & Self::FLAG_LOST != 0
@@ -157,6 +159,10 @@ impl DeviceInfo {
 
     pub const fn supports_adjacency_topology_rendering(self) -> bool {
         self.flags & Self::FLAG_ADJACENCY_TOPOLOGY_RENDERING != 0
+    }
+
+    pub const fn supports_indexed_msaa4(self) -> bool {
+        self.flags & Self::FLAG_INDEXED_MSAA4 != 0
     }
 }
 
@@ -236,6 +242,17 @@ pub const INDEXED_DRAW_CLEAR_DEPTH: u32 = 1 << 4;
 /// LOAD_COLOR preserves color; CLEAR_DEPTH writes depth with ALWAYS comparison.
 /// Without CLEAR_DEPTH, depth is untouched. Ordinary draw depth flags are invalid.
 pub const INDEXED_DRAW_GEOMETRY_CLEAR: u32 = 1 << 5;
+/// Opt into 4× multisampling for a standalone, textured triangle-list draw
+/// that clears color and uses the transient depth buffer. Requires an adapter
+/// reporting support and a drawable within the declared extent.
+pub const INDEXED_DRAW_MSAA4: u32 = 1 << 6;
+pub const INDEXED_MSAA4_MAX_WIDTH: u32 = 1280;
+pub const INDEXED_MSAA4_MAX_HEIGHT: u32 = 720;
+
+pub const fn indexed_msaa4_extent_supported(width: u32, height: u32) -> bool {
+    width != 0 && height != 0 && width <= INDEXED_MSAA4_MAX_WIDTH && height <= INDEXED_MSAA4_MAX_HEIGHT
+}
+
 /// GL comparison ordinal (NEVER through ALWAYS), not an Intel packet encoding.
 pub const INDEXED_DRAW_DEPTH_COMPARE_SHIFT: u32 = 8;
 pub const INDEXED_DRAW_DEPTH_COMPARE_MASK: u32 = 7 << INDEXED_DRAW_DEPTH_COMPARE_SHIFT;
@@ -245,9 +262,13 @@ pub const INDEXED_DRAW_FLAGS_ALL: u32 = INDEXED_DRAW_LOAD_COLOR
     | INDEXED_DRAW_DEPTH_WRITE
     | INDEXED_DRAW_CLEAR_DEPTH
     | INDEXED_DRAW_DEPTH_COMPARE_MASK
-    | INDEXED_DRAW_GEOMETRY_CLEAR;
+    | INDEXED_DRAW_GEOMETRY_CLEAR
+    | INDEXED_DRAW_MSAA4;
 
 pub const fn indexed_draw_flags_valid(flags: u32) -> bool {
+    if flags & INDEXED_DRAW_MSAA4 != 0 {
+        return flags == INDEXED_DRAW_MSAA4;
+    }
     flags & !INDEXED_DRAW_FLAGS_ALL == 0
         && (flags
             & !(INDEXED_DRAW_LOAD_COLOR
@@ -1518,6 +1539,39 @@ mod tests {
     }
 
     #[test]
+    fn indexed_msaa4_is_an_explicit_standalone_draw() {
+        assert!(indexed_draw_flags_valid(IndexedDraw::default().texture_reserved));
+        assert!(indexed_draw_flags_valid(INDEXED_DRAW_MSAA4));
+        for incompatible in [
+            INDEXED_DRAW_LOAD_COLOR,
+            INDEXED_DRAW_DRAWABLE_DEPTH,
+            INDEXED_DRAW_DEPTH_TEST,
+            INDEXED_DRAW_DEPTH_WRITE,
+            INDEXED_DRAW_CLEAR_DEPTH,
+            INDEXED_DRAW_GEOMETRY_CLEAR,
+            INDEXED_DRAW_DEPTH_COMPARE_MASK,
+            1 << 31,
+        ] {
+            assert!(!indexed_draw_flags_valid(INDEXED_DRAW_MSAA4 | incompatible));
+        }
+    }
+
+    #[test]
+    fn indexed_msaa4_support_is_reported_and_bounded() {
+        assert!(!DeviceInfo::default().supports_indexed_msaa4());
+        let info = DeviceInfo {
+            flags: DeviceInfo::FLAG_INDEXED_MSAA4,
+            ..DeviceInfo::default()
+        };
+        assert!(info.supports_indexed_msaa4());
+        assert!(indexed_msaa4_extent_supported(640, 560));
+        assert!(indexed_msaa4_extent_supported(1280, 720));
+        for extent in [[0, 560], [640, 0], [1281, 720], [1280, 721]] {
+            assert!(!indexed_msaa4_extent_supported(extent[0], extent[1]));
+        }
+    }
+
+    #[test]
     fn abi_records_have_stable_sizes() {
         assert_eq!(core::mem::size_of::<DeviceInfo>(), 48);
         assert_eq!(core::mem::size_of::<DeviceDiagnostics>(), 32);
@@ -1525,6 +1579,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<BufferSlice>(), 24);
         assert_eq!(core::mem::size_of::<SurfaceInfo>(), 32);
         assert_eq!(core::mem::size_of::<IndexedDraw>(), 104);
+        assert_eq!(core::mem::offset_of!(IndexedDraw, texture_reserved), 96);
         assert_eq!(core::mem::size_of::<IndexedBatchDraw>(), 16);
         assert_eq!(core::mem::size_of::<IndexedDrawBatch>(), 312);
         assert_eq!(core::mem::size_of::<IndexedBatchDrawV2>(), 24);

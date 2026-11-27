@@ -14,7 +14,7 @@ use spin::Mutex;
 use trueos_time::{Duration, Timer};
 
 use super::physical::{
-    PhysicalBufferSlice, PhysicalContextDescriptor, PhysicalContextFaultKind,
+    PhysicalAdapterInfo, PhysicalBufferSlice, PhysicalContextDescriptor, PhysicalContextFaultKind,
     PhysicalContextHandle, PhysicalContextPriority, PhysicalGpuDevice, PhysicalGpuError,
     PhysicalGpuFault, PhysicalGpuVmHandle, PhysicalSchedulerStatus, physical_device,
 };
@@ -571,6 +571,7 @@ pub(crate) struct DeviceInfo {
     pub(crate) queue_count: usize,
     pub(crate) lost: bool,
     pub(crate) adjacency_topology_rendering: bool,
+    pub(crate) indexed_msaa4: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1541,13 +1542,15 @@ pub(crate) fn device_info(
     principal: Principal,
     handle: DeviceHandle,
 ) -> Result<DeviceInfo, VgpuError> {
-    let adjacency_topology_rendering = physical_device().is_some_and(|physical| {
-        let adapter = physical.adapter_info();
+    let adapter = physical_device().map(|physical| physical.adapter_info());
+    let adjacency_topology_rendering = adapter.is_some_and(|adapter| {
         crate::intel::render::device_supports_adjacency_geometry_shader(
             adapter.device_id,
             adapter.revision_id,
         )
     });
+    let indexed_msaa4 =
+        adapter.is_some_and(|adapter| ui4_indexed_msaa4_target_supported(adapter, 640, 560));
     let broker = BROKER.lock();
     let device = lookup_device(&broker, handle, principal)?;
     Ok(DeviceInfo {
@@ -1567,6 +1570,7 @@ pub(crate) fn device_info(
             .count(),
         lost: device.lost,
         adjacency_topology_rendering,
+        indexed_msaa4,
     })
 }
 
@@ -3259,6 +3263,7 @@ pub(crate) struct Ui4IndexedDrawDescriptor {
     pub(crate) load_color: bool,
     pub(crate) retain_texture: bool,
     pub(crate) depth_flags: u32,
+    pub(crate) msaa4: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -3329,6 +3334,20 @@ fn ui4_single_indexed_topology_valid(
         topology,
         ResidentScenePrimitiveTopology::TriangleList | ResidentScenePrimitiveTopology::QuadList
     ) && topology.accepts_index_count(index_count as usize)
+}
+
+fn ui4_indexed_msaa4_target_supported(
+    adapter: PhysicalAdapterInfo,
+    width: u32,
+    height: u32,
+) -> bool {
+    adapter.vendor_id == 0x8086
+        && crate::intel::render::indexed_msaa4_target_supported(
+            adapter.device_id,
+            adapter.revision_id,
+            width,
+            height,
+        )
 }
 
 fn canonicalize_ui4_single_indexed_winding(
@@ -3502,18 +3521,24 @@ pub(crate) fn submit_ui4_indexed_draw(
         );
         VgpuError::Unsupported
     };
-    if !v::vgpu::indexed_draw_flags_valid(
-        draw.depth_flags
-            | if draw.load_color {
-                v::vgpu::INDEXED_DRAW_LOAD_COLOR
-            } else {
-                0
-            },
-    ) || !ui4_single_indexed_topology_valid(draw.topology, draw.index_count)
+    let mut flags = draw.depth_flags;
+    if draw.load_color {
+        flags |= v::vgpu::INDEXED_DRAW_LOAD_COLOR;
+    }
+    if draw.msaa4 {
+        flags |= v::vgpu::INDEXED_DRAW_MSAA4;
+    }
+    if !v::vgpu::indexed_draw_flags_valid(flags)
+        || !ui4_single_indexed_topology_valid(draw.topology, draw.index_count)
         || draw.base_vertex != 0
     {
         return Err(unsupported("draw-contract"));
     }
+    let msaa4_adapter = if draw.msaa4 {
+        Some(require_physical()?.adapter_info())
+    } else {
+        None
+    };
     let geometry_clear = draw.depth_flags & v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR != 0;
     let (
         window_id,
@@ -3631,6 +3656,21 @@ pub(crate) fn submit_ui4_indexed_draw(
         }
         let vertex_stride = pipeline.vertex_stride as usize;
         let position_offset = pipeline.position_offset as usize;
+        if let Some(adapter) = msaa4_adapter {
+            if pipeline.package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
+                || draw.topology != crate::intel::render::ResidentScenePrimitiveTopology::TriangleList
+                || draw.sampled_texture.raw() == 0
+                || draw.retain_texture
+            {
+                return Err(unsupported("indexed-msaa4-draw"));
+            }
+            // Validate the drawable before reserving the queue or staging GPU
+            // resources. Unsupported requests leave the lease untouched.
+            let surface = lookup_surface_mut(device, draw.surface)?;
+            if !ui4_indexed_msaa4_target_supported(adapter, surface.width, surface.height) {
+                return Err(unsupported("indexed-msaa4-target"));
+            }
+        }
         {
             let queue = lookup_queue_mut(device, queue_handle)?;
             if queue.class != QueueClass::Render || queue.in_flight != 0 {
@@ -4182,6 +4222,13 @@ pub(crate) fn submit_ui4_indexed_draw(
             destination,
             diagnostic_logs,
         )
+    } else if draw.msaa4 {
+        crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_msaa4_direct_to_surface(
+            core::slice::from_ref(&scene_draw),
+            Some(draw.clear_rgba8_srgb.to_le_bytes()),
+            destination,
+            diagnostic_logs,
+        )
     } else {
         crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_direct_to_surface(
         core::slice::from_ref(&scene_draw),
@@ -4192,8 +4239,19 @@ pub(crate) fn submit_ui4_indexed_draw(
     };
     let timing_rendered = crate::chronos::monotonic_nanos();
     let render_error = rendered.as_ref().err().copied();
-    // These direct single-sample routes reject Busy before accepting geometry.
+    // Busy, bad shape, and scratch admission reject before geometry. An
+    // unavailable resolve requires retired geometry and no accepted drawable writer.
     let transient_busy = matches!(render_error, Some("render-busy" | "render-storage-busy"));
+    let rejected_msaa4 = draw.msaa4
+        && matches!(
+            render_error,
+            Some(
+                "indexed-msaa4-shape"
+                    | "indexed-msaa4-scratch-unavailable"
+                    | "indexed-msaa4-resolve-unavailable"
+            )
+        );
+    let clean_rejection = transient_busy || rejected_msaa4;
     if let Some(reason) = render_error {
         if !transient_busy || diagnostic_logs {
             crate::log_warn!(target: "render";
@@ -4212,8 +4270,8 @@ pub(crate) fn submit_ui4_indexed_draw(
         );
     }
     let release = ui4_indexed_target_release(&rendered, 1, phys, bytes);
-    let released_mesh = if release.is_some() || transient_busy {
-        // Exact retirement (or pre-accept Busy) permits reuse of the streaming
+    let released_mesh = if release.is_some() || clean_rejection {
+        // Exact retirement or a clean rejection permits reuse of the streaming
         // allocation; other shader routes retain their existing release policy.
         cached_voxy_mesh || crate::intel::render::release_resident_triangle_mesh(&mesh)
     } else {
@@ -4224,16 +4282,20 @@ pub(crate) fn submit_ui4_indexed_draw(
     };
     // The buffer owns the immutable resident texture. The staged Arc pins it
     // through completion; writes and destruction invalidate only after retirement.
-    let released_texture = (release.is_some() || transient_busy)
+    let released_texture = (release.is_some() || clean_rejection)
         && (draw.retain_texture
             || cached_voxy_mesh
             || figure_state.is_some()
             || sampled_texture
                 .as_deref()
                 .is_none_or(crate::intel::render::release_resident_sampled_texture));
-    if transient_busy && released_mesh && released_texture {
+    if clean_rejection && released_mesh && released_texture {
         rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
-        return Err(VgpuError::Busy);
+        return Err(if transient_busy {
+            VgpuError::Busy
+        } else {
+            VgpuError::Unsupported
+        });
     }
     let Some(release) = release.filter(|_| released_mesh && released_texture) else {
         if voxy_camera.is_some() {

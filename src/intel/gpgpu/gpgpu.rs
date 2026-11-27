@@ -48,6 +48,7 @@ include!("operations/surfaces.rs");
 include!("operations/probes.rs");
 include!("operations/rectangle_dispatch.rs");
 include!("operations/submission_2d.rs");
+include!("operations/msaa_resolve.rs");
 include!("operations/bfly_history.rs");
 include!("operations/effects.rs");
 include!("operations/cpp_demo.rs");
