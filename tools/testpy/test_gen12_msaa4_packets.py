@@ -60,17 +60,18 @@ def harness_source() -> str:
     ))
     declarations.append(constant(PIPELINE, "MESA_POINT_SAMPLE_MASK_DW"))
     declarations.extend(item(PIPELINE, name) for name in (
-        "Gen12Msaa4Layout", "gen12_msaa4_device", "gen12_msaa4_layout",
-        "gen12_msaa4_depth_matches_target", "gen12_msaa4_raster_dw1",
-        "triangle_sample_state", "triangle_sample_pattern", "triangle_ps_blend_dw1",
+        "Gen12MsaaLayout", "gen12_msaa_device", "gen12_msaa_layout",
+        "gen12_msaa_depth_matches_target", "gen12_msaa_raster_dw1",
+        "triangle_sample_count_encoding", "triangle_sample_state", "triangle_sample_pattern",
+        "triangle_ps_blend_dw1",
         "TriangleRenderTargetSurface", "triangle_render_target_surface_state",
-        "mesa_sample_mask_dw", "native_raster_dw1", "gen12_msaa4_tests",
+        "mesa_sample_mask_dw", "native_raster_dw1", "gen12_msaa_tests",
     ))
     return "\n".join(declarations)
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="trueos-gen12-msaa4-packets-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="trueos-gen12-msaa-packets-") as temporary:
         directory = Path(temporary)
         source = directory / "packets.rs"
         binary = directory / "packets"

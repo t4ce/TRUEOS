@@ -5,11 +5,11 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "310799309a25094289130543debff0c018488e9fc333748f3836b79d752b9836",
-      "size_bytes": 14656,
+      "sha256": "6efc2c969886265f57ee1856b8c4945a602bfd313658e1ccf1c263ddc9e35b1f",
+      "size_bytes": 16080,
       "type": "relocatable",
-      "ze_info_section_offset": 9784,
-      "ze_info_section_size": 4029
+      "ze_info_section_offset": 11216,
+      "ze_info_section_size": 4027
     },
     "kernels": [
       {
@@ -50,7 +50,7 @@
             "size": 12
           }
         ],
-        "kernel_name": "resolve_gen12_y0_msaa4_rgba8",
+        "kernel_name": "resolve_gen12_y0_msaa_rgba8",
         "payload_args": [
           {
             "access": "readonly",
@@ -199,7 +199,7 @@
             "access_qualifier": "NONE",
             "address_qualifier": "__private",
             "index": 5,
-            "name": "swap_red_blue",
+            "name": "resolve_flags",
             "type_name": "uint;4",
             "type_qualifiers": "NONE"
           },
@@ -222,13 +222,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 1160,
+          "entry_size": 1512,
           "section_alignment": 0,
-          "section_name": ".text.resolve_gen12_y0_msaa4_rgba8",
+          "section_name": ".text.resolve_gen12_y0_msaa_rgba8",
           "section_offset": 64,
-          "section_size": 1344,
-          "sha256": "59c60042c1d43af374965bb47c7842a5e25a83d2d346cd164f6ed0354d6906d2",
-          "symbol_size": 1160,
+          "section_size": 1664,
+          "sha256": "c05ac589eb7507a5269220e8ae7b5a445d27bcf80fdf9d5bdc5b9caa1649c9a7",
+          "symbol_size": 1512,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -244,10 +244,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 1480,
-      "embedded_section_size": 8228,
-      "sha256": "727433c629b4a274ed8be3342967a1bbc0e7549dcab8c369f9a5f4d639483e56",
-      "size_bytes": 8228
+      "embedded_section_offset": 1800,
+      "embedded_section_size": 9344,
+      "sha256": "d093ccc5ebc0a02b0c31b07a8a35c564bcd75405f848948f2b1b13f6ba9f9961",
+      "size_bytes": 9344
     }
   },
   "provenance": {
@@ -271,33 +271,33 @@
         "-fno-rtti",
         "-MMD",
         "-MF",
-        "$OUT_DIR/resolve_gen12_y0_msaa4_rgba8.d",
+        "$OUT_DIR/resolve_gen12_y0_msaa_rgba8.d",
         "-MT",
-        "resolve_gen12_y0_msaa4_rgba8.bc",
+        "resolve_gen12_y0_msaa_rgba8.bc",
         "-emit-llvm",
         "-c",
-        "resolve_gen12_y0_msaa4_rgba8.clcpp",
+        "resolve_gen12_y0_msaa_rgba8.clcpp",
         "-o",
-        "$OUT_DIR/resolve_gen12_y0_msaa4_rgba8.bc"
+        "$OUT_DIR/resolve_gen12_y0_msaa_rgba8.bc"
       ],
       [
         "$LLVM_SPIRV",
         "--preserve-ocl-kernel-arg-type-metadata-through-string",
-        "$OUT_DIR/resolve_gen12_y0_msaa4_rgba8.bc",
+        "$OUT_DIR/resolve_gen12_y0_msaa_rgba8.bc",
         "-o",
-        "$OUT_DIR/resolve_gen12_y0_msaa4_rgba8.spv"
+        "$OUT_DIR/resolve_gen12_y0_msaa_rgba8.spv"
       ],
       [
         "$OCLOC",
         "compile",
         "-file",
-        "$OUT_DIR/resolve_gen12_y0_msaa4_rgba8.spv",
+        "$OUT_DIR/resolve_gen12_y0_msaa_rgba8.spv",
         "-spirv_input",
         "-device",
         "0x4680",
         "-64",
         "-output",
-        "resolve_gen12_y0_msaa4_rgba8",
+        "resolve_gen12_y0_msaa_rgba8",
         "-out_dir",
         "$OUT_DIR",
         "-output_no_suffix",
@@ -307,7 +307,7 @@
         "$OCLOC",
         "validate",
         "-file",
-        "$OUT_DIR/resolve_gen12_y0_msaa4_rgba8.bin"
+        "$OUT_DIR/resolve_gen12_y0_msaa_rgba8.bin"
       ]
     ],
     "frontend": {
@@ -319,7 +319,7 @@
     },
     "publication_policy": {
       "expected_kernels": [
-        "resolve_gen12_y0_msaa4_rgba8"
+        "resolve_gen12_y0_msaa_rgba8"
       ],
       "name": "cpp-native-aot-v1"
     },
@@ -440,19 +440,19 @@
     }
   },
   "rust_symbols": {
-    "resolve_gen12_y0_msaa4_rgba8": "RESOLVE_GEN12_Y0_MSAA4_RGBA8_ADLS_CPP_ABI_CONTRACT"
+    "resolve_gen12_y0_msaa_rgba8": "RESOLVE_GEN12_Y0_MSAA_RGBA8_ADLS_CPP_ABI_CONTRACT"
   },
   "schema_version": 2,
   "source": {
     "inputs": [
       {
-        "path": "TRUEOS/crates/trueos-shader/gpgpu/kernels/resolve_gen12_y0_msaa4_rgba8.clcpp",
-        "sha256": "b67ba444abc50d51f4f2294ca48b9b413e66433cb35f64783e47dc30bec9af33",
-        "size_bytes": 2029
+        "path": "TRUEOS/crates/trueos-shader/gpgpu/kernels/resolve_gen12_y0_msaa_rgba8.clcpp",
+        "sha256": "4bca80990f34878afc1a9ca2064aa854970124ba9fb24c495af04492b831b273",
+        "size_bytes": 2224
       }
     ],
     "language": "C++ for OpenCL",
-    "path": "TRUEOS/crates/trueos-shader/gpgpu/kernels/resolve_gen12_y0_msaa4_rgba8.clcpp"
+    "path": "TRUEOS/crates/trueos-shader/gpgpu/kernels/resolve_gen12_y0_msaa_rgba8.clcpp"
   },
   "target": {
     "label": "adls",

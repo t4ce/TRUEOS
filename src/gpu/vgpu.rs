@@ -571,6 +571,7 @@ pub(crate) struct DeviceInfo {
     pub(crate) queue_count: usize,
     pub(crate) lost: bool,
     pub(crate) adjacency_topology_rendering: bool,
+    pub(crate) indexed_msaa2: bool,
     pub(crate) indexed_msaa4: bool,
 }
 
@@ -1549,8 +1550,10 @@ pub(crate) fn device_info(
             adapter.revision_id,
         )
     });
+    let indexed_msaa2 =
+        adapter.is_some_and(|adapter| ui4_indexed_msaa_target_supported(adapter, 640, 560, 2));
     let indexed_msaa4 =
-        adapter.is_some_and(|adapter| ui4_indexed_msaa4_target_supported(adapter, 640, 560));
+        adapter.is_some_and(|adapter| ui4_indexed_msaa_target_supported(adapter, 640, 560, 4));
     let broker = BROKER.lock();
     let device = lookup_device(&broker, handle, principal)?;
     Ok(DeviceInfo {
@@ -1570,6 +1573,7 @@ pub(crate) fn device_info(
             .count(),
         lost: device.lost,
         adjacency_topology_rendering,
+        indexed_msaa2,
         indexed_msaa4,
     })
 }
@@ -3263,7 +3267,7 @@ pub(crate) struct Ui4IndexedDrawDescriptor {
     pub(crate) load_color: bool,
     pub(crate) retain_texture: bool,
     pub(crate) depth_flags: u32,
-    pub(crate) msaa4: bool,
+    pub(crate) sample_count: u8,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -3336,17 +3340,19 @@ fn ui4_single_indexed_topology_valid(
     ) && topology.accepts_index_count(index_count as usize)
 }
 
-fn ui4_indexed_msaa4_target_supported(
+fn ui4_indexed_msaa_target_supported(
     adapter: PhysicalAdapterInfo,
     width: u32,
     height: u32,
+    samples: u8,
 ) -> bool {
     adapter.vendor_id == 0x8086
-        && crate::intel::render::indexed_msaa4_target_supported(
+        && crate::intel::render::indexed_msaa_target_supported(
             adapter.device_id,
             adapter.revision_id,
             width,
             height,
+            samples,
         )
 }
 
@@ -3515,8 +3521,8 @@ pub(crate) fn submit_ui4_indexed_draw(
     let timing_start = crate::chronos::monotonic_nanos();
     let unsupported = |reason: &'static str| {
         crate::log_warn!(target: "vgpu";
-            "vgpu-indexed: rejected reason={} flags=0x{:X} indices={} vertex_offset={} texture={}x{} pitch={} sampler=0x{:X}\n",
-            reason, draw.depth_flags, draw.index_count, draw.vertex_offset,
+            "vgpu-indexed: rejected reason={} flags=0x{:X} samples={} indices={} vertex_offset={} texture={}x{} pitch={} sampler=0x{:X}\n",
+            reason, draw.depth_flags, draw.sample_count, draw.index_count, draw.vertex_offset,
             draw.texture_width, draw.texture_height, draw.texture_pitch, draw.sampler_flags,
         );
         VgpuError::Unsupported
@@ -3525,16 +3531,20 @@ pub(crate) fn submit_ui4_indexed_draw(
     if draw.load_color {
         flags |= v::vgpu::INDEXED_DRAW_LOAD_COLOR;
     }
-    if draw.msaa4 {
-        flags |= v::vgpu::INDEXED_DRAW_MSAA4;
-    }
+    flags |= match draw.sample_count {
+        1 => 0,
+        2 => v::vgpu::INDEXED_DRAW_MSAA2,
+        4 => v::vgpu::INDEXED_DRAW_MSAA4,
+        _ => return Err(unsupported("indexed-msaa-samples")),
+    };
     if !v::vgpu::indexed_draw_flags_valid(flags)
         || !ui4_single_indexed_topology_valid(draw.topology, draw.index_count)
         || draw.base_vertex != 0
     {
         return Err(unsupported("draw-contract"));
     }
-    let msaa4_adapter = if draw.msaa4 {
+    let msaa = draw.sample_count != 1;
+    let msaa_adapter = if msaa {
         Some(require_physical()?.adapter_info())
     } else {
         None
@@ -3656,19 +3666,24 @@ pub(crate) fn submit_ui4_indexed_draw(
         }
         let vertex_stride = pipeline.vertex_stride as usize;
         let position_offset = pipeline.position_offset as usize;
-        if let Some(adapter) = msaa4_adapter {
+        if let Some(adapter) = msaa_adapter {
             if pipeline.package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
                 || draw.topology != crate::intel::render::ResidentScenePrimitiveTopology::TriangleList
                 || draw.sampled_texture.raw() == 0
                 || draw.retain_texture
             {
-                return Err(unsupported("indexed-msaa4-draw"));
+                return Err(unsupported("indexed-msaa-draw"));
             }
             // Validate the drawable before reserving the queue or staging GPU
             // resources. Unsupported requests leave the lease untouched.
             let surface = lookup_surface_mut(device, draw.surface)?;
-            if !ui4_indexed_msaa4_target_supported(adapter, surface.width, surface.height) {
-                return Err(unsupported("indexed-msaa4-target"));
+            if !ui4_indexed_msaa_target_supported(
+                adapter,
+                surface.width,
+                surface.height,
+                draw.sample_count,
+            ) {
+                return Err(unsupported("indexed-msaa-target"));
             }
         }
         {
@@ -4222,12 +4237,13 @@ pub(crate) fn submit_ui4_indexed_draw(
             destination,
             diagnostic_logs,
         )
-    } else if draw.msaa4 {
-        crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_msaa4_direct_to_surface(
+    } else if msaa {
+        crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_msaa_direct_to_surface(
             core::slice::from_ref(&scene_draw),
             Some(draw.clear_rgba8_srgb.to_le_bytes()),
             destination,
             diagnostic_logs,
+            draw.sample_count,
         )
     } else {
         crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_direct_to_surface(
@@ -4242,16 +4258,16 @@ pub(crate) fn submit_ui4_indexed_draw(
     // Busy, bad shape, and scratch admission reject before geometry. An
     // unavailable resolve requires retired geometry and no accepted drawable writer.
     let transient_busy = matches!(render_error, Some("render-busy" | "render-storage-busy"));
-    let rejected_msaa4 = draw.msaa4
+    let rejected_msaa = msaa
         && matches!(
             render_error,
             Some(
-                "indexed-msaa4-shape"
-                    | "indexed-msaa4-scratch-unavailable"
-                    | "indexed-msaa4-resolve-unavailable"
+                "indexed-msaa-shape"
+                    | "indexed-msaa-scratch-unavailable"
+                    | "indexed-msaa-resolve-unavailable"
             )
         );
-    let clean_rejection = transient_busy || rejected_msaa4;
+    let clean_rejection = transient_busy || rejected_msaa;
     if let Some(reason) = render_error {
         if !transient_busy || diagnostic_logs {
             crate::log_warn!(target: "render";

@@ -216,6 +216,7 @@ pub(crate) fn render_resident_coverage_mask(
             None,
             destination.render_gpu,
             SURFACE_FORMAT_R8_UNORM,
+            1,
             surface.pitch_bytes as usize,
             surface.width as usize,
             surface.height as usize,

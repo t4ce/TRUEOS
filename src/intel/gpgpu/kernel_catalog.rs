@@ -3,7 +3,7 @@ pub(crate) const COPY_RECT_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/copy_rect_rgba8.clcpp");
 pub(crate) const COPY_RECT_RGBA8_SOURCE_PATH: &str =
     "src/intel/gpgpu/kernels/copy_rect_rgba8.clcpp";
-const RESOLVE_GEN12_Y0_MSAA4_RGBA8_KERNEL_NAME: &str = "resolve_gen12_y0_msaa4_rgba8";
+const RESOLVE_GEN12_Y0_MSAA_RGBA8_KERNEL_NAME: &str = "resolve_gen12_y0_msaa_rgba8";
 pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME: &str = "alpha_blend_worklist_rgba8";
 pub(crate) const ALPHA_BLEND_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/alpha_blend_worklist_rgba8.clcpp");
@@ -60,8 +60,8 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
     match name {
 
         COPY_RECT_RGBA8_KERNEL_NAME => Some(COPY_RECT_RGBA8_OPENCL_SOURCE),
-        RESOLVE_GEN12_Y0_MSAA4_RGBA8_KERNEL_NAME => {
-            Some(include_str!("kernels/resolve_gen12_y0_msaa4_rgba8.clcpp"))
+        RESOLVE_GEN12_Y0_MSAA_RGBA8_KERNEL_NAME => {
+            Some(include_str!("kernels/resolve_gen12_y0_msaa_rgba8.clcpp"))
         }
 
         ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME => Some(ALPHA_BLEND_WORKLIST_RGBA8_OPENCL_SOURCE),
@@ -91,8 +91,8 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
     match name {
 
         COPY_RECT_RGBA8_KERNEL_NAME => Some(COPY_RECT_RGBA8_SOURCE_PATH),
-        RESOLVE_GEN12_Y0_MSAA4_RGBA8_KERNEL_NAME => {
-            Some("crates/trueos-shader/gpgpu/kernels/resolve_gen12_y0_msaa4_rgba8.clcpp")
+        RESOLVE_GEN12_Y0_MSAA_RGBA8_KERNEL_NAME => {
+            Some("crates/trueos-shader/gpgpu/kernels/resolve_gen12_y0_msaa_rgba8.clcpp")
         }
 
         ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME => {
@@ -135,7 +135,7 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
 }
 
 include!("kernels/artifacts/adls/cpp/copy_rect_rgba8.contract.rs");
-include!("kernels/artifacts/adls/cpp/resolve_gen12_y0_msaa4_rgba8.contract.rs");
+include!("kernels/artifacts/adls/cpp/resolve_gen12_y0_msaa_rgba8.contract.rs");
 
 include!("kernels/artifacts/adls/cpp/alpha_blend_worklist_rgba8.contract.rs");
 
@@ -148,9 +148,9 @@ embedded_compute_artifact!(pub(crate) COPY_RECT_RGBA8_ADLS_BIN, COPY_RECT_RGBA8_
     COPY_RECT_RGBA8_ADLS_BIN_STORAGE,
     "kernels/artifacts/adls/cpp/copy_rect_rgba8.bin"
 );
-embedded_compute_artifact!(RESOLVE_GEN12_Y0_MSAA4_RGBA8_ADLS_BIN, RESOLVE_GEN12_Y0_MSAA4_RGBA8_ADLS_SPV,
-    RESOLVE_GEN12_Y0_MSAA4_RGBA8_ADLS_BIN_STORAGE,
-    "kernels/artifacts/adls/cpp/resolve_gen12_y0_msaa4_rgba8.bin"
+embedded_compute_artifact!(RESOLVE_GEN12_Y0_MSAA_RGBA8_ADLS_BIN, RESOLVE_GEN12_Y0_MSAA_RGBA8_ADLS_SPV,
+    RESOLVE_GEN12_Y0_MSAA_RGBA8_ADLS_BIN_STORAGE,
+    "kernels/artifacts/adls/cpp/resolve_gen12_y0_msaa_rgba8.bin"
 );
 
 const _: () = assert!(matches!(COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));

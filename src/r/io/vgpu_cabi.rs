@@ -127,6 +127,10 @@ pub(crate) fn broker_device_info(
                 v::vgpu::DeviceInfo::FLAG_INDEXED_MSAA4
             } else {
                 0
+            }) | (if info.indexed_msaa2 {
+                v::vgpu::DeviceInfo::FLAG_INDEXED_MSAA2
+            } else {
+                0
             }),
             reserved: 0,
         })
@@ -409,9 +413,13 @@ pub(crate) fn broker_ui4_indexed_submit(
             sampler_flags: draw.sampler_flags,
             load_color: draw.texture_reserved & v::vgpu::INDEXED_DRAW_LOAD_COLOR != 0,
             retain_texture: draw.texture_reserved & v::vgpu::INDEXED_DRAW_LOAD_COLOR != 0,
-            msaa4: draw.texture_reserved & v::vgpu::INDEXED_DRAW_MSAA4 != 0,
+            sample_count: match draw.texture_reserved & v::vgpu::INDEXED_DRAW_MSAA_MASK {
+                v::vgpu::INDEXED_DRAW_MSAA2 => 2,
+                v::vgpu::INDEXED_DRAW_MSAA4 => 4,
+                _ => 1,
+            },
             depth_flags: draw.texture_reserved
-                & !(v::vgpu::INDEXED_DRAW_LOAD_COLOR | v::vgpu::INDEXED_DRAW_MSAA4),
+                & !(v::vgpu::INDEXED_DRAW_LOAD_COLOR | v::vgpu::INDEXED_DRAW_MSAA_MASK),
         },
     )
     .map_err(|error| {

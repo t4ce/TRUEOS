@@ -12,13 +12,13 @@ static inline uint y0_pixel_offset(uint x, uint y, uint pitch_bytes)
 }
 
 __attribute__((intel_reqd_sub_group_size(16)))
-__kernel void resolve_gen12_y0_msaa4_rgba8(
+__kernel void resolve_gen12_y0_msaa_rgba8(
     __global const uint *src,
     __global uint *dst,
     uint src_pitch_bytes,
     uint dst_pitch_bytes,
     uint slice_bytes,
-    uint swap_red_blue,
+    uint resolve_flags,
     uint width,
     uint height)
 {
@@ -32,19 +32,25 @@ __kernel void resolve_gen12_y0_msaa4_rgba8(
     const uint slice = slice_bytes >> 2u;
     const uint c0 = src[offset];
     const uint c1 = src[offset + slice];
-    const uint c2 = src[offset + 2u * slice];
-    const uint c3 = src[offset + 3u * slice];
 
     // Sum two separate 16-bit lanes per register. Four 8-bit components
     // never cross into the adjacent lane, even when rounding.
     const uint lane_mask = 0x00ff00ffu;
-    const uint even = (((c0 & lane_mask) + (c1 & lane_mask)
-                      + (c2 & lane_mask) + (c3 & lane_mask) + 0x00020002u)
-                     >> 2u) & lane_mask;
-    const uint odd = ((((c0 >> 8u) & lane_mask) + ((c1 >> 8u) & lane_mask)
-                     + ((c2 >> 8u) & lane_mask) + ((c3 >> 8u) & lane_mask) + 0x00020002u)
-                    >> 2u) & lane_mask;
-    const uint red_blue = swap_red_blue != 0u
+    uint even = (c0 & lane_mask) + (c1 & lane_mask);
+    uint odd = ((c0 >> 8u) & lane_mask) + ((c1 >> 8u) & lane_mask);
+    // Bits 2:1 hold the sample count. Bit 0 selects the output channel order.
+    if ((resolve_flags & 4u) != 0u) {
+        const uint c2 = src[offset + 2u * slice];
+        const uint c3 = src[offset + 3u * slice];
+        even = (even + (c2 & lane_mask) + (c3 & lane_mask) + 0x00020002u) >> 2u;
+        odd = (odd + ((c2 >> 8u) & lane_mask) + ((c3 >> 8u) & lane_mask) + 0x00020002u) >> 2u;
+    } else {
+        even = (even + 0x00010001u) >> 1u;
+        odd = (odd + 0x00010001u) >> 1u;
+    }
+    even &= lane_mask;
+    odd &= lane_mask;
+    const uint red_blue = (resolve_flags & 1u) != 0u
         ? ((even & 0xffu) << 16u) | (even >> 16u)
         : even;
     dst[y * (dst_pitch_bytes >> 2u) + x] = red_blue | (odd << 8u);
