@@ -274,11 +274,17 @@ pub(crate) struct Ui4SoftwareCursorVisual {
     pub(crate) icon: super::Ui4CursorIcon,
     pub(crate) custom_cursor: Option<Arc<super::Ui4CursorImage>>,
     pub(crate) stepped_cell: Option<Ui4VisualRect>,
-    pub(crate) context_menu: Option<(u32, u32)>,
+    pub(crate) context_menu: Option<DesktopContextMenu>,
     pub(crate) selection: Option<Ui4VisualRect>,
     pub(crate) dock_fields_visible: bool,
     pub(super) spirit_dock_circle: Option<Ui4SpiritDockCircle>,
     pub(crate) dock_preview: Option<Ui4DockPreview>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DesktopContextMenu {
+    pub(super) anchor: (u32, u32),
+    pub(super) opened_at_ms: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -380,7 +386,7 @@ struct CursorRoute {
     dock_fields_visible: bool,
     spirit_dock_circle: Option<Ui4SpiritDockCircle>,
     dock_preview: Option<Ui4DockPreview>,
-    context_menu: Option<(u32, u32)>,
+    context_menu: Option<DesktopContextMenu>,
     context_menu_owns_gesture: bool,
     context_menu_pressed_action: Option<DesktopContextMenuAction>,
     requested_context_menu_gesture: Option<u64>,
@@ -477,10 +483,10 @@ impl CursorRoute {
         screen_width: u32,
         screen_height: u32,
     ) {
-        let Some(anchor) = self.context_menu else {
+        let Some(menu) = self.context_menu else {
             return;
         };
-        let menu = context_menu_rect(anchor, screen_width, screen_height);
+        let menu = context_menu_rect(menu.anchor, screen_width, screen_height);
         if visual_rect_contains(menu, x, y) {
             self.context_menu_owns_gesture = true;
             self.context_menu_pressed_action = desktop_context_menu_action_at(menu, x, y);
@@ -1097,7 +1103,8 @@ impl InputBroker {
             self.cursors[index].y = y;
             self.cursors[index].buttons_down = event.buttons_down;
             if buttons_down == 0 {
-                let selected = self.cursors[index].context_menu.and_then(|anchor| {
+                let selected = self.cursors[index].context_menu.and_then(|menu| {
+                    let anchor = menu.anchor;
                     let menu = context_menu_rect(anchor, width, height);
                     let released_action = desktop_context_menu_action_at(menu, x, y);
                     (released_action == self.cursors[index].context_menu_pressed_action)
@@ -1271,22 +1278,14 @@ impl InputBroker {
                     super::context_menu::registered_request(window.owner, window.id)
                         .map(|request| (window.owner, window.id, request))
                 });
-                match frame_menu {
-                    Some((menu_owner, menu_window, request)) => {
-                        if super::context_menu::open(
-                            source,
-                            menu_owner,
-                            menu_window,
-                            (x, y),
-                            color,
-                            request,
-                        )
-                        .is_err()
-                        {
-                            self.cursors[index].context_menu = Some((x, y));
-                        }
-                    }
-                    None => self.cursors[index].context_menu = Some((x, y)),
+                let opened_frame_menu = frame_menu.is_some_and(|(owner, window, request)| {
+                    super::context_menu::open(source, owner, window, (x, y), color, request).is_ok()
+                });
+                if !opened_frame_menu {
+                    self.cursors[index].context_menu = Some(DesktopContextMenu {
+                        anchor: (x, y),
+                        opened_at_ms: trueos_time::Instant::now().as_millis(),
+                    });
                 }
             }
             self.cursors[index].secondary_dragged = false;

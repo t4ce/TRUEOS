@@ -205,7 +205,7 @@ TESTS = r'''
   broker.cursors[human].selection_serial=41;
   broker.cursors[human].keyboard_source=Some(keyboard());
   broker.cursors[human].capture=Some(WindowTarget::from(frame(1)));
-  broker.cursors[human].context_menu=Some((3,4));
+  broker.cursors[human].context_menu=Some(DesktopContextMenu {anchor:(3,4),opened_at_ms:0});
   broker.cursors[ai_index].selection_serial=99;
   frames::select_for_test(ai,2,Ui4CursorIcon::ResizeHorizontal);
   frames::select_for_test(old,1,Ui4CursorIcon::Loading);
@@ -304,7 +304,7 @@ TESTS = r'''
    route.collapse_drag=Some(target);route.collapse_press=Some((target,()));
    route.screenshot_latch=true;route.selection_anchor=Some((7,8));
    route.secondary_anchor=Some((9,10));route.secondary_dragged=true;
-   route.context_menu=Some((11,12));route.context_menu_owns_gesture=true;
+   route.context_menu=Some(DesktopContextMenu {anchor:(11,12),opened_at_ms:0});route.context_menu_owns_gesture=true;
    route.requested_context_menu_gesture=Some(100);route.buttons_down=3;route.absorb_select=true;
    broker.quad_resize=Some(QuadResizeGesture{source:route.source});
   }
@@ -352,7 +352,7 @@ def harness() -> str:
                  "retarget_source", "cursor_retired"):
         source += item(FRAME, name)
     source += BROKER_FIXTURE
-    for name in ("WindowTarget", "GeometryGesture", "KeyboardSource", "CursorRoute", "InputBroker"):
+    for name in ("WindowTarget", "GeometryGesture", "KeyboardSource", "DesktopContextMenu", "CursorRoute", "InputBroker"):
         source += item(BROKER, name)
     for marker in ("impl WindowTarget {", "impl From<super::CursorFrameKey> for WindowTarget {"):
         source += block(broker, marker)

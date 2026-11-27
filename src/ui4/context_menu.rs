@@ -102,6 +102,7 @@ pub(super) struct ContextMenuVisualEntry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ContextMenuVisual {
     pub(super) anchor: (u32, u32),
+    pub(super) opened_at_ms: u64,
     pub(super) color: crate::graphics::primitives::Rgba8,
     pub(super) entries: Vec<ContextMenuVisualEntry>,
     pub(super) hovered: Option<usize>,
@@ -115,6 +116,7 @@ struct ActiveContextMenu {
     owner: WindowOwner,
     window: WindowId,
     anchor: (u32, u32),
+    opened_at_ms: u64,
     color: crate::graphics::primitives::Rgba8,
     entries: Vec<ContextMenuEntry>,
     context: u64,
@@ -252,6 +254,7 @@ pub(super) fn resolve_window_menu(
         entries.push(entry);
     }
     menu.entries = entries;
+    menu.opened_at_ms = trueos_time::Instant::now().as_millis();
     menu.preparing = false;
     drop(active);
     super::input_broker::notify_slot4_visual_change();
@@ -354,6 +357,7 @@ pub(super) fn open(
         owner,
         window,
         anchor,
+        opened_at_ms: trueos_time::Instant::now().as_millis(),
         color,
         entries: request.entries,
         context: request.context,
@@ -543,6 +547,7 @@ pub(super) fn visual() -> Option<ContextMenuVisual> {
     let menu = active.as_ref().filter(|m| !m.preparing)?;
     Some(ContextMenuVisual {
         anchor: menu.anchor,
+        opened_at_ms: menu.opened_at_ms,
         color: menu.color,
         entries: menu
             .entries

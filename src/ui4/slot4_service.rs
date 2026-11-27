@@ -6,8 +6,8 @@
 //! detached Codex arrival sprite. It deliberately does not
 //! participate in application-plane composition or its atomic SURF batch.
 //! Cursor input is coalesced to the display cadence; hovered button dashes
-//! add a 15 Hz wake only while present. The detached sprite uses the display
-//! cadence independently of Lilly's sprite animation. Virgl reuses the shape
+//! add a 15 Hz wake only while present. Menu strokes and the detached sprite
+//! update at display cadence. Virgl reuses the shape
 //! builder in its final composition pass instead of queuing an Intel flip.
 
 use alloc::vec::Vec;
@@ -20,6 +20,9 @@ const SLOT4_RECT_BASE_CAPACITY: usize = 64;
 const SOFTWARE_CURSOR_STROKE_PX: u32 = 5;
 const SOFTWARE_CURSOR_LONG_PX: u32 = 27;
 const DOCK_FIELD_ALPHA: u8 = 84;
+const MENU_STROKE_DELAY_MS: u64 = 50;
+const MENU_STROKE_PX_PER_SECOND: u64 = 3_600;
+const MENU_LINE_WIDTH_PX: u32 = 1;
 
 type Slot4Rects = Vec<crate::intel::LiveOverlayRect>;
 
@@ -36,6 +39,7 @@ static CODEX_TILE_RUNS: Mutex<Option<Vec<CodexTileRun>>> = Mutex::new(None);
 struct Slot4Scene {
     rects: Slot4Rects,
     glyphs: Vec<Range<usize>>,
+    menu_animating: bool,
 }
 
 impl Slot4Scene {
@@ -43,6 +47,7 @@ impl Slot4Scene {
         Self {
             rects: Vec::new(),
             glyphs: Vec::new(),
+            menu_animating: false,
         }
     }
 }
@@ -89,6 +94,7 @@ pub(crate) async fn ui4_slot4_service_task() {
 
     let mut state = Slot4State::new();
     let mut visual_dirty = true;
+    let mut menu_animating = false;
     let mut cadence = super::InteractionCadence::new();
     let mut next_present = Instant::MIN;
 
@@ -96,7 +102,7 @@ pub(crate) async fn ui4_slot4_service_task() {
         super::codex_handoff::advance();
         let now = Instant::now();
         let codex_active = super::codex_handoff::active();
-        visual_dirty |= super::button_outline::due(now) || codex_active;
+        visual_dirty |= super::button_outline::due(now) || codex_active || menu_animating;
         if let Some(pending) = state.pending.take() {
             match crate::intel::poll_ui4_live_overlay_flip(pending.flip) {
                 crate::intel::Ui4LiveOverlayFlipPoll::Pending => {
@@ -119,6 +125,7 @@ pub(crate) async fn ui4_slot4_service_task() {
             // cadence after rasterization adds its CPU time to every period.
             next_present = cadence.next_deadline();
             let scene = software_cursor_scene();
+            menu_animating = scene.menu_animating;
             let windows = slot4_windows();
             match queue_slot4(&state, scene, &windows) {
                 Ok(Some(pending)) => {
@@ -140,6 +147,7 @@ pub(crate) async fn ui4_slot4_service_task() {
         if state.pending.is_none()
             && !visual_dirty
             && !codex_active
+            && !menu_animating
             && super::button_outline::wait(now).is_none()
         {
             super::input_broker::wait_slot4_visual_change().await;
@@ -158,13 +166,13 @@ pub(crate) async fn ui4_slot4_service_task() {
         } else {
             Duration::MAX
         };
-        let codex_wait = if codex_active {
+        let animation_wait = if (codex_active || menu_animating) && state.pending.is_none() {
             next_present.saturating_duration_since(now)
         } else {
             Duration::MAX
         };
         let wait = present_wait.min(flip_wait)
-            .min(codex_wait)
+            .min(animation_wait)
             .min(super::button_outline::wait(now).unwrap_or(Duration::MAX))
             .max(Duration::from_ticks(1));
         if with_timeout(wait, super::input_broker::wait_slot4_visual_change())
@@ -504,8 +512,10 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
 fn software_cursor_scene() -> Slot4Scene {
     use crate::graphics::primitives::Rgba8;
 
+    let now_ms = Instant::now().as_millis();
     let visuals = super::software_cursor_visuals();
     let mut rects = Slot4Rects::with_capacity(SLOT4_RECT_BASE_CAPACITY);
+    let mut menu_animating = false;
     let (screen_w, screen_h) = super::output_dimensions().unwrap_or((2560, 1440));
 
     if let Some(output) = super::OutputId::from_slot(0) {
@@ -605,14 +615,15 @@ fn software_cursor_scene() -> Slot4Scene {
     }
 
     for visual in &visuals {
-        let Some((x, y)) = visual.context_menu else {
+        let Some(menu) = visual.context_menu else {
             continue;
         };
-        let menu_rect = super::input_broker::context_menu_rect((x, y), screen_w, screen_h);
+        let menu_rect = super::input_broker::context_menu_rect(menu.anchor, screen_w, screen_h);
         let row_height = super::input_broker::CONTEXT_MENU_ROW_HEIGHT_PX;
         let horizontal_inset = super::input_broker::DESKTOP_CONTEXT_MENU_HORIZONTAL_INSET_PX;
         let vertical_inset = super::input_broker::DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX;
-        let row_text_y = 0;
+        let row_x = menu_rect.x.saturating_add(horizontal_inset);
+        let row_width = menu_rect.width.saturating_sub(horizontal_inset * 2);
         // Capitals occupy the first nine rows of MicroFont's eleven-row cell.
         // Split the remaining whitespace evenly around each divider.
         let divider_offset_y = row_height.saturating_sub(9 * 2) / 2;
@@ -625,52 +636,42 @@ fn software_cursor_scene() -> Slot4Scene {
             menu_rect.height,
             Rgba8::new(22, 25, 33, 235),
         );
-        push_rect_border(&mut rects, menu_rect, 1, visual.color);
-        for row in 1..super::input_broker::DESKTOP_CONTEXT_MENU_ENTRY_COUNT {
-            push_overlay_rect(
-                &mut rects,
-                menu_rect.x.saturating_add(horizontal_inset),
-                row_top.saturating_add(row.saturating_mul(row_height))
-                    .saturating_sub(divider_offset_y),
-                menu_rect
-                    .width
-                    .saturating_sub(horizontal_inset.saturating_mul(2)),
-                1,
-                Rgba8::new(180, 188, 204, 150),
-            );
-        }
         for (index, &(action, label)) in super::input_broker::DESKTOP_CONTEXT_MENU_ENTRIES
             .iter()
             .enumerate()
         {
-            let row = index as u32;
-            let y = row_top
-                .saturating_add(row.saturating_mul(row_height))
-                .saturating_add(row_text_y);
-            let width = menu_rect
-                .width
-                .saturating_sub(horizontal_inset.saturating_mul(2));
-            let x = menu_rect.x.saturating_add(horizontal_inset);
+            let y = row_top.saturating_add((index as u32).saturating_mul(row_height));
             if action == super::input_broker::DesktopContextMenuAction::ColorPicker {
-                push_microfont_rainbow_menu_text(&mut rects, x, y, width, label);
+                push_microfont_rainbow_menu_text(&mut rects, row_x, y, row_width, label);
             } else {
                 push_microfont_menu_text(
                     &mut rects,
-                    x,
+                    row_x,
                     y,
-                    width,
+                    row_width,
                     label,
                     Rgba8::new(255, 55, 255, 255),
                 );
             }
         }
+        let mut stroke = MenuStroke::new(menu.opened_at_ms, now_ms);
+        stroke.border(&mut rects, menu_rect, visual.color);
+        for row in 1..super::input_broker::DESKTOP_CONTEXT_MENU_ENTRY_COUNT {
+            let y = row_top.saturating_add(row.saturating_mul(row_height))
+                .saturating_sub(divider_offset_y);
+            if y >= menu_rect.y.saturating_add(menu_rect.height) {
+                break;
+            }
+            stroke.divider(&mut rects, row_x, y, row_width, Rgba8::new(180, 188, 204, 150));
+        }
+        menu_animating |= stroke.finish(&mut rects, menu_rect);
     }
 
     super::button_outline::append(&mut rects, screen_w, screen_h);
     super::terminal_outlines::append(&mut rects, screen_w, screen_h);
 
     if let Some(menu) = super::context_menu::visual() {
-        push_requested_context_menu(&mut rects, &menu, screen_w, screen_h);
+        menu_animating |= push_requested_context_menu(&mut rects, &menu, screen_w, screen_h, now_ms);
     }
 
     if let Some(handle) = super::input_broker::quad_resize_visual() {
@@ -694,7 +695,7 @@ fn software_cursor_scene() -> Slot4Scene {
         }
     }
 
-    Slot4Scene { rects, glyphs }
+    Slot4Scene { rects, glyphs, menu_animating }
 }
 
 /// Compile the immutable native tile once. Movement translates short solid
@@ -1039,12 +1040,123 @@ fn push_custom_cursor_image(
     }
 }
 
+#[derive(Clone, Copy)]
+enum MenuStrokeDirection {
+    Right,
+    Down,
+    Left,
+    Up,
+}
+
+struct MenuStroke {
+    remaining_px: u64,
+    show_tip: bool,
+    tip: Option<(u32, u32, crate::graphics::primitives::Rgba8)>,
+}
+
+impl MenuStroke {
+    fn new(opened_at_ms: u64, now_ms: u64) -> Self {
+        let age_ms = now_ms.saturating_sub(opened_at_ms);
+        let drawing_ms = age_ms.saturating_sub(MENU_STROKE_DELAY_MS);
+        Self {
+            remaining_px: drawing_ms.saturating_mul(MENU_STROKE_PX_PER_SECOND) / 1_000,
+            show_tip: age_ms >= MENU_STROKE_DELAY_MS,
+            tip: None,
+        }
+    }
+
+    fn border(
+        &mut self,
+        rects: &mut Slot4Rects,
+        bounds: super::Ui4VisualRect,
+        color: crate::graphics::primitives::Rgba8,
+    ) {
+        use MenuStrokeDirection::*;
+
+        let [top, bottom, left, right] = rect_border_parts(bounds, MENU_LINE_WIDTH_PX);
+        for (part, direction) in [(top, Right), (right, Down), (bottom, Left), (left, Up)] {
+            self.segment(rects, part, direction, color);
+        }
+    }
+
+    fn divider(
+        &mut self,
+        rects: &mut Slot4Rects,
+        x: u32,
+        y: u32,
+        width: u32,
+        color: crate::graphics::primitives::Rgba8,
+    ) {
+        self.segment(
+            rects,
+            super::Ui4VisualRect { x, y, width, height: MENU_LINE_WIDTH_PX },
+            MenuStrokeDirection::Right,
+            color,
+        );
+    }
+
+    fn segment(
+        &mut self,
+        rects: &mut Slot4Rects,
+        mut part: super::Ui4VisualRect,
+        direction: MenuStrokeDirection,
+        color: crate::graphics::primitives::Rgba8,
+    ) {
+        use MenuStrokeDirection::*;
+
+        if self.tip.is_some() || part.width == 0 || part.height == 0 {
+            return;
+        }
+        let horizontal = matches!(direction, Right | Left);
+        let reverse = matches!(direction, Left | Up);
+        let length = if horizontal { part.width } else { part.height };
+        let drawn = self.remaining_px.min(u64::from(length)) as u32;
+        self.remaining_px -= u64::from(drawn);
+        let offset = if reverse { length - drawn } else { 0 };
+        if drawn < length {
+            let tip_offset = if reverse { offset - 1 } else { drawn };
+            let (x, y) = if horizontal {
+                (part.x.saturating_add(tip_offset), part.y)
+            } else {
+                (part.x, part.y.saturating_add(tip_offset))
+            };
+            self.tip = Some((x, y, color));
+        }
+        if horizontal {
+            part.x = part.x.saturating_add(offset);
+            part.width = drawn;
+        } else {
+            part.y = part.y.saturating_add(offset);
+            part.height = drawn;
+        }
+        push_visual_rect(rects, part, color);
+    }
+
+    fn finish(self, rects: &mut Slot4Rects, bounds: super::Ui4VisualRect) -> bool {
+        let Some((x, y, color)) = self.tip else {
+            return false;
+        };
+        if self.show_tip {
+            let width = (2 * MENU_LINE_WIDTH_PX).min(bounds.width);
+            let height = (2 * MENU_LINE_WIDTH_PX).min(bounds.height);
+            let x = x.min(bounds.x.saturating_add(bounds.width - width));
+            let y = y.min(bounds.y.saturating_add(bounds.height - height));
+            push_overlay_rect(
+                rects, x, y, width, height,
+                crate::graphics::primitives::Rgba8::new(color.r, color.g, color.b, 255),
+            );
+        }
+        true
+    }
+}
+
 fn push_requested_context_menu(
     rects: &mut Slot4Rects,
     menu: &super::context_menu::ContextMenuVisual,
     screen_w: u32,
     screen_h: u32,
-) {
+    now_ms: u64,
+) -> bool {
     use crate::graphics::primitives::Rgba8;
 
     let menu_rect =
@@ -1057,8 +1169,6 @@ fn push_requested_context_menu(
         menu_rect.height,
         Rgba8::new(22, 25, 33, 245),
     );
-    push_rect_border(rects, menu_rect, 1, menu.color);
-
     for (index, entry) in menu.entries.iter().enumerate() {
         let Some(row) = super::context_menu::entry_rect(menu_rect, index) else {
             break;
@@ -1071,16 +1181,6 @@ fn push_requested_context_menu(
                 row.width,
                 row.height,
                 Rgba8::new(menu.color.r, menu.color.g, menu.color.b, 72),
-            );
-        }
-        if index != 0 {
-            push_overlay_rect(
-                rects,
-                row.x.saturating_add(6),
-                row.y,
-                row.width.saturating_sub(12),
-                1,
-                Rgba8::new(180, 188, 204, 105),
             );
         }
         let text_color = if entry.enabled {
@@ -1101,6 +1201,22 @@ fn push_requested_context_menu(
             text_color,
         );
     }
+
+    let mut stroke = MenuStroke::new(menu.opened_at_ms, now_ms);
+    stroke.border(rects, menu_rect, menu.color);
+    for index in 1..menu.entries.len() {
+        let Some(row) = super::context_menu::entry_rect(menu_rect, index) else {
+            break;
+        };
+        stroke.divider(
+            rects,
+            row.x.saturating_add(6),
+            row.y,
+            row.width.saturating_sub(12),
+            Rgba8::new(180, 188, 204, 105),
+        );
+    }
+    stroke.finish(rects, menu_rect)
 }
 
 fn push_microfont_menu_text(
